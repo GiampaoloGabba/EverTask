@@ -51,7 +51,14 @@ public class SampleTaskRequestHanlder : EverTaskHandler<SampleTaskRequest>
 ```
 
 ## Task Dispatch
+
+To dispatch a task, obtain an instance of `ITaskDispatcher`. This can be done using Dependency Injection:
+
 ```csharp
+// Retrieving ITaskDispatcher via method injection
+var _dispatcher = serviceProvider.GetService<ITaskDispatcher>();
+
+// Alternatively, ITaskDispatcher can be injected directly into the constructor of your class
 _dispatcher.Dispatch(new SampleTaskRequest("Hello World"));
 ```
 
@@ -87,27 +94,27 @@ builder.Services.AddEverTask(opt =>
 
 `EverTaskServiceConfiguration` provides various options for configuring the EverTask service. Here's a summary of its properties and their intended functionalities:
 
->### ChannelOptions
->- **Type:** `BoundedChannelOptions`
->- **Default:** Capacity set to 100, `FullMode` set to `BoundedChannelFullMode.Wait`
->- **Purpose:** Defines the behavior of the task queue. The capacity determines the maximum number of tasks that can be queued, and `FullMode` decides the behavior when the queue is full (e.g., waiting for space to become available).
+### `ChannelOptions`
+- **Type:** `BoundedChannelOptions`
+- **Default:** Capacity set to 100, `FullMode` set to `BoundedChannelFullMode.Wait`
+- **Purpose:** Defines the behavior of the task queue. The capacity determines the maximum number of tasks that can be queued, and `FullMode` decides the behavior when the queue is full (e.g., waiting for space to become available).
 
->### ThrowIfUnableToPersist
->- **Type:** `bool`
->- **Default:** `true`
->- **Purpose:** Determines whether the service should throw an exception if it is unable to persist a task. When set to `true`, it ensures that task persistence failures are explicitly handled, potentially preventing data loss.
+### `ThrowIfUnableToPersist`
+- **Type:** `bool`
+- **Default:** `true`
+- **Purpose:** Determines whether the service should throw an exception if it is unable to persist a task. When set to `true`, it ensures that task persistence failures are explicitly handled, potentially preventing data loss.
 
->### SetChannelOptions (Overloaded Methods)
->- **Purpose:** Allows configuring `ChannelOptions` either by specifying the capacity directly or by providing a `BoundedChannelOptions` object. Adjusting these options can optimize the task queue's performance and behavior.
+### `SetChannelOptions (Overloaded Methods)`
+- **Purpose:** Allows configuring `ChannelOptions` either by specifying the capacity directly or by providing a `BoundedChannelOptions` object. Adjusting these options can optimize the task queue's performance and behavior.
 
->### SetThrowIfUnableToPersist
->- **Purpose:** Enables or disables throwing exceptions when task persistence fails. This can be critical for ensuring data integrity and handling errors appropriately.
+### `SetThrowIfUnableToPersist`
+- **Purpose:** Enables or disables throwing exceptions when task persistence fails. This can be critical for ensuring data integrity and handling errors appropriately.
 
->### RegisterTasksFromAssembly
->- **Purpose:** Registers task handlers from a single assembly. This is useful for modular applications where task handlers are defined in different modules.
+### `RegisterTasksFromAssembly`
+- **Purpose:** Registers task handlers from a single assembly. This is useful for modular applications where task handlers are defined in different modules.
 
->### RegisterTasksFromAssemblies
->- **Purpose:** Registers task handlers from multiple assemblies. Ideal for larger applications with distributed task handling logic across various modules or libraries.
+### `RegisterTasksFromAssemblies`
+- **Purpose:** Registers task handlers from multiple assemblies. Ideal for larger applications with distributed task handling logic across various modules or libraries.
 
 ## SQL Server Persistence and Logging
 
@@ -159,6 +166,16 @@ builder.Services.AddEverTask(opt =>
     }
   }
 
+## EverTask and EverTask.Abstractions
+
+EverTask is complemented by the `EverTask.Abstractions` package, designed for use in Application projects where additional implementations are not required. This allows separation of concerns, keeping your application layer free from infrastructural code.
+
+In your Infrastructure project, where EverTask is added, specify the assembly (or assemblies) containing `IEverTask` requests. This modular approach ensures that the application layer remains clean and focused, while the infrastructure layer handles task execution and management.
+
+## Serialization and deserialization of Requests for Persistence
+
+EverTask uses Newtonsoft.Json for serializing and deserializing task requests, due to its robust support for polymorphism and inheritance, features that are limited in System.Text.Json. It is recommended to use simple objects for task requests, preferably primitives or uncomplicated complex objects, to ensure smooth serialization. In cases where EverTask is unable to serialize a request, it will throw an exception during the `Dispatch` method. This design choice emphasizes reliability in task persistence, ensuring that only serializable tasks are queued for execution.
+
 
 ## Future Developments
 
@@ -172,6 +189,6 @@ builder.Services.AddEverTask(opt =>
 
 &nbsp;
 
->## 🌟 Acknowledgements
->Special thanks to the author of [MediaTr](https://github.com/jbogard/MediatR) for their inspirational work.
+## 🌟 Acknowledgements
+Special thanks to the author of [MediaTr](https://github.com/jbogard/MediatR) for their inspirational work.
 
