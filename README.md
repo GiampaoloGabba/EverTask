@@ -205,5 +205,7 @@ I have included comments within these files to acknowledge and reference the spe
 
 Their approach and architecture have been instrumental in shaping the functionality and design of these elements.
 
+This project includes code from [MediatR](https://github.com/jbogard/MediatR), which is licensed under the Apache 2.0 License. The full text of the license can be found in the [LICENSE](LICENSE) file.
+
 
 
