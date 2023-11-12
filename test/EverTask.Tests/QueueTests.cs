@@ -1,4 +1,5 @@
 ﻿using EverTask.Handler;
+using EverTask.Logger;
 using EverTask.Storage;
 
 namespace EverTask.Tests;

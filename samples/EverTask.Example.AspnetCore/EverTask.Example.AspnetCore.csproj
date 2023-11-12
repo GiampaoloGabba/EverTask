@@ -14,8 +14,6 @@
     <ItemGroup>
       <ProjectReference Include="..\..\src\EverTask\EverTask.csproj" />
       <ProjectReference Include="..\..\src\Logging\EverTask.Serilog\EverTask.Serilog.csproj" />
-      <ProjectReference Include="..\..\src\Starage\EverTask.SqlServer\EverTask.SqlServer.csproj" />
-      <ProjectReference Include="..\..\src\Storage\EverTask.SqlServer\EverTask.SqlServer.csproj" />
     </ItemGroup>
 
 </Project>

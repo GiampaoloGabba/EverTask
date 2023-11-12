@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Logging;
+﻿using EverTask.Logger;
+using Microsoft.Extensions.Logging;
 using Serilog.Context;
 using Serilog.Core;
 using Serilog.Events;

@@ -1,4 +1,6 @@
-﻿namespace EverTask.Tests;
+﻿using EverTask.Logger;
+
+namespace EverTask.Tests;
 
 public class AssemblyResolutionTests
 {

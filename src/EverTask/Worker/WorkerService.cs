@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Hosting;
+﻿using EverTask.Logger;
+using Microsoft.Extensions.Hosting;
 
 namespace EverTask.Worker;
 

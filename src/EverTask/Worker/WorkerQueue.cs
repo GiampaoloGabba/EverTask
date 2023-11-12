@@ -1,4 +1,6 @@
-﻿namespace EverTask.Worker;
+﻿using EverTask.Logger;
+
+namespace EverTask.Worker;
 
 public class WorkerQueue(EverTaskServiceConfiguration configuration, IEverTaskLogger<WorkerQueue> logger, ITaskStorage? taskStorage = null) : IWorkerQueue
 {

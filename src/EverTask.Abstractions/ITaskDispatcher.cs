@@ -22,5 +22,12 @@ public interface ITaskDispatcher
     Task Dispatch<TTask>(TTask task, CancellationToken cancellationToken = default)
         where TTask : IEverTask;
 
+    /// <summary>
+    /// Asynchronously push a task to the backgorundqueue. For internal use.
+    /// </summary>
+    /// <param name="task">Task object</param>
+    /// <param name="ct">Optional cancellation token</param>
+    /// <param name="existingTaskId">Optional existing persistence guid for the task</param>
+    /// <returns>A task that represents the queue operation.</returns>
     Task ExecuteDispatch(IEverTask task, CancellationToken ct = default, Guid? existingTaskId = null);
 }

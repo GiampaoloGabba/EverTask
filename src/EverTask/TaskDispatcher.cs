@@ -1,5 +1,8 @@
-﻿namespace EverTask;
+﻿using EverTask.Logger;
 
+namespace EverTask;
+
+/// <inheritdoc />
 public class TaskDispatcher(
     IServiceProvider serviceProvider,
     IWorkerQueue workerQueue,
@@ -7,6 +10,7 @@ public class TaskDispatcher(
     IEverTaskLogger<TaskDispatcher> logger,
     ITaskStorage? taskStorage = null) : ITaskDispatcher
 {
+    /// <inheritdoc />
     public Task Dispatch<TTask>(TTask task, CancellationToken cancellationToken = default) where TTask : IEverTask
     {
         if (task == null)
@@ -17,6 +21,7 @@ public class TaskDispatcher(
         return ExecuteDispatch(task, cancellationToken);
     }
 
+    /// <inheritdoc />
     public Task Dispatch(object task, CancellationToken cancellationToken = default) =>
         task switch
         {
@@ -25,6 +30,7 @@ public class TaskDispatcher(
             _ => throw new ArgumentException($"{nameof(task)} does not implement ${nameof(IEverTask)}")
         };
 
+    /// <inheritdoc />
     public async Task ExecuteDispatch(IEverTask task, CancellationToken ct = default, Guid? existingTaskId = null)
     {
         if (task == null)
