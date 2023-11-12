@@ -1,6 +1,8 @@
 ﻿namespace Microsoft.Extensions.DependencyInjection;
 
-//Code adapted from https://github.com/jbogard/MediatR/blob/master/src/MediatR/Registration/ServiceRegistrar.cs
+// This code was adapted from MediatR by Jimmy Bogard.
+// Specific inspiration was taken from the ServiceRegistrar.cs file.
+// Source: https://github.com/jbogard/MediatR/blob/master/src/MediatR/Registration/ServiceRegistrar.cs
 
 internal static class HandlerRegistrar
 {

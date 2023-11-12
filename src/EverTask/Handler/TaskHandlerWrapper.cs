@@ -1,6 +1,8 @@
 ﻿namespace EverTask.Handler;
 
-//Wrapper idea taken and adapted from https://github.com/jbogard/MediatR/blob/master/src/MediatR/Wrappers/NotificationHandlerWrapper.cs
+// This code was adapted from MediatR by Jimmy Bogard.
+// Specific inspiration was taken from the NotificationHandlerWrapper.cs file.
+// Source: https://github.com/jbogard/MediatR/blob/master/src/MediatR/Wrappers/NotificationHandlerWrapper.cs
 
 internal abstract class TaskHandlerWrapper
 {

@@ -190,5 +190,20 @@ EverTask uses Newtonsoft.Json for serializing and deserializing task requests, d
 &nbsp;
 
 ## 🌟 Acknowledgements
-Special thanks to the author of [MediaTr](https://github.com/jbogard/MediatR) for their inspirational work.
+
+Special thanks to **[jbogard](https://github.com/jbogard)** for the **[MediaTr](https://github.com/jbogard/MediatR)** project, providing significant inspiration in the development of key components of this library, especially in the creation of: 
+
+[`TaskDispatcher.cs`](https://github.com/GiampaoloGabba/EverTask/blob/master/src/EverTask/TaskDispatcher.cs)
+
+[`TaskHandlerExecutor.cs`](https://github.com/GiampaoloGabba/EverTask/blob/master/src/EverTask/Handler/TaskHandlerExecutor.cs)
+
+[`TaskHandlerWrapper.cs`](https://github.com/GiampaoloGabba/EverTask/blob/master/src/EverTask/Handler/TaskHandlerWrapper.cs)
+
+[`HandlerRegistrar.cs`](https://github.com/GiampaoloGabba/EverTask/blob/master/src/EverTask/MicrosoftExtensionsDI/HandlerRegistrar.cs)
+
+I have included comments within these files to acknowledge and reference the specific parts of the MediaTr project that inspired them.
+
+Their approach and architecture have been instrumental in shaping the functionality and design of these elements.
+
+
 
