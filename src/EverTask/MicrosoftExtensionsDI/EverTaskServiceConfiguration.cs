@@ -1,0 +1,53 @@
+﻿namespace Microsoft.Extensions.DependencyInjection;
+
+public class EverTaskServiceConfiguration
+{
+    internal BoundedChannelOptions ChannelOptions = new(100)
+    {
+        FullMode = BoundedChannelFullMode.Wait
+    };
+
+    internal bool ThrowIfUnableToPersist = true;
+    internal List<Assembly> AssembliesToRegister { get; } = new();
+
+    public EverTaskServiceConfiguration SetChannelOptions(int capacity)
+    {
+        ChannelOptions.Capacity = capacity;
+        return this;
+    }
+
+    public EverTaskServiceConfiguration SetChannelOptions(BoundedChannelOptions options)
+    {
+        ChannelOptions = options;
+        return this;
+    }
+
+    public EverTaskServiceConfiguration SetThrowIfUnableToPersist(bool value)
+    {
+        ThrowIfUnableToPersist = value;
+        return this;
+    }
+
+    /// <summary>
+    /// Register various EverTask handlers from assembly
+    /// </summary>
+    /// <param name="assembly">Assembly to scan</param>
+    /// <returns>This</returns>
+    public EverTaskServiceConfiguration RegisterTasksFromAssembly(Assembly assembly)
+    {
+        AssembliesToRegister.Add(assembly);
+        return this;
+    }
+
+    /// <summary>
+    /// Register various EverTask handlers from assemblies
+    /// </summary>
+    /// <param name="assemblies">Assemblies to scan</param>
+    /// <returns>This</returns>
+    public EverTaskServiceConfiguration RegisterTasksFromAssemblies(
+        params Assembly[] assemblies)
+    {
+        AssembliesToRegister.AddRange(assemblies);
+        return this;
+    }
+}

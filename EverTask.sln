@@ -1,0 +1,83 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{E2DA20AA-28D1-455C-BF50-C49A8F831633}"
+	ProjectSection(SolutionItems) = preProject
+		.editorconfig = .editorconfig
+		.gitignore = .gitignore
+		Directory.Build.props = Directory.Build.props
+		Directory.Packages.props = Directory.Packages.props
+		global.json = global.json
+		README.md = README.md
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{6267E2ED-942C-497D-BFC9-B3CE0AFC276F}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "test", "test", "{5267E2ED-942C-497D-BFC9-B3CE0AFC276F}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "samples", "samples", "{4267E2ED-942C-497D-BFC9-B3CE0AFC276F}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Logging", "Logging", "{7267E2ED-942C-497D-BFC9-B3CE0AFC276F}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Storage", "Storage", "{8267E2ED-942C-497D-BFC9-B3CE0AFC276F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EverTask", "src\EverTask\EverTask.csproj", "{EF3FB892-548E-49F8-A96E-2C3D289507F8}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EverTask.Abstractions", "src\EverTask.Abstractions\EverTask.Abstractions.csproj", "{4992D71B-E01C-461A-9DCA-C2767E5E8E55}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EverTask.Serilog", "src\Logging\EverTask.Serilog\EverTask.Serilog.csproj", "{511F9BA8-56A0-487D-BDEF-6D3A65D600FF}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EverTask.EfCore", "src\Storage\EverTask.EfCore\EverTask.EfCore.csproj", "{F2A0340F-C884-4314-A209-01494ECCACEE}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EverTask.SqlServer", "src\Storage\EverTask.SqlServer\EverTask.SqlServer.csproj", "{59C7A64C-3583-4D6D-9F47-EFB1E8E395B2}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EverTask.Example.AspnetCore", "samples\EverTask.Example.AspnetCore\EverTask.Example.AspnetCore.csproj", "{AD3210EB-3FE1-41BE-8EBF-436403E8C438}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EverTask.Tests", "test\EverTask.Tests\EverTask.Tests.csproj", "{1C94BDE0-4F9D-4E0E-BEEE-B7EA447FB12B}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{EF3FB892-548E-49F8-A96E-2C3D289507F8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EF3FB892-548E-49F8-A96E-2C3D289507F8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EF3FB892-548E-49F8-A96E-2C3D289507F8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EF3FB892-548E-49F8-A96E-2C3D289507F8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4992D71B-E01C-461A-9DCA-C2767E5E8E55}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4992D71B-E01C-461A-9DCA-C2767E5E8E55}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4992D71B-E01C-461A-9DCA-C2767E5E8E55}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4992D71B-E01C-461A-9DCA-C2767E5E8E55}.Release|Any CPU.Build.0 = Release|Any CPU
+		{511F9BA8-56A0-487D-BDEF-6D3A65D600FF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{511F9BA8-56A0-487D-BDEF-6D3A65D600FF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{511F9BA8-56A0-487D-BDEF-6D3A65D600FF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{511F9BA8-56A0-487D-BDEF-6D3A65D600FF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F2A0340F-C884-4314-A209-01494ECCACEE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F2A0340F-C884-4314-A209-01494ECCACEE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F2A0340F-C884-4314-A209-01494ECCACEE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F2A0340F-C884-4314-A209-01494ECCACEE}.Release|Any CPU.Build.0 = Release|Any CPU
+		{59C7A64C-3583-4D6D-9F47-EFB1E8E395B2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{59C7A64C-3583-4D6D-9F47-EFB1E8E395B2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{59C7A64C-3583-4D6D-9F47-EFB1E8E395B2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{59C7A64C-3583-4D6D-9F47-EFB1E8E395B2}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AD3210EB-3FE1-41BE-8EBF-436403E8C438}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AD3210EB-3FE1-41BE-8EBF-436403E8C438}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AD3210EB-3FE1-41BE-8EBF-436403E8C438}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AD3210EB-3FE1-41BE-8EBF-436403E8C438}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1C94BDE0-4F9D-4E0E-BEEE-B7EA447FB12B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1C94BDE0-4F9D-4E0E-BEEE-B7EA447FB12B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1C94BDE0-4F9D-4E0E-BEEE-B7EA447FB12B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1C94BDE0-4F9D-4E0E-BEEE-B7EA447FB12B}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{EF3FB892-548E-49F8-A96E-2C3D289507F8} = {6267E2ED-942C-497D-BFC9-B3CE0AFC276F}
+		{4992D71B-E01C-461A-9DCA-C2767E5E8E55} = {6267E2ED-942C-497D-BFC9-B3CE0AFC276F}
+		{7267E2ED-942C-497D-BFC9-B3CE0AFC276F} = {6267E2ED-942C-497D-BFC9-B3CE0AFC276F}
+		{8267E2ED-942C-497D-BFC9-B3CE0AFC276F} = {6267E2ED-942C-497D-BFC9-B3CE0AFC276F}
+		{511F9BA8-56A0-487D-BDEF-6D3A65D600FF} = {7267E2ED-942C-497D-BFC9-B3CE0AFC276F}
+		{F2A0340F-C884-4314-A209-01494ECCACEE} = {8267E2ED-942C-497D-BFC9-B3CE0AFC276F}
+		{59C7A64C-3583-4D6D-9F47-EFB1E8E395B2} = {8267E2ED-942C-497D-BFC9-B3CE0AFC276F}
+		{AD3210EB-3FE1-41BE-8EBF-436403E8C438} = {4267E2ED-942C-497D-BFC9-B3CE0AFC276F}
+		{1C94BDE0-4F9D-4E0E-BEEE-B7EA447FB12B} = {5267E2ED-942C-497D-BFC9-B3CE0AFC276F}
+	EndGlobalSection
+EndGlobal
