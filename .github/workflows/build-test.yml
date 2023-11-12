@@ -27,5 +27,5 @@ jobs:
         run: dotnet build EverTask.sln --no-restore
 
       - name: Test
-        run: dotnet test EverTask.Test/EverTask.Test.csproj --no-restore --verbosity normal
+        run: dotnet test test/EverTask.Tests/EverTask.Tests.csproj --no-restore --verbosity normal
 
