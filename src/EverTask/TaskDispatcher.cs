@@ -2,6 +2,8 @@
 
 namespace EverTask;
 
+//Dispatcher idea taken and adapted from https://github.com/jbogard/MediatR/blob/master/src/MediatR/Mediator.cs
+
 /// <inheritdoc />
 public class TaskDispatcher(
     IServiceProvider serviceProvider,

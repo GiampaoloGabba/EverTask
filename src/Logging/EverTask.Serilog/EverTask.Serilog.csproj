@@ -12,4 +12,8 @@
     <ProjectReference Include="..\..\EverTask\EverTask.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="..\..\..\assets\logo-nuget.png" Pack="true" PackagePath="" />
+  </ItemGroup>
+
 </Project>

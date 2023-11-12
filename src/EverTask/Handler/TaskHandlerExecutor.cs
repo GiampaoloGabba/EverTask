@@ -1,5 +1,7 @@
 ﻿namespace EverTask.Handler;
 
+//Executor idea taken and adapted from https://github.com/jbogard/MediatR/blob/master/src/MediatR/NotificationHandlerExecutor.cs
+
 public record TaskHandlerExecutor(
     IEverTask Task,
     object Handler,

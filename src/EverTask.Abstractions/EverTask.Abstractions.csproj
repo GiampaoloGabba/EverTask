@@ -1,7 +1,5 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
-
-    <PropertyGroup>
-
-    </PropertyGroup>
-
+  <ItemGroup>
+    <None Include="..\..\assets\logo-nuget.png" Pack="true" PackagePath="" />
+  </ItemGroup>
 </Project>

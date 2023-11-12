@@ -10,4 +10,8 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="..\..\..\assets\logo-nuget.png" Pack="true" PackagePath="" />
+  </ItemGroup>
+
 </Project>

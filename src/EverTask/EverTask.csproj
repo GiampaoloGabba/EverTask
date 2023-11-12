@@ -13,4 +13,8 @@
     <PackageReference Include="Newtonsoft.Json" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="..\..\assets\logo-nuget.png" Pack="true" PackagePath="" />
+  </ItemGroup>
+
 </Project>

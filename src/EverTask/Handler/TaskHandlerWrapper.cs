@@ -1,5 +1,7 @@
 ﻿namespace EverTask.Handler;
 
+//Wrapper idea taken and adapted from https://github.com/jbogard/MediatR/blob/master/src/MediatR/Wrappers/NotificationHandlerWrapper.cs
+
 internal abstract class TaskHandlerWrapper
 {
     public abstract TaskHandlerExecutor Handle(IEverTask task, IServiceProvider serviceFactory, Guid? existingTaskId = null);
