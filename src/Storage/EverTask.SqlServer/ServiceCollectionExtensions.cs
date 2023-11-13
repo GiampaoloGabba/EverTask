@@ -20,7 +20,8 @@ public static class ServiceCollectionExtensions
         builder.Services.AddDbContext<TaskStoreEfDbContext>((_, opt) =>
         {
             opt.UseSqlServer(connectionString,
-                opt => opt.MigrationsHistoryTable(HistoryRepository.DefaultTableName, storeOptions.SchemaName));
+                   opt => opt.MigrationsHistoryTable(HistoryRepository.DefaultTableName, storeOptions.SchemaName))
+               .ReplaceService<IMigrationsAssembly, DbSchemaAwareMigrationAssembly>();
         });
 
         builder.Services.AddScoped<ITaskStoreDbContext>(provider => provider.GetRequiredService<TaskStoreEfDbContext>());
