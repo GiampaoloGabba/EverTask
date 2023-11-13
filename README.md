@@ -4,22 +4,22 @@
 [![NuGet](https://img.shields.io/nuget/vpre/evertask.svg)](https://www.nuget.org/packages/evertask)
 
 ## Overview
-EverTask is a .NET library for executing background tasks in ASP.NET Core applications. It is designed to be simple and focuses on task persistence, ensuring that pending tasks resume upon application restart.
+EverTask is a .NET library for executing background tasks in .NET applications. It is designed to be simple and focuses on task persistence, ensuring that pending tasks resume upon application restart.
 
 > This project is in its initial stages, more detailed documentation will be provided in the future.
 
 ## Features
-| Feature                       | Description                                                                                   |
-|-------------------------------|-----------------------------------------------------------------------------------------------|
-| **Background Task Execution** | Run tasks in the background in ASP.NET Core.                                                  |
-| **Persistence**               | Resumes pending tasks after application restarts.                                             |
-| **Simplicity by Design**      | Created for simplicity, using the latest .NET technologies.                                   |
-| **Inspiration from MediaTr**  | Implementation based on creating requests and handlers.                                       |
-| **Error Handling**            | Method overrides for error observation and task completion.                                   |
-| **In-Memory Storage**         | Provides an in-memory storage solution for testing and lightweight applications.                  |
-| **SQL Storage**                   | Includes support for SQL Server storage, enabling persistent task management.                     |
-| **Serilog Integration**           | Supports integration with Serilog for detailed and customizable logging.                          |
-| **Extensible Storage & Logging**  | Designed to allow easy plug-in of additional database solutions or logging systems.          |                                                                      |
+| Feature                       | Description                                                                         |
+|-------------------------------|-------------------------------------------------------------------------------------|
+| **Background Task Execution** | Easily run background tasks with parameters in .NET                                 |
+| **Persistence**               | Resumes pending tasks after application restarts.                                   |
+| **Simplicity by Design**      | Created for simplicity, using the latest .NET technologies.                         |
+| **Inspiration from MediaTr**  | Implementation based on creating requests and handlers.                             |
+| **Error Handling**            | Method overrides for error observation and task completion.                         |
+| **In-Memory Storage**         | Provides an in-memory storage solution for testing and lightweight applications.    |
+| **SQL Storage**                   | Includes support for SQL Server storage, enabling persistent task management.       |
+| **Serilog Integration**           | Supports integration with Serilog for detailed and customizable logging.            |
+| **Extensible Storage & Logging**  | Designed to allow easy plug-in of additional database solutions or logging systems. |                                                                      |
 
 
 ## Efficient Task Processing
@@ -132,7 +132,7 @@ builder.Services.AddEverTask(opt =>
 - **Migration Handling:** Option to apply database migrations automatically or handle them manually.
  
 ### Serilog Integration
-- **Default Logging:** Uses ASP.NET Core's configured `ILogger` by default.
+- **Default Logging:** Uses .NET configured `ILogger` by default.
 - **Serilog Option:** Enables adding Serilog as a separate logger for EverTask, with customizable options.
 - **Example Configuration in appsettings.json:**
   ```json
@@ -186,12 +186,12 @@ EverTask uses Newtonsoft.Json for serializing and deserializing task requests, d
 
 ## Future Developments
 
-| Feature                                              | Description                                                                                                                                                                                |
-|------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **Web Dashboard**                                    | Implement a simple web dashboard for monitoring tasks.                                                                                                                                     |
-| **Delayed and Scheduled Tasks**                      | Executing tasks with a delay (specified via TimeSpan) and scheduled tasks (using cron expressions).                                                                                        |
-| **Support for New Storage Options**                  | Considering the inclusion of additional storage options like MySql, Postgres, and various DocumentDBs initially supported by EfCore, with the possibility of expanding to other databases. |
-| **Decoupling from ASP.NET Core Background Services** | Future updates may involve decoupling from ASP.NET Core's background services to make the library usable across all types of .NET projects, enhancing its versatility and applicability.   |
+| Feature                                          | Description                                                                                                                                                                                |
+|--------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Web Dashboard**                                | Implement a simple web dashboard for monitoring tasks.                                                                                                                                     |
+| **Delayed and Scheduled Tasks**                  | Executing tasks with a delay (specified via TimeSpan) and scheduled tasks (using cron expressions).                                                                                        |
+| **Support for New Storage Options**              | Considering the inclusion of additional storage options like MySql, Postgres, and various DocumentDBs initially supported by EfCore, with the possibility of expanding to other databases. |
+| **More examples for using outside ASP.NET Core** | ...and improving all the documentation!                                                                                                                                                    |
 
 
 &nbsp;
