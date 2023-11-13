@@ -1,0 +1,49 @@
+name: .NET Build and test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    environment: release
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Setup .NET 6
+        uses: actions/setup-dotnet@v2
+        with:
+          dotnet-version: '6.0.x'
+
+      - name: Setup .NET 7
+        uses: actions/setup-dotnet@v2
+        with:
+          dotnet-version: '7.0.x'
+
+      - name: Setup dotnet 8
+        uses: actions/setup-dotnet@v2
+        with:
+          dotnet-version: '8.0.100-rc.2.23502.2'
+
+      - name: Restore dependencies
+        run: dotnet restore EverTask.sln
+
+      - name: Build
+        run: dotnet build EverTask.sln --no-restore --configuration Release
+
+      - name: Test
+        run: dotnet test test/EverTask.Tests/EverTask.Tests.csproj --no-restore --verbosity normal
+
+      - name: NuGet Push
+        run: |
+          dotnet pack src/EverTask.Abstractions/EverTask.Abstractions.csproj --no-build -o nupkg
+          dotnet pack src/EverTask/EverTask.csproj --no-build -o nupkg
+          dotnet pack src/storage/EverTask.EfCore/EverTask.EfCore.csproj --no-build -o nupkg
+          dotnet pack src/storage/EverTask.SqlServer/EverTask.SqlServer.csproj --no-build -o nupkg
+          dotnet pack src/logging/EverTask.Serilog/EverTask.Serilog.csproj --no-build -o nupkg
+          dotnet nuget push "nupkg/*.nupkg" --source "https://api.nuget.org/v3/index.json" --api-key ${{ secrets.NUGET_API_KEY }}
+        env:
+          ASPNETCORE_ENVIRONMENT: release
+

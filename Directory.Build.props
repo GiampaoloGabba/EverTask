@@ -8,6 +8,7 @@
   </PropertyGroup>
 
   <PropertyGroup>
+    <Version>1.0.0-beta</Version>
     <Authors>Giampaolo Gabba</Authors>
     <Description>Easy background task with persistence for ASP.NET Core</Description>
     <Copyright>Copyright Giampaolo Gabba</Copyright>
@@ -20,6 +21,7 @@
     <Deterministic>true</Deterministic>
     <MinVerTagPrefix>v</MinVerTagPrefix>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
 </Project>

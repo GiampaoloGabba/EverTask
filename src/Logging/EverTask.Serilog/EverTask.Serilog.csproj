@@ -14,6 +14,7 @@
 
   <ItemGroup>
     <None Include="..\..\..\assets\logo-nuget.png" Pack="true" PackagePath="" />
+    <None Include="..\..\..\README.md" Pack="true" PackagePath="" />
   </ItemGroup>
 
 </Project>
