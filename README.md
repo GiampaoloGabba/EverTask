@@ -1,5 +1,8 @@
 ![EverTask Logo](https://raw.githubusercontent.com/GiampaoloGabba/EverTask/master/assets/logo-main.png)
 
+[![Build](https://github.com/GiampaoloGabba/EverTask/actions/workflows/build.yml/badge.svg)](https://github.com/GiampaoloGabba/EverTask/actions/workflows/build.yml)
+[![NuGet](https://img.shields.io/nuget/vpre/evertask.svg)](https://www.nuget.org/packages/evertask)
+
 ## Overview
 EverTask is a .NET library for executing background tasks in ASP.NET Core applications. It is designed to be simple and focuses on task persistence, ensuring that pending tasks resume upon application restart.
 
