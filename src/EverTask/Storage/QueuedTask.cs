@@ -11,7 +11,7 @@ public class QueuedTask
     public string?         Exception        { get; set; }
 
     public QueuedTaskStatus         Status       { get; set; }
-    public ICollection<StatusAudit> StatusAudits { get; set; } = Array.Empty<StatusAudit>();
+    public ICollection<StatusAudit> StatusAudits { get; set; } = new List<StatusAudit>();
 }
 
 public class StatusAudit
