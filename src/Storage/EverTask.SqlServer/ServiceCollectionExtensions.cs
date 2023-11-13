@@ -15,7 +15,12 @@ public static class ServiceCollectionExtensions
     {
         var storeOptions = new TaskStoreOptions();
         configure?.Invoke(storeOptions);
-        builder.Services.TryAddSingleton(storeOptions);
+
+        builder.Services.Configure<TaskStoreOptions>(options =>
+        {
+            options.SchemaName = storeOptions.SchemaName;
+            options.AutoApplyMigrations = storeOptions.AutoApplyMigrations;
+        });
 
         builder.Services.AddDbContext<TaskStoreEfDbContext>((_, opt) =>
         {

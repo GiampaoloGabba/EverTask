@@ -3,5 +3,5 @@
 public class TaskStoreOptions
 {
     public bool    AutoApplyMigrations { get; set; } = true;
-    public string? SchemaName          { get; set; }
+    public string? SchemaName          { get; set; } = "EverTask";
 }
