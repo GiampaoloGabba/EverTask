@@ -1,4 +1,4 @@
-name: .NET Build and test
+name: Nuget Release
 
 on:
   workflow_dispatch:
