@@ -19,6 +19,10 @@ EverTask is a .NET library for executing background tasks in ASP.NET Core applic
 | **Extensible Storage & Logging**  | Designed to allow easy plug-in of additional database solutions or logging systems.          |                                                                      |
 
 
+## Efficient Task Processing
+
+EverTask employs a non-polling approach for task management, utilizing the .NET's `System.Threading.Channels` to create a `BoundedQueue`. This queue efficiently manages task execution without the need for constant database polling. Upon application restart after a stop, any unprocessed tasks are retrieved from the database in bulk and re-queued in the channel's queue for execution by the background service. This design ensures a seamless and efficient task processing cycle, even across application restarts.
+
 ## Implementation Example
 ```csharp
 public record SampleTaskRequest(string TestProperty) : IEverTask;

@@ -43,7 +43,7 @@ jobs:
           dotnet pack src/Storage/EverTask.EfCore/EverTask.EfCore.csproj --no-build -o nupkg
           dotnet pack src/Storage/EverTask.SqlServer/EverTask.SqlServer.csproj --no-build -o nupkg
           dotnet pack src/Logging/EverTask.Serilog/EverTask.Serilog.csproj --no-build -o nupkg
-          dotnet nuget push "nupkg/*.nupkg" --source "https://api.nuget.org/v3/index.json" --api-key ${{ secrets.NUGET_API_KEY }}
+          dotnet nuget push "nupkg/*.nupkg" --source "https://api.nuget.org/v3/index.json" --api-key ${{ secrets.NUGET_API_KEY }} --skip-duplicate
         env:
           ASPNETCORE_ENVIRONMENT: release
 
