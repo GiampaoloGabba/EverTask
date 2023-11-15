@@ -81,14 +81,14 @@ public class TaskHanlderExecutorTests
     [Fact]
     public void Should_throw_for_null_Request()
     {
-        var executor = new TaskHandlerExecutor(null!, new TestTaskHanlder(), null!, null, null, Guid.NewGuid());
+        var executor = new TaskHandlerExecutor(null!, new TestTaskHanlder(), null!, null, null, null, Guid.NewGuid());
         Should.Throw<ArgumentNullException>(() => executor.ToQueuedTask());
     }
 
     [Fact]
     public void Should_throw_for_null_Handler_Handle()
     {
-        var executor = new TaskHandlerExecutor(new TestTaskRequest("Test"), null!, null!, null, null, Guid.NewGuid());
+        var executor = new TaskHandlerExecutor(new TestTaskRequest("Test"), null!, null!, null, null, null, Guid.NewGuid());
         Should.Throw<ArgumentNullException>(() => executor.ToQueuedTask());
     }
 }

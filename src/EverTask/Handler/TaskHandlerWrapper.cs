@@ -21,8 +21,9 @@ internal class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TTask : I
             task,
             handlerService,
             (theTask, theToken) => handlerService.Handle((TTask)theTask, theToken),
-            (exception, message) => handlerService.OnError(exception, message),
-            () => handlerService.Completed(),
+            (persistenceId, exception, message) => handlerService.OnError(persistenceId, exception, message),
+            persistenceId => handlerService.OnStarted(persistenceId),
+            persistenceId => handlerService.OnCompleted(persistenceId),
             existingTaskId ?? Guid.NewGuid()
         );
     }

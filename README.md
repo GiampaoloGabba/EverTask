@@ -14,6 +14,7 @@ EverTask is a .NET library for executing background tasks in .NET applications. 
 | **Background Task Execution** | Easily run background tasks with parameters in .NET                                 |
 | **Persistence**               | Resumes pending tasks after application restarts.                                   |
 | **Managed Parallelism**      | Efficiently handles concurrent task execution with configurable parallelism.                          |
+| **Async All The Way**      | Fully asynchronous architecture, enhancing performance and scalability in modern environments.                          |
 | **Simplicity by Design**      | Created for simplicity, using the latest .NET technologies.        |
 | **Inspiration from MediaTr**  | Implementation based on creating requests and handlers.                             |
 | **Error Handling**            | Method overrides for error observation and task completion.                         |
@@ -28,7 +29,10 @@ EverTask is a .NET library for executing background tasks in .NET applications. 
 EverTask employs a non-polling approach for task management, utilizing the .NET's `System.Threading.Channels` to create a `BoundedQueue`. This queue efficiently manages task execution without the need for constant database polling. Upon application restart after a stop, any unprocessed tasks are retrieved from the database in bulk and re-queued in the channel's queue for execution by the background service. This design ensures a seamless and efficient task processing cycle, even across application restarts.
 
 
-## Implementation Example
+## Creating Requests and Handlers with Lifecycle Control
+
+This example demonstrates how to create a request and its corresponding handler in EverTask. The `SampleTaskRequest` and `SampleTaskRequestHandler` illustrate the basic structure. Additionally, the handler includes optional overrides that allow you to control and monitor the lifecycle of a background task, providing hooks for when a task starts, completes, or encounters an error.
+
 ```csharp
 public record SampleTaskRequest(string TestProperty) : IEverTask;
 
@@ -40,21 +44,30 @@ public class SampleTaskRequestHanlder : EverTaskHandler<SampleTaskRequest>
     {
         _logger = logger;
     }
+
     public override Task Handle(SampleTaskRequest backgroundTask, CancellationToken cancellationToken)
     {
-        _logger.LogInformation(backgroundTask.TestProperty);
+        _logger.LogInformation($"Property value: {backgroundTask.TestProperty}");
         return Task.CompletedTask;
     }
 
     // Optional Overrides
-    public override ValueTask Completed()
+    public override ValueTask OnStarted(Guid persistenceId)
     {
-        return base.Completed();
+        _logger.LogInformation($"====== TASK WITH ID {persistenceId} STARTED IN BACKGROUND ======");
+        return ValueTask.CompletedTask;
     }
 
-    public override ValueTask OnError(Exception? exception, string? message)
+    public override ValueTask OnCompleted(Guid persistenceId)
     {
-        return base.OnError(exception, message);
+        _logger.LogInformation($"====== TASK WITH ID {persistenceId} COMPLETED IN BACKGROUND ======");
+        return ValueTask.CompletedTask;
+    }
+
+    public override ValueTask OnError(Guid persistenceId, Exception? exception, string? message)
+    {
+        _logger.LogError(exception, $"Error in task with ID {persistenceId}: {message}");
+        return ValueTask.CompletedTask;
     }
 }
 ```
@@ -187,12 +200,12 @@ EverTask uses Newtonsoft.Json for serializing and deserializing task requests, d
 
 ## Future Developments
 
-| Feature                                          | Description                                                                                                                                                                                |
-|--------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **Web Dashboard**                                | Implement a simple web dashboard for monitoring tasks.                                                                                                                                     |
-| **Delayed and Scheduled Tasks**                  | Executing tasks with a delay (specified via TimeSpan) and scheduled tasks (using cron expressions).                                                                                        |
-| **Support for New Storage Options**              | Considering the inclusion of additional storage options like MySql, Postgres, and various DocumentDBs initially supported by EfCore, with the possibility of expanding to other databases. |
-| **More examples for using outside ASP.NET Core** | ...and improving all the documentation!                                                                                                                                                    |
+| Feature                             | Description                                                                                                                                                                                |
+|-------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Web Dashboard**                   | Implement a simple web dashboard for monitoring tasks.                                                                                                                                     |
+| **Delayed and Scheduled Tasks**     | Executing tasks with a delay (specified via TimeSpan) and scheduled tasks (using cron expressions).                                                                                        |
+| **Support for New Storage Options** | Considering the inclusion of additional storage options like MySql, Postgres, and various DocumentDBs initially supported by EfCore, with the possibility of expanding to other databases. |
+| **Improving documentation**         | docs needs more love...                                                                                                                                                                    |
 
 
 &nbsp;

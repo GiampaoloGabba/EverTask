@@ -18,13 +18,22 @@ public class SampleTaskRequestHanlder : EverTaskHandler<SampleTaskRequest>
         return Task.CompletedTask;
     }
 
-    public override ValueTask Completed()
+    public override ValueTask OnStarted(Guid persistenceId)
     {
-        return base.Completed();
+        _logger.LogInformation("====== TASK WITH ID {persistenceId} STARTED IN BACKGROUND ======", persistenceId);
+        return ValueTask.CompletedTask;
     }
 
-    public override ValueTask OnError(Exception? exception, string? message)
+    public override ValueTask OnCompleted(Guid persistenceId)
     {
-        return base.OnError(exception, message);
+        _logger.LogInformation("====== TASK WITH ID {persistenceId} COMPLETED IN BACKGROUND ======", persistenceId);
+        return ValueTask.CompletedTask;
+    }
+
+    public override ValueTask OnError(Guid persistenceId, Exception? exception, string? message)
+    {
+        _logger.LogInformation("====== TASK WITH ID {persistenceId} FAILED ======", persistenceId);
+        _logger.LogError(exception, message);
+        return ValueTask.CompletedTask;
     }
 }

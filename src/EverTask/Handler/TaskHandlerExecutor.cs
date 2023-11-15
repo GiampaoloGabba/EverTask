@@ -8,8 +8,9 @@ public record TaskHandlerExecutor(
     IEverTask Task,
     object Handler,
     Func<IEverTask, CancellationToken, Task> HandlerCallback,
-    Func<Exception?, string, ValueTask>? HandlerErrorCallback,
-    Func<ValueTask>? HandlerCompletedCallback,
+    Func<Guid, Exception?, string, ValueTask>? HandlerErrorCallback,
+    Func<Guid, ValueTask>? HandlerStartedCallback,
+    Func<Guid, ValueTask>? HandlerCompletedCallback,
     Guid PersistenceId);
 
 public static class TaskHandlerExecutorExtensions

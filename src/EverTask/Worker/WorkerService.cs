@@ -35,6 +35,11 @@ public class WorkerService(
             if (taskStorage != null)
                 await taskStorage.SetTaskInProgress(task.PersistenceId, token).ConfigureAwait(false);
 
+            if (task.HandlerStartedCallback != null)
+            {
+                await task.HandlerStartedCallback.Invoke(task.PersistenceId).ConfigureAwait(false);
+            }
+
             await task.HandlerCallback.Invoke(task.Task, token).ConfigureAwait(false);
 
             if (taskStorage != null)
@@ -42,7 +47,7 @@ public class WorkerService(
 
             if (task.HandlerCompletedCallback != null)
             {
-                await task.HandlerCompletedCallback.Invoke().ConfigureAwait(false);
+                await task.HandlerCompletedCallback.Invoke(task.PersistenceId).ConfigureAwait(false);
             }
 
             logger.LogInformation("Task with id {taskId} was completed.", task.PersistenceId);
@@ -56,7 +61,7 @@ public class WorkerService(
             if (task.HandlerErrorCallback != null)
             {
                 await task.HandlerErrorCallback
-                          .Invoke(ex, $"Task with id {task.PersistenceId} was cancelled")
+                          .Invoke(task.PersistenceId, ex, $"Task with id {task.PersistenceId} was cancelled")
                           .ConfigureAwait(false);
             }
 
@@ -71,7 +76,7 @@ public class WorkerService(
             if (task.HandlerErrorCallback != null)
             {
                 await task.HandlerErrorCallback
-                          .Invoke(ex, $"Error occurred executing task with id {task.PersistenceId}")
+                          .Invoke(task.PersistenceId, ex, $"Error occurred executing the task with id {task.PersistenceId}")
                           .ConfigureAwait(false);
             }
 
