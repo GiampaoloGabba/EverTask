@@ -27,6 +27,7 @@ public class TestTaskHanlder2 : EverTaskHandler<TestTaskRequest2>
 {
     public override Task Handle(TestTaskRequest2 backgroundTask, CancellationToken cancellationToken)
     {
+        File.Create("test1.txt");
         return Task.CompletedTask;
     }
 }

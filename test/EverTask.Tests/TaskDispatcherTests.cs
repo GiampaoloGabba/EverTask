@@ -4,20 +4,17 @@ namespace EverTask.Tests;
 
 public class TaskDispatcherTests
 {
-    private readonly Mock<IServiceProvider> _serviceProviderMock;
-
     private readonly TaskDispatcher _taskDispatcher;
 
     public TaskDispatcherTests()
     {
-        _serviceProviderMock = new Mock<IServiceProvider>();
-
+        var serviceProviderMock      = new Mock<IServiceProvider>();
         var workerQueueMock          = new Mock<IWorkerQueue>();
         var serviceConfigurationMock = new Mock<EverTaskServiceConfiguration>();
         var loggerMock               = new Mock<IEverTaskLogger<TaskDispatcher>>();
 
         _taskDispatcher = new TaskDispatcher(
-            _serviceProviderMock.Object,
+            serviceProviderMock.Object,
             workerQueueMock.Object,
             serviceConfigurationMock.Object,
             loggerMock.Object);

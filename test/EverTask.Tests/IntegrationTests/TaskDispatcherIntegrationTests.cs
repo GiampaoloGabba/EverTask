@@ -1,6 +1,6 @@
 ﻿using EverTask.Storage;
 
-namespace EverTask.Tests;
+namespace EverTask.Tests.IntegrationTests;
 
 public class TaskDispatcherIntegrationTests
 {
