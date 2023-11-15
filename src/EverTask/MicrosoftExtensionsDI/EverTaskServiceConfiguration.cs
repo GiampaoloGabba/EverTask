@@ -7,6 +7,8 @@ public class EverTaskServiceConfiguration
         FullMode = BoundedChannelFullMode.Wait
     };
 
+    internal int MaxDegreeOfParallelism = 1;
+
     internal bool ThrowIfUnableToPersist = true;
     internal List<Assembly> AssembliesToRegister { get; } = new();
 
@@ -19,6 +21,12 @@ public class EverTaskServiceConfiguration
     public EverTaskServiceConfiguration SetChannelOptions(BoundedChannelOptions options)
     {
         ChannelOptions = options;
+        return this;
+    }
+
+    public EverTaskServiceConfiguration SetMaxDegreeOfParallelism(int parallelism)
+    {
+        MaxDegreeOfParallelism = parallelism;
         return this;
     }
 

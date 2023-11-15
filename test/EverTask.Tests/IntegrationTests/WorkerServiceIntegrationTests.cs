@@ -16,7 +16,9 @@ public class WorkerServiceIntegrationTests
                 {
                     services.AddLogging();
                     services.AddEverTask(cfg => cfg.RegisterTasksFromAssembly(typeof(TestTaskRequest).Assembly)
-                                                   .SetChannelOptions(1)).AddMemoryStorage();
+                                                   .SetChannelOptions(3)
+                                                   .SetMaxDegreeOfParallelism(3))
+                            .AddMemoryStorage();
                     services.AddSingleton<ITaskStorage, MemoryTaskStorage>();
                 })
                 .Build();
@@ -56,28 +58,43 @@ public class WorkerServiceIntegrationTests
     }
 
     [Fact]
-    public async Task Should_execute_pending_task()
+    public async Task Should_execute_pending_and_concurrent_task()
     {
         if (File.Exists("test1.txt"))
             File.Delete("test1.txt");
 
-        var task = new TestTaskRequest2();
-        await _dispatcher.Dispatch(task);
+        if (File.Exists("test2.txt"))
+            File.Delete("test2.txt");
+
+
+        var task1 = new TestTaskConcurrent1();
+        await _dispatcher.Dispatch(task1);
+
+        var task2 = new TestTaskConcurrent2();
+        await _dispatcher.Dispatch(task2);
 
         var dequeued = await _workerQueue.Dequeue(CancellationToken.None);
-        dequeued.Task.ShouldBe(task);
+        dequeued.Task.ShouldBe(task1);
+        dequeued = await _workerQueue.Dequeue(CancellationToken.None);
+        dequeued.Task.ShouldBe(task2);
 
         var pt = await _storage.RetrievePendingTasks();
-        pt.Length.ShouldBe(1);
+        pt.Length.ShouldBe(2);
 
         await _host.StartAsync();
         await Task.Delay(500, CancellationToken.None);
 
         var tasks = await _storage.GetAll();
-        tasks.Length.ShouldBe(1);
+        tasks.Length.ShouldBe(2);
         tasks[0].Status = QueuedTaskStatus.Completed;
 
         File.Exists("test1.txt").ShouldBeTrue();
+        File.Exists("test2.txt").ShouldBeTrue();
+
+        var parallelExecution = TestTaskConcurrent1.StartTime < TestTaskConcurrent2.EndTime &&
+                                TestTaskConcurrent2.StartTime < TestTaskConcurrent1.EndTime;
+
+        parallelExecution.ShouldBeTrue();
 
         var cts = new CancellationTokenSource();
         cts.CancelAfter(2000);

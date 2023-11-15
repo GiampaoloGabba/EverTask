@@ -13,7 +13,8 @@ EverTask is a .NET library for executing background tasks in .NET applications. 
 |-------------------------------|-------------------------------------------------------------------------------------|
 | **Background Task Execution** | Easily run background tasks with parameters in .NET                                 |
 | **Persistence**               | Resumes pending tasks after application restarts.                                   |
-| **Simplicity by Design**      | Created for simplicity, using the latest .NET technologies.                         |
+| **Managed Parallelism**      | Efficiently handles concurrent task execution with configurable parallelism.                          |
+| **Simplicity by Design**      | Created for simplicity, using the latest .NET technologies.        |
 | **Inspiration from MediaTr**  | Implementation based on creating requests and handlers.                             |
 | **Error Handling**            | Method overrides for error observation and task completion.                         |
 | **In-Memory Storage**         | Provides an in-memory storage solution for testing and lightweight applications.    |
@@ -25,6 +26,7 @@ EverTask is a .NET library for executing background tasks in .NET applications. 
 ## Efficient Task Processing
 
 EverTask employs a non-polling approach for task management, utilizing the .NET's `System.Threading.Channels` to create a `BoundedQueue`. This queue efficiently manages task execution without the need for constant database polling. Upon application restart after a stop, any unprocessed tasks are retrieved from the database in bulk and re-queued in the channel's queue for execution by the background service. This design ensures a seamless and efficient task processing cycle, even across application restarts.
+
 
 ## Implementation Example
 ```csharp
@@ -97,31 +99,30 @@ builder.Services.AddEverTask(opt =>
 .AddSerilog(opt => opt.ReadFrom.Configuration(configuration, new ConfigurationReaderOptions { SectionName = "EverTaskSerilog" }));
 ```
 
-# Service Configuration Properties
+# Fluent Service Configuration
 
-`EverTaskServiceConfiguration` provides various options for configuring the EverTask service. Here's a summary of its properties and their intended functionalities:
-
-### `ChannelOptions`
-- **Type:** `BoundedChannelOptions`
-- **Default:** Capacity set to 100, `FullMode` set to `BoundedChannelFullMode.Wait`
-- **Purpose:** Defines the behavior of the task queue. The capacity determines the maximum number of tasks that can be queued, and `FullMode` decides the behavior when the queue is full (e.g., waiting for space to become available).
-
-### `ThrowIfUnableToPersist`
-- **Type:** `bool`
-- **Default:** `true`
-- **Purpose:** Determines whether the service should throw an exception if it is unable to persist a task. When set to `true`, it ensures that task persistence failures are explicitly handled, potentially preventing data loss.
+`EverTaskService` can be configured using a series of fluent methods, allowing a clear and user-friendly way to set up the service. These methods enable precise control over task processing, persistence, and parallel execution. Below are the available configuration methods, along with their default values and types:
 
 ### `SetChannelOptions (Overloaded Methods)`
-- **Purpose:** Allows configuring `ChannelOptions` either by specifying the capacity directly or by providing a `BoundedChannelOptions` object. Adjusting these options can optimize the task queue's performance and behavior.
+- **Type:** `Action<BoundedChannelOptions>` or `int`
+- **Default:** Capacity set to 100, `FullMode` set to `BoundedChannelFullMode.Wait`
+- **Functionality:** Configures the behavior of the task queue. You can directly specify the queue capacity or provide a `BoundedChannelOptions` object. This defines the maximum number of tasks that can be queued and the behavior when the queue is full.
 
 ### `SetThrowIfUnableToPersist`
-- **Purpose:** Enables or disables throwing exceptions when task persistence fails. This can be critical for ensuring data integrity and handling errors appropriately.
+- **Type:** `bool`
+- **Default:** `true`
+- **Functionality:** Determines whether the service should throw an exception if it is unable to persist a task. When enabled, it ensures that task persistence failures are explicitly managed, aiding in data integrity.
+
+### `SetMaxDegreeOfParallelism`
+- **Type:** `int`
+- **Default:** `1`
+- **Functionality:** Sets the maximum number of tasks that can be executed concurrently. The default sequential execution can be adjusted to enable parallel processing, optimizing task throughput in multi-core systems.
 
 ### `RegisterTasksFromAssembly`
-- **Purpose:** Registers task handlers from a single assembly. This is useful for modular applications where task handlers are defined in different modules.
+- **Functionality:** Facilitates the registration of task handlers from a single assembly. This is particularly beneficial for applications structured in a modular fashion, enabling easy integration of task handlers.
 
 ### `RegisterTasksFromAssemblies`
-- **Purpose:** Registers task handlers from multiple assemblies. Ideal for larger applications with distributed task handling logic across various modules or libraries.
+- **Functionality:** Allows for the registration of task handlers from multiple assemblies. This approach suits larger applications with distributed task handling logic spread across various modules or libraries.
 
 ## SQL Server Persistence and Logging
 

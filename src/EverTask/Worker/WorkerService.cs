@@ -7,6 +7,7 @@ public class WorkerService(
     IWorkerQueue workerQueue,
     IServiceScopeFactory serviceScopeFactory,
     ITaskDispatcher taskDispatcher,
+    EverTaskServiceConfiguration configuration,
     IEverTaskLogger<WorkerService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken ct)
@@ -15,59 +16,66 @@ public class WorkerService(
 
         await ProcessPendingAsync(ct).ConfigureAwait(false);
 
-        while (!ct.IsCancellationRequested)
+        var options = new ParallelOptions
         {
-            var task = await workerQueue.Dequeue(ct).ConfigureAwait(false);
+            MaxDegreeOfParallelism = configuration.MaxDegreeOfParallelism,
+            CancellationToken      = ct
+        };
 
-            using var scope       = serviceScopeFactory.CreateScope();
-            var       taskStorage = scope.ServiceProvider.GetService<ITaskStorage>();
+        await Parallel.ForEachAsync(workerQueue.DequeueAll(ct), options, DoWork).ConfigureAwait(false);
+    }
 
-            try
+    private async ValueTask DoWork(TaskHandlerExecutor task, CancellationToken token)
+    {
+        using var scope       = serviceScopeFactory.CreateScope();
+        var       taskStorage = scope.ServiceProvider.GetService<ITaskStorage>();
+
+        try
+        {
+            if (taskStorage != null)
+                await taskStorage.SetTaskInProgress(task.PersistenceId, token).ConfigureAwait(false);
+
+            await task.HandlerCallback.Invoke(task.Task, token).ConfigureAwait(false);
+
+            if (taskStorage != null)
+                await taskStorage.SetTaskCompleted(task.PersistenceId, token).ConfigureAwait(false);
+
+            if (task.HandlerCompletedCallback != null)
             {
-                if (taskStorage != null)
-                    await taskStorage.SetTaskInProgress(task.PersistenceId, ct).ConfigureAwait(false);
-
-                await task.HandlerCallback.Invoke(task.Task, ct).ConfigureAwait(false);
-
-                if (taskStorage != null)
-                    await taskStorage.SetTaskCompleted(task.PersistenceId, ct).ConfigureAwait(false);
-
-                if (task.HandlerCompletedCallback != null)
-                {
-                    await task.HandlerCompletedCallback.Invoke().ConfigureAwait(false);
-                }
-
-                logger.LogInformation("Task with id {taskId} was completed.", task.PersistenceId);
+                await task.HandlerCompletedCallback.Invoke().ConfigureAwait(false);
             }
-            catch (OperationCanceledException ex)
+
+            logger.LogInformation("Task with id {taskId} was completed.", task.PersistenceId);
+        }
+        catch (OperationCanceledException ex)
+        {
+            if (taskStorage != null)
+                await taskStorage.SetTaskStatus(task.PersistenceId, QueuedTaskStatus.Cancelled, null, token)
+                                 .ConfigureAwait(false);
+
+            if (task.HandlerErrorCallback != null)
             {
-                if (taskStorage != null)
-                    await taskStorage.SetTaskStatus(task.PersistenceId, QueuedTaskStatus.Cancelled, null, ct)
-                                     .ConfigureAwait(false);
-
-                if (task.HandlerErrorCallback != null)
-                {
-                    await task.HandlerErrorCallback.Invoke(ex, $"Task with id {task.PersistenceId} was cancelled")
-                              .ConfigureAwait(false);
-                }
-
-                logger.LogWarning(ex, "Task with id {taskId} was cancelled.", task.PersistenceId);
+                await task.HandlerErrorCallback
+                          .Invoke(ex, $"Task with id {task.PersistenceId} was cancelled")
+                          .ConfigureAwait(false);
             }
-            catch (Exception ex)
+
+            logger.LogWarning(ex, "Task with id {taskId} was cancelled.", task.PersistenceId);
+        }
+        catch (Exception ex)
+        {
+            if (taskStorage != null)
+                await taskStorage.SetTaskStatus(task.PersistenceId, QueuedTaskStatus.Failed, ex, token)
+                                 .ConfigureAwait(false);
+
+            if (task.HandlerErrorCallback != null)
             {
-                if (taskStorage != null)
-                    await taskStorage.SetTaskStatus(task.PersistenceId, QueuedTaskStatus.Failed, ex, ct)
-                                     .ConfigureAwait(false);
-
-                if (task.HandlerErrorCallback != null)
-                {
-                    await task.HandlerErrorCallback
-                              .Invoke(ex, $"Error occurred executing task with id {task.PersistenceId}")
-                              .ConfigureAwait(false);
-                }
-
-                logger.LogError(ex, "Error occurred executing task with id {taskId}.", task.PersistenceId);
+                await task.HandlerErrorCallback
+                          .Invoke(ex, $"Error occurred executing task with id {task.PersistenceId}")
+                          .ConfigureAwait(false);
             }
+
+            logger.LogError(ex, "Error occurred executing task with id {taskId}.", task.PersistenceId);
         }
     }
 
@@ -78,7 +86,8 @@ public class WorkerService(
 
         if (taskStorage == null)
         {
-            logger.LogWarning("Persistence is not active. In your DI, use .AddSqlStorage() for persistent tasks or .AddMemoryStorage() for tests");
+            logger.LogWarning(
+                "Persistence is not active. In your DI, use .AddSqlStorage() for persistent tasks or .AddMemoryStorage() for tests");
             return;
         }
 
