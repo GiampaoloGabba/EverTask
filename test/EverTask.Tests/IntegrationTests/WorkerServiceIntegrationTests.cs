@@ -16,7 +16,9 @@ public class WorkerServiceIntegrationTests
                 {
                     services.AddLogging();
                     services.AddEverTask(cfg => cfg.RegisterTasksFromAssembly(typeof(TestTaskRequest).Assembly)
-                                                   .SetChannelOptions(1)).AddMemoryStorage();
+                                                   .SetChannelOptions(3)
+                                                   .SetMaxDegreeOfParallelism(3))
+                            .AddMemoryStorage();
                     services.AddSingleton<ITaskStorage, MemoryTaskStorage>();
                 })
                 .Build();
@@ -29,15 +31,13 @@ public class WorkerServiceIntegrationTests
     [Fact]
     public async Task Should_execute_task()
     {
-        if (File.Exists("test1.txt"))
-            File.Delete("test1.txt");
-
         await _host.StartAsync();
 
-        var task = new TestTaskRequest2();
+        var task = new TestTaskConcurrent1();
+        TestTaskConcurrent1.Counter = 0;
         await _dispatcher.Dispatch(task);
 
-        await Task.Delay(500);
+        await Task.Delay(1100);
 
         var pt = await _storage.RetrievePendingTasks();
         pt.Length.ShouldBe(0);
@@ -50,34 +50,47 @@ public class WorkerServiceIntegrationTests
         var cts = new CancellationTokenSource();
         cts.CancelAfter(2000);
 
-        File.Exists("test1.txt").ShouldBeTrue();
-
         await _host.StopAsync(cts.Token);
+
+        TestTaskConcurrent1.Counter.ShouldBe(1);
     }
 
     [Fact]
-    public async Task Should_execute_pending_task()
+    public async Task Should_execute_pending_and_concurrent_task()
     {
-        if (File.Exists("test1.txt"))
-            File.Delete("test1.txt");
+        var task1 = new TestTaskConcurrent1();
+        await _dispatcher.Dispatch(task1);
 
-        var task = new TestTaskRequest2();
-        await _dispatcher.Dispatch(task);
+        var task2 = new TestTaskConcurrent2();
+        await _dispatcher.Dispatch(task2);
+
+        TestTaskConcurrent1.Counter = 0;
+        TestTaskConcurrent2.Counter = 0;
 
         var dequeued = await _workerQueue.Dequeue(CancellationToken.None);
-        dequeued.Task.ShouldBe(task);
+        dequeued.Task.ShouldBe(task1);
+        dequeued = await _workerQueue.Dequeue(CancellationToken.None);
+        dequeued.Task.ShouldBe(task2);
 
         var pt = await _storage.RetrievePendingTasks();
-        pt.Length.ShouldBe(1);
+        pt.Length.ShouldBe(2);
 
         await _host.StartAsync();
-        await Task.Delay(500, CancellationToken.None);
+
+        await Task.Delay(1100, CancellationToken.None);
 
         var tasks = await _storage.GetAll();
-        tasks.Length.ShouldBe(1);
+        tasks.Length.ShouldBe(2);
         tasks[0].Status = QueuedTaskStatus.Completed;
 
-        File.Exists("test1.txt").ShouldBeTrue();
+        TestTaskConcurrent1.Counter.ShouldBe(1);
+        TestTaskConcurrent2.Counter.ShouldBe(1);
+
+        var parallelExecution = TestTaskConcurrent1.StartTime < TestTaskConcurrent2.EndTime &&
+                                TestTaskConcurrent2.StartTime < TestTaskConcurrent1.EndTime;
+
+        parallelExecution.ShouldBeTrue();
+
 
         var cts = new CancellationTokenSource();
         cts.CancelAfter(2000);

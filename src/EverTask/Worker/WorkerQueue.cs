@@ -28,4 +28,9 @@ public class WorkerQueue(EverTaskServiceConfiguration configuration, IEverTaskLo
     {
         return await _queue.Reader.ReadAsync(cancellationToken).ConfigureAwait(false);
     }
+
+    public IAsyncEnumerable<TaskHandlerExecutor> DequeueAll(CancellationToken cancellationToken)
+    {
+        return _queue.Reader.ReadAllAsync(cancellationToken);
+    }
 }
