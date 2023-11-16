@@ -1,5 +1,6 @@
 ﻿using EverTask.Handler;
 using EverTask.Logger;
+using EverTask.Scheduler;
 using EverTask.Storage;
 
 namespace EverTask.Tests;
@@ -21,6 +22,7 @@ public class QueueTests
         _executor = new TaskHandlerExecutor(
             new TestTaskRequest2(),
             new TestTaskHanlder2(),
+            null,
             null!,
             null,
             null,

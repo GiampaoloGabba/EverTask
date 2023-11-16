@@ -123,7 +123,7 @@ public class WorkerService(
             {
                 try
                 {
-                    await taskDispatcher.ExecuteDispatch(task, ct, taskInfo.Id).ConfigureAwait(false);
+                    await taskDispatcher.ExecuteDispatch(task, taskInfo.ScheduledExecutionUtc, ct, taskInfo.Id).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {

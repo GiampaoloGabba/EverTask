@@ -22,7 +22,7 @@ await host.StartAsync();
 
 var dispatcher = host.Services.GetRequiredService<ITaskDispatcher>();
 
-await dispatcher.Dispatch(new SampleTaskRequest("Hello World"));
+await dispatcher.Dispatch(new SampleTaskRequest("Hello World"), TimeSpan.FromMinutes(1));
 
-await host.StopAsync();
 Console .ReadKey();
+await host.StopAsync();

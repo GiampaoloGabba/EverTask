@@ -6,28 +6,66 @@
 public interface ITaskDispatcher
 {
     /// <summary>
-    /// Asynchronously push a task to the backgorundqueue
+    /// Asynchronously enqueues a task to the background queue with an optional delay before execution.
     /// </summary>
-    /// <param name="task">Task object</param>
-    /// <param name="cancellationToken">Optional cancellation token</param>
-    /// <returns>A task that represents the queue operation.</returns>
-    Task Dispatch(object task, CancellationToken cancellationToken = default);
+    /// <param name="task">The task object to be executed.</param>
+    /// <param name="scheduleDelay">
+    /// Optional. The amount of time to delay before executing the task.
+    /// Defaults to immediate execution if not specified.
+    /// </param>
+    /// <param name="cancellationToken">
+    /// Optional. A token for canceling the scheduling before its execution.
+    /// </param>
+    /// <returns>A task that represents the asyncronous queue operation.</returns>
+    Task Dispatch(object task, TimeSpan? scheduleDelay = null, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Asynchronously push a task to the backgorundqueue
+    /// Asynchronously enqueues a task to the background queue with an optional delay before execution.
     /// </summary>
-    /// <param name="task">Task object</param>
-    /// <param name="cancellationToken">Optional cancellation token</param>
-    /// <returns>A task that represents the queue operation.</returns>
-    Task Dispatch<TTask>(TTask task, CancellationToken cancellationToken = default)
+    /// <param name="task">The task object to be executed.</param>
+    /// <param name="scheduleDelay">
+    /// Optional. The amount of time to delay before executing the task.
+    /// Defaults to immediate execution if not specified.
+    /// </param>
+    /// <param name="cancellationToken">
+    /// Optional. A token for canceling the scheduling before its execution.
+    /// </param>
+    /// <returns>A task that represents the asyncronous queue operation.</returns>
+    Task Dispatch<TTask>(TTask task, TimeSpan? scheduleDelay = null, CancellationToken cancellationToken = default)
         where TTask : IEverTask;
 
     /// <summary>
-    /// Asynchronously push a task to the backgorundqueue. For internal use.
+    /// For internal use only! - Asynchronously enqueues a task to the background queue with an optional delay before execution.
     /// </summary>
-    /// <param name="task">Task object</param>
-    /// <param name="ct">Optional cancellation token</param>
+    /// <param name="task">The task object to be executed.</param>
+    /// <param name="ct">/// Optional. A token for canceling the scheduling before its execution.</param>
     /// <param name="existingTaskId">Optional existing persistence guid for the task</param>
     /// <returns>A task that represents the queue operation.</returns>
     Task ExecuteDispatch(IEverTask task, CancellationToken ct = default, Guid? existingTaskId = null);
+
+    /// <summary>
+    /// For internal use only! - Asynchronously enqueues a task to the background queue with an optional delay before execution.
+    /// </summary>
+    /// <param name="task">The task object to be executed.</param>
+    /// <param name="scheduleDelay">
+    /// Optional. The amount of time to delay before executing the task.
+    /// Defaults to immediate execution if not specified.
+    /// </param>
+    /// <param name="ct">/// Optional. A token for canceling the scheduling before its execution.</param>
+    /// <param name="existingTaskId">Optional existing persistence guid for the task</param>
+    /// <returns>A task that represents the queue operation.</returns>
+    Task ExecuteDispatch(IEverTask task, TimeSpan? scheduleDelay, CancellationToken ct = default, Guid? existingTaskId = null);
+
+    /// <summary>
+    /// For internal use only! - Asynchronously enqueues a task to the background queue with an optional delay before execution.
+    /// </summary>
+    /// <param name="task">The task object to be executed.</param>
+    /// <param name="executionTime">
+    /// Optional. The DateTimeOffset for the task execution.
+    /// Defaults to immediate execution if not specified.
+    /// </param>
+    /// <param name="ct">/// Optional. A token for canceling the scheduling before its execution.</param>
+    /// <param name="existingTaskId">Optional existing persistence guid for the task</param>
+    /// <returns>A task that represents the queue operation.</returns>
+    Task ExecuteDispatch(IEverTask task, DateTimeOffset? executionTime = null, CancellationToken ct = default, Guid? existingTaskId = null);
 }

@@ -7,6 +7,7 @@
 public record TaskHandlerExecutor(
     IEverTask Task,
     object Handler,
+    DateTimeOffset? ExecutionTime,
     Func<IEverTask, CancellationToken, Task> HandlerCallback,
     Func<Guid, Exception?, string, ValueTask>? HandlerErrorCallback,
     Func<Guid, ValueTask>? HandlerStartedCallback,
@@ -20,9 +21,9 @@ public static class TaskHandlerExecutorExtensions
         ArgumentNullException.ThrowIfNull(executor.Task);
         ArgumentNullException.ThrowIfNull(executor.Handler);
 
-        var request = JsonConvert.SerializeObject(executor.Task);
-        var requestType = executor.Task.GetType().AssemblyQualifiedName;
-        var handlerType = executor.Handler.GetType().AssemblyQualifiedName;
+        var request       = JsonConvert.SerializeObject(executor.Task);
+        var requestType   = executor.Task.GetType().AssemblyQualifiedName;
+        var handlerType   = executor.Handler.GetType().AssemblyQualifiedName;
 
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(requestType);
@@ -30,12 +31,13 @@ public static class TaskHandlerExecutorExtensions
 
         return new QueuedTask
         {
-            Id           = executor.PersistenceId,
-            Type         = requestType,
-            Request      = request,
-            Handler      = handlerType,
-            Status       = QueuedTaskStatus.WaitingQueue,
-            CreatedAtUtc = DateTimeOffset.UtcNow
+            Id                    = executor.PersistenceId,
+            Type                  = requestType,
+            Request               = request,
+            Handler               = handlerType,
+            Status                = QueuedTaskStatus.WaitingQueue,
+            CreatedAtUtc          = DateTimeOffset.UtcNow,
+            ScheduledExecutionUtc = executor.ExecutionTime
         };
     }
 }

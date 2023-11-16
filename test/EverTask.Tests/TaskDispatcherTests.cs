@@ -1,4 +1,5 @@
 ﻿using EverTask.Logger;
+using EverTask.Scheduler;
 
 namespace EverTask.Tests;
 
@@ -10,12 +11,14 @@ public class TaskDispatcherTests
     {
         var serviceProviderMock      = new Mock<IServiceProvider>();
         var workerQueueMock          = new Mock<IWorkerQueue>();
+        var delayedQueue             = new Mock<IDelayedQueue>();
         var serviceConfigurationMock = new Mock<EverTaskServiceConfiguration>();
         var loggerMock               = new Mock<IEverTaskLogger<TaskDispatcher>>();
 
         _taskDispatcher = new TaskDispatcher(
             serviceProviderMock.Object,
             workerQueueMock.Object,
+            delayedQueue.Object,
             serviceConfigurationMock.Object,
             loggerMock.Object);
     }
