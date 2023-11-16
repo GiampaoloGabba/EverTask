@@ -9,20 +9,20 @@ EverTask is a .NET library for executing background tasks in .NET applications. 
 > This project is in its initial stages, more detailed documentation will be provided in the future.
 
 ## Features
-| Feature                          | Description                                                                                                                 |
-|----------------------------------|-----------------------------------------------------------------------------------------------------------------------------|
-| **Background Task Execution**    | Easily run background tasks with parameters in .NET                                                                         |
-| **Persistence**                  | Resumes pending tasks after application restarts.                                                                           |
-| **Managed Parallelism**          | Efficiently handles concurrent task execution with configurable parallelism.                                                |
-| **Scheduled/Delayed tasks**      | 🌟 Coming soon! Delayed are already working in [this branch](https://github.com/GiampaoloGabba/EverTask/tree/delayed-tasks) |
-| **Async All The Way**            | Fully asynchronous architecture, enhancing performance and scalability in modern environments.                              |
-| **Simplicity by Design**         | Created for simplicity, using the latest .NET technologies.                                                                 |
-| **Inspiration from MediaTr**     | Implementation based on creating requests and handlers.                                                                     |
-| **Error Handling**               | Method overrides for error observation and task completion.                                                                 |
-| **In-Memory Storage**            | Provides an in-memory storage solution for testing and lightweight applications.                                            |
-| **SQL Storage**                  | Includes support for SQL Server storage, enabling persistent task management.                                               |
-| **Serilog Integration**          | Supports integration with Serilog for detailed and customizable logging.                                                    |
-| **Extensible Storage & Logging** | Designed to allow easy plug-in of additional database solutions or logging systems.                                         |                                                                      |
+| Feature                          | Description                                                                                                                          |
+|----------------------------------|--------------------------------------------------------------------------------------------------------------------------------------|
+| **Background Task Execution**    | Easily run background tasks with parameters in .NET                                                                                  |
+| **Persistence**                  | Resumes pending tasks after application restarts.                                                                                    |
+| **Managed Parallelism**          | Efficiently handles concurrent task execution with configurable parallelism.                                                         |
+| **Scheduled and Delayed tasks**  | 🌟 Coming soon! Already working in [this branch](https://github.com/GiampaoloGabba/EverTask/tree/delayed-tasks), need tests and docs |
+| **Async All The Way**            | Fully asynchronous architecture, enhancing performance and scalability in modern environments.                                       |
+| **Simplicity by Design**         | Created for simplicity, using the latest .NET technologies.                                                                          |
+| **Inspiration from MediaTr**     | Implementation based on creating requests and handlers.                                                                              |
+| **Error Handling**               | Method overrides for error observation and task completion.                                                                          |
+| **In-Memory Storage**            | Provides an in-memory storage solution for testing and lightweight applications.                                                     |
+| **SQL Storage**                  | Includes support for SQL Server storage, enabling persistent task management.                                                        |
+| **Serilog Integration**          | Supports integration with Serilog for detailed and customizable logging.                                                             |
+| **Extensible Storage & Logging** | Designed to allow easy plug-in of additional database solutions or logging systems.                                                  |                                                                      |
 
 
 ## Efficient Task Processing
