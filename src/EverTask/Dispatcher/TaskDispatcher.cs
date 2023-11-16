@@ -1,7 +1,7 @@
 ﻿using EverTask.Logger;
 using EverTask.Scheduler;
 
-namespace EverTask;
+namespace EverTask.Dispatcher;
 
 // This code was adapted from MediatR by Jimmy Bogard.
 // Specific inspiration was taken from the Mediator.cs file.
@@ -14,7 +14,7 @@ public class TaskDispatcher(
     IScheduler scheduler,
     EverTaskServiceConfiguration serviceConfiguration,
     IEverTaskLogger<TaskDispatcher> logger,
-    ITaskStorage? taskStorage = null) : ITaskDispatcher
+    ITaskStorage? taskStorage = null) : ITaskDispatcherInternal
 {
 
     /// <inheritdoc />

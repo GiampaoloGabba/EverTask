@@ -1,4 +1,5 @@
-﻿using EverTask.Logger;
+﻿using EverTask.Dispatcher;
+using EverTask.Logger;
 using EverTask.Scheduler;
 
 namespace EverTask.Tests;

@@ -1,4 +1,5 @@
-﻿using EverTask.Logger;
+﻿using EverTask.Dispatcher;
+using EverTask.Logger;
 using EverTask.Scheduler;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -20,7 +21,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton(typeof(IEverTaskLogger<>), typeof(EverTaskLogger<>));
         services.TryAddSingleton<IScheduler, Scheduler>();
         services.TryAddSingleton<IWorkerQueue, WorkerQueue>();
-        services.TryAddSingleton<ITaskDispatcher, TaskDispatcher>();
+        services.AddSingleton<ITaskDispatcherInternal, TaskDispatcher>();
+        services.AddSingleton<ITaskDispatcher>(provider => provider.GetRequiredService<ITaskDispatcherInternal>());
         services.AddHostedService<WorkerService>();
         services.AddEverTaskHandlers(options);
 

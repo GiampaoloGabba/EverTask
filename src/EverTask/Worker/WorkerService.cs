@@ -1,4 +1,5 @@
-﻿using EverTask.Logger;
+﻿using EverTask.Dispatcher;
+using EverTask.Logger;
 using Microsoft.Extensions.Hosting;
 
 namespace EverTask.Worker;
@@ -6,7 +7,7 @@ namespace EverTask.Worker;
 public class WorkerService(
     IWorkerQueue workerQueue,
     IServiceScopeFactory serviceScopeFactory,
-    ITaskDispatcher taskDispatcher,
+    ITaskDispatcherInternal taskDispatcher,
     EverTaskServiceConfiguration configuration,
     IEverTaskLogger<WorkerService> logger) : BackgroundService
 {
