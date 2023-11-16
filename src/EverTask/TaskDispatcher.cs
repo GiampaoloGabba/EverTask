@@ -11,39 +11,28 @@ namespace EverTask;
 public class TaskDispatcher(
     IServiceProvider serviceProvider,
     IWorkerQueue workerQueue,
-    IDelayedQueue delayedQueue,
+    IScheduler scheduler,
     EverTaskServiceConfiguration serviceConfiguration,
     IEverTaskLogger<TaskDispatcher> logger,
     ITaskStorage? taskStorage = null) : ITaskDispatcher
 {
-    /// <inheritdoc />
-    public Task Dispatch<TTask>(TTask task, TimeSpan? executionDelay = null, CancellationToken cancellationToken = default) where TTask : IEverTask
-    {
-        if (task == null)
-        {
-            throw new ArgumentNullException(nameof(task));
-        }
-
-        return ExecuteDispatch(task, executionDelay, cancellationToken);
-    }
 
     /// <inheritdoc />
-    public Task Dispatch(object task, TimeSpan? executionDelay = null, CancellationToken cancellationToken = default) =>
-        task switch
-        {
-            null => throw new ArgumentNullException(nameof(task)),
-            IEverTask instance => ExecuteDispatch(instance, executionDelay, cancellationToken),
-            _ => throw new ArgumentException($"{nameof(task)} does not implement ${nameof(IEverTask)}")
-        };
+    public Task Dispatch<TTask>(TTask task,  CancellationToken cancellationToken = default) where TTask : IEverTask =>
+        ExecuteDispatch(task, (DateTimeOffset?)null, cancellationToken);
 
     /// <inheritdoc />
-    public async Task ExecuteDispatch(IEverTask task, CancellationToken ct = default, Guid? existingTaskId = null)
-    {
-        if (task == null)
-            throw new ArgumentNullException(nameof(task));
+    public Task Dispatch<TTask>(TTask task, TimeSpan executionDelay, CancellationToken cancellationToken = default) where TTask : IEverTask =>
+        ExecuteDispatch(task, executionDelay, cancellationToken);
 
+    /// <inheritdoc />
+    public Task Dispatch<TTask>(TTask task, DateTimeOffset executionTime, CancellationToken cancellationToken = default) where TTask : IEverTask =>
+        ExecuteDispatch(task, executionTime, cancellationToken);
+
+
+    /// <inheritdoc />
+    public async Task ExecuteDispatch(IEverTask task, CancellationToken ct = default, Guid? existingTaskId = null) =>
         await ExecuteDispatch(task, (DateTimeOffset?)null, ct, existingTaskId).ConfigureAwait(false);
-    }
 
     /// <inheritdoc />
     public async Task ExecuteDispatch(IEverTask task, TimeSpan? executionDelay = null, CancellationToken ct = default,
@@ -92,9 +81,9 @@ public class TaskDispatcher(
             }
         }
 
-        if (executionTime > DateTimeOffset.UtcNow)
+        if (executor.ExecutionTime > DateTimeOffset.UtcNow)
         {
-            delayedQueue.Enqueue(executor);
+            scheduler.Schedule(executor);
         }
         else
         {

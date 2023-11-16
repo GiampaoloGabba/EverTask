@@ -6,32 +6,41 @@
 public interface ITaskDispatcher
 {
     /// <summary>
-    /// Asynchronously enqueues a task to the background queue with an optional delay before execution.
+    /// Asynchronously enqueues a task to the background queue
     /// </summary>
-    /// <param name="task">The task object to be executed.</param>
-    /// <param name="scheduleDelay">
-    /// Optional. The amount of time to delay before executing the task.
-    /// Defaults to immediate execution if not specified.
-    /// </param>
+    /// <param name="task">The IEverTask to be executed.</param>
     /// <param name="cancellationToken">
-    /// Optional. A token for canceling the scheduling before its execution.
+    /// Optional. A token for canceling the dispatch operation.
     /// </param>
     /// <returns>A task that represents the asyncronous queue operation.</returns>
-    Task Dispatch(object task, TimeSpan? scheduleDelay = null, CancellationToken cancellationToken = default);
+    Task Dispatch<TTask>(TTask task, CancellationToken cancellationToken = default) where TTask : IEverTask;
 
     /// <summary>
-    /// Asynchronously enqueues a task to the background queue with an optional delay before execution.
+    /// Asynchronously schedules a task to the background queue with a delay before execution.
     /// </summary>
-    /// <param name="task">The task object to be executed.</param>
+    /// <param name="task">The IEverTask to be executed.</param>
     /// <param name="scheduleDelay">
-    /// Optional. The amount of time to delay before executing the task.
-    /// Defaults to immediate execution if not specified.
+    /// The amount of time to delay the execution of the task.
     /// </param>
     /// <param name="cancellationToken">
-    /// Optional. A token for canceling the scheduling before its execution.
+    /// Optional. A token for canceling the dispatch operation.
     /// </param>
-    /// <returns>A task that represents the asyncronous queue operation.</returns>
-    Task Dispatch<TTask>(TTask task, TimeSpan? scheduleDelay = null, CancellationToken cancellationToken = default)
+    /// <returns>A task that represents the asynchronous queue operation.</returns>
+    Task Dispatch<TTask>(TTask task, TimeSpan scheduleDelay, CancellationToken cancellationToken = default)
+        where TTask : IEverTask;
+
+    /// <summary>
+    /// Asynchronously schedules a task to the background queue to be executed at a specified time.
+    /// </summary>
+    /// <param name="task">The IEverTask to be executed.</param>
+    /// <param name="scheduleTime">
+    /// The specific time when the task is to be executed.
+    /// </param>
+    /// <param name="cancellationToken">
+    /// Optional. A token for canceling the dispatch operation.
+    /// </param>
+    /// <returns>A task that represents the asynchronous queue operation.</returns>
+    Task Dispatch<TTask>(TTask task, DateTimeOffset scheduleTime, CancellationToken cancellationToken = default)
         where TTask : IEverTask;
 
     /// <summary>

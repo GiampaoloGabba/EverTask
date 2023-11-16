@@ -17,6 +17,8 @@ internal class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TTask : I
     {
         var handlerService = serviceFactory.GetService<IEverTaskHandler<TTask>>();
 
+        executionTime = executionTime?.ToUniversalTime();
+
         ArgumentNullException.ThrowIfNull(handlerService);
 
         return new TaskHandlerExecutor(

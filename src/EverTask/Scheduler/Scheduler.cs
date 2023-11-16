@@ -2,16 +2,16 @@
 
 namespace EverTask.Scheduler;
 
-internal class DelayedQueue : IDelayedQueue
+internal class Scheduler : IScheduler
 {
     private readonly IWorkerQueue _workerQueue;
     private readonly ITaskStorage? _taskStorage;
-    private readonly IEverTaskLogger<DelayedQueue> _logger;
+    private readonly IEverTaskLogger<Scheduler> _logger;
     private readonly ConcurrentPriorityQueue<TaskHandlerExecutor, DateTimeOffset> _queue;
     private readonly Timer _timer;
 
-    public DelayedQueue(IWorkerQueue workerQueue,
-                        IEverTaskLogger<DelayedQueue> logger,
+    public Scheduler(IWorkerQueue workerQueue,
+                        IEverTaskLogger<Scheduler> logger,
                         ITaskStorage? taskStorage = null)
     {
         _workerQueue = workerQueue;
@@ -21,7 +21,7 @@ internal class DelayedQueue : IDelayedQueue
         _timer       = new Timer(TimerCallback, null, Timeout.Infinite, Timeout.Infinite);
     }
 
-    public void Enqueue(TaskHandlerExecutor item)
+    public void Schedule(TaskHandlerExecutor item)
     {
         ArgumentNullException.ThrowIfNull(item.ExecutionTime);
         _queue.Enqueue(item, item.ExecutionTime.Value);

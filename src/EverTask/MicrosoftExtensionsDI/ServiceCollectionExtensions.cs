@@ -18,7 +18,7 @@ public static class ServiceCollectionExtensions
 
         services.TryAddSingleton(options);
         services.TryAddSingleton(typeof(IEverTaskLogger<>), typeof(EverTaskLogger<>));
-        services.TryAddSingleton<IDelayedQueue, DelayedQueue>();
+        services.TryAddSingleton<IScheduler, Scheduler>();
         services.TryAddSingleton<IWorkerQueue, WorkerQueue>();
         services.TryAddSingleton<ITaskDispatcher, TaskDispatcher>();
         services.AddHostedService<WorkerService>();

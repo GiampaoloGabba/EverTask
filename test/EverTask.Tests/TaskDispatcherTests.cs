@@ -11,7 +11,7 @@ public class TaskDispatcherTests
     {
         var serviceProviderMock      = new Mock<IServiceProvider>();
         var workerQueueMock          = new Mock<IWorkerQueue>();
-        var delayedQueue             = new Mock<IDelayedQueue>();
+        var delayedQueue             = new Mock<IScheduler>();
         var serviceConfigurationMock = new Mock<EverTaskServiceConfiguration>();
         var loggerMock               = new Mock<IEverTaskLogger<TaskDispatcher>>();
 
@@ -28,12 +28,5 @@ public class TaskDispatcherTests
     {
         IEverTask task = null!;
         await Assert.ThrowsAsync<ArgumentNullException>(() => _taskDispatcher.Dispatch(task));
-    }
-
-    [Fact]
-    public async Task Should_throw_ArgumentNullException_when_task_isNot_IEverTask()
-    {
-        object task = new object();
-        await Assert.ThrowsAsync<ArgumentException>(() => _taskDispatcher.Dispatch(task));
     }
 }

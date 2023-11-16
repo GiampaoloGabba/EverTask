@@ -12,4 +12,10 @@ public class SampleTaskRequestHanlder(ILogger<SampleTaskRequestHanlder> logger) 
         logger.LogInformation(backgroundTask.TestProperty);
         return Task.CompletedTask;
     }
+
+    public override ValueTask OnStarted(Guid persistenceId)
+    {
+        logger.LogInformation("**** STARTED: {persistenceId} at {date}", persistenceId, DateTimeOffset.Now);
+        return ValueTask.CompletedTask;
+    }
 }
