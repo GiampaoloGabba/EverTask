@@ -36,4 +36,10 @@ public class SampleTaskRequestHanlder : EverTaskHandler<SampleTaskRequest>
         _logger.LogError(exception, message);
         return ValueTask.CompletedTask;
     }
+
+    protected override ValueTask DisposeAsyncCore()
+    {
+        _logger.LogInformation("====== DISPOSING TASK COMPLETED IN BACKGROUND ======");
+        return base.DisposeAsyncCore();
+    }
 }

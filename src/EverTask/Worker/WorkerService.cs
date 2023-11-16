@@ -42,6 +42,18 @@ public class WorkerService(
 
             await task.HandlerCallback.Invoke(task.Task, token).ConfigureAwait(false);
 
+            if (task.Handler is IAsyncDisposable asyncDisposable)
+            {
+                try
+                {
+                    await asyncDisposable.DisposeAsync();
+                }
+                catch (Exception e)
+                {
+                    logger.LogError(e, "Unable to dispose Task with id {taskId}.", task.PersistenceId);
+                }
+            }
+
             if (taskStorage != null)
                 await taskStorage.SetTaskCompleted(task.PersistenceId, token).ConfigureAwait(false);
 

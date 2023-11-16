@@ -4,7 +4,7 @@
 /// Defines a handler for a background task
 /// </summary>
 /// <typeparam name="TTask">The type of task being handled</typeparam>
-public interface IEverTaskHandler<in TTask> where TTask : IEverTask
+public interface IEverTaskHandler<in TTask> : IAsyncDisposable where TTask : IEverTask
 {
     /// <summary>
     /// Handles the specified EverTask object asynchronously.
