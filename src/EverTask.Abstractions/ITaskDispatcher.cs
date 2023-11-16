@@ -13,7 +13,7 @@ public interface ITaskDispatcher
     /// Optional. A token for canceling the dispatch operation.
     /// </param>
     /// <returns>A task that represents the asyncronous queue operation.</returns>
-    Task Dispatch<TTask>(TTask task, CancellationToken cancellationToken = default) where TTask : IEverTask;
+    Task Dispatch(IEverTask task, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Asynchronously schedules a task to the background queue with a delay before execution.
@@ -26,8 +26,7 @@ public interface ITaskDispatcher
     /// Optional. A token for canceling the dispatch operation.
     /// </param>
     /// <returns>A task that represents the asynchronous queue operation.</returns>
-    Task Dispatch<TTask>(TTask task, TimeSpan scheduleDelay, CancellationToken cancellationToken = default)
-        where TTask : IEverTask;
+    Task Dispatch(IEverTask task, TimeSpan scheduleDelay, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Asynchronously schedules a task to the background queue to be executed at a specified time.
@@ -40,8 +39,7 @@ public interface ITaskDispatcher
     /// Optional. A token for canceling the dispatch operation.
     /// </param>
     /// <returns>A task that represents the asynchronous queue operation.</returns>
-    Task Dispatch<TTask>(TTask task, DateTimeOffset scheduleTime, CancellationToken cancellationToken = default)
-        where TTask : IEverTask;
+    Task Dispatch(IEverTask task, DateTimeOffset scheduleTime, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// For internal use only! - Asynchronously enqueues a task to the background queue with an optional delay before execution.

@@ -18,15 +18,15 @@ public class TaskDispatcher(
 {
 
     /// <inheritdoc />
-    public Task Dispatch<TTask>(TTask task,  CancellationToken cancellationToken = default) where TTask : IEverTask =>
+    public Task Dispatch(IEverTask task,  CancellationToken cancellationToken = default)=>
         ExecuteDispatch(task, (DateTimeOffset?)null, cancellationToken);
 
     /// <inheritdoc />
-    public Task Dispatch<TTask>(TTask task, TimeSpan executionDelay, CancellationToken cancellationToken = default) where TTask : IEverTask =>
+    public Task Dispatch(IEverTask task, TimeSpan executionDelay, CancellationToken cancellationToken = default) =>
         ExecuteDispatch(task, executionDelay, cancellationToken);
 
     /// <inheritdoc />
-    public Task Dispatch<TTask>(TTask task, DateTimeOffset executionTime, CancellationToken cancellationToken = default) where TTask : IEverTask =>
+    public Task Dispatch(IEverTask task, DateTimeOffset executionTime, CancellationToken cancellationToken = default) =>
         ExecuteDispatch(task, executionTime, cancellationToken);
 
 
