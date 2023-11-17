@@ -4,10 +4,10 @@ namespace EverTask.Tests.IntegrationTests;
 
 public class WorkerServiceIntegrationTests
 {
-    private readonly ITaskDispatcher _dispatcher;
-    private readonly ITaskStorage _storage;
-    private readonly IHost _host;
-    private readonly IWorkerQueue _workerQueue;
+    private ITaskDispatcher _dispatcher;
+    private ITaskStorage _storage;
+    private IHost _host;
+    private IWorkerQueue _workerQueue;
 
     public WorkerServiceIntegrationTests()
     {
@@ -45,7 +45,9 @@ public class WorkerServiceIntegrationTests
         var tasks = await _storage.GetAll();
 
         tasks.Length.ShouldBe(1);
-        tasks[0].Status = QueuedTaskStatus.Completed;
+        tasks[0].Status.ShouldBe(QueuedTaskStatus.Completed);
+        tasks[0].LastExecutionUtc.ShouldNotBeNull();
+        tasks[0].Exception.ShouldBeNull();
 
         var cts = new CancellationTokenSource();
         cts.CancelAfter(2000);
@@ -91,6 +93,47 @@ public class WorkerServiceIntegrationTests
 
         parallelExecution.ShouldBeTrue();
 
+
+        var cts = new CancellationTokenSource();
+        cts.CancelAfter(2000);
+
+        await _host.StopAsync(cts.Token);
+    }
+
+    [Fact]
+    public async Task Should_execute_Tasks_sequentially()
+    {
+        _host = new HostBuilder()
+                .ConfigureServices((hostContext, services) =>
+                {
+                    services.AddLogging();
+                    services.AddEverTask(cfg => cfg.RegisterTasksFromAssembly(typeof(TestTaskRequest).Assembly)
+                                                   .SetChannelOptions(3)
+                                                   .SetMaxDegreeOfParallelism(1))
+                            .AddMemoryStorage();
+                    services.AddSingleton<ITaskStorage, MemoryTaskStorage>();
+                })
+                .Build();
+
+        _dispatcher  = _host.Services.GetRequiredService<ITaskDispatcher>();
+        _storage     = _host.Services.GetRequiredService<ITaskStorage>();
+        _workerQueue = _host.Services.GetRequiredService<IWorkerQueue>();
+
+        await _host.StartAsync();
+
+        var task1 = new TestTaskConcurrent1();
+        await _dispatcher.Dispatch(task1);
+
+        await Task.Delay(1100, CancellationToken.None);
+
+        TestTaskConcurrent1.Counter.ShouldBe(1);
+
+        var task2 = new TestTaskConcurrent2();
+        await _dispatcher.Dispatch(task2);
+
+        await Task.Delay(1100, CancellationToken.None);
+
+        TestTaskConcurrent2.Counter.ShouldBe(1);
 
         var cts = new CancellationTokenSource();
         cts.CancelAfter(2000);

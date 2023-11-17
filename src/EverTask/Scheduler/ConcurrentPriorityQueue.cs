@@ -14,54 +14,6 @@ internal class ConcurrentPriorityQueue<TElement, TPriority>
     public ConcurrentPriorityQueue() => _queue = new PriorityQueue<TElement, TPriority>();
 
     /// <summary>
-    ///  Initializes a new instance of the <see cref="PriorityQueue{TElement, TPriority}"/> class with thread safety
-    ///  and the specified custom priority comparer.
-    /// </summary>
-    /// <param name="comparer">
-    ///  Custom comparer dictating the ordering of elements.
-    ///  Uses <see cref="Comparer{T}.Default" /> if the argument is <see langword="null"/>.
-    /// </param>
-    public ConcurrentPriorityQueue(IComparer<TPriority>? comparer) =>
-        _queue = new PriorityQueue<TElement, TPriority>(comparer);
-
-    /// <summary>
-    ///  Initializes a new instance of the <see cref="PriorityQueue{TElement, TPriority}"/> class with thread safety
-    ///  with the specified initial capacity and custom priority comparer.
-    /// </summary>
-    /// <param name="initialCapacity">Initial capacity to allocate in the underlying heap array.</param>
-    /// <param name="comparer">
-    ///  Custom comparer dictating the ordering of elements.
-    ///  Uses <see cref="Comparer{T}.Default" /> if the argument is <see langword="null"/>.
-    /// </param>
-    /// <exception cref="ArgumentOutOfRangeException">
-    ///  The specified <paramref name="initialCapacity"/> was negative.
-    /// </exception>
-    public ConcurrentPriorityQueue(int initialCapacity, IComparer<TPriority>? comparer = null) =>
-        _queue = new PriorityQueue<TElement, TPriority>(initialCapacity, comparer);
-
-    /// <summary>
-    ///  Initializes a new instance of the <see cref="PriorityQueue{TElement, TPriority}"/> class
-    ///  that is populated with the specified elements and priorities,
-    ///  and with the specified custom priority comparer.
-    /// </summary>
-    /// <param name="items">The pairs of elements and priorities with which to populate the queue.</param>
-    /// <param name="comparer">
-    ///  Custom comparer dictating the ordering of elements.
-    ///  Uses <see cref="Comparer{T}.Default" /> if the argument is <see langword="null"/>.
-    /// </param>
-    /// <exception cref="ArgumentNullException">
-    ///  The specified <paramref name="items"/> argument was <see langword="null"/>.
-    /// </exception>
-    /// <remarks>
-    ///  Constructs the heap using a heapify operation,
-    ///  which is generally faster than enqueuing individual elements sequentially.
-    /// </remarks>
-    public ConcurrentPriorityQueue(IEnumerable<(TElement Element, TPriority Priority)> items,
-                                   IComparer<TPriority>? comparer = null) =>
-        _queue = new PriorityQueue<TElement, TPriority>(items, comparer);
-
-
-    /// <summary>
     ///  Adds with thread safety the specified element with associated priority to the <see cref="PriorityQueue{TElement, TPriority}"/>.
     /// </summary>
     /// <param name="element">The element to add to the <see cref="PriorityQueue{TElement, TPriority}"/>.</param>
@@ -151,6 +103,20 @@ internal class ConcurrentPriorityQueue<TElement, TPriority>
         lock (_lock)
         {
             return _queue.TryPeek(out element, out priority);
+        }
+    }
+
+    /// <summary>
+    ///  Gets, with thread safety, the number of elements contained in the <see cref="PriorityQueue{TElement, TPriority}"/>.
+    /// </summary>
+    public int Count
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _queue.Count;
+            }
         }
     }
 }

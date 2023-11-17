@@ -48,4 +48,19 @@ public class QueueTests
         persist.Length.ShouldBe(1);
         persist[0].Status.ShouldBe(QueuedTaskStatus.Queued);
     }
+
+    [Fact]
+    public async Task Should_update_Audit_correctly_when_updating_status()
+    {
+        await _memoryStorage.PersistTask(_executor.ToQueuedTask());
+
+        await _workerQueue.Queue(_executor);
+        var persist = await _memoryStorage.RetrievePendingTasks();
+        persist.Length.ShouldBe(1);
+        persist[0].Status.ShouldBe(QueuedTaskStatus.Queued);
+
+        persist[0].StatusAudits.Count.ShouldBe(1);
+        persist[0].StatusAudits.FirstOrDefault()?.QueuedTaskId.ShouldBe(persist[0].Id);
+        persist[0].StatusAudits.FirstOrDefault()?.NewStatus.ShouldBe(QueuedTaskStatus.Queued);
+    }
 }

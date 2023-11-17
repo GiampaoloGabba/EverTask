@@ -1,4 +1,5 @@
-﻿using EverTask.Storage;
+﻿using EverTask.Scheduler;
+using EverTask.Storage;
 
 namespace EverTask.Tests.IntegrationTests;
 
@@ -6,6 +7,7 @@ public class TaskDispatcherIntegrationTests
 {
     private readonly ITaskDispatcher _dispatcher;
     private readonly IWorkerQueue _workerQueue;
+    private readonly IScheduler _scheduler;
 
 
     public TaskDispatcherIntegrationTests()
@@ -20,6 +22,7 @@ public class TaskDispatcherIntegrationTests
         var provider = services.BuildServiceProvider();
         _dispatcher  = provider.GetRequiredService<ITaskDispatcher>();
         _workerQueue = provider.GetRequiredService<IWorkerQueue>();
+        _scheduler   = provider.GetRequiredService<IScheduler>();
     }
 
     [Fact]
@@ -114,5 +117,35 @@ public class TaskDispatcherIntegrationTests
         pending[0].Type.ShouldBe(typeof(TestTaskRequest).AssemblyQualifiedName);
         pending[0].Handler.ShouldBe(typeof(TestTaskHanlder).AssemblyQualifiedName);
         pending[0].Id.ShouldBeOfType<Guid>();
+    }
+
+    [Fact]
+    public async Task Should_put_Timespan_Item_into_Timed_Scheduler()
+    {
+        var task       = new TestTaskRequest("Test");
+        var futureDate = DateTimeOffset.UtcNow.AddMinutes(1);
+        await _dispatcher.Dispatch(task, TimeSpan.FromMinutes(1));
+
+        var dequeued = ((TimerScheduler)_scheduler).GetQueue().Peek();
+        dequeued.Task.ShouldBe(task);
+
+        Assert.NotNull(dequeued.ExecutionTime);
+
+        dequeued.ExecutionTime!.Value.ShouldBeGreaterThan(futureDate);
+    }
+
+    [Fact]
+    public async Task Should_put_DateOffset_Item_into_Timed_Scheduler()
+    {
+        var task       = new TestTaskRequest("Test");
+        var futureDate = DateTimeOffset.UtcNow.AddMinutes(1);
+        await _dispatcher.Dispatch(task, futureDate);
+
+        var dequeued = ((TimerScheduler)_scheduler).GetQueue().Peek();
+        dequeued.Task.ShouldBe(task);
+
+        Assert.NotNull(dequeued.ExecutionTime);
+
+        dequeued.ExecutionTime!.Value.ShouldBe(futureDate);
     }
 }

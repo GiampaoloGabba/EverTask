@@ -2,16 +2,16 @@
 
 namespace EverTask.Scheduler;
 
-internal class Scheduler : IScheduler
+public class TimerScheduler : IScheduler
 {
     private readonly IWorkerQueue _workerQueue;
     private readonly ITaskStorage? _taskStorage;
-    private readonly IEverTaskLogger<Scheduler> _logger;
+    private readonly IEverTaskLogger<TimerScheduler> _logger;
     private readonly ConcurrentPriorityQueue<TaskHandlerExecutor, DateTimeOffset> _queue;
     private readonly Timer _timer;
 
-    public Scheduler(IWorkerQueue workerQueue,
-                        IEverTaskLogger<Scheduler> logger,
+    public TimerScheduler(IWorkerQueue workerQueue,
+                        IEverTaskLogger<TimerScheduler> logger,
                         ITaskStorage? taskStorage = null)
     {
         _workerQueue = workerQueue;
@@ -19,6 +19,11 @@ internal class Scheduler : IScheduler
         _logger      = logger;
         _queue       = new ConcurrentPriorityQueue<TaskHandlerExecutor, DateTimeOffset>();
         _timer       = new Timer(TimerCallback, null, Timeout.Infinite, Timeout.Infinite);
+    }
+
+    internal ConcurrentPriorityQueue<TaskHandlerExecutor, DateTimeOffset> GetQueue()
+    {
+        return _queue;
     }
 
     public void Schedule(TaskHandlerExecutor item)
@@ -30,7 +35,7 @@ internal class Scheduler : IScheduler
         UpdateTimer();
     }
 
-    private void TimerCallback(object? state)
+    internal void TimerCallback(object? state)
     {
         while (_queue.TryPeek(out var item, out DateTimeOffset nextDeliveryTime) &&
                nextDeliveryTime <= DateTimeOffset.UtcNow)
@@ -66,7 +71,7 @@ internal class Scheduler : IScheduler
         DispatcherQueueAsync(item).ConfigureAwait(false);
     }
 
-    private async Task DispatcherQueueAsync(TaskHandlerExecutor item)
+    internal async Task DispatcherQueueAsync(TaskHandlerExecutor item)
     {
         try
         {

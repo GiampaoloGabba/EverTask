@@ -20,6 +20,11 @@ public class EverTaskLoggerTests
         everTaskLogger.Log(LogLevel.Information, evtId, "Test", null, Formatter);
 
         loggerMock.Verify(l => l.Log(LogLevel.Information, evtId, "Test", null, Formatter), Times.Once);
+        everTaskLogger.IsEnabled(LogLevel.None).ShouldBe(loggerMock.Object.IsEnabled(LogLevel.None));
+
+        everTaskLogger.BeginScope(new Dictionary<string, object?>());
+        loggerMock.Verify(l => l.BeginScope(new Dictionary<string, object?>()), Times.Once);
+
     }
 
     [Fact]
@@ -44,6 +49,11 @@ public class EverTaskLoggerTests
         everTaskLogger.Log(LogLevel.Information, evtId, "Test", null, Formatter);
 
         defaultLoggerMock.Verify(l => l.Log(LogLevel.Information, evtId, "Test", null, Formatter), Times.Once);
+
+        everTaskLogger.IsEnabled(LogLevel.None).ShouldBe(defaultLoggerMock.Object.IsEnabled(LogLevel.None));
+
+        everTaskLogger.BeginScope(new Dictionary<string, object?>());
+        defaultLoggerMock.Verify(l => l.BeginScope(new Dictionary<string, object?>()), Times.Once);
     }
 
     private string Formatter(string s, Exception? e) => s;
