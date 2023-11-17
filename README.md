@@ -9,20 +9,20 @@ EverTask is a .NET library for executing background tasks in .NET applications. 
 > This project is in its initial stages, more detailed documentation will be provided in the future.
 
 ## Features
-| Feature                          | Description                                                                                                                          |
-|----------------------------------|--------------------------------------------------------------------------------------------------------------------------------------|
-| **Background Task Execution**    | Easily run background tasks with parameters in .NET                                                                                  |
-| **Persistence**                  | Resumes pending tasks after application restarts.                                                                                    |
-| **Managed Parallelism**          | Efficiently handles concurrent task execution with configurable parallelism.                                                         |
-| **Scheduled and Delayed tasks**  | 🌟 Coming soon! Already working in [this branch](https://github.com/GiampaoloGabba/EverTask/tree/delayed-tasks), need tests and docs |
-| **Async All The Way**            | Fully asynchronous architecture, enhancing performance and scalability in modern environments.                                       |
-| **Simplicity by Design**         | Created for simplicity, using the latest .NET technologies.                                                                          |
-| **Inspiration from MediaTr**     | Implementation based on creating requests and handlers.                                                                              |
-| **Error Handling**               | Method overrides for error observation and task completion.                                                                          |
-| **In-Memory Storage**            | Provides an in-memory storage solution for testing and lightweight applications.                                                     |
-| **SQL Storage**                  | Includes support for SQL Server storage, enabling persistent task management.                                                        |
-| **Serilog Integration**          | Supports integration with Serilog for detailed and customizable logging.                                                             |
-| **Extensible Storage & Logging** | Designed to allow easy plug-in of additional database solutions or logging systems.                                                  |                                                                      |
+| Feature                          | Description                                                                                                                        |
+|----------------------------------|------------------------------------------------------------------------------------------------------------------------------------|
+| **Background Task Execution**    | Easily run background tasks with parameters in .NET                                                                                |
+| **Persistence**                  | Resumes pending tasks after application restarts.                                                                                  |
+| **Managed Parallelism**          | Efficiently handles concurrent task execution with configurable parallelism.                                                       |
+| **Scheduled and Delayed tasks**  | 🌟 Now available! Schedule tasks for future execution or delay them using a TimeSpan or DateTimeOffset.|
+| **Async All The Way**            | Fully asynchronous architecture, enhancing performance and scalability in modern environments.                                     |
+| **Simplicity by Design**         | Created for simplicity, using the latest .NET technologies.                                                                        |
+| **Inspiration from MediaTr**     | Implementation based on creating requests and handlers.                                                                            |
+| **Error Handling**               | Method overrides for error observation and task completion.                                                                        |
+| **In-Memory Storage**            | Provides an in-memory storage solution for testing and lightweight applications.                                                   |
+| **SQL Storage**                  | Includes support for SQL Server storage, enabling persistent task management.                                                      |
+| **Serilog Integration**          | Supports integration with Serilog for detailed and customizable logging.                                                           |
+| **Extensible Storage & Logging** | Designed to allow easy plug-in of additional database solutions or logging systems.                                                |                                                                      |
 
 
 ## Efficient Task Processing
@@ -70,6 +70,12 @@ public class SampleTaskRequestHanlder : EverTaskHandler<SampleTaskRequest>
         _logger.LogError(exception, $"Error in task with ID {persistenceId}: {message}");
         return ValueTask.CompletedTask;
     }
+    
+    protected override ValueTask DisposeAsyncCore()
+    {
+        _logger.LogInformation("====== TASK DISPOSED IN BACKGROUND ======");
+        return base.DisposeAsyncCore();
+    }
 }
 ```
 
@@ -84,6 +90,33 @@ var _dispatcher = serviceProvider.GetService<ITaskDispatcher>();
 // Alternatively, ITaskDispatcher can be injected directly into the constructor of your class
 _dispatcher.Dispatch(new SampleTaskRequest("Hello World"));
 ```
+
+### Dispatching Tasks with Delay
+
+You can also schedule tasks to be executed after a certain delay. This can be achieved using either `TimeSpan` or `DateTimeOffset`.
+
+#### Using TimeSpan for Relative Delay
+To delay task execution by a relative time period, use `TimeSpan`. This is useful when you want to postpone a task by a specific duration, such as 30 minutes or 2 hours from now.
+
+```csharp
+// Delaying task execution by 30 minutes
+var delay = TimeSpan.FromMinutes(30);
+_dispatcher.Dispatch(new SampleTaskRequest("Delayed Task"), delay);
+```
+
+#### Using DateTimeOffset for Absolute Delay
+
+Alternatively, use `DateTimeOffset` for scheduling a task at a specific future point in time. This is particularly useful for tasks that need to be executed at a specific date and time, regardless of the current moment.
+
+```csharp
+// Scheduling a task for a specific time in the future
+var scheduledTime = DateTimeOffset.Now.AddHours(2); // 2 hours from now
+_dispatcher.Dispatch(new SampleTaskRequest("Scheduled Task"), scheduledTime);
+```
+&nbsp;
+> 💡 **Remember:** Delayed and scheduled tasks are also persistent. If your app restarts, you won't lose these tasks – they'll be executed at the right time!
+
+
 
 ## Basic Configuration
 ```csharp
