@@ -1,4 +1,16 @@
 ﻿<wpf:ResourceDictionary xml:space="preserve" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:s="clr-namespace:System;assembly=mscorlib" xmlns:ss="urn:shemas-jetbrains-com:settings-storage-xaml" xmlns:wpf="http://schemas.microsoft.com/winfx/2006/xaml/presentation">
 	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_002EAbstractions_003B_002A_003B_002A_003B_002A/@EntryIndexedValue">True</s:Boolean>
+	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_002EEfCore_003B_002A_003BEverTask_002EEfCore_002EExceptionExtensions_003BAppendExceptionDetails/@EntryIndexedValue">True</s:Boolean>
+	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_002EEfCore_003B_002A_003BEverTask_002EEfCore_002ETaskStoreOptions_003B_002A/@EntryIndexedValue">True</s:Boolean>
 	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_002EExample_002EAspnetCore_003B_002A_003B_002A_003B_002A/@EntryIndexedValue">True</s:Boolean>
-	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_002ETests_003B_002A_003B_002A_003B_002A/@EntryIndexedValue">True</s:Boolean></wpf:ResourceDictionary>
+	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_002EExample_002EConsole_003B_002A_003B_002A_003B_002A/@EntryIndexedValue">True</s:Boolean>
+	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_002ESerilog_003B_002A_003BEverTask_002ESerilog_002ELogEventEnricherProperty_003B_002A/@EntryIndexedValue">True</s:Boolean>
+	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_002ETests_002ELogging_003B_002A_003B_002A_003B_002A/@EntryIndexedValue">True</s:Boolean>
+	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_002ETests_002EStorage_003B_002A_003B_002A_003B_002A/@EntryIndexedValue">True</s:Boolean>
+	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_002ETests_003B_002A_003B_002A_003B_002A/@EntryIndexedValue">True</s:Boolean>
+	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_003B_002A_003BEverTask_002EDispatcher_002ETaskDispatcher_003BExecuteDispatch/@EntryIndexedValue">True</s:Boolean>
+	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_003B_002A_003BEverTask_002EDispatcher_002E_003CExecuteDispatch_003Ed_005F_005F10_003B_002A/@EntryIndexedValue">True</s:Boolean>
+	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_003B_002A_003BEverTask_002EHandler_002ETaskHandlerExecutor_003B_002Ector/@EntryIndexedValue">True</s:Boolean>
+	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_003B_002A_003BEverTask_002EStorage_002EStatusAudit_003B_002A/@EntryIndexedValue">True</s:Boolean>
+	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_003B_002A_003BEverTask_002EWorker_002EWorkerQueue_003BMoveNext/@EntryIndexedValue">True</s:Boolean>
+	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_003B_002A_003BEverTask_002EWorker_002EWorkerQueue_003BQueue/@EntryIndexedValue">True</s:Boolean></wpf:ResourceDictionary>

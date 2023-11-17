@@ -1,4 +1,5 @@
-﻿using EverTask.Logger;
+﻿using EverTask.Dispatcher;
+using EverTask.Logger;
 using Microsoft.Extensions.Hosting;
 
 namespace EverTask.Worker;
@@ -6,7 +7,7 @@ namespace EverTask.Worker;
 public class WorkerService(
     IWorkerQueue workerQueue,
     IServiceScopeFactory serviceScopeFactory,
-    ITaskDispatcher taskDispatcher,
+    ITaskDispatcherInternal taskDispatcher,
     EverTaskServiceConfiguration configuration,
     IEverTaskLogger<WorkerService> logger) : BackgroundService
 {
@@ -41,6 +42,18 @@ public class WorkerService(
             }
 
             await task.HandlerCallback.Invoke(task.Task, token).ConfigureAwait(false);
+
+            if (task.Handler is IAsyncDisposable asyncDisposable)
+            {
+                try
+                {
+                    await asyncDisposable.DisposeAsync();
+                }
+                catch (Exception e)
+                {
+                    logger.LogError(e, "Unable to dispose Task with id {taskId}.", task.PersistenceId);
+                }
+            }
 
             if (taskStorage != null)
                 await taskStorage.SetTaskCompleted(task.PersistenceId, token).ConfigureAwait(false);
@@ -123,7 +136,7 @@ public class WorkerService(
             {
                 try
                 {
-                    await taskDispatcher.ExecuteDispatch(task, ct, taskInfo.Id).ConfigureAwait(false);
+                    await taskDispatcher.ExecuteDispatch(task, taskInfo.ScheduledExecutionUtc, ct, taskInfo.Id).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {

@@ -5,7 +5,9 @@ using Microsoft.Extensions.Options;
 
 namespace EverTask.SqlServer;
 
-public class TaskStoreEfDbContext(DbContextOptions<TaskStoreEfDbContext> options, IOptions<TaskStoreOptions> storeOptions)
+public class TaskStoreEfDbContext(
+    DbContextOptions<TaskStoreEfDbContext> options,
+    IOptions<TaskStoreOptions> storeOptions)
     : DbContext(options), ITaskStoreDbContext
 {
     public string? Schema { get; } = storeOptions.Value.SchemaName;

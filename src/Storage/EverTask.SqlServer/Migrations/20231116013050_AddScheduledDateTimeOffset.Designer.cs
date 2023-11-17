@@ -4,16 +4,19 @@ using EverTask.SqlServer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
 
-namespace EverTask.EfCore.Data.Migrations
+namespace EverTask.SqlServer.Migrations
 {
     [DbContext(typeof(TaskStoreEfDbContext))]
-    partial class TaskStoreDbContextModelSnapshot : ModelSnapshot
+    [Migration("20231116013050_AddScheduledDateTimeOffset")]
+    partial class AddScheduledDateTimeOffset
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

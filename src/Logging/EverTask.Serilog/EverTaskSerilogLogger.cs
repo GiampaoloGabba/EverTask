@@ -46,7 +46,7 @@ public class EverTaskSerilogLogger<T>(ILogger logger) : IEverTaskLogger<T>
             LogLevel.Warning => LogEventLevel.Warning,
             LogLevel.Error => LogEventLevel.Error,
             LogLevel.Critical => LogEventLevel.Fatal,
-            LogLevel.None => LogEventLevel.Information,
+            LogLevel.None => LogEventLevel.Verbose,
             _ => throw new ArgumentOutOfRangeException(nameof(logLevel))
         };
 

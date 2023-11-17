@@ -2,7 +2,6 @@
 using EverTask.Example.Console;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Serilog;
 
 var builder = Host.CreateDefaultBuilder(args);
 builder.ConfigureServices(services =>
@@ -13,16 +12,21 @@ builder.ConfigureServices(services =>
                    .SetThrowIfUnableToPersist(true)
                    .RegisterTasksFromAssembly(typeof(Program).Assembly);
             })
-            .AddMemoryStorage()
-            .AddSerilog(opt => opt.WriteTo.Console());
+            .AddMemoryStorage();
 });
 
 var host = builder.Build();
 await host.StartAsync();
 
+Console.WriteLine($"=== START DISPATCH: {DateTimeOffset.Now}");
+
 var dispatcher = host.Services.GetRequiredService<ITaskDispatcher>();
 
-await dispatcher.Dispatch(new SampleTaskRequest("Hello World"));
+await dispatcher.Dispatch(new SampleTaskRequest("Hello World 30 seconds"), TimeSpan.FromSeconds(30));
 
+var scheduleTime = DateTimeOffset.Now.AddSeconds(10);
+
+await dispatcher.Dispatch(new SampleTaskRequest("Hello World 10 seconds"), scheduleTime);
+
+Console.ReadKey();
 await host.StopAsync();
-Console .ReadKey();

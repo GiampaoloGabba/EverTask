@@ -1,14 +1,20 @@
 ﻿using EverTask.Logger;
+using EverTask.Scheduler;
 
 namespace EverTask.Worker;
 
-public class WorkerQueue(EverTaskServiceConfiguration configuration, IEverTaskLogger<WorkerQueue> logger, ITaskStorage? taskStorage = null) : IWorkerQueue
+public class WorkerQueue(
+    EverTaskServiceConfiguration configuration,
+    IEverTaskLogger<WorkerQueue> logger,
+    ITaskStorage? taskStorage = null) : IWorkerQueue
 {
-    private readonly Channel<TaskHandlerExecutor> _queue = Channel.CreateBounded<TaskHandlerExecutor>(configuration.ChannelOptions);
+    private readonly Channel<TaskHandlerExecutor> _queue =
+        Channel.CreateBounded<TaskHandlerExecutor>(configuration.ChannelOptions);
 
-    public async Task Queue(TaskHandlerExecutor task)
+    public async ValueTask Queue(TaskHandlerExecutor task)
     {
         ArgumentNullException.ThrowIfNull(task);
+
         if (taskStorage != null)
             await taskStorage.SetTaskQueued(task.PersistenceId).ConfigureAwait(false);
         try
@@ -20,7 +26,7 @@ public class WorkerQueue(EverTaskServiceConfiguration configuration, IEverTaskLo
         {
             logger.LogError(e, "Unable to queuing task with id {taskId}", task.PersistenceId);
             if (taskStorage != null)
-                await taskStorage.SetTaskStatus(task.PersistenceId,QueuedTaskStatus.Failed, e).ConfigureAwait(false);
+                await taskStorage.SetTaskStatus(task.PersistenceId, QueuedTaskStatus.Failed, e).ConfigureAwait(false);
         }
     }
 

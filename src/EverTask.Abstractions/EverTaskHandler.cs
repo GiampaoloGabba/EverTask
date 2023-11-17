@@ -1,20 +1,39 @@
 ﻿namespace EverTask.Abstractions;
 
-public abstract class EverTaskHandler<T> : IEverTaskHandler<T> where T : IEverTask
+/// <summary>
+/// Base abstract class for handling EverTask tasks.
+/// </summary>
+/// <typeparam name="TTask">The type of EverTask to handle.</typeparam>
+public abstract class EverTaskHandler<TTask> : IEverTaskHandler<TTask> where TTask : IEverTask
 {
-    public abstract Task Handle(T backgroundTask, CancellationToken cancellationToken);
+    /// <inheritdoc/>
+    public abstract Task Handle(TTask backgroundTask, CancellationToken cancellationToken);
 
+    /// <inheritdoc/>
     public virtual ValueTask OnError(Guid persistenceId, Exception? exception, string? message)
     {
         return ValueTask.CompletedTask;
     }
 
+    /// <inheritdoc/>
     public virtual ValueTask OnStarted(Guid persistenceId)
     {
         return default;
     }
 
+    /// <inheritdoc/>
     public virtual ValueTask OnCompleted(Guid persistenceId)
+    {
+        return ValueTask.CompletedTask;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await DisposeAsyncCore();
+        GC.SuppressFinalize(this);
+    }
+
+    protected virtual ValueTask DisposeAsyncCore()
     {
         return ValueTask.CompletedTask;
     }

@@ -34,10 +34,9 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
     {
         logger.LogInformation("Retrieve Pending Tasks");
 
-        var pending = _pendingTasks.Where(x => x.Status
-                                                   is QueuedTaskStatus.Queued
-                                                   or QueuedTaskStatus.Pending
-                                                   or QueuedTaskStatus.InProgress);
+        var pending = _pendingTasks.Where(t => t.Status == QueuedTaskStatus.Queued ||
+                                                t.Status == QueuedTaskStatus.Pending ||
+                                                t.Status == QueuedTaskStatus.InProgress);
         return Task.FromResult(pending.ToArray());
     }
 
@@ -50,14 +49,8 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         SetTaskStatus(taskId, QueuedTaskStatus.InProgress, null, ct);
 
     /// <inheritdoc />
-    public Task SetTaskCompleted(Guid taskId, CancellationToken ct = default)
-    {
-        var task = _pendingTasks.FirstOrDefault(x => x.Id == taskId);
-        if (task != null)
-            task.Status = QueuedTaskStatus.Completed;
-
-        return SetTaskStatus(taskId, QueuedTaskStatus.Completed, null, ct);
-    }
+    public Task SetTaskCompleted(Guid taskId, CancellationToken ct = default) =>
+        SetTaskStatus(taskId, QueuedTaskStatus.Completed, null, ct);
 
     /// <inheritdoc />
     public Task SetTaskStatus(Guid taskId, QueuedTaskStatus status, Exception? exception = null,
@@ -67,7 +60,19 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
 
         var task = _pendingTasks.FirstOrDefault(x => x.Id == taskId);
         if (task != null)
-            task.Status = status;
+        {
+            task.Status           = status;
+            task.LastExecutionUtc = DateTimeOffset.UtcNow;
+
+            task.StatusAudits.Add(new StatusAudit
+            {
+                QueuedTaskId = taskId,
+                UpdatedAtUtc = DateTimeOffset.UtcNow,
+                NewStatus    = status,
+                Exception    = exception?.ToString()
+            });
+
+        }
 
         return Task.CompletedTask;
     }

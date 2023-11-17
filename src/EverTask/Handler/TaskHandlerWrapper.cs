@@ -6,20 +6,25 @@
 
 internal abstract class TaskHandlerWrapper
 {
-    public abstract TaskHandlerExecutor Handle(IEverTask task, IServiceProvider serviceFactory, Guid? existingTaskId = null);
+    public abstract TaskHandlerExecutor Handle(IEverTask task, DateTimeOffset? executionTime,
+                                               IServiceProvider serviceFactory, Guid? existingTaskId = null);
 }
 
 internal class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TTask : IEverTask
 {
-    public override TaskHandlerExecutor Handle(IEverTask task, IServiceProvider serviceFactory, Guid? existingTaskId = null)
+    public override TaskHandlerExecutor Handle(IEverTask task, DateTimeOffset? executionTime,
+                                               IServiceProvider serviceFactory, Guid? existingTaskId = null)
     {
         var handlerService = serviceFactory.GetService<IEverTaskHandler<TTask>>();
+
+        executionTime = executionTime?.ToUniversalTime();
 
         ArgumentNullException.ThrowIfNull(handlerService);
 
         return new TaskHandlerExecutor(
             task,
             handlerService,
+            executionTime,
             (theTask, theToken) => handlerService.Handle((TTask)theTask, theToken),
             (persistenceId, exception, message) => handlerService.OnError(persistenceId, exception, message),
             persistenceId => handlerService.OnStarted(persistenceId),

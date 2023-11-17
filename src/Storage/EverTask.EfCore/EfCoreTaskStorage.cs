@@ -6,7 +6,8 @@ using EverTask.Storage;
 
 namespace EverTask.EfCore;
 
-public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTaskLogger<EfCoreTaskStorage> logger) : ITaskStorage
+public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTaskLogger<EfCoreTaskStorage> logger)
+    : ITaskStorage
 {
     public async Task<QueuedTask[]> Get(Expression<Func<QueuedTask, bool>> where, CancellationToken ct = default)
     {
@@ -53,8 +54,8 @@ public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTa
         return await dbContext.QueuedTasks
                               .AsNoTracking()
                               .Where(t => t.Status == QueuedTaskStatus.Queued ||
-                                          t.Status == QueuedTaskStatus.Pending ||
-                                          t.Status == QueuedTaskStatus.InProgress)
+                                           t.Status == QueuedTaskStatus.Pending ||
+                                           t.Status == QueuedTaskStatus.InProgress)
                               .ToArrayAsync(ct)
                               .ConfigureAwait(false);
     }
@@ -103,7 +104,6 @@ public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTa
             {
                 logger.LogCritical(e, "Unable to update the status {status} for taskId {taskId}", status, taskId);
             }
-
         }
     }
 

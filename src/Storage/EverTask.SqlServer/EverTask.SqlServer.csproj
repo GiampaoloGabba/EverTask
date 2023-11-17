@@ -8,11 +8,12 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" />
   </ItemGroup>
 
   <ItemGroup>
     <None Include="..\..\..\assets\logo-nuget.png" Pack="true" PackagePath="" />
     <None Include="..\..\..\README.md" Pack="true" PackagePath="" />
   </ItemGroup>
-
+  
 </Project>
