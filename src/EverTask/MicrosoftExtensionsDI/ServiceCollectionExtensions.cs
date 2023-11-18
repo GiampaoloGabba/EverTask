@@ -18,6 +18,7 @@ public static class ServiceCollectionExtensions
         }
 
         services.TryAddSingleton(options);
+        services.TryAddSingleton<IWorkerBlacklist, WorkerBlacklist>();
         services.TryAddSingleton(typeof(IEverTaskLogger<>), typeof(EverTaskLogger<>));
         services.TryAddSingleton<IScheduler, TimerScheduler>();
         services.TryAddSingleton<IWorkerQueue, WorkerQueue>();

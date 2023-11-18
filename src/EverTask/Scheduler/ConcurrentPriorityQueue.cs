@@ -2,7 +2,7 @@
 
 namespace EverTask.Scheduler;
 
-internal class ConcurrentPriorityQueue<TElement, TPriority>
+internal sealed class ConcurrentPriorityQueue<TElement, TPriority>
 {
     private readonly PriorityQueue<TElement, TPriority> _queue;
     private readonly object _lock = new();

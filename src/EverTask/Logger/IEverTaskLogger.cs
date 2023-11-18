@@ -1,6 +1,5 @@
 ﻿namespace EverTask.Logger;
 
-
 /// <summary>
 /// EverTask custom logger
 /// </summary>

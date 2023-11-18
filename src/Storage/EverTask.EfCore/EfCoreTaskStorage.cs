@@ -69,6 +69,9 @@ public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTa
     public async Task SetTaskCompleted(Guid taskId, CancellationToken ct = default) =>
         await SetTaskStatus(taskId, QueuedTaskStatus.Completed, null, ct).ConfigureAwait(false);
 
+    public async Task SetTaskCancelled(Guid taskId, CancellationToken ct = default) =>
+        await SetTaskStatus(taskId, QueuedTaskStatus.Cancelled, null, ct).ConfigureAwait(false);
+
     public async Task SetTaskStatus(Guid taskId, QueuedTaskStatus status, Exception? exception = null,
                                     CancellationToken ct = default)
     {
@@ -78,7 +81,10 @@ public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTa
         await using var dbContext = scope.ServiceProvider.GetRequiredService<ITaskStoreDbContext>();
 
         var ex = exception.ToDetailedString();
-        var lastExecutionUtc = status != QueuedTaskStatus.Queued && status != QueuedTaskStatus.InProgress
+        var lastExecutionUtc = status != QueuedTaskStatus.Queued
+                               && status != QueuedTaskStatus.InProgress
+                               && status != QueuedTaskStatus.Cancelled
+                               && status != QueuedTaskStatus.Pending
                                    ? DateTimeOffset.UtcNow
                                    : (DateTimeOffset?)null;
 

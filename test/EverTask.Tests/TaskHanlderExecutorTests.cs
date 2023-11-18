@@ -35,6 +35,19 @@ public class TaskHanlderExecutorTests
     }
 
     [Fact]
+    public void Executor_Should_convert_offset_to_utc()
+    {
+        var task           = new TestTaskRequest("test");
+        var inputOffset    = new DateTimeOffset(2023, 1, 1, 12, 0, 0, TimeSpan.FromHours(10));
+        var expectedOffset = new DateTimeOffset(inputOffset.UtcDateTime);
+
+        var handlerWrapper = new TaskHandlerWrapperImp<TestTaskRequest>();
+        var executor       = handlerWrapper.Handle(task, inputOffset, _provider, Guid.NewGuid());
+
+        executor.ExecutionTime.ShouldBe(expectedOffset);
+    }
+
+    [Fact]
     public void Should_throw_for_not_registered()
     {
         var taskHandlerWrapper = new TaskHandlerWrapperImp<TestTaskRequestNoHandler>();
@@ -81,14 +94,16 @@ public class TaskHanlderExecutorTests
     [Fact]
     public void Should_throw_for_null_Request()
     {
-        var executor = new TaskHandlerExecutor(null!, new TestTaskHanlder(), null,null!, null, null, null, Guid.NewGuid());
+        var executor =
+            new TaskHandlerExecutor(null!, new TestTaskHanlder(), null, null!, null, null, null, Guid.NewGuid());
         Should.Throw<ArgumentNullException>(() => executor.ToQueuedTask());
     }
 
     [Fact]
     public void Should_throw_for_null_Handler_Handle()
     {
-        var executor = new TaskHandlerExecutor(new TestTaskRequest("Test"), null!, null, null!, null, null, null, Guid.NewGuid());
+        var executor = new TaskHandlerExecutor(new TestTaskRequest("Test"), null!, null, null!, null, null, null,
+            Guid.NewGuid());
         Should.Throw<ArgumentNullException>(() => executor.ToQueuedTask());
     }
 

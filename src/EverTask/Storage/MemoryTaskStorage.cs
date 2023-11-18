@@ -52,6 +52,9 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
     public Task SetTaskCompleted(Guid taskId, CancellationToken ct = default) =>
         SetTaskStatus(taskId, QueuedTaskStatus.Completed, null, ct);
 
+    public Task SetTaskCancelled(Guid taskId, CancellationToken ct = default) =>
+        SetTaskStatus(taskId, QueuedTaskStatus.Cancelled, null, ct);
+
     /// <inheritdoc />
     public Task SetTaskStatus(Guid taskId, QueuedTaskStatus status, Exception? exception = null,
                               CancellationToken ct = default)

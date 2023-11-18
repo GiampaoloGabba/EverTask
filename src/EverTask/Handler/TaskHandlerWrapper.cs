@@ -10,7 +10,7 @@ internal abstract class TaskHandlerWrapper
                                                IServiceProvider serviceFactory, Guid? existingTaskId = null);
 }
 
-internal class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TTask : IEverTask
+internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TTask : IEverTask
 {
     public override TaskHandlerExecutor Handle(IEverTask task, DateTimeOffset? executionTime,
                                                IServiceProvider serviceFactory, Guid? existingTaskId = null)

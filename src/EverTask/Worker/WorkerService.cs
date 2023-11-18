@@ -9,11 +9,13 @@ public class WorkerService(
     IServiceScopeFactory serviceScopeFactory,
     ITaskDispatcherInternal taskDispatcher,
     EverTaskServiceConfiguration configuration,
+    IWorkerBlacklist workerBlacklist,
     IEverTaskLogger<WorkerService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
-        logger.LogInformation("Queued BackgroundService is running, searching for pending tasks to execute...");
+        logger.LogInformation("EverTask BackgroundService is running.");
+        logger.LogInformation("MaxDegreeOfParallelism: {maxDegreeOfParallelism}", configuration.MaxDegreeOfParallelism);
 
         await ProcessPendingAsync(ct).ConfigureAwait(false);
 
@@ -33,13 +35,20 @@ public class WorkerService(
 
         try
         {
+            if (workerBlacklist.IsBlacklisted(task.PersistenceId))
+            {
+                logger.LogInformation("Task with id {taskId} is signaled to be cancelled and will not be executed.", task.PersistenceId);
+                workerBlacklist.Remove(task.PersistenceId);
+                return;
+            }
+
+            logger.LogInformation("Starting task with id {taskId}.", task.PersistenceId);
+
             if (taskStorage != null)
                 await taskStorage.SetTaskInProgress(task.PersistenceId, token).ConfigureAwait(false);
 
             if (task.HandlerStartedCallback != null)
-            {
                 await task.HandlerStartedCallback.Invoke(task.PersistenceId).ConfigureAwait(false);
-            }
 
             await task.HandlerCallback.Invoke(task.Task, token).ConfigureAwait(false);
 
@@ -157,7 +166,7 @@ public class WorkerService(
 
     public override async Task StopAsync(CancellationToken stoppingToken)
     {
-        logger.LogInformation("Queued BackgroundService is stopping.");
+        logger.LogInformation("EverTask BackgroundService is stopping.");
         await base.StopAsync(stoppingToken);
     }
 }

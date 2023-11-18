@@ -14,29 +14,38 @@ public class TaskDispatcher(
     IScheduler scheduler,
     EverTaskServiceConfiguration serviceConfiguration,
     IEverTaskLogger<TaskDispatcher> logger,
+    IWorkerBlacklist workerBlacklist,
     ITaskStorage? taskStorage = null) : ITaskDispatcherInternal
 {
 
     /// <inheritdoc />
-    public Task Dispatch(IEverTask task,  CancellationToken cancellationToken = default)=>
+    public Task<Guid> Dispatch(IEverTask task,  CancellationToken cancellationToken = default)=>
         ExecuteDispatch(task, (DateTimeOffset?)null, cancellationToken);
 
     /// <inheritdoc />
-    public Task Dispatch(IEverTask task, TimeSpan executionDelay, CancellationToken cancellationToken = default) =>
+    public Task<Guid> Dispatch(IEverTask task, TimeSpan executionDelay, CancellationToken cancellationToken = default) =>
         ExecuteDispatch(task, executionDelay, cancellationToken);
 
     /// <inheritdoc />
-    public Task Dispatch(IEverTask task, DateTimeOffset executionTime, CancellationToken cancellationToken = default) =>
+    public Task<Guid> Dispatch(IEverTask task, DateTimeOffset executionTime, CancellationToken cancellationToken = default) =>
         ExecuteDispatch(task, executionTime, cancellationToken);
 
+    /// <inheritdoc />
+    public async Task Cancel(Guid taskId, CancellationToken cancellationToken = default)
+    {
+        if (taskStorage!=null)
+            await taskStorage.SetTaskCancelled(taskId, cancellationToken).ConfigureAwait(false);
+
+        workerBlacklist.Add(taskId);
+    }
 
     /// <inheritdoc />
-    public async Task ExecuteDispatch(IEverTask task, CancellationToken ct = default, Guid? existingTaskId = null) =>
+    public async Task<Guid> ExecuteDispatch(IEverTask task, CancellationToken ct = default, Guid? existingTaskId = null) =>
         await ExecuteDispatch(task, (DateTimeOffset?)null, ct, existingTaskId).ConfigureAwait(false);
 
     /// <inheritdoc />
-    public async Task ExecuteDispatch(IEverTask task, TimeSpan? executionDelay = null, CancellationToken ct = default,
-                                      Guid? existingTaskId = null)
+    public async Task<Guid> ExecuteDispatch(IEverTask task, TimeSpan? executionDelay = null, CancellationToken ct = default,
+                                            Guid? existingTaskId = null)
     {
         if (task == null)
             throw new ArgumentNullException(nameof(task));
@@ -45,10 +54,10 @@ public class TaskDispatcher(
                                 ? DateTimeOffset.UtcNow.Add(executionDelay.Value)
                                 : (DateTimeOffset?)null;
 
-        await ExecuteDispatch(task, executionTime, ct, existingTaskId).ConfigureAwait(false);
+        return await ExecuteDispatch(task, executionTime, ct, existingTaskId).ConfigureAwait(false);
     }
 
-    public async Task ExecuteDispatch(IEverTask task, DateTimeOffset? executionTime = null, CancellationToken ct = default, Guid? existingTaskId = null)
+    public async Task<Guid> ExecuteDispatch(IEverTask task, DateTimeOffset? executionTime = null, CancellationToken ct = default, Guid? existingTaskId = null)
     {
         if (task == null)
             throw new ArgumentNullException(nameof(task));
@@ -89,5 +98,7 @@ public class TaskDispatcher(
         {
             await workerQueue.Queue(executor).ConfigureAwait(false);
         }
+
+        return executor.PersistenceId;
     }
 }

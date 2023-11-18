@@ -43,6 +43,11 @@ public class TestTaskStorage : ITaskStorage
         return Task.CompletedTask;
     }
 
+    public Task SetTaskCancelled(Guid taskId, CancellationToken ct = default)
+    {
+        return Task.CompletedTask;
+    }
+
     public Task SetTaskStatus(Guid taskId, QueuedTaskStatus status, Exception? exception = null, CancellationToken ct = default)
     {
         return Task.CompletedTask;

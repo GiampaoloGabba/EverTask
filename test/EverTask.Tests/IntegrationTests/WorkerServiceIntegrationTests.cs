@@ -8,6 +8,7 @@ public class WorkerServiceIntegrationTests
     private ITaskStorage _storage;
     private IHost _host;
     private IWorkerQueue _workerQueue;
+    private IWorkerBlacklist _workerBlacklist;
 
     public WorkerServiceIntegrationTests()
     {
@@ -23,9 +24,10 @@ public class WorkerServiceIntegrationTests
                 })
                 .Build();
 
-        _dispatcher  = _host.Services.GetRequiredService<ITaskDispatcher>();
-        _storage     = _host.Services.GetRequiredService<ITaskStorage>();
-        _workerQueue = _host.Services.GetRequiredService<IWorkerQueue>();
+        _dispatcher      = _host.Services.GetRequiredService<ITaskDispatcher>();
+        _storage         = _host.Services.GetRequiredService<ITaskStorage>();
+        _workerQueue     = _host.Services.GetRequiredService<IWorkerQueue>();
+        _workerBlacklist = _host.Services.GetRequiredService<IWorkerBlacklist>();
     }
 
     [Fact]
@@ -37,7 +39,7 @@ public class WorkerServiceIntegrationTests
         TestTaskConcurrent1.Counter = 0;
         await _dispatcher.Dispatch(task);
 
-        await Task.Delay(1100);
+        await Task.Delay(600);
 
         var pt = await _storage.RetrievePendingTasks();
         pt.Length.ShouldBe(0);
@@ -79,11 +81,13 @@ public class WorkerServiceIntegrationTests
 
         await _host.StartAsync();
 
-        await Task.Delay(1100, CancellationToken.None);
+        await Task.Delay(600, CancellationToken.None);
 
         var tasks = await _storage.GetAll();
         tasks.Length.ShouldBe(2);
-        tasks[0].Status = QueuedTaskStatus.Completed;
+
+        tasks[0].Status.ShouldBe(QueuedTaskStatus.Completed);
+        tasks[1].Status.ShouldBe(QueuedTaskStatus.Completed);
 
         TestTaskConcurrent1.Counter.ShouldBe(1);
         TestTaskConcurrent2.Counter.ShouldBe(1);
@@ -124,16 +128,50 @@ public class WorkerServiceIntegrationTests
         var task1 = new TestTaskConcurrent1();
         await _dispatcher.Dispatch(task1);
 
-        await Task.Delay(1100, CancellationToken.None);
+        await Task.Delay(600, CancellationToken.None);
 
         TestTaskConcurrent1.Counter.ShouldBe(1);
 
         var task2 = new TestTaskConcurrent2();
         await _dispatcher.Dispatch(task2);
 
-        await Task.Delay(1100, CancellationToken.None);
+        await Task.Delay(600, CancellationToken.None);
 
         TestTaskConcurrent2.Counter.ShouldBe(1);
+
+        var cts = new CancellationTokenSource();
+        cts.CancelAfter(2000);
+
+        await _host.StopAsync(cts.Token);
+    }
+
+    [Fact]
+    public async Task Should_skip_blacklisted_task()
+    {
+        var task1 = new TestTaskConcurrent1();
+        var task2 = new TestTaskConcurrent2();
+
+        TestTaskConcurrent1.Counter = 0;
+        TestTaskConcurrent2.Counter = 0;
+
+        var task1Id = await _dispatcher.Dispatch(task1);
+        await _dispatcher.Cancel(task1Id);
+
+        await _host.StartAsync();
+
+        var task2Id = await _dispatcher.Dispatch(task2, TimeSpan.FromMinutes(2));
+        await _dispatcher.Cancel(task2Id);
+
+        await Task.Delay(600, CancellationToken.None);
+
+        var tasks = await _storage.GetAll();
+        tasks.Length.ShouldBe(2);
+
+        tasks[0].Status.ShouldBe(QueuedTaskStatus.Cancelled);
+        tasks[1].Status.ShouldBe(QueuedTaskStatus.Cancelled);
+
+        TestTaskConcurrent1.Counter.ShouldBe(0);
+        TestTaskConcurrent2.Counter.ShouldBe(0);
 
         var cts = new CancellationTokenSource();
         cts.CancelAfter(2000);
