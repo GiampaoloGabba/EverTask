@@ -116,6 +116,19 @@ _dispatcher.Dispatch(new SampleTaskRequest("Scheduled Task"), scheduledTime);
 &nbsp;
 > 💡 **Remember:** Delayed and scheduled tasks are also persistent. If your app restarts, you won't lose these tasks – they'll be executed at the right time!
 
+## Task Cancellation
+
+When you dispatch, you can capture the returned GUID to keep track of the task. If you need to cancel this task before it starts, use the `Cancel` method of `ITaskDispatcher` with this ID.
+
+```csharp
+// Dispatching a task and getting its unique ID
+Guid taskId = _dispatcher.Dispatch(new SampleTaskRequest("Cancelable Task"));
+
+// Cancelling the task (if not started yet)
+_dispatcher.Cancel(taskId);
+```
+&nbsp;
+> 💡 **Note:** Cancellation is effective only if the task has not yet begun. Once a task is in progress, the Cancel method will not affect its execution.
 
 
 ## Basic Configuration
