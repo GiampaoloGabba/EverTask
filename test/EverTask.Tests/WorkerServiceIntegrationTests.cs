@@ -1,4 +1,5 @@
-﻿using EverTask.Storage;
+﻿using EverTask.Monitoring;
+using EverTask.Storage;
 
 namespace EverTask.Tests.IntegrationTests;
 
@@ -8,7 +9,8 @@ public class WorkerServiceIntegrationTests
     private ITaskStorage _storage;
     private IHost _host;
     private IWorkerQueue _workerQueue;
-    private IWorkerBlacklist _workerBlacklist;
+    private readonly IWorkerBlacklist _workerBlacklist;
+    private IEverTaskWorkerService _workerService;
 
     public WorkerServiceIntegrationTests()
     {
@@ -21,13 +23,13 @@ public class WorkerServiceIntegrationTests
                                                    .SetMaxDegreeOfParallelism(3))
                             .AddMemoryStorage();
                     services.AddSingleton<ITaskStorage, MemoryTaskStorage>();
-                })
-                .Build();
+                }).Build();
 
         _dispatcher      = _host.Services.GetRequiredService<ITaskDispatcher>();
         _storage         = _host.Services.GetRequiredService<ITaskStorage>();
         _workerQueue     = _host.Services.GetRequiredService<IWorkerQueue>();
         _workerBlacklist = _host.Services.GetRequiredService<IWorkerBlacklist>();
+        _workerService   = _host.Services.GetRequiredService<IEverTaskWorkerService>();
     }
 
     [Fact]
@@ -162,7 +164,9 @@ public class WorkerServiceIntegrationTests
         var task2Id = await _dispatcher.Dispatch(task2, TimeSpan.FromMinutes(2));
         await _dispatcher.Cancel(task2Id);
 
-        await Task.Delay(600, CancellationToken.None);
+        await Task.Delay(300, CancellationToken.None);
+
+        _workerBlacklist.IsBlacklisted(task2Id).ShouldBeTrue();
 
         var tasks = await _storage.GetAll();
         tasks.Length.ShouldBe(2);
@@ -176,6 +180,33 @@ public class WorkerServiceIntegrationTests
         var cts = new CancellationTokenSource();
         cts.CancelAfter(2000);
 
+        await _host.StopAsync(cts.Token);
+    }
+
+    [Fact]
+    public async Task Should_execute_monitoring()
+    {
+        await _host.StartAsync();
+
+        var monitorCalled = false;
+
+        _workerService.TaskEventOccurredAsync += data =>
+        {
+            data.Severity.ShouldBe(SeverityLevel.Information);
+            monitorCalled = true;
+            return Task.CompletedTask;
+        };
+
+        var task = new TestTaskConcurrent1();
+        TestTaskConcurrent1.Counter = 0;
+        await _dispatcher.Dispatch(task);
+
+        await Task.Delay(600);
+
+        monitorCalled.ShouldBeTrue();
+
+        var cts = new CancellationTokenSource();
+        cts.CancelAfter(2000);
         await _host.StopAsync(cts.Token);
     }
 }

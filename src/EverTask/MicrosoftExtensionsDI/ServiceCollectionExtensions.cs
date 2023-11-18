@@ -1,6 +1,8 @@
 ﻿using EverTask.Dispatcher;
 using EverTask.Logger;
+using EverTask.Monitoring;
 using EverTask.Scheduler;
+using Microsoft.Extensions.Hosting;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -27,9 +29,13 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<WorkerService>();
         services.AddEverTaskHandlers(options);
 
+        services.AddSingleton<IEverTaskWorkerService>(provider => provider
+                                                                  .GetServices<IHostedService>()
+                                                                  .OfType<WorkerService>()
+                                                                  .FirstOrDefault()!);
+
         return new EverTaskServiceBuilder(services);
     }
-
     private static void AddEverTaskHandlers(this IServiceCollection services, EverTaskServiceConfiguration configuration)
     {
         var assembliesToScan = configuration.AssembliesToRegister.Distinct().ToArray();
