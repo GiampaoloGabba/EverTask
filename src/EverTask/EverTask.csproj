@@ -16,15 +16,13 @@
   <ItemGroup>
     <None Include="..\..\assets\logo-nuget.png" Pack="true" PackagePath="" />
     <None Include="..\..\README.md" Pack="true" PackagePath="" />
-    <None Remove="Scheduler\Builder\**" />
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Remove="Scheduler\Builder\**" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <EmbeddedResource Remove="Scheduler\Builder\**" />
+    <Compile Include="Scheduler\Builder\Enums.cs" />
+    <Compile Include="Scheduler\Builder\ISchedulerBuilder.cs" />
+    <Compile Include="Scheduler\Builder\ScheduledTask.cs" />
+    <Compile Include="Scheduler\Builder\SchedulerBuilder.cs" />
   </ItemGroup>
 
 </Project>
