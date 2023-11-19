@@ -40,7 +40,8 @@ This example demonstrates how to create a request and its corresponding handler 
 
 ```csharp
 public record SampleTaskRequest(string TestProperty) : IEverTask;
-
+```
+```csharp
 public class SampleTaskRequestHanlder : EverTaskHandler<SampleTaskRequest>
 {
     private readonly ILogger<SampleTaskRequestHanlder> _logger;
@@ -58,7 +59,7 @@ public class SampleTaskRequestHanlder : EverTaskHandler<SampleTaskRequest>
 }
 ```
 
-### TaskHandler Optional overrides for livecycle control
+### `EverTaskHandler` Optional overrides for lifecycle control
 
 ```csharp
 public override ValueTask OnStarted(Guid taskId)
