@@ -1,8 +1,16 @@
 ﻿using EverTask.Dispatcher;
 using EverTask.Logger;
+using EverTask.Monitoring;
 using Microsoft.Extensions.Hosting;
 
 namespace EverTask.Worker;
+
+public interface IEverTaskWorkerService
+{
+    public event Func<EverTaskEventData, Task>? TaskEventOccurredAsync;
+    Task StartAsync(CancellationToken stoppingToken);
+    Task StopAsync(CancellationToken stoppingToken);
+}
 
 public class WorkerService(
     IWorkerQueue workerQueue,
@@ -10,12 +18,15 @@ public class WorkerService(
     ITaskDispatcherInternal taskDispatcher,
     EverTaskServiceConfiguration configuration,
     IWorkerBlacklist workerBlacklist,
-    IEverTaskLogger<WorkerService> logger) : BackgroundService
+    IEverTaskLogger<WorkerService> logger) : BackgroundService, IEverTaskWorkerService
 {
+
+    public event Func<EverTaskEventData, Task>? TaskEventOccurredAsync;
+
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
-        logger.LogInformation("EverTask BackgroundService is running.");
-        logger.LogInformation("MaxDegreeOfParallelism: {maxDegreeOfParallelism}", configuration.MaxDegreeOfParallelism);
+        logger.LogTrace("EverTask BackgroundService is running.");
+        logger.LogTrace("MaxDegreeOfParallelism: {maxDegreeOfParallelism}", configuration.MaxDegreeOfParallelism);
 
         await ProcessPendingAsync(ct).ConfigureAwait(false);
 
@@ -37,12 +48,12 @@ public class WorkerService(
         {
             if (workerBlacklist.IsBlacklisted(task.PersistenceId))
             {
-                logger.LogInformation("Task with id {taskId} is signaled to be cancelled and will not be executed.", task.PersistenceId);
+                RegisterInfo(task, "Task with id {0} is signaled to be cancelled and will not be executed.", task.PersistenceId);
                 workerBlacklist.Remove(task.PersistenceId);
                 return;
             }
 
-            logger.LogInformation("Starting task with id {taskId}.", task.PersistenceId);
+            RegisterInfo(task, "Starting task with id {0}.", task.PersistenceId);
 
             if (taskStorage != null)
                 await taskStorage.SetTaskInProgress(task.PersistenceId, token).ConfigureAwait(false);
@@ -60,7 +71,7 @@ public class WorkerService(
                 }
                 catch (Exception e)
                 {
-                    logger.LogError(e, "Unable to dispose Task with id {taskId}.", task.PersistenceId);
+                    RegisterError(e, task, "Unable to dispose Task with id {0}.", task.PersistenceId);
                 }
             }
 
@@ -72,7 +83,7 @@ public class WorkerService(
                 await task.HandlerCompletedCallback.Invoke(task.PersistenceId).ConfigureAwait(false);
             }
 
-            logger.LogInformation("Task with id {taskId} was completed.", task.PersistenceId);
+            RegisterInfo(task, "Task with id {0} was completed.", task.PersistenceId);
         }
         catch (OperationCanceledException ex)
         {
@@ -87,7 +98,7 @@ public class WorkerService(
                           .ConfigureAwait(false);
             }
 
-            logger.LogWarning(ex, "Task with id {taskId} was cancelled.", task.PersistenceId);
+            RegisterWarning(ex, task, "Task with id {0} was cancelled.", task.PersistenceId);
         }
         catch (Exception ex)
         {
@@ -102,7 +113,7 @@ public class WorkerService(
                           .ConfigureAwait(false);
             }
 
-            logger.LogError(ex, "Error occurred executing task with id {taskId}.", task.PersistenceId);
+            RegisterError(ex, task, "Error occurred executing task with id {0}.", task.PersistenceId);
         }
     }
 
@@ -120,12 +131,12 @@ public class WorkerService(
 
         var pendingTasks = await taskStorage.RetrievePendingTasks(ct).ConfigureAwait(false);
         var contTask     = 0;
-        logger.LogInformation("Found {count} tasks to execute", pendingTasks.Length);
+        logger.LogTrace("Found {count} tasks to execute", pendingTasks.Length);
 
         foreach (var taskInfo in pendingTasks)
         {
             contTask++;
-            logger.LogInformation("Processing task {task} of {count} tasks to execute", contTask, pendingTasks.Length);
+            logger.LogTrace("Processing task {task} of {count} tasks to execute", contTask, pendingTasks.Length);
             IEverTask? task = null;
 
             try
@@ -161,6 +172,55 @@ public class WorkerService(
                     new Exception("Unable to create the IBackground task from the specified properties"),
                     ct).ConfigureAwait(false);
             }
+        }
+    }
+
+    private void RegisterInfo(TaskHandlerExecutor executor, string message, params object[] messageArgs)
+    {
+        RegisterEvent(SeverityLevel.Information, executor, message, null, messageArgs);
+    }
+
+    private void RegisterWarning(Exception? exception, TaskHandlerExecutor executor, string message, params object[] messageArgs)
+    {
+        RegisterEvent(SeverityLevel.Warning, executor, message, exception, messageArgs);
+    }
+
+    private void RegisterError(Exception exception, TaskHandlerExecutor executor, string message, params object[] messageArgs)
+    {
+        RegisterEvent(SeverityLevel.Error, executor, message, exception, messageArgs);
+    }
+
+    private void RegisterEvent(SeverityLevel severity, TaskHandlerExecutor executor, string message, Exception? exception = null, params object[] messageArgs)
+    {
+        if (severity == SeverityLevel.Information)
+        {
+            logger.LogInformation(message, messageArgs);
+        }
+        else if (severity == SeverityLevel.Warning)
+        {
+            logger.LogWarning(exception, message, messageArgs);
+        }
+        else
+        {
+            logger.LogError(exception, message, messageArgs);
+        }
+
+        PublishEvent(executor,severity, message, exception, messageArgs);
+    }
+
+    internal void PublishEvent(TaskHandlerExecutor task, SeverityLevel severity, string message, Exception? exception = null, params object[] messageArgs)
+    {
+        var eventHandlers = TaskEventOccurredAsync?.GetInvocationList();
+        if (eventHandlers == null)
+            return;
+
+        message = string.Format(message, messageArgs);
+
+        foreach (var eventHandler in eventHandlers)
+        {
+            var data    = EverTaskEventData.FromExecutor(task, severity, message, exception);
+            var handler = (Func<EverTaskEventData, Task>)eventHandler;
+            _ = handler(data);
         }
     }
 

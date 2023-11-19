@@ -1,4 +1,5 @@
 ﻿using EverTask.Handler;
+using EverTask.Monitoring;
 using EverTask.Storage;
 using Newtonsoft.Json;
 
@@ -166,5 +167,32 @@ public class TaskHanlderExecutorTests
             PersistenceId: Guid.NewGuid());
 
         Should.Throw<ArgumentNullException>(() => executor.ToQueuedTask());
+    }
+
+    [Fact]
+    public void EverTaskEventData_FromExecutor_correctly_map_Properties()
+    {
+        var task          = new TestTaskRequest("test");
+        var handler       = new object();
+        var executionTime = DateTimeOffset.UtcNow;
+        var persistenceId = Guid.NewGuid();
+
+        var executor = new TaskHandlerExecutor(
+            Task: task,
+            Handler: handler,
+            ExecutionTime: executionTime,
+            HandlerCallback: (everTask, token) => Task.CompletedTask,
+            HandlerErrorCallback: null,
+            HandlerStartedCallback: null,
+            HandlerCompletedCallback: null,
+            PersistenceId: persistenceId);
+
+        var eventData = EverTaskEventData.FromExecutor(executor, SeverityLevel.Information, "test", null);
+
+        eventData.TaskId.ShouldBe(persistenceId);
+        eventData.TaskParameters.ShouldBe(JsonConvert.SerializeObject(task));
+        eventData.TaskType.ShouldBe(task.GetType().ToString());
+        eventData.TaskHandlerType.ShouldBe(handler.GetType().ToString());
+        eventData.Severity.ShouldBe(SeverityLevel.Information.ToString());
     }
 }
