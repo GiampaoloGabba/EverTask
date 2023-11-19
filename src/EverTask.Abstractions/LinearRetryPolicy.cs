@@ -52,6 +52,14 @@ public class LinearRetryPolicy : IRetryPolicy
                 await action(token).ConfigureAwait(false);
                 return;
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (TimeoutException)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 exceptions.Add(ex);

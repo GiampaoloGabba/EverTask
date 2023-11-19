@@ -16,22 +16,23 @@ on task persistence, ensuring that pending tasks resume upon application restart
 
 ## Features
 
-| Feature                          | Description                                                                                                                                                                                                                                                                                                                    |
-|----------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **Background Task Execution**    | Easily run background tasks with parameters in .NET                                                                                                                                                                                                                                                                            |
-| **Persistence**                  | Resumes pending tasks after application restarts.                                                                                                                                                                                                                                                                              |
-| **Managed Parallelism**          | Efficiently handles concurrent task execution with configurable parallelism.                                                                                                                                                                                                                                                   |
-| **Scheduled and Delayed tasks**  | Schedule tasks for future execution or delay them using a TimeSpan.                                                                                                                                                                                                                                                            |
-| **Resilient Task Execution**     | 🌟 Now available! A powerful resilience feature to ensure your tasks are robust against transient failures. Fully customizable even with your custom retry policies                                                                                                                                                            |
-| **Task monitoring**              | 🌟 Now available! Monitor your task with the included in-memory monitoring or remotely with SignalR! [![NuGet](https://img.shields.io/nuget/vpre/EverTask.Monitor.AspnetCore.SignalR.svg?label=EverTask.Monitor.AspnetCore.SignalR)](https://www.nuget.org/packages/EverTask.Monitor.AspnetCore.SignalR) |
-| **Error Handling**               | Method overrides for error observation and task completion/cancellation.                                                                                                                                                                                                                                                       |
-| **SQL Storage**                  | Includes support for SQL Server storage, enabling persistent task management. <br/>[![NuGet](https://img.shields.io/nuget/vpre/evertask.sqlserver.svg?label=Evertask.SqlServer)](https://www.nuget.org/packages/evertask.sqlserver)                                                                                            |
-| **In-Memory Storage**            | Provides an in-memory storage solution for testing and lightweight applications.                                                                                                                                                                                                                                               |
-| **Serilog Integration**          | Supports integration with Serilog for detailed and customizable logging. <br/>[![NuGet](https://img.shields.io/nuget/vpre/evertask.serilog.svg?label=Evertask.Serilog)](https://www.nuget.org/packages/evertask.serilog)                                                                                                       |
-| **Extensible Storage & Logging** | Designed to allow easy plug-in of additional database solutions or logging systems.                                                                                                                                                                                                                                            |                                                                      |
-| **Async All The Way**            | Fully asynchronous architecture, enhancing performance and scalability in modern environments.                                                                                                                                                                                                                                 |
-| **Simplicity by Design**         | Created for simplicity, using the latest .NET technologies.                                                                                                                                                                                                                                                                    |
-| **Inspiration from MediaTr**     | Implementation based on creating requests and handlers.                                                                                                                                                                                                                                                                        |
+| Feature                          | Description                                                                                                                                                                                                                                                                            |
+|----------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Background execution**         | Easily run background tasks with parameters in .NET                                                                                                                                                                                                                                    |
+| **Persistence**                  | Resumes pending tasks after application restarts.                                                                                                                                                                                                                                      |
+| **Managed Parallelism**          | Efficiently handles concurrent task execution with configurable parallelism.                                                                                                                                                                                                           |
+| **Scheduled and Delayed tasks**  | Schedule tasks for future execution or delay them using a TimeSpan.                                                                                                                                                                                                                    |
+| **Resilient execution**          | A powerful resilience feature to ensure your tasks are robust against transient failures. Fully customizable even with your custom retry policies                                                                                                                                      |
+| **Monitoring**                   | Monitor your task with the included in-memory monitoring or remotely with SignalR! [![NuGet](https://img.shields.io/nuget/vpre/EverTask.Monitor.AspnetCore.SignalR.svg?label=EverTask.Monitor.AspnetCore.SignalR)](https://www.nuget.org/packages/EverTask.Monitor.AspnetCore.SignalR) |
+| **Task timeout**                 | Configure the maximum execution time for your tasks                                                                                                                                                                                                                                    |
+| **Error Handling**               | Method overrides for error observation and task completion/cancellation.                                                                                                                                                                                                               |
+| **SQL Storage**                  | Includes support for SQL Server storage, enabling persistent task management. <br/>[![NuGet](https://img.shields.io/nuget/vpre/evertask.sqlserver.svg?label=Evertask.SqlServer)](https://www.nuget.org/packages/evertask.sqlserver)                                                    |
+| **In-Memory Storage**            | Provides an in-memory storage solution for testing and lightweight applications.                                                                                                                                                                                                       |
+| **Serilog Integration**          | Supports integration with Serilog for detailed and customizable logging. <br/>[![NuGet](https://img.shields.io/nuget/vpre/evertask.serilog.svg?label=Evertask.Serilog)](https://www.nuget.org/packages/evertask.serilog)                                                               |
+| **Extensible Storage & Logging** | Designed to allow easy plug-in of additional database solutions or logging systems.                                                                                                                                                                                                    |                                                                      |
+| **Async All The Way**            | Fully asynchronous architecture, enhancing performance and scalability in modern environments.                                                                                                                                                                                         |
+| **Simplicity by Design**         | Created for simplicity, using the latest .NET technologies.                                                                                                                                                                                                                            |
+| **Inspiration from MediaTr**     | Implementation based on creating requests and handlers.                                                                                                                                                                                                                                |
 
 ## Efficient Task Processing
 
@@ -187,6 +188,41 @@ _dispatcher.Cancel(taskId);
 > 💡 **Note:** Cancellation is effective only if the task has not yet begun. Once a task is in progress, the Cancel
 > method will not affect its execution.
 
+## Task Execution Timeout Control
+
+EverTask provides a flexible approach to managing task execution times with its timeout functionality.
+
+#### Global Default Timeout
+
+A global default timeout for all tasks can be set using the `SetDefaultTimeout` option in the EverTask configuration. This timeout defines a uniform maximum duration for task execution, after which the `CancellationToken` will be marked as cancelled.
+
+```csharp
+// Example of setting a global default timeout
+builder.Services.AddEverTask(opt =>
+{
+    opt.SetDefaultTimeout(TimeSpan.FromMinutes(5)); // Sets a global timeout of 5 minutes
+});
+```
+
+#### Customizing Timeout per Task Handler
+In addition to the global timeout, individual task handlers can specify their own timeout periods. This is achieved by setting the Timeout property in the task handler, allowing for task-specific timeout durations.
+
+```csharp
+public class MyCustomTimeoutTaskHandler : EverTaskHandler<MyTask>
+{
+    public MyCustomTimeoutTaskHandler()
+    {
+        // Setting a custom timeout for this specific handler
+        Timeout = TimeSpan.FromMinutes(2);
+    }
+    
+    public override Task Handle(CancellationToken cancellationToken)
+    {
+        // Task handling logic
+    }
+}
+```
+
 ## Resilience and Retry Policies
 
 EverTask now includes a powerful resilience feature to ensure your tasks are robust against transient failures. This is
@@ -194,9 +230,15 @@ achieved through customizable retry policies, which are applied to task executio
 
 #### Default Linear Retry Policy
 
-By default, tasks are executed using the LinearRetryPolicy. This policy attempts to execute a task three times with a
-fixed delay of 500 milliseconds between retries. This approach helps in overcoming temporary issues that might prevent a
-task from completing successfully on its first try.
+Tasks by default use the `LinearRetryPolicy`, set in the global configuration (`SetDefaultRetryPolicy`). This default policy attempts three executions with a 500-millisecond delay between them, addressing temporary issues that might hinder task completion.
+
+```csharp
+// Example of setting a global default RetryPolicy
+builder.Services.AddEverTask(opt =>
+{
+    opt.SetDefaultRetryPolicy(new LinearRetryPolicy(3, TimeSpan.FromMilliseconds(500)));
+});
+```
 
 ```csharp
 // Handler automatically inherits the default LinearRetryPolicy
@@ -466,6 +508,18 @@ the available configuration methods, along with their default values and types:
 - **Default:** `1`
 - **Functionality:** Sets the maximum number of tasks that can be executed concurrently. The default sequential
   execution can be adjusted to enable parallel processing, optimizing task throughput in multi-core systems.
+
+### `SetDefaultRetryPolicy`
+
+- **Type:** `IRetryPolicy`
+- **Default:** `LinearRetryPolicy` *(with 3 tries every 500 milliseconds)*
+- **Functionality:** Defines a global default retry policy for tasks, using `LinearRetryPolicy` (3 attempts, 500 ms delay) unless overridden in task handlers. Supports custom policies via `IRetryPolicy` interface implementation.
+
+### `SetDefaultTimeout`
+
+- **Type:** `TimeSpan?`
+- **Default:** `null`
+- **Functionality:** Specifies a global default timeout for tasks. If set, the `CancellationToken` provided to task handlers will be cancelled after the timeout duration. Users must handle this cancellation in their task logic. Setting to `null` means tasks have no default timeout and will run until completion or external cancellation.
 
 ### `RegisterTasksFromAssembly`
 

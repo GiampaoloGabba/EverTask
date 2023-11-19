@@ -16,6 +16,8 @@ public class EverTaskServiceConfiguration
 
     internal IRetryPolicy DefaultRetryPolicy { get; set; } = new LinearRetryPolicy(3, TimeSpan.FromMilliseconds(500));
 
+    internal TimeSpan? DefaultTimeout { get; set; } = null;
+
     public EverTaskServiceConfiguration SetChannelOptions(int capacity)
     {
         ChannelOptions.Capacity = capacity;
@@ -43,6 +45,12 @@ public class EverTaskServiceConfiguration
     public EverTaskServiceConfiguration SetDefaultRetryPolicy(IRetryPolicy policy)
     {
         DefaultRetryPolicy = policy;
+        return this;
+    }
+
+    public EverTaskServiceConfiguration SetDefaultTimeout(TimeSpan? timeout)
+    {
+        DefaultTimeout = timeout;
         return this;
     }
 
