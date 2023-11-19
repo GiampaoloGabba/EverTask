@@ -376,6 +376,12 @@ public class MyService
     }
 }
 ```
+The above code will produce this output:
+```
+Message received from EverTask Worker Server: EverTaskEventData { TaskId = dc49351d-476d-49f0-a1e8-3e2a39182d22, EventDateUtc = 19/11/2023 16:10:20 +00:00, Severity = Information, TaskType = EverTask.Example.AspnetCore.SampleTaskRequest, TaskHandlerType = EverTask.Example.AspnetCore.SampleTaskRequestHanlder, TaskParameters = {"TestProperty":"Hello World"}, Message = Task with id dc49351d-476d-49f0-a1e8-3e2a39182d22 was completed., Exception =  }
+```
+
+
 Here, `data` is of type `EverTaskEventData` which includes detailed information about the event:
 ```csharp
 public record EverTaskEventData(
