@@ -10,19 +10,19 @@ public abstract class EverTaskHandler<TTask> : IEverTaskHandler<TTask> where TTa
     public abstract Task Handle(TTask backgroundTask, CancellationToken cancellationToken);
 
     /// <inheritdoc/>
-    public virtual ValueTask OnError(Guid persistenceId, Exception? exception, string? message)
+    public virtual ValueTask OnError(Guid taskId, Exception? exception, string? message)
     {
         return ValueTask.CompletedTask;
     }
 
     /// <inheritdoc/>
-    public virtual ValueTask OnStarted(Guid persistenceId)
+    public virtual ValueTask OnStarted(Guid taskId)
     {
         return default;
     }
 
     /// <inheritdoc/>
-    public virtual ValueTask OnCompleted(Guid persistenceId)
+    public virtual ValueTask OnCompleted(Guid taskId)
     {
         return ValueTask.CompletedTask;
     }

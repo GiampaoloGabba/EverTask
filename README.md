@@ -34,7 +34,7 @@ EverTask is a .NET library for executing background tasks in .NET applications. 
 EverTask employs a non-polling approach for task management, utilizing the .NET's `System.Threading.Channels` to create a `BoundedQueue`. This queue efficiently manages task execution without the need for constant database polling. Upon application restart after a stop, any unprocessed tasks are retrieved from the database in bulk and re-queued in the channel's queue for execution by the background service. This design ensures a seamless and efficient task processing cycle, even across application restarts.
 
 
-## Creating Requests and Handlers with Lifecycle Control
+## Creating Requests and Handlers
 
 This example demonstrates how to create a request and its corresponding handler in EverTask. The `SampleTaskRequest` and `SampleTaskRequestHandler` illustrate the basic structure. Additionally, the handler includes optional overrides that allow you to control and monitor the lifecycle of a background task, providing hooks for when a task starts, completes, is disposed, or encounters an error.
 
@@ -55,34 +55,37 @@ public class SampleTaskRequestHanlder : EverTaskHandler<SampleTaskRequest>
         _logger.LogInformation($"Property value: {backgroundTask.TestProperty}");
         return Task.CompletedTask;
     }
-
-    // Optional Overrides
-    public override ValueTask OnStarted(Guid persistenceId)
-    {
-        _logger.LogInformation($"====== TASK WITH ID {persistenceId} STARTED IN BACKGROUND ======");
-        return ValueTask.CompletedTask;
-    }
-
-    public override ValueTask OnCompleted(Guid persistenceId)
-    {
-        _logger.LogInformation($"====== TASK WITH ID {persistenceId} COMPLETED IN BACKGROUND ======");
-        return ValueTask.CompletedTask;
-    }
-
-    public override ValueTask OnError(Guid persistenceId, Exception? exception, string? message)
-    {
-        _logger.LogError(exception, $"Error in task with ID {persistenceId}: {message}");
-        return ValueTask.CompletedTask;
-    }
-    
-    protected override ValueTask DisposeAsyncCore()
-    {
-        _logger.LogInformation("====== TASK DISPOSED IN BACKGROUND ======");
-        return base.DisposeAsyncCore();
-    }
 }
 ```
 
+### TaskHandler Optional overrides for livecycle control
+
+```csharp
+public override ValueTask OnStarted(Guid taskId)
+{
+    _logger.LogInformation($"====== TASK WITH ID {taskId} STARTED IN BACKGROUND ======");
+    return ValueTask.CompletedTask;
+}
+
+public override ValueTask OnCompleted(Guid taskIdtaskId)
+{
+    _logger.LogInformation($"====== TASK WITH ID {taskId} COMPLETED IN BACKGROUND ======");
+    return ValueTask.CompletedTask;
+}
+
+public override ValueTask OnError(Guid taskId, Exception? exception, string? message)
+{
+    _logger.LogError(exception, $"Error in task with ID {taskId}: {message}");
+    return ValueTask.CompletedTask;
+}
+
+protected override ValueTask DisposeAsyncCore()
+{
+    _logger.LogInformation("====== TASK DISPOSED IN BACKGROUND ======");
+    return base.DisposeAsyncCore();
+}
+```
+    
 ## Task Dispatch
 
 To dispatch a task, obtain an instance of `ITaskDispatcher`. This can be done using Dependency Injection:
@@ -131,7 +134,6 @@ Guid taskId = _dispatcher.Dispatch(new SampleTaskRequest("Cancelable Task"));
 // Cancelling the task (if not started yet)
 _dispatcher.Cancel(taskId);
 ```
-&nbsp;
 > 💡 **Note:** Cancellation is effective only if the task has not yet begun. Once a task is in progress, the Cancel method will not affect its execution.
 
 
