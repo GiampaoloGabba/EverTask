@@ -36,6 +36,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
 
         var pending = _pendingTasks.Where(t => t.Status == QueuedTaskStatus.Queued ||
                                                 t.Status == QueuedTaskStatus.Pending ||
+                                                t.Status == QueuedTaskStatus.ServiceStopped ||
                                                 t.Status == QueuedTaskStatus.InProgress);
         return Task.FromResult(pending.ToArray());
     }
@@ -49,11 +50,14 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         SetTaskStatus(taskId, QueuedTaskStatus.InProgress, null, ct);
 
     /// <inheritdoc />
-    public Task SetTaskCompleted(Guid taskId, CancellationToken ct = default) =>
-        SetTaskStatus(taskId, QueuedTaskStatus.Completed, null, ct);
+    public Task SetTaskCompleted(Guid taskId) =>
+        SetTaskStatus(taskId, QueuedTaskStatus.Completed);
 
-    public Task SetTaskCancelled(Guid taskId, CancellationToken ct = default) =>
-        SetTaskStatus(taskId, QueuedTaskStatus.Cancelled, null, ct);
+    public Task SetTaskCancelledByUser(Guid taskId) =>
+        SetTaskStatus(taskId, QueuedTaskStatus.Cancelled);
+
+    public Task SetTaskCancelledByService(Guid taskId, Exception exception) =>
+        SetTaskStatus(taskId, QueuedTaskStatus.ServiceStopped, exception);
 
     /// <inheritdoc />
     public Task SetTaskStatus(Guid taskId, QueuedTaskStatus status, Exception? exception = null,
@@ -66,13 +70,14 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         {
             task.Status           = status;
             task.LastExecutionUtc = DateTimeOffset.UtcNow;
+            task.Exception        = exception.ToDetailedString();
 
             task.StatusAudits.Add(new StatusAudit
             {
                 QueuedTaskId = taskId,
                 UpdatedAtUtc = DateTimeOffset.UtcNow,
                 NewStatus    = status,
-                Exception    = exception?.ToString()
+                Exception    = exception.ToDetailedString()
             });
 
         }

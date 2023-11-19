@@ -16,9 +16,11 @@ public class QueueTests
         var loggerMock        = new Mock<IEverTaskLogger<WorkerQueue>>();
         var loggerMock2       = new Mock<IEverTaskLogger<MemoryTaskStorage>>();
         var configurationMock = new Mock<EverTaskServiceConfiguration>();
+        var mockBlacklist     = new Mock<IWorkerBlacklist>();
+
 
         _memoryStorage = new MemoryTaskStorage(loggerMock2.Object);
-        _workerQueue   = new WorkerQueue(configurationMock.Object, loggerMock.Object, _memoryStorage);
+        _workerQueue   = new WorkerQueue(configurationMock.Object, loggerMock.Object, mockBlacklist.Object, _memoryStorage);
         _executor = new TaskHandlerExecutor(
             new TestTaskRequest2(),
             new TestTaskHanlder2(),

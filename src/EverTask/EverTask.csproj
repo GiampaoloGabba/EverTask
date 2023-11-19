@@ -27,4 +27,8 @@
     <EmbeddedResource Remove="Scheduler\Builder\**" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Folder Include="Resilience\" />
+  </ItemGroup>
+
 </Project>

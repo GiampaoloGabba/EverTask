@@ -1,4 +1,6 @@
-﻿namespace Microsoft.Extensions.DependencyInjection;
+﻿using EverTask.Resilience;
+
+namespace Microsoft.Extensions.DependencyInjection;
 
 public class EverTaskServiceConfiguration
 {
@@ -11,6 +13,8 @@ public class EverTaskServiceConfiguration
 
     internal bool ThrowIfUnableToPersist = true;
     internal List<Assembly> AssembliesToRegister { get; } = new();
+
+    internal IRetryPolicy DefaultRetryPolicy { get; set; } = new LinearRetryPolicy(3, TimeSpan.FromMilliseconds(500));
 
     public EverTaskServiceConfiguration SetChannelOptions(int capacity)
     {
@@ -33,6 +37,12 @@ public class EverTaskServiceConfiguration
     public EverTaskServiceConfiguration SetThrowIfUnableToPersist(bool value)
     {
         ThrowIfUnableToPersist = value;
+        return this;
+    }
+
+    public EverTaskServiceConfiguration SetDefaultRetryPolicy(IRetryPolicy policy)
+    {
+        DefaultRetryPolicy = policy;
         return this;
     }
 

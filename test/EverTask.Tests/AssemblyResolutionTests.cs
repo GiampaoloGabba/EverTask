@@ -1,4 +1,6 @@
-﻿using EverTask.Logger;
+﻿using EverTask.Dispatcher;
+using EverTask.Logger;
+using EverTask.Scheduler;
 
 namespace EverTask.Tests;
 
@@ -14,15 +16,9 @@ public class AssemblyResolutionTests
     }
 
     [Fact]
-    public void Should_resolve_TaskDipatcher()
+    public void Should_resolve_Configuration()
     {
-        _provider.GetService<ITaskDispatcher>().ShouldNotBeNull();
-    }
-
-    [Fact]
-    public void Should_resolve_WorkerQueue()
-    {
-        _provider.GetService<IWorkerQueue>().ShouldNotBeNull();
+        _provider.GetService<EverTaskServiceConfiguration>().ShouldNotBeNull();
     }
 
     [Fact]
@@ -32,9 +28,39 @@ public class AssemblyResolutionTests
     }
 
     [Fact]
-    public void Should_resolve_Configuration()
+    public void Should_resolve_WorkerBlackList()
     {
-        _provider.GetService<EverTaskServiceConfiguration>().ShouldNotBeNull();
+        _provider.GetService<IWorkerBlacklist>().ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void Should_resolve_WorkerQueue()
+    {
+        _provider.GetService<IWorkerQueue>().ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void Should_resolve_Scheduler()
+    {
+        _provider.GetService<IScheduler>().ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void Should_resolve_TaskDipatcher_Internal()
+    {
+        _provider.GetService<ITaskDispatcherInternal>().ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void Should_resolve_TaskDipatcher()
+    {
+        _provider.GetService<ITaskDispatcher>().ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void Should_resolve_WorkerExecutor()
+    {
+        _provider.GetService<IEverTaskWorkerExecutor>().ShouldNotBeNull();
     }
 
     [Fact]

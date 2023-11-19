@@ -57,17 +57,23 @@ public interface ITaskStorage
     /// Sets a task's status to completed.
     /// </summary>
     /// <param name="taskId">The ID of the task.</param>
-    /// <param name="ct">Optional cancellation token.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    Task SetTaskCompleted(Guid taskId, CancellationToken ct = default);
+    Task SetTaskCompleted(Guid taskId);
 
     /// <summary>
-    /// Sets a task's status to cancelled.
+    /// Sets a task's status to manually cancelled by the user.
     /// </summary>
     /// <param name="taskId">The ID of the task.</param>
-    /// <param name="ct">Optional cancellation token.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    Task SetTaskCancelled(Guid taskId, CancellationToken ct = default);
+    Task SetTaskCancelledByUser(Guid taskId);
+
+    /// <summary>
+    /// Sets a task's status to SystemStopped, indicating that the task was cancelled by the background service while stopping.
+    /// </summary>
+    /// <param name="taskId">The ID of the task.</param>
+    /// <param name="exception">The exception that caused the task to be cancelled.</param>
+    /// <returns>A task representing the asynchronous operation.</returns>
+    Task SetTaskCancelledByService(Guid taskId, Exception exception);
 
     /// <summary>
     /// Sets the status of a task.

@@ -38,12 +38,17 @@ public class TestTaskStorage : ITaskStorage
         return Task.CompletedTask;
     }
 
-    public Task SetTaskCompleted(Guid taskId, CancellationToken ct = default)
+    public Task SetTaskCompleted(Guid taskId)
     {
         return Task.CompletedTask;
     }
 
-    public Task SetTaskCancelled(Guid taskId, CancellationToken ct = default)
+    public Task SetTaskCancelledByUser(Guid taskId)
+    {
+        return Task.CompletedTask;
+    }
+
+    public Task SetTaskCancelledByService(Guid taskId, Exception exception)
     {
         return Task.CompletedTask;
     }
