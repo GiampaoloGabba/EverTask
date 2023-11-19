@@ -23,7 +23,7 @@ on task persistence, ensuring that pending tasks resume upon application restart
 | **Managed Parallelism**          | Efficiently handles concurrent task execution with configurable parallelism.                                                                                                                                                                                                                                                   |
 | **Scheduled and Delayed tasks**  | Schedule tasks for future execution or delay them using a TimeSpan.                                                                                                                                                                                                                                                            |
 | **Resilient Task Execution**     | 🌟 Now available! A powerful resilience feature to ensure your tasks are robust against transient failures. Fully customizable even with your custom retry policies                                                                                                                                                            |
-| **Task monitoring**              | 🌟 Now available! Monitor your task with the included in-memory monitoring or remotely with SignalR! **Docs coming soon**  [![NuGet](https://img.shields.io/nuget/vpre/EverTask.Monitor.AspnetCore.SignalR.svg?label=EverTask.Monitor.AspnetCore.SignalR)](https://www.nuget.org/packages/EverTask.Monitor.AspnetCore.SignalR) |
+| **Task monitoring**              | 🌟 Now available! Monitor your task with the included in-memory monitoring or remotely with SignalR! [![NuGet](https://img.shields.io/nuget/vpre/EverTask.Monitor.AspnetCore.SignalR.svg?label=EverTask.Monitor.AspnetCore.SignalR)](https://www.nuget.org/packages/EverTask.Monitor.AspnetCore.SignalR) |
 | **Error Handling**               | Method overrides for error observation and task completion/cancellation.                                                                                                                                                                                                                                                       |
 | **SQL Storage**                  | Includes support for SQL Server storage, enabling persistent task management. <br/>[![NuGet](https://img.shields.io/nuget/vpre/evertask.sqlserver.svg?label=Evertask.SqlServer)](https://www.nuget.org/packages/evertask.sqlserver)                                                                                            |
 | **In-Memory Storage**            | Provides an in-memory storage solution for testing and lightweight applications.                                                                                                                                                                                                                                               |
@@ -448,7 +448,7 @@ the available configuration methods, along with their default values and types:
 ### `SetChannelOptions (Overloaded Methods)`
 
 - **Type:** `Action<BoundedChannelOptions>` or `int`
-- **Default:** Capacity set to 100, `FullMode` set to `BoundedChannelFullMode.Wait`
+- **Default:** Capacity set to 500, `FullMode` set to `BoundedChannelFullMode.Wait`
 - **Functionality:** Configures the behavior of the task queue. You can directly specify the queue capacity or provide
   a `BoundedChannelOptions` object. This defines the maximum number of tasks that can be queued and the behavior when
   the queue is full.

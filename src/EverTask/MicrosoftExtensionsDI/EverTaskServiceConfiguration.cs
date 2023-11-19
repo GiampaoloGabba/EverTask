@@ -4,7 +4,7 @@ namespace Microsoft.Extensions.DependencyInjection;
 
 public class EverTaskServiceConfiguration
 {
-    internal BoundedChannelOptions ChannelOptions = new(100)
+    internal BoundedChannelOptions ChannelOptions = new(500)
     {
         FullMode = BoundedChannelFullMode.Wait
     };
