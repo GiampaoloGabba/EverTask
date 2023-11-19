@@ -67,7 +67,8 @@ public class TimerSchedulerTests
 
         await Task.Delay(1500);
 
-        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == taskHandlerExecutor)), Times.Once);
+        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == taskHandlerExecutor)),
+            Times.Once);
     }
 
     [Fact]

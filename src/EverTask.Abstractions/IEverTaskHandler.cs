@@ -7,6 +7,11 @@
 public interface IEverTaskHandler<in TTask> : IAsyncDisposable where TTask : IEverTask
 {
     /// <summary>
+    /// Gets or sets the retry policy for this task. Default is a linear retry policy with 3 tries every 500 milliseconds
+    /// </summary>
+    public IRetryPolicy? RetryPolicy { get; set; }
+
+    /// <summary>
     /// Handles the specified EverTask object asynchronously.
     /// </summary>
     /// <param name="backgroundTask">The EverTask task to handle.</param>

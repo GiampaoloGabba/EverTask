@@ -1,4 +1,6 @@
-﻿namespace EverTask.Resilience;
+﻿using EverTask.Abstractions;
+
+namespace EverTask.Resilience;
 
 public class LinearRetryPolicy : IRetryPolicy
 {
@@ -30,7 +32,7 @@ public class LinearRetryPolicy : IRetryPolicy
         _retryDelays = retryDelays;
     }
 
-    public async Task Execute(Func<Task> action)
+    public async Task Execute(Func<CancellationToken, Task> action, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(action);
 
@@ -38,12 +40,16 @@ public class LinearRetryPolicy : IRetryPolicy
         var attempt    = 0;
         foreach (var retryDelay in _retryDelays)
         {
+            token.ThrowIfCancellationRequested();
+
             if (attempt > 0)
-                await Task.Delay(retryDelay).ConfigureAwait(false);
+                await Task.Delay(retryDelay, token).ConfigureAwait(false);
+
+            token.ThrowIfCancellationRequested();
 
             try
             {
-                await action().ConfigureAwait(false);
+                await action(token).ConfigureAwait(false);
                 return;
             }
             catch (Exception ex)

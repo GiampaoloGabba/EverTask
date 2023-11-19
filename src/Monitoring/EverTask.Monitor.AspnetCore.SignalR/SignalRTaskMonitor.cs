@@ -8,22 +8,22 @@ namespace EverTask.Monitor.AspnetCore.SignalR;
 
 public class SignalRTaskMonitor : ITaskMonitor
 {
-    private readonly IEverTaskWorkerService _workerService;
+    private readonly IEverTaskWorkerExecutor _executor;
     private readonly IHubContext<TaskMonitorHub> _hubContext;
     private readonly IEverTaskLogger<SignalRTaskMonitor> _logger;
 
-    public SignalRTaskMonitor(IEverTaskWorkerService workerService, IHubContext<TaskMonitorHub> hubContext,
+    public SignalRTaskMonitor(IEverTaskWorkerExecutor executor, IHubContext<TaskMonitorHub> hubContext,
                               IEverTaskLogger<SignalRTaskMonitor> logger)
     {
-        _workerService = workerService;
-        _hubContext    = hubContext;
-        _logger        = logger;
+        _executor   = executor;
+        _hubContext = hubContext;
+        _logger     = logger;
     }
 
     public void SubScribe()
     {
         _logger.LogInformation("EverTask SignalR MonitorHub created and subscribed");
-        _workerService.TaskEventOccurredAsync += OnTaskEventOccurredAsync;
+        _executor.TaskEventOccurredAsync += OnTaskEventOccurredAsync;
     }
 
     private async Task OnTaskEventOccurredAsync(EverTaskEventData eventData)
@@ -35,7 +35,7 @@ public class SignalRTaskMonitor : ITaskMonitor
     public void Unsubscribe()
     {
         _logger.LogInformation("EverTask SignalR MonitorHub unsubscribed");
-        _workerService.TaskEventOccurredAsync -= OnTaskEventOccurredAsync;
+        _executor.TaskEventOccurredAsync -= OnTaskEventOccurredAsync;
     }
 
     protected void Dispose(bool disposing)

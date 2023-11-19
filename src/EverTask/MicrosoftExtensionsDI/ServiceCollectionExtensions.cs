@@ -1,6 +1,7 @@
 ﻿using EverTask.Dispatcher;
 using EverTask.Logger;
 using EverTask.Monitoring;
+using EverTask.Resilience;
 using EverTask.Scheduler;
 using Microsoft.Extensions.Hosting;
 
@@ -20,19 +21,15 @@ public static class ServiceCollectionExtensions
         }
 
         services.TryAddSingleton(options);
-        services.TryAddSingleton<IWorkerBlacklist, WorkerBlacklist>();
         services.TryAddSingleton(typeof(IEverTaskLogger<>), typeof(EverTaskLogger<>));
-        services.TryAddSingleton<IScheduler, TimerScheduler>();
+        services.TryAddSingleton<IWorkerBlacklist, WorkerBlacklist>();
         services.TryAddSingleton<IWorkerQueue, WorkerQueue>();
+        services.TryAddSingleton<IScheduler, TimerScheduler>();
         services.AddSingleton<ITaskDispatcherInternal, TaskDispatcher>();
         services.AddSingleton<ITaskDispatcher>(provider => provider.GetRequiredService<ITaskDispatcherInternal>());
+        services.AddSingleton<IEverTaskWorkerExecutor, WorkerExecutor>();
         services.AddHostedService<WorkerService>();
         services.AddEverTaskHandlers(options);
-
-        services.AddSingleton<IEverTaskWorkerService>(provider => provider
-                                                                  .GetServices<IHostedService>()
-                                                                  .OfType<WorkerService>()
-                                                                  .FirstOrDefault()!);
 
         return new EverTaskServiceBuilder(services);
     }
