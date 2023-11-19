@@ -8,5 +8,6 @@ public enum QueuedTaskStatus
     Pending,
     Cancelled,
     Completed,
-    Failed
+    Failed,
+    ServiceStopped
 }

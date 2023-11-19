@@ -5,6 +5,7 @@ namespace EverTask.Worker;
 public class WorkerQueue(
     EverTaskServiceConfiguration configuration,
     IEverTaskLogger<WorkerQueue> logger,
+    IWorkerBlacklist workerBlacklist,
     ITaskStorage? taskStorage = null) : IWorkerQueue
 {
     private readonly Channel<TaskHandlerExecutor> _queue =
@@ -13,6 +14,9 @@ public class WorkerQueue(
     public async ValueTask Queue(TaskHandlerExecutor task)
     {
         ArgumentNullException.ThrowIfNull(task);
+
+        if (workerBlacklist.IsBlacklisted(task.PersistenceId))
+            return;
 
         if (taskStorage != null)
             await taskStorage.SetTaskQueued(task.PersistenceId).ConfigureAwait(false);

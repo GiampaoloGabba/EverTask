@@ -55,6 +55,7 @@ public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTa
                               .AsNoTracking()
                               .Where(t => t.Status == QueuedTaskStatus.Queued ||
                                            t.Status == QueuedTaskStatus.Pending ||
+                                           t.Status == QueuedTaskStatus.ServiceStopped ||
                                            t.Status == QueuedTaskStatus.InProgress)
                               .ToArrayAsync(ct)
                               .ConfigureAwait(false);
@@ -66,11 +67,14 @@ public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTa
     public async Task SetTaskInProgress(Guid taskId, CancellationToken ct = default) =>
         await SetTaskStatus(taskId, QueuedTaskStatus.InProgress, null, ct).ConfigureAwait(false);
 
-    public async Task SetTaskCompleted(Guid taskId, CancellationToken ct = default) =>
-        await SetTaskStatus(taskId, QueuedTaskStatus.Completed, null, ct).ConfigureAwait(false);
+    public async Task SetTaskCompleted(Guid taskId) =>
+        await SetTaskStatus(taskId, QueuedTaskStatus.Completed).ConfigureAwait(false);
 
-    public async Task SetTaskCancelled(Guid taskId, CancellationToken ct = default) =>
-        await SetTaskStatus(taskId, QueuedTaskStatus.Cancelled, null, ct).ConfigureAwait(false);
+    public async Task SetTaskCancelledByUser(Guid taskId) =>
+        await SetTaskStatus(taskId, QueuedTaskStatus.Cancelled).ConfigureAwait(false);
+
+    public async Task SetTaskCancelledByService(Guid taskId, Exception exception) =>
+        await SetTaskStatus(taskId, QueuedTaskStatus.ServiceStopped, exception).ConfigureAwait(false);
 
     public async Task SetTaskStatus(Guid taskId, QueuedTaskStatus status, Exception? exception = null,
                                     CancellationToken ct = default)

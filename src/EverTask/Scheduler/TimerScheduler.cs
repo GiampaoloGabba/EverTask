@@ -11,14 +11,14 @@ public class TimerScheduler : IScheduler
     private readonly Timer _timer;
 
     public TimerScheduler(IWorkerQueue workerQueue,
-                        IEverTaskLogger<TimerScheduler> logger,
-                        ITaskStorage? taskStorage = null)
+                          IEverTaskLogger<TimerScheduler> logger,
+                          ITaskStorage? taskStorage = null)
     {
-        _workerQueue = workerQueue;
-        _taskStorage = taskStorage;
-        _logger      = logger;
-        _queue       = new ConcurrentPriorityQueue<TaskHandlerExecutor, DateTimeOffset>();
-        _timer       = new Timer(TimerCallback, null, Timeout.Infinite, Timeout.Infinite);
+        _workerQueue     = workerQueue;
+        _taskStorage     = taskStorage;
+        _logger          = logger;
+        _queue           = new ConcurrentPriorityQueue<TaskHandlerExecutor, DateTimeOffset>();
+        _timer           = new Timer(TimerCallback, null, Timeout.Infinite, Timeout.Infinite);
     }
 
     internal ConcurrentPriorityQueue<TaskHandlerExecutor, DateTimeOffset> GetQueue()

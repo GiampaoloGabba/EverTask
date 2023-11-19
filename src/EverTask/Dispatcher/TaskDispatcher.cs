@@ -34,7 +34,7 @@ public class TaskDispatcher(
     public async Task Cancel(Guid taskId, CancellationToken cancellationToken = default)
     {
         if (taskStorage!=null)
-            await taskStorage.SetTaskCancelled(taskId, cancellationToken).ConfigureAwait(false);
+            await taskStorage.SetTaskCancelledByUser(taskId).ConfigureAwait(false);
 
         workerBlacklist.Add(taskId);
     }
