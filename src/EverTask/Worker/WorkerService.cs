@@ -48,12 +48,12 @@ public class WorkerService(
         {
             if (workerBlacklist.IsBlacklisted(task.PersistenceId))
             {
-                RegisterInfo(task, "Task with id {TaskId} is signaled to be cancelled and will not be executed.", task.PersistenceId);
+                RegisterInfo(task, "Task with id {0} is signaled to be cancelled and will not be executed.", task.PersistenceId);
                 workerBlacklist.Remove(task.PersistenceId);
                 return;
             }
 
-            RegisterInfo(task, "Starting task with id {TaskId}.", task.PersistenceId);
+            RegisterInfo(task, "Starting task with id {0}.", task.PersistenceId);
 
             if (taskStorage != null)
                 await taskStorage.SetTaskInProgress(task.PersistenceId, token).ConfigureAwait(false);
@@ -71,7 +71,7 @@ public class WorkerService(
                 }
                 catch (Exception e)
                 {
-                    RegisterError(e, task, "Unable to dispose Task with id {taskId}.", task.PersistenceId);
+                    RegisterError(e, task, "Unable to dispose Task with id {0}.", task.PersistenceId);
                 }
             }
 
@@ -83,7 +83,7 @@ public class WorkerService(
                 await task.HandlerCompletedCallback.Invoke(task.PersistenceId).ConfigureAwait(false);
             }
 
-            RegisterInfo(task, "Task with id {TaskId} was completed.", task.PersistenceId);
+            RegisterInfo(task, "Task with id {0} was completed.", task.PersistenceId);
         }
         catch (OperationCanceledException ex)
         {
@@ -98,7 +98,7 @@ public class WorkerService(
                           .ConfigureAwait(false);
             }
 
-            RegisterWarning(ex, task, "Task with id {taskId} was cancelled.", task.PersistenceId);
+            RegisterWarning(ex, task, "Task with id {0} was cancelled.", task.PersistenceId);
         }
         catch (Exception ex)
         {
@@ -113,7 +113,7 @@ public class WorkerService(
                           .ConfigureAwait(false);
             }
 
-            RegisterError(ex, task, "Error occurred executing task with id {taskId}.", task.PersistenceId);
+            RegisterError(ex, task, "Error occurred executing task with id {0}.", task.PersistenceId);
         }
     }
 
@@ -205,14 +205,16 @@ public class WorkerService(
             logger.LogError(exception, message, messageArgs);
         }
 
-        PublishEvent(executor,severity, message, exception);
+        PublishEvent(executor,severity, message, exception, messageArgs);
     }
 
-    internal void PublishEvent(TaskHandlerExecutor task, SeverityLevel severity, string message, Exception? exception = null)
+    internal void PublishEvent(TaskHandlerExecutor task, SeverityLevel severity, string message, Exception? exception = null, params object[] messageArgs)
     {
         var eventHandlers = TaskEventOccurredAsync?.GetInvocationList();
         if (eventHandlers == null)
             return;
+
+        message = string.Format(message, messageArgs);
 
         foreach (var eventHandler in eventHandlers)
         {

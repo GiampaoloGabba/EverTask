@@ -1,6 +1,6 @@
 ﻿using System.Text;
 
-namespace EverTask.EfCore;
+namespace EverTask;
 
 public static class ExceptionExtensions
 {

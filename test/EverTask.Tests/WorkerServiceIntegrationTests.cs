@@ -192,7 +192,7 @@ public class WorkerServiceIntegrationTests
 
         _workerService.TaskEventOccurredAsync += data =>
         {
-            data.Severity.ShouldBe(SeverityLevel.Information);
+            data.Severity.ShouldBe(SeverityLevel.Information.ToString());
             monitorCalled = true;
             return Task.CompletedTask;
         };

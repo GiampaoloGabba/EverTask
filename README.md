@@ -1,7 +1,11 @@
 ![EverTask Logo](https://raw.githubusercontent.com/GiampaoloGabba/EverTask/master/assets/logo-main.png)
 
 [![Build](https://github.com/GiampaoloGabba/EverTask/actions/workflows/build.yml/badge.svg)](https://github.com/GiampaoloGabba/EverTask/actions/workflows/build.yml)
-[![NuGet](https://img.shields.io/nuget/vpre/evertask.svg)](https://www.nuget.org/packages/evertask)
+[![NuGet](https://img.shields.io/nuget/vpre/evertask.svg?label=Evertask)](https://www.nuget.org/packages/evertask)
+[![NuGet](https://img.shields.io/nuget/vpre/evertask.abstractions.svg?label=Evertask.Abstractions)](https://www.nuget.org/packages/evertask.abstractions)
+[![NuGet](https://img.shields.io/nuget/vpre/evertask.sqlserver.svg?label=Evertask.SqlServer)](https://www.nuget.org/packages/evertask.sqlserver)
+[![NuGet](https://img.shields.io/nuget/vpre/evertask.serilog.svg?label=Evertask.Serilog)](https://www.nuget.org/packages/evertask.serilog)
+[![NuGet](https://img.shields.io/nuget/vpre/evertask.monitoring.signalr.svg?label=Evertask.Monitoring.SignalR)](https://www.nuget.org/packages/evertask.monitoring.signalr)
 
 ## Overview
 EverTask is a .NET library for executing background tasks in .NET applications. It is designed to be simple and focuses on task persistence, ensuring that pending tasks resume upon application restart.
@@ -9,21 +13,21 @@ EverTask is a .NET library for executing background tasks in .NET applications. 
 > This project is in its initial stages, more detailed documentation will be provided in the future.
 
 ## Features
-| Feature                          | Description                                                                                                                        |
-|----------------------------------|------------------------------------------------------------------------------------------------------------------------------------|
-| **Background Task Execution**    | Easily run background tasks with parameters in .NET                                                                                |
-| **Persistence**                  | Resumes pending tasks after application restarts.                                                                                  |
-| **Managed Parallelism**          | Efficiently handles concurrent task execution with configurable parallelism.                                                       |
-| **Scheduled and Delayed tasks**  | 🌟 Now available! Schedule tasks for future execution or delay them using a TimeSpan or DateTimeOffset.|
-| **Async All The Way**            | Fully asynchronous architecture, enhancing performance and scalability in modern environments.                                     |
-| **Simplicity by Design**         | Created for simplicity, using the latest .NET technologies.                                                                        |
-| **Inspiration from MediaTr**     | Implementation based on creating requests and handlers.                                                                            |
-| **Error Handling**               | Method overrides for error observation and task completion.                                                                        |
-| **In-Memory Storage**            | Provides an in-memory storage solution for testing and lightweight applications.                                                   |
-| **SQL Storage**                  | Includes support for SQL Server storage, enabling persistent task management.                                                      |
-| **Serilog Integration**          | Supports integration with Serilog for detailed and customizable logging.                                                           |
-| **Extensible Storage & Logging** | Designed to allow easy plug-in of additional database solutions or logging systems.                                                |                                                                      |
-
+| Feature                          | Description                                                                                                                                                                                                                                                                                              |
+|----------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Background Task Execution**    | Easily run background tasks with parameters in .NET                                                                                                                                                                                                                                                      |
+| **Persistence**                  | Resumes pending tasks after application restarts.                                                                                                                                                                                                                                                        |
+| **Managed Parallelism**          | Efficiently handles concurrent task execution with configurable parallelism.                                                                                                                                                                                                                             |
+| **Scheduled and Delayed tasks**  | Schedule tasks for future execution or delay them using a TimeSpan or DateTimeOffset.                                                                                                                                                                                                                    |
+| **Task monitoring**              | 🌟 Now available! Monitor your task with the included in-memory monitoring or remotely with SignalR! **Docs coming soon**  [![NuGet](https://img.shields.io/nuget/vpre/evertask.monitoring.signalr.svg?label=Evertask.Monitoring.SignalR)](https://www.nuget.org/packages/evertask.monitoring.signalr) |
+| **Error Handling**               | Method overrides for error observation and task completion/cancellation.                                                                                                                                                                                                                                 |
+| **SQL Storage**                  | Includes support for SQL Server storage, enabling persistent task management. <br/>[![NuGet](https://img.shields.io/nuget/vpre/evertask.sqlserver.svg?label=Evertask.SqlServer)](https://www.nuget.org/packages/evertask.sqlserver)                                                                      |
+| **In-Memory Storage**            | Provides an in-memory storage solution for testing and lightweight applications.                                                                                                                                                                                                                         |
+| **Serilog Integration**          | Supports integration with Serilog for detailed and customizable logging. <br/>[![NuGet](https://img.shields.io/nuget/vpre/evertask.serilog.svg?label=Evertask.Serilog)](https://www.nuget.org/packages/evertask.serilog)                                                                                 |
+| **Extensible Storage & Logging** | Designed to allow easy plug-in of additional database solutions or logging systems.                                                                                                                                                                                                                      |                                                                      |
+| **Async All The Way**            | Fully asynchronous architecture, enhancing performance and scalability in modern environments.                                                                                                                                                                                                           |
+| **Simplicity by Design**         | Created for simplicity, using the latest .NET technologies.                                                                                                                                                                                                                                              |
+| **Inspiration from MediaTr**     | Implementation based on creating requests and handlers.                                                                                                                                                                                                                                                  |
 
 ## Efficient Task Processing
 
@@ -184,15 +188,16 @@ builder.Services.AddEverTask(opt =>
 ### `RegisterTasksFromAssemblies`
 - **Functionality:** Allows for the registration of task handlers from multiple assemblies. This approach suits larger applications with distributed task handling logic spread across various modules or libraries.
 
-## SQL Server Persistence and Logging
+## SQL Server Persistence
+[![NuGet](https://img.shields.io/nuget/vpre/evertask.sqlserver.svg?label=Evertask.SqlServer)](https://www.nuget.org/packages/evertask.sqlserver)
 
-### SQL Server Storage
 - **Default Schema:** Creates a new schema named `EverTask` by default. This approach avoids adding clutter to the main data schema.
 - **Migration Table:** Places the Entity Framework Core migration table in the custom `EverTask` schema.
 - **Schema Customization:** Allows specifying a different schema or using `null` to default to the main schema.
 - **Migration Handling:** Option to apply database migrations automatically or handle them manually.
  
-### Serilog Integration
+## Serilog Integration
+[![NuGet](https://img.shields.io/nuget/vpre/evertask.serilog.svg?label=Evertask.SeriLog)](https://www.nuget.org/packages/evertask.serilog)
 - **Default Logging:** Uses .NET configured `ILogger` by default.
 - **Serilog Option:** Enables adding Serilog as a separate logger for EverTask, with customizable options.
 - **Example Configuration in appsettings.json:**
@@ -235,6 +240,8 @@ builder.Services.AddEverTask(opt =>
   }
 
 ## EverTask and EverTask.Abstractions
+[![NuGet](https://img.shields.io/nuget/vpre/evertask.svg?label=Evertask)](https://www.nuget.org/packages/evertask)
+[![NuGet](https://img.shields.io/nuget/vpre/evertask.abstractions.svg?label=Evertask.Abstractions)](https://www.nuget.org/packages/evertask.abstractions)
 
 EverTask is complemented by the `EverTask.Abstractions` package, designed for use in Application projects where additional implementations are not required. This allows separation of concerns, keeping your application layer free from infrastructural code.
 

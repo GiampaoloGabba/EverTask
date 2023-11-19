@@ -1,4 +1,6 @@
-﻿using Microsoft.AspNetCore.SignalR;
+﻿using EverTask.Monitor.AspnetCore.SignalR;
+using EverTask.Monitoring;
+using Microsoft.AspNetCore.SignalR;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -8,6 +10,8 @@ public static class ServiceCollectionExtensions
     {
 
         builder.Services.AddSignalR();
+        builder.Services.AddSingleton<ITaskMonitor, SignalRTaskMonitor>();
+
         return builder;
     }
 
@@ -15,6 +19,7 @@ public static class ServiceCollectionExtensions
                                                               Action<HubOptions> hubConfiguration)
     {
         builder.Services.AddSignalR(hubConfiguration);
+        builder.Services.AddSingleton<ITaskMonitor, SignalRTaskMonitor>();
         return builder;
     }
 }

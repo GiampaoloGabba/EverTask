@@ -17,12 +17,15 @@
 
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="8.0.0" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.5.0"/>
+    <PackageReference Include="Swashbuckle.AspNetCore.Annotations" Version="6.5.0" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\EverTask\EverTask.csproj"/>
     <ProjectReference Include="..\..\src\Logging\EverTask.Serilog\EverTask.Serilog.csproj"/>
+    <ProjectReference Include="..\..\src\Monitoring\EverTask.Monitor.AspnetCore.SignalR\EverTask.Monitor.AspnetCore.SignalR.csproj" />
   </ItemGroup>
 
 </Project>

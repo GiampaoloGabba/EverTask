@@ -3,25 +3,23 @@
 public record EverTaskEventData(
     Guid TaskId,
     DateTimeOffset EventDateUtc,
-    SeverityLevel Severity,
-    Type TaskType,
-    Type TaskHandlerType,
+    string Severity,
+    string TaskType,
+    string TaskHandlerType,
     string TaskParameters,
-    DateTimeOffset? TaskTaskScheduledExecutionUtc,
     string Message,
-    Exception? Exception = null)
+    string? Exception = null)
 {
     internal static EverTaskEventData FromExecutor(TaskHandlerExecutor executor, SeverityLevel severity, string message, Exception? exception) =>
         new (
             executor.PersistenceId,
             DateTimeOffset.UtcNow,
-            severity,
-            executor.Task.GetType(),
-            executor.Handler.GetType(),
+            severity.ToString(),
+            executor.Task.GetType().ToString(),
+            executor.Handler.GetType().ToString(),
             JsonConvert.SerializeObject(executor.Task),
-            executor.ExecutionTime,
             message,
-            exception);
+            exception.ToDetailedString());
 };
 
 public enum SeverityLevel

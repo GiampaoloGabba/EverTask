@@ -6,16 +6,18 @@ using Microsoft.Extensions.Logging;
 
 namespace EverTask.Monitor.AspnetCore.SignalR;
 
-public class SignalRTaskMonitorHub : Hub, ITaskMonitor
+public class SignalRTaskMonitor : ITaskMonitor
 {
-    private readonly WorkerService _workerService;
-    private readonly IEverTaskLogger<SignalRTaskMonitorHub> _logger;
+    private readonly IEverTaskWorkerService _workerService;
+    private readonly IHubContext<TaskMonitorHub> _hubContext;
+    private readonly IEverTaskLogger<SignalRTaskMonitor> _logger;
 
-    public SignalRTaskMonitorHub(WorkerService workerService ,IEverTaskLogger<SignalRTaskMonitorHub> logger)
+    public SignalRTaskMonitor(IEverTaskWorkerService workerService, IHubContext<TaskMonitorHub> hubContext,
+                              IEverTaskLogger<SignalRTaskMonitor> logger)
     {
         _workerService = workerService;
-        _logger   = logger;
-        SubScribe();
+        _hubContext    = hubContext;
+        _logger        = logger;
     }
 
     public void SubScribe()
@@ -27,7 +29,7 @@ public class SignalRTaskMonitorHub : Hub, ITaskMonitor
     private async Task OnTaskEventOccurredAsync(EverTaskEventData eventData)
     {
         _logger.LogInformation("EverTask SignalR MonitorHub, message received: {@eventData}", eventData);
-        await Clients.All.SendAsync("EverTaskEvent", eventData).ConfigureAwait(false);
+        await _hubContext.Clients.All.SendAsync("EverTaskEvent", eventData).ConfigureAwait(false);
     }
 
     public void Unsubscribe()
@@ -36,9 +38,8 @@ public class SignalRTaskMonitorHub : Hub, ITaskMonitor
         _workerService.TaskEventOccurredAsync -= OnTaskEventOccurredAsync;
     }
 
-    protected override void Dispose(bool disposing)
+    protected void Dispose(bool disposing)
     {
-        base.Dispose(disposing);
         Unsubscribe();
     }
 }

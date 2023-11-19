@@ -188,16 +188,11 @@ public class TaskHanlderExecutorTests
             PersistenceId: persistenceId);
 
         var eventData = EverTaskEventData.FromExecutor(executor, SeverityLevel.Information, "test", null);
-        var eventData2 = new EverTaskEventData(
-            executor.PersistenceId,
-            DateTimeOffset.UtcNow,
-            SeverityLevel.Information,
-            executor.Task.GetType(),
-            executor.Handler.GetType(),
-            JsonConvert.SerializeObject(executor.Task),
-            executor.ExecutionTime,
-            "test");
 
-        eventData2.ShouldBeEquivalentTo(eventData2);
+        eventData.TaskId.ShouldBe(persistenceId);
+        eventData.TaskParameters.ShouldBe(JsonConvert.SerializeObject(task));
+        eventData.TaskType.ShouldBe(task.GetType().ToString());
+        eventData.TaskHandlerType.ShouldBe(handler.GetType().ToString());
+        eventData.Severity.ShouldBe(SeverityLevel.Information.ToString());
     }
 }
