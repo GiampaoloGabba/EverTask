@@ -191,7 +191,36 @@ public class WorkerServiceIntegrationTests
 
         await _host.StopAsync(cts.Token);
 
-        TestTaskWithCustomRetryPolicy.Counter.ShouldBe(2);
+        TestTaskWithCustomRetryPolicy.Counter.ShouldBe(5);
+    }
+
+    [Fact]
+    public async Task Should_not_execute_task_with_custom_timeout_excedeed()
+    {
+        await _host.StartAsync();
+
+        var task = new TestTaskWithCustomTimeout();
+        TestTaskWithCustomTimeout.Counter = 0;
+        await _dispatcher.Dispatch(task);
+
+        await Task.Delay(900);
+
+        var pt = await _storage.RetrievePendingTasks();
+        pt.Length.ShouldBe(0);
+
+        var tasks = await _storage.GetAll();
+
+        tasks.Length.ShouldBe(1);
+        tasks[0].Status.ShouldBe(QueuedTaskStatus.Failed);
+        tasks[0].LastExecutionUtc.ShouldNotBeNull();
+        tasks[0].Exception.ShouldNotBeNull().ShouldContain("TimeoutException");
+
+        var cts = new CancellationTokenSource();
+        cts.CancelAfter(2000);
+
+        await _host.StopAsync(cts.Token);
+
+        TestTaskWithCustomTimeout.Counter.ShouldBe(0);
     }
 
     [Fact]

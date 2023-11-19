@@ -50,8 +50,25 @@ public class WorkerExecutor(
 
             token.ThrowIfCancellationRequested();
 
-            await configuration.DefaultRetryPolicy.Execute((mainToken) =>
-                task.HandlerCallback.Invoke(task.Task, mainToken), token).ConfigureAwait(false);
+            var handlerOptions = task.Handler as IEverTaskHandlerOptions;
+
+            var retryPolicy = handlerOptions?.RetryPolicy ?? configuration.DefaultRetryPolicy;
+            var timeout     = handlerOptions?.Timeout ?? configuration.DefaultTimeout;
+
+            await retryPolicy.Execute(async retryToken =>
+            {
+                if (timeout.HasValue && timeout.Value > TimeSpan.Zero)
+                {
+                    await ExecuteWithTimeout(
+                        innerToken => task.HandlerCallback.Invoke(task.Task, innerToken),
+                        timeout.Value,
+                        retryToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    await task.HandlerCallback.Invoke(task.Task, retryToken).ConfigureAwait(false);
+                }
+            }, token).ConfigureAwait(false);
 
             token.ThrowIfCancellationRequested();
 
@@ -97,7 +114,29 @@ public class WorkerExecutor(
         }
     }
 
-    private async ValueTask ExecuteCallback(Func<Guid, ValueTask>? handler, TaskHandlerExecutor task, string callbackName)
+    private async Task ExecuteWithTimeout(Func<CancellationToken, Task> action, TimeSpan timeout,
+                                          CancellationToken token)
+    {
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+        timeoutCts.CancelAfter(timeout);
+
+        var timeoutToken = timeoutCts.Token;
+        try
+        {
+            await action(timeoutToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            if (token.IsCancellationRequested)
+            {
+                throw;
+            }
+            throw new TimeoutException();
+        }
+    }
+
+    private async ValueTask ExecuteCallback(Func<Guid, ValueTask>? handler, TaskHandlerExecutor task,
+                                            string callbackName)
     {
         if (handler == null) return;
 
@@ -142,12 +181,14 @@ public class WorkerExecutor(
         RegisterEvent(SeverityLevel.Warning, executor, message, exception, messageArgs);
     }
 
-    private void RegisterError(Exception exception, TaskHandlerExecutor executor, string message, params object[] messageArgs)
+    private void RegisterError(Exception exception, TaskHandlerExecutor executor, string message,
+                               params object[] messageArgs)
     {
         RegisterEvent(SeverityLevel.Error, executor, message, exception, messageArgs);
     }
 
-    private void RegisterEvent(SeverityLevel severity, TaskHandlerExecutor executor, string message, Exception? exception = null, params object[] messageArgs)
+    private void RegisterEvent(SeverityLevel severity, TaskHandlerExecutor executor, string message,
+                               Exception? exception = null, params object[] messageArgs)
     {
         switch (severity)
         {

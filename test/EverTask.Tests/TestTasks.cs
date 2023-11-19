@@ -36,6 +36,12 @@ public class TestTaskWithCustomRetryPolicy() : IEverTask
     public static int Counter { get; set; } = 0;
 };
 
+public class TestTaskWithCustomTimeout() : IEverTask
+{
+    public static int Counter { get; set; } = 0;
+};
+
+
 public record TestTaskRequestNoSerializable(IPAddress notSerializable) : IEverTask;
 
 public record ThrowStorageError() : IEverTask;
@@ -118,19 +124,34 @@ public class TestTaskWithCustomRetryPolicyHanlder : EverTaskHandler<TestTaskWith
 {
     public TestTaskWithCustomRetryPolicyHanlder()
     {
-        RetryPolicy = new LinearRetryPolicy(2, TimeSpan.FromMilliseconds(300));
+        RetryPolicy = new LinearRetryPolicy(5, TimeSpan.FromMilliseconds(100));
     }
 
     public override Task Handle(TestTaskWithCustomRetryPolicy backgroundTask, CancellationToken cancellationToken)
     {
         TestTaskWithCustomRetryPolicy.Counter++;
 
-        if (TestTaskWithCustomRetryPolicy.Counter < 2)
+        if (TestTaskWithCustomRetryPolicy.Counter < 5)
         {
             throw new Exception();
         }
 
         return Task.CompletedTask;
+    }
+}
+
+public class TestTaskWithCustomTimeoutHanlder : EverTaskHandler<TestTaskWithCustomTimeout>
+{
+    public TestTaskWithCustomTimeoutHanlder()
+    {
+        Timeout = TimeSpan.FromMilliseconds(300);
+    }
+
+    public override async Task Handle(TestTaskWithCustomTimeout backgroundTask, CancellationToken cancellationToken)
+    {
+        await Task.Delay(500, cancellationToken);
+
+        TestTaskWithCustomTimeout.Counter++;
     }
 }
 

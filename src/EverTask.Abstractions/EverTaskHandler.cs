@@ -7,6 +7,7 @@
 public abstract class EverTaskHandler<TTask> : IEverTaskHandler<TTask> where TTask : IEverTask
 {
     public IRetryPolicy? RetryPolicy { get; set; }
+    public TimeSpan?     Timeout     { get; set; } = null;
 
     /// <inheritdoc/>
     public abstract Task Handle(TTask backgroundTask, CancellationToken cancellationToken);
