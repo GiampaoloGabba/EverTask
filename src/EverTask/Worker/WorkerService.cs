@@ -1,6 +1,4 @@
-﻿using EverTask.Dispatcher;
-using EverTask.Logger;
-using Microsoft.Extensions.Hosting;
+﻿using Microsoft.Extensions.Hosting;
 
 namespace EverTask.Worker;
 
@@ -48,7 +46,8 @@ public class WorkerService(
         {
             contTask++;
             logger.LogTrace("Processing task {task} of {count} tasks to execute", contTask, pendingTasks.Length);
-            IEverTask? task = null;
+            IEverTask?     task          = null;
+            ScheduledTask? scheduledTask = null;
 
             try
             {
@@ -63,11 +62,23 @@ public class WorkerService(
                 logger.LogError(e, "Unable to deserialize task with id {taskId}.", taskInfo.Id);
             }
 
+            try
+            {
+                if (!string.IsNullOrEmpty(taskInfo.ScheduledTask))
+                {
+                    scheduledTask = JsonConvert.DeserializeObject<ScheduledTask>(taskInfo.ScheduledTask);
+                }
+            }
+            catch (Exception e)
+            {
+                logger.LogError(e, "Unable to deserialize recurring task info with id {taskId}.", taskInfo.Id);
+            }
+
             if (task != null)
             {
                 try
                 {
-                    await taskDispatcher.ExecuteDispatch(task, taskInfo.ScheduledExecutionUtc, ct, taskInfo.Id)
+                    await taskDispatcher.ExecuteDispatch(task, taskInfo.ScheduledExecutionUtc, scheduledTask, taskInfo.CurrentRunCount, ct, taskInfo.Id)
                                         .ConfigureAwait(false);
                 }
                 catch (Exception ex)

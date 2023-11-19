@@ -1,7 +1,4 @@
-﻿using EverTask.Logger;
-using EverTask.Scheduler;
-
-namespace EverTask.Dispatcher;
+﻿namespace EverTask.Dispatcher;
 
 // This code was adapted from MediatR by Jimmy Bogard.
 // Specific inspiration was taken from the Mediator.cs file.
@@ -17,10 +14,9 @@ public class TaskDispatcher(
     IWorkerBlacklist workerBlacklist,
     ITaskStorage? taskStorage = null) : ITaskDispatcherInternal
 {
-
     /// <inheritdoc />
-    public Task<Guid> Dispatch(IEverTask task,  CancellationToken cancellationToken = default)=>
-        ExecuteDispatch(task, (DateTimeOffset?)null, cancellationToken);
+    public Task<Guid> Dispatch(IEverTask task, CancellationToken cancellationToken = default) =>
+        ExecuteDispatch(task, null, null, null,cancellationToken);
 
     /// <inheritdoc />
     public Task<Guid> Dispatch(IEverTask task, TimeSpan executionDelay, CancellationToken cancellationToken = default) =>
@@ -28,23 +24,34 @@ public class TaskDispatcher(
 
     /// <inheritdoc />
     public Task<Guid> Dispatch(IEverTask task, DateTimeOffset executionTime, CancellationToken cancellationToken = default) =>
-        ExecuteDispatch(task, executionTime, cancellationToken);
+        ExecuteDispatch(task, executionTime, null, null,cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<Guid> Dispatch(IEverTask task, Action<ITaskSchedulerBuilder> schedulerBuilder, CancellationToken cancellationToken = default)
+    {
+        var builder = new TaskSchedulerBuilder();
+        schedulerBuilder(builder);
+
+        return await ExecuteDispatch(task, null, builder.ScheduledTask, null,cancellationToken).ConfigureAwait(false);
+    }
 
     /// <inheritdoc />
     public async Task Cancel(Guid taskId, CancellationToken cancellationToken = default)
     {
-        if (taskStorage!=null)
+        if (taskStorage != null)
             await taskStorage.SetTaskCancelledByUser(taskId).ConfigureAwait(false);
 
         workerBlacklist.Add(taskId);
     }
 
     /// <inheritdoc />
-    public async Task<Guid> ExecuteDispatch(IEverTask task, CancellationToken ct = default, Guid? existingTaskId = null) =>
-        await ExecuteDispatch(task, (DateTimeOffset?)null, ct, existingTaskId).ConfigureAwait(false);
+    public async Task<Guid> ExecuteDispatch(IEverTask task, CancellationToken ct = default,
+                                            Guid? existingTaskId = null) =>
+        await ExecuteDispatch(task, null, null, null, ct, existingTaskId).ConfigureAwait(false);
 
     /// <inheritdoc />
-    public async Task<Guid> ExecuteDispatch(IEverTask task, TimeSpan? executionDelay = null, CancellationToken ct = default,
+    public async Task<Guid> ExecuteDispatch(IEverTask task, TimeSpan? executionDelay = null,
+                                            CancellationToken ct = default,
                                             Guid? existingTaskId = null)
     {
         if (task == null)
@@ -54,13 +61,25 @@ public class TaskDispatcher(
                                 ? DateTimeOffset.UtcNow.Add(executionDelay.Value)
                                 : (DateTimeOffset?)null;
 
-        return await ExecuteDispatch(task, executionTime, ct, existingTaskId).ConfigureAwait(false);
+        return await ExecuteDispatch(task, executionTime, null, null, ct, existingTaskId).ConfigureAwait(false);
     }
 
-    public async Task<Guid> ExecuteDispatch(IEverTask task, DateTimeOffset? executionTime = null, CancellationToken ct = default, Guid? existingTaskId = null)
+    public async Task<Guid> ExecuteDispatch(IEverTask task, DateTimeOffset? executionTime = null,
+                                            ScheduledTask? scheduled = null, int? currentRun = null,
+                                            CancellationToken ct = default, Guid? existingTaskId = null)
     {
         if (task == null)
             throw new ArgumentNullException(nameof(task));
+
+        if (scheduled != null)
+        {
+            var nextRun = scheduled.CalculateNextRun(DateTimeOffset.UtcNow, currentRun ?? 0);
+
+            if (nextRun == null)
+                throw new ArgumentException("Invalid scheduler expression", nameof(scheduled));
+
+            executionTime = nextRun;
+        }
 
         var taskType = task.GetType();
 
@@ -69,7 +88,7 @@ public class TaskDispatcher(
         var handler = (TaskHandlerWrapper?)Activator.CreateInstance(wrapperType) ??
                       throw new InvalidOperationException($"Could not create wrapper for type {taskType}");
 
-        var executor = handler.Handle(task, executionTime, serviceProvider, existingTaskId);
+        var executor = handler.Handle(task, executionTime, scheduled, serviceProvider, existingTaskId);
 
         if (existingTaskId == null)
         {
@@ -90,7 +109,7 @@ public class TaskDispatcher(
             }
         }
 
-        if (executor.ExecutionTime > DateTimeOffset.UtcNow)
+        if (executor.ExecutionTime > DateTimeOffset.UtcNow || scheduled != null)
         {
             scheduler.Schedule(executor);
         }

@@ -1,6 +1,4 @@
-﻿using EverTask.Logger;
-
-namespace EverTask.Scheduler;
+﻿namespace EverTask.Scheduler;
 
 public class TimerScheduler : IScheduler
 {
@@ -30,8 +28,8 @@ public class TimerScheduler : IScheduler
     {
         ArgumentNullException.ThrowIfNull(item.ExecutionTime);
         _queue.Enqueue(item, item.ExecutionTime.Value);
-
-        // Calcola il prossimo tempo di attivazione del timer
+        
+        // Calculate the next activation time of the timer
         UpdateTimer();
     }
 

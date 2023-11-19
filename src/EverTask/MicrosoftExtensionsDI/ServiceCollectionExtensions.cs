@@ -1,9 +1,4 @@
-﻿using EverTask.Dispatcher;
-using EverTask.Logger;
-using EverTask.Monitoring;
-using EverTask.Resilience;
-using EverTask.Scheduler;
-using Microsoft.Extensions.Hosting;
+﻿using Microsoft.Extensions.Hosting;
 
 namespace Microsoft.Extensions.DependencyInjection;
 

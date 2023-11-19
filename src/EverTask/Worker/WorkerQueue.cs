@@ -1,6 +1,4 @@
-﻿using EverTask.Logger;
-
-namespace EverTask.Worker;
+﻿namespace EverTask.Worker;
 
 public class WorkerQueue(
     EverTaskServiceConfiguration configuration,

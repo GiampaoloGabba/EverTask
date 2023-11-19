@@ -1,5 +1,4 @@
 ﻿using System.Linq.Expressions;
-using EverTask.Logger;
 
 namespace EverTask.Storage;
 
@@ -34,10 +33,11 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
     {
         logger.LogInformation("Retrieve Pending Tasks");
 
-        var pending = _pendingTasks.Where(t => t.Status == QueuedTaskStatus.Queued ||
-                                                t.Status == QueuedTaskStatus.Pending ||
-                                                t.Status == QueuedTaskStatus.ServiceStopped ||
-                                                t.Status == QueuedTaskStatus.InProgress);
+        var pending = _pendingTasks.Where(t => (t.MaxRuns == null || t.CurrentRunCount <= t.MaxRuns)
+                                               && (t.Status == QueuedTaskStatus.Queued ||
+                                                   t.Status == QueuedTaskStatus.Pending ||
+                                                   t.Status == QueuedTaskStatus.ServiceStopped ||
+                                                   t.Status == QueuedTaskStatus.InProgress));
         return Task.FromResult(pending.ToArray());
     }
 
@@ -79,7 +79,30 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
                 NewStatus    = status,
                 Exception    = exception.ToDetailedString()
             });
+        }
 
+        return Task.CompletedTask;
+    }
+
+    public Task<int> GetCurrentRunCount(Guid taskId)
+    {
+        logger.LogInformation("Get the current run counter for Task {taskId}", taskId);
+        var task = _pendingTasks.FirstOrDefault(x => x.Id == taskId);
+
+        return Task.FromResult(task?.CurrentRunCount ?? 1);
+    }
+
+    public Task UpdateCurrentRun(Guid taskId, DateTimeOffset? nextRun)
+    {
+        logger.LogInformation("Update the current run counter for Task {taskId}", taskId);
+        var task = _pendingTasks.FirstOrDefault(x => x.Id == taskId);
+
+        if (task != null)
+        {
+            task.NextRunUtc = nextRun;
+            var currentRun = task.CurrentRunCount ?? 0;
+
+            task.CurrentRunCount = currentRun + 1;
         }
 
         return Task.CompletedTask;

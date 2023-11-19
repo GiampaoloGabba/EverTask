@@ -1,7 +1,4 @@
-﻿using EverTask.Logger;
-using EverTask.Monitoring;
-
-namespace EverTask.Worker;
+﻿namespace EverTask.Worker;
 
 public interface IEverTaskWorkerExecutor
 {
@@ -13,6 +10,7 @@ public class WorkerExecutor(
     IWorkerBlacklist workerBlacklist,
     EverTaskServiceConfiguration configuration,
     IServiceScopeFactory serviceScopeFactory,
+    IScheduler scheduler,
     IEverTaskLogger<WorkerExecutor> logger) : IEverTaskWorkerExecutor
 {
     public event Func<EverTaskEventData, Task>? TaskEventOccurredAsync;
@@ -112,6 +110,28 @@ public class WorkerExecutor(
 
             RegisterError(ex, task, "Error occurred executing task with id {0}.", task.PersistenceId);
         }
+        finally
+        {
+            await QueueNextOccourrence(task, taskStorage);
+        }
+    }
+
+    private async Task QueueNextOccourrence(TaskHandlerExecutor task, ITaskStorage? taskStorage)
+    {
+        if (task.ScheduledTask == null) return;
+
+        if (taskStorage != null)
+        {
+            var currentRun = await taskStorage.GetCurrentRunCount(task.PersistenceId);
+            var nextRun    = task.ScheduledTask.CalculateNextRun(DateTimeOffset.UtcNow, currentRun+1);
+            await taskStorage.UpdateCurrentRun(task.PersistenceId, nextRun)
+                             .ConfigureAwait(false);
+
+            if (nextRun.HasValue)
+            {
+                scheduler.Schedule(task);
+            }
+        }
     }
 
     private async Task ExecuteWithTimeout(Func<CancellationToken, Task> action, TimeSpan timeout,
@@ -131,6 +151,7 @@ public class WorkerExecutor(
             {
                 throw;
             }
+
             throw new TimeoutException();
         }
     }

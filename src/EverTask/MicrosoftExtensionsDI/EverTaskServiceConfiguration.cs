@@ -1,6 +1,4 @@
-﻿using EverTask.Resilience;
-
-namespace Microsoft.Extensions.DependencyInjection;
+﻿namespace Microsoft.Extensions.DependencyInjection;
 
 public class EverTaskServiceConfiguration
 {

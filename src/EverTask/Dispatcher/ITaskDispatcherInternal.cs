@@ -32,8 +32,10 @@ public interface ITaskDispatcherInternal : ITaskDispatcher
     /// Optional. The DateTimeOffset for the task execution.
     /// Defaults to immediate execution if not specified.
     /// </param>
+    /// <param name="currentRun">Optional. The number of times the task has been executed.</param>
+    /// <param name="scheduled">Optional. The ScheduledTask for the task execution.</param>
     /// <param name="ct">/// Optional. A token for canceling the scheduling before its execution.</param>
     /// <param name="existingTaskId">Optional existing persistence guid for the task</param>
     /// <returns>A task that represents the queue operation.</returns>
-    internal Task<Guid> ExecuteDispatch(IEverTask task, DateTimeOffset? executionTime = null, CancellationToken ct = default, Guid? existingTaskId = null);
+    internal Task<Guid> ExecuteDispatch(IEverTask task, DateTimeOffset? executionTime = null, ScheduledTask? scheduled = null, int? currentRun = null, CancellationToken ct = default, Guid? existingTaskId = null);
 }

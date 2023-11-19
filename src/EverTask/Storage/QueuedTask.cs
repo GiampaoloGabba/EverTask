@@ -10,6 +10,12 @@ public class QueuedTask
     public string          Request               { get; set; } = "";
     public string          Handler               { get; set; } = "";
     public string?         Exception             { get; set; }
+    public bool            IsRecurring           { get; set; }
+    public string?         ScheduledTask         { get; set; }
+    public string?         ScheduledTaskInfo     { get; set; }
+    public int?            CurrentRunCount       { get; set; }
+    public int?            MaxRuns               { get; set; }
+    public DateTimeOffset? NextRunUtc            { get; set; }
 
     public QueuedTaskStatus         Status       { get; set; }
     public ICollection<StatusAudit> StatusAudits { get; set; } = new List<StatusAudit>();

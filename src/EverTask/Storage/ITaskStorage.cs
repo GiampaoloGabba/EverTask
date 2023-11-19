@@ -85,4 +85,19 @@ public interface ITaskStorage
     /// <returns>A task representing the asynchronous operation.</returns>
     Task SetTaskStatus(Guid taskId, QueuedTaskStatus status, Exception? exception = null,
                        CancellationToken ct = default);
+
+    /// <summary>
+    /// Get the current run counter for this task.
+    /// </summary>
+    /// <param name="taskId">The ID of the task.</param>
+    /// <returns>The current run count for this task.</returns>
+    Task<int> GetCurrentRunCount(Guid taskId);
+
+    /// <summary>
+    /// Add the current run to the run counter for this task.
+    /// </summary>
+    /// <param name="taskId">The ID of the task.</param>
+    /// <param name="nextRun">The next run date.</param>
+    /// <returns>A task representing the asynchronous operation.</returns>
+    Task UpdateCurrentRun(Guid taskId, DateTimeOffset? nextRun);
 }

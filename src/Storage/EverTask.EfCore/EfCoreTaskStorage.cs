@@ -53,10 +53,11 @@ public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTa
 
         return await dbContext.QueuedTasks
                               .AsNoTracking()
-                              .Where(t => t.Status == QueuedTaskStatus.Queued ||
-                                           t.Status == QueuedTaskStatus.Pending ||
-                                           t.Status == QueuedTaskStatus.ServiceStopped ||
-                                           t.Status == QueuedTaskStatus.InProgress)
+                              .Where(t => (t.MaxRuns == null || t.CurrentRunCount <= t.MaxRuns)
+                                          && (t.Status == QueuedTaskStatus.Queued ||
+                                              t.Status == QueuedTaskStatus.Pending ||
+                                              t.Status == QueuedTaskStatus.ServiceStopped ||
+                                              t.Status == QueuedTaskStatus.InProgress))
                               .ToArrayAsync(ct)
                               .ConfigureAwait(false);
     }
@@ -137,6 +138,49 @@ public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTa
         catch (Exception e)
         {
             logger.LogWarning(e, "Unable to save the audit status for taskId {taskId}", taskId);
+        }
+    }
+
+    public async Task<int> GetCurrentRunCount(Guid taskId)
+    {
+        logger.LogInformation("Get the current run counter for Task {taskId}", taskId);
+        using var       scope     = serviceScopeFactory.CreateScope();
+        await using var dbContext = scope.ServiceProvider.GetRequiredService<ITaskStoreDbContext>();
+
+        var task = await dbContext.QueuedTasks
+                                  .Where(x => x.Id == taskId)
+                                  .FirstOrDefaultAsync()
+                                  .ConfigureAwait(false);
+
+        return task?.CurrentRunCount ?? 0;
+    }
+
+    public async Task UpdateCurrentRun(Guid taskId, DateTimeOffset? nextRun)
+    {
+        logger.LogInformation("Update the current run counter for Task {taskId}", taskId);
+
+        using var       scope     = serviceScopeFactory.CreateScope();
+        await using var dbContext = scope.ServiceProvider.GetRequiredService<ITaskStoreDbContext>();
+
+        var task = await dbContext.QueuedTasks
+                                  .Where(x => x.Id == taskId)
+                                  .FirstOrDefaultAsync()
+                                  .ConfigureAwait(false);
+
+        if (task != null)
+        {
+            task.NextRunUtc = nextRun;
+            var currentRun = task.CurrentRunCount ?? 0;
+            task.CurrentRunCount = currentRun + 1;
+
+            try
+            {
+                await dbContext.SaveChangesAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception e)
+            {
+                logger.LogCritical(e, "Update the current run counter for Task  for taskId {taskId}", taskId);
+            }
         }
     }
 }
