@@ -12,11 +12,12 @@ public class TaskDispatcher(
     EverTaskServiceConfiguration serviceConfiguration,
     IEverTaskLogger<TaskDispatcher> logger,
     IWorkerBlacklist workerBlacklist,
+    ICancellationSourceProvider cancellationSourceProvider,
     ITaskStorage? taskStorage = null) : ITaskDispatcherInternal
 {
     /// <inheritdoc />
     public Task<Guid> Dispatch(IEverTask task, CancellationToken cancellationToken = default) =>
-        ExecuteDispatch(task, null, null, null,cancellationToken);
+        ExecuteDispatch(task,cancellationToken);
 
     /// <inheritdoc />
     public Task<Guid> Dispatch(IEverTask task, TimeSpan executionDelay, CancellationToken cancellationToken = default) =>
@@ -24,7 +25,7 @@ public class TaskDispatcher(
 
     /// <inheritdoc />
     public Task<Guid> Dispatch(IEverTask task, DateTimeOffset executionTime, CancellationToken cancellationToken = default) =>
-        ExecuteDispatch(task, executionTime, null, null,cancellationToken);
+        ExecuteDispatch(task, executionTime, null, null, cancellationToken);
 
     /// <inheritdoc />
     public async Task<Guid> Dispatch(IEverTask task, Action<ITaskSchedulerBuilder> schedulerBuilder, CancellationToken cancellationToken = default)
@@ -47,8 +48,7 @@ public class TaskDispatcher(
     }
 
     /// <inheritdoc />
-    public async Task<Guid> ExecuteDispatch(IEverTask task, CancellationToken ct = default,
-                                            Guid? existingTaskId = null) =>
+    public async Task<Guid> ExecuteDispatch(IEverTask task, CancellationToken ct = default, Guid? existingTaskId = null) =>
         await ExecuteDispatch(task, null, null, null, ct, existingTaskId).ConfigureAwait(false);
 
     /// <inheritdoc />

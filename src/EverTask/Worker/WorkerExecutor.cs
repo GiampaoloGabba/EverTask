@@ -11,6 +11,7 @@ public class WorkerExecutor(
     EverTaskServiceConfiguration configuration,
     IServiceScopeFactory serviceScopeFactory,
     IScheduler scheduler,
+    ICancellationSourceProvider cancellationSourceProvider,
     IEverTaskLogger<WorkerExecutor> logger) : IEverTaskWorkerExecutor
 {
     public event Func<EverTaskEventData, Task>? TaskEventOccurredAsync;
@@ -41,10 +42,11 @@ public class WorkerExecutor(
 
             token.ThrowIfCancellationRequested();
 
-            var handlerOptions = task.Handler as IEverTaskHandlerOptions;
+            var taskToken = cancellationSourceProvider.CreateToken(task.PersistenceId, token);
 
-            var retryPolicy = handlerOptions?.RetryPolicy ?? configuration.DefaultRetryPolicy;
-            var timeout     = handlerOptions?.Timeout ?? configuration.DefaultTimeout;
+            var handlerOptions = task.Handler as IEverTaskHandlerOptions;
+            var retryPolicy    = handlerOptions?.RetryPolicy ?? configuration.DefaultRetryPolicy;
+            var timeout        = handlerOptions?.Timeout ?? configuration.DefaultTimeout;
 
             await retryPolicy.Execute(async retryToken =>
             {
@@ -59,7 +61,7 @@ public class WorkerExecutor(
                 {
                     await task.HandlerCallback.Invoke(task.Task, retryToken).ConfigureAwait(false);
                 }
-            }, token).ConfigureAwait(false);
+            }, taskToken).ConfigureAwait(false);
 
             token.ThrowIfCancellationRequested();
 
