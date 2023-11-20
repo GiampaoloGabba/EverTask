@@ -6,13 +6,13 @@
 
 internal abstract class TaskHandlerWrapper
 {
-    public abstract TaskHandlerExecutor Handle(IEverTask task, DateTimeOffset? executionTime, ScheduledTask? scheduled,
+    public abstract TaskHandlerExecutor Handle(IEverTask task, DateTimeOffset? executionTime, RecurringTask? recurring,
                                                IServiceProvider serviceFactory, Guid? existingTaskId = null);
 }
 
 internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TTask : IEverTask
 {
-    public override TaskHandlerExecutor Handle(IEverTask task, DateTimeOffset? executionTime, ScheduledTask? scheduled,
+    public override TaskHandlerExecutor Handle(IEverTask task, DateTimeOffset? executionTime, RecurringTask? recurring,
                                                IServiceProvider serviceFactory, Guid? existingTaskId = null)
     {
         var handlerService = serviceFactory.GetService<IEverTaskHandler<TTask>>();
@@ -25,7 +25,7 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
             task,
             handlerService,
             executionTime,
-            scheduled,
+            recurring,
             (theTask, theToken) => handlerService.Handle((TTask)theTask, theToken),
             (persistenceId, exception, message) => handlerService.OnError(persistenceId, exception, message),
             persistenceId => handlerService.OnStarted(persistenceId),

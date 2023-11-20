@@ -2,7 +2,7 @@
 
 namespace EverTask.Scheduler.Builder;
 
-public class ScheduledTask
+public class RecurringTask
 {
     public TimeSpan?       InitialDelay    { get; set; }
     public DateTimeOffset? SpecificRunTime { get; set; }
@@ -11,26 +11,28 @@ public class ScheduledTask
     public MonthInterval?  MonthInterval   { get; set; }
     public int             MaxRuns         { get; set; }
 
-    public string? CronExpression { get; set; }
+    //saving cronexp as string to easy serialization/deserialization
+    public string?         CronExpression  { get; set; }
 
     //used to serialization/deserialization
-    public ScheduledTask() { }
+    public RecurringTask() { }
 
     public DateTimeOffset? CalculateNextRun(DateTimeOffset current, int currentRun)
     {
         if (currentRun >= MaxRuns)
             return null;
 
-        if (currentRun == 0
-            && SpecificRunTime.HasValue
-            && SpecificRunTime.Value.ToUniversalTime() <= current.ToUniversalTime().AddSeconds(1))
+        if (currentRun == 0)
         {
-            return current;
+            var runtime = SpecificRunTime;
+            if (runtime == null && InitialDelay != null)
+                runtime = current.Add(InitialDelay.Value);
+
+            if (runtime != null && runtime.Value.ToUniversalTime() <= current.ToUniversalTime().AddSeconds(1))
+                return runtime.Value;
         }
 
-        var nextSchedule = CalculateNextSchedule(current);
-
-        return nextSchedule;
+        return CalculateNextSchedule(current);
     }
 
     private DateTimeOffset? CalculateNextSchedule(DateTimeOffset current)
@@ -54,6 +56,7 @@ public class ScheduledTask
         };
     }
 
+    #region ToString in human readable format
     public override string ToString()
     {
         var parts = new List<string>();
@@ -108,4 +111,5 @@ public class ScheduledTask
 
         return string.Join(" ", parts);
     }
+    #endregion
 }

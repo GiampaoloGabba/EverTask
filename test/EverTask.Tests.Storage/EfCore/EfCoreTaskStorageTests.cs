@@ -85,7 +85,7 @@ public class EfCoreTaskStorageTests
         _storage         = services.BuildServiceProvider().GetRequiredService<ITaskStorage>();
         _mockedDbContext = services.BuildServiceProvider().GetRequiredService<TestDbContext>();
 
-        _storage.PersistTask(_queuedTasks[0]);
+        _storage.Persist(_queuedTasks[0]);
     }
 
     [Fact]
@@ -116,7 +116,7 @@ public class EfCoreTaskStorageTests
     public async Task PersistTask_ShouldPersistTask()
     {
         CleanUpDatabase();
-        await _storage.PersistTask(_queuedTasks[1]);
+        await _storage.Persist(_queuedTasks[1]);
         _mockedDbContext.QueuedTasks.Count().ShouldBe(1);
 
         var result = await _storage.Get(x => x.Type == "Type2");
@@ -129,8 +129,8 @@ public class EfCoreTaskStorageTests
     public async Task Should_RetrivePendingTasks()
     {
         CleanUpDatabase();
-        await _storage.PersistTask(_queuedTasks[0]);
-        await _storage.RetrievePendingTasks();
+        await _storage.Persist(_queuedTasks[0]);
+        await _storage.RetrievePending();
         _mockedDbContext.QueuedTasks.Count().ShouldBe(1);
 
         var result = await _storage.Get(x => x.Type == "Type1");
@@ -143,11 +143,11 @@ public class EfCoreTaskStorageTests
     public async Task Should_SetTaskQueued()
     {
         CleanUpDatabase();
-        await _storage.PersistTask(_queuedTasks[0]);
+        await _storage.Persist(_queuedTasks[0]);
         var result         = await _storage.Get(x => x.Type == "Type1");
         var startingLength = _mockedDbContext.QueuedTaskStatusAudit.Count(x=>x.QueuedTaskId==result[0].Id);
 
-        await _storage.SetTaskQueued(result[0].Id);
+        await _storage.SetQueued(result[0].Id);
 
         result = await _storage.Get(x => x.Type == "Type1");
         result[0].Status.ShouldBe(QueuedTaskStatus.Queued);
@@ -160,11 +160,11 @@ public class EfCoreTaskStorageTests
     public async Task Should_SetTaskInProgress()
     {
         CleanUpDatabase();
-        await _storage.PersistTask(_queuedTasks[0]);
+        await _storage.Persist(_queuedTasks[0]);
         var result         = await _storage.Get(x => x.Type == "Type1");
         var startingLength = _mockedDbContext.QueuedTaskStatusAudit.Count(x=>x.QueuedTaskId==result[0].Id);
 
-        await _storage.SetTaskInProgress(result[0].Id);
+        await _storage.SetInProgress(result[0].Id);
 
         result = await _storage.Get(x => x.Type == "Type1");
         result[0].Status.ShouldBe(QueuedTaskStatus.InProgress);
@@ -177,11 +177,11 @@ public class EfCoreTaskStorageTests
     public async Task Should_SetTaskCompleted()
     {
         CleanUpDatabase();
-        await _storage.PersistTask(_queuedTasks[0]);
+        await _storage.Persist(_queuedTasks[0]);
         var result         = await _storage.Get(x => x.Type == "Type1");
         var startingLength = _mockedDbContext.QueuedTaskStatusAudit.Count(x=>x.QueuedTaskId==result[0].Id);
 
-        await _storage.SetTaskCompleted(result[0].Id);
+        await _storage.SetCompleted(result[0].Id);
 
         result = await _storage.Get(x => x.Type == "Type1");
         result[0].Status.ShouldBe(QueuedTaskStatus.Completed);

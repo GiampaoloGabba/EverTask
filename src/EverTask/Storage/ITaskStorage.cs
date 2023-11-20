@@ -28,14 +28,14 @@ public interface ITaskStorage
     /// <param name="executor">The queued task to be persisted.</param>
     /// <param name="ct">Optional cancellation token.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    Task PersistTask(QueuedTask executor, CancellationToken ct = default);
+    Task Persist(QueuedTask executor, CancellationToken ct = default);
 
     /// <summary>
     /// Retrieves all pending tasks.
     /// </summary>
     /// <param name="ct">Optional cancellation token.</param>
     /// <returns>An array of pending tasks.</returns>
-    Task<QueuedTask[]> RetrievePendingTasks(CancellationToken ct = default);
+    Task<QueuedTask[]> RetrievePending(CancellationToken ct = default);
 
     /// <summary>
     /// Sets a task's status to queued.
@@ -43,7 +43,7 @@ public interface ITaskStorage
     /// <param name="taskId">The ID of the task.</param>
     /// <param name="ct">Optional cancellation token.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    Task SetTaskQueued(Guid taskId, CancellationToken ct = default);
+    Task SetQueued(Guid taskId, CancellationToken ct = default);
 
     /// <summary>
     /// Sets a task's status to in progress.
@@ -51,21 +51,21 @@ public interface ITaskStorage
     /// <param name="taskId">The ID of the task.</param>
     /// <param name="ct">Optional cancellation token.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    Task SetTaskInProgress(Guid taskId, CancellationToken ct = default);
+    Task SetInProgress(Guid taskId, CancellationToken ct = default);
 
     /// <summary>
     /// Sets a task's status to completed.
     /// </summary>
     /// <param name="taskId">The ID of the task.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    Task SetTaskCompleted(Guid taskId);
+    Task SetCompleted(Guid taskId);
 
     /// <summary>
     /// Sets a task's status to manually cancelled by the user.
     /// </summary>
     /// <param name="taskId">The ID of the task.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    Task SetTaskCancelledByUser(Guid taskId);
+    Task SetCancelledByUser(Guid taskId);
 
     /// <summary>
     /// Sets a task's status to SystemStopped, indicating that the task was cancelled by the background service while stopping.
@@ -73,7 +73,7 @@ public interface ITaskStorage
     /// <param name="taskId">The ID of the task.</param>
     /// <param name="exception">The exception that caused the task to be cancelled.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    Task SetTaskCancelledByService(Guid taskId, Exception exception);
+    Task SetCancelledByService(Guid taskId, Exception exception);
 
     /// <summary>
     /// Sets the status of a task.
@@ -83,7 +83,7 @@ public interface ITaskStorage
     /// <param name="exception">Optional exception related to the task status change.</param>
     /// <param name="ct">Optional cancellation token.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    Task SetTaskStatus(Guid taskId, QueuedTaskStatus status, Exception? exception = null,
+    Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception = null,
                        CancellationToken ct = default);
 
     /// <summary>

@@ -8,7 +8,7 @@ public record TaskHandlerExecutor(
     IEverTask Task,
     object Handler,
     DateTimeOffset? ExecutionTime,
-    ScheduledTask? ScheduledTask,
+    RecurringTask? RecurringTask,
     Func<IEverTask, CancellationToken, Task> HandlerCallback,
     Func<Guid, Exception?, string, ValueTask>? HandlerErrorCallback,
     Func<Guid, ValueTask>? HandlerStartedCallback,
@@ -32,13 +32,13 @@ public static class TaskHandlerExecutorExtensions
         string?         scheduleTaskInfo = null;
         int?            maxRuns          = null;
 
-        if (executor.ScheduledTask != null)
+        if (executor.RecurringTask != null)
         {
-            scheduleTask     = JsonConvert.SerializeObject(executor.ScheduledTask);
+            scheduleTask     = JsonConvert.SerializeObject(executor.RecurringTask);
             isRecurring      = true;
-            nextRun          = executor.ScheduledTask.CalculateNextRun(DateTimeOffset.UtcNow, 0);
-            scheduleTaskInfo = executor.ScheduledTask.ToString();
-            maxRuns          = executor.ScheduledTask.MaxRuns;
+            nextRun          = executor.RecurringTask.CalculateNextRun(DateTimeOffset.UtcNow, 0);
+            scheduleTaskInfo = executor.RecurringTask.ToString();
+            maxRuns          = executor.RecurringTask.MaxRuns;
         }
 
         ArgumentNullException.ThrowIfNull(request);
@@ -55,8 +55,8 @@ public static class TaskHandlerExecutorExtensions
             CreatedAtUtc          = DateTimeOffset.UtcNow,
             ScheduledExecutionUtc = executor.ExecutionTime,
             IsRecurring           = isRecurring,
-            ScheduledTask         = scheduleTask,
-            ScheduledTaskInfo     = scheduleTaskInfo,
+            RecurringTask         = scheduleTask,
+            RecurringInfo         = scheduleTaskInfo,
             MaxRuns               = maxRuns,
             NextRunUtc            = nextRun,
             CurrentRunCount       = 0

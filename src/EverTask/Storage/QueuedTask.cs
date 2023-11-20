@@ -11,8 +11,8 @@ public class QueuedTask
     public string          Handler               { get; set; } = "";
     public string?         Exception             { get; set; }
     public bool            IsRecurring           { get; set; }
-    public string?         ScheduledTask         { get; set; }
-    public string?         ScheduledTaskInfo     { get; set; }
+    public string?         RecurringTask         { get; set; }
+    public string?         RecurringInfo         { get; set; }
     public int?            CurrentRunCount       { get; set; }
     public int?            MaxRuns               { get; set; }
     public DateTimeOffset? NextRunUtc            { get; set; }

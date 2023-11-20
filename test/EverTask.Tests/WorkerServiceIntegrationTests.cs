@@ -43,7 +43,7 @@ public class WorkerServiceIntegrationTests
 
         await Task.Delay(600);
 
-        var pt = await _storage.RetrievePendingTasks();
+        var pt = await _storage.RetrievePending();
         pt.Length.ShouldBe(0);
 
         var tasks = await _storage.GetAll();
@@ -76,7 +76,7 @@ public class WorkerServiceIntegrationTests
 
         await Task.Delay(200);
 
-        var pt = await _storage.RetrievePendingTasks();
+        var pt = await _storage.RetrievePending();
         pt.Length.ShouldBe(0);
 
         var tasks = await _storage.GetAll();
@@ -121,7 +121,7 @@ public class WorkerServiceIntegrationTests
 
         await Task.Delay(300);
 
-        var pt = await _storage.RetrievePendingTasks();
+        var pt = await _storage.RetrievePending();
         pt.Length.ShouldBe(1);
 
         var tasks = await _storage.GetAll();
@@ -147,7 +147,7 @@ public class WorkerServiceIntegrationTests
 
         await Task.Delay(1600);
 
-        var pt = await _storage.RetrievePendingTasks();
+        var pt = await _storage.RetrievePending();
         pt.Length.ShouldBe(0);
 
         var tasks = await _storage.GetAll();
@@ -176,7 +176,7 @@ public class WorkerServiceIntegrationTests
 
         await Task.Delay(700);
 
-        var pt = await _storage.RetrievePendingTasks();
+        var pt = await _storage.RetrievePending();
         pt.Length.ShouldBe(0);
 
         var tasks = await _storage.GetAll();
@@ -205,7 +205,7 @@ public class WorkerServiceIntegrationTests
 
         await Task.Delay(900);
 
-        var pt = await _storage.RetrievePendingTasks();
+        var pt = await _storage.RetrievePending();
         pt.Length.ShouldBe(0);
 
         var tasks = await _storage.GetAll();
@@ -233,7 +233,7 @@ public class WorkerServiceIntegrationTests
 
         await Task.Delay(1600);
 
-        var pt = await _storage.RetrievePendingTasks();
+        var pt = await _storage.RetrievePending();
         pt.Length.ShouldBe(0);
 
         var tasks = await _storage.GetAll();
@@ -266,7 +266,7 @@ public class WorkerServiceIntegrationTests
         dequeued = await _workerQueue.Dequeue(CancellationToken.None);
         dequeued.Task.ShouldBe(task2);
 
-        var pt = await _storage.RetrievePendingTasks();
+        var pt = await _storage.RetrievePending();
         pt.Length.ShouldBe(2);
 
         await _host.StartAsync();

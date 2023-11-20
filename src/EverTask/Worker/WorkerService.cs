@@ -38,7 +38,7 @@ public class WorkerService(
             return;
         }
 
-        var pendingTasks = await taskStorage.RetrievePendingTasks(ct).ConfigureAwait(false);
+        var pendingTasks = await taskStorage.RetrievePending(ct).ConfigureAwait(false);
         var contTask     = 0;
         logger.LogTrace("Found {count} tasks to execute", pendingTasks.Length);
 
@@ -47,7 +47,7 @@ public class WorkerService(
             contTask++;
             logger.LogTrace("Processing task {task} of {count} tasks to execute", contTask, pendingTasks.Length);
             IEverTask?     task          = null;
-            ScheduledTask? scheduledTask = null;
+            RecurringTask? scheduledTask = null;
 
             try
             {
@@ -64,9 +64,9 @@ public class WorkerService(
 
             try
             {
-                if (!string.IsNullOrEmpty(taskInfo.ScheduledTask))
+                if (!string.IsNullOrEmpty(taskInfo.RecurringTask))
                 {
-                    scheduledTask = JsonConvert.DeserializeObject<ScheduledTask>(taskInfo.ScheduledTask);
+                    scheduledTask = JsonConvert.DeserializeObject<RecurringTask>(taskInfo.RecurringTask);
                 }
             }
             catch (Exception e)
@@ -83,13 +83,13 @@ public class WorkerService(
                 }
                 catch (Exception ex)
                 {
-                    await taskStorage.SetTaskStatus(taskInfo.Id, QueuedTaskStatus.Failed, ex, ct).ConfigureAwait(false);
+                    await taskStorage.SetStatus(taskInfo.Id, QueuedTaskStatus.Failed, ex, ct).ConfigureAwait(false);
                     logger.LogError(ex, "Error occurred executing task with id {taskId}.", taskInfo.Id);
                 }
             }
             else
             {
-                await taskStorage.SetTaskStatus(
+                await taskStorage.SetStatus(
                     taskInfo.Id,
                     QueuedTaskStatus.Failed,
                     new Exception("Unable to create the IBackground task from the specified properties"),

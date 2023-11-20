@@ -29,17 +29,19 @@ public class TaskDispatcher(
     /// <inheritdoc />
     public async Task<Guid> Dispatch(IEverTask task, Action<ITaskSchedulerBuilder> schedulerBuilder, CancellationToken cancellationToken = default)
     {
-        var builder = new TaskSchedulerBuilder();
+        var builder = new RecurringTaskBuilder();
         schedulerBuilder(builder);
 
-        return await ExecuteDispatch(task, null, builder.ScheduledTask, null,cancellationToken).ConfigureAwait(false);
+        return await ExecuteDispatch(task, null, builder.RecurringTask, null,cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
     public async Task Cancel(Guid taskId, CancellationToken cancellationToken = default)
     {
         if (taskStorage != null)
-            await taskStorage.SetTaskCancelledByUser(taskId).ConfigureAwait(false);
+            await taskStorage.SetCancelledByUser(taskId).ConfigureAwait(false);
+
+        cancellationSourceProvider.CancelTokenForTask(taskId);
 
         workerBlacklist.Add(taskId);
     }
@@ -65,18 +67,18 @@ public class TaskDispatcher(
     }
 
     public async Task<Guid> ExecuteDispatch(IEverTask task, DateTimeOffset? executionTime = null,
-                                            ScheduledTask? scheduled = null, int? currentRun = null,
+                                            RecurringTask? recurring = null, int? currentRun = null,
                                             CancellationToken ct = default, Guid? existingTaskId = null)
     {
         if (task == null)
             throw new ArgumentNullException(nameof(task));
 
-        if (scheduled != null)
+        if (recurring != null)
         {
-            var nextRun = scheduled.CalculateNextRun(DateTimeOffset.UtcNow, currentRun ?? 0);
+            var nextRun = recurring.CalculateNextRun(DateTimeOffset.UtcNow, currentRun ?? 0);
 
             if (nextRun == null)
-                throw new ArgumentException("Invalid scheduler expression", nameof(scheduled));
+                throw new ArgumentException("Invalid scheduler recurring expression", nameof(recurring));
 
             executionTime = nextRun;
         }
@@ -88,7 +90,7 @@ public class TaskDispatcher(
         var handler = (TaskHandlerWrapper?)Activator.CreateInstance(wrapperType) ??
                       throw new InvalidOperationException($"Could not create wrapper for type {taskType}");
 
-        var executor = handler.Handle(task, executionTime, scheduled, serviceProvider, existingTaskId);
+        var executor = handler.Handle(task, executionTime, recurring, serviceProvider, existingTaskId);
 
         if (existingTaskId == null)
         {
@@ -98,7 +100,7 @@ public class TaskDispatcher(
                 {
                     var taskEntity = executor.ToQueuedTask();
                     logger.LogInformation("Persisting Task: {type}", taskEntity.Type);
-                    await taskStorage.PersistTask(taskEntity, ct).ConfigureAwait(false);
+                    await taskStorage.Persist(taskEntity, ct).ConfigureAwait(false);
                 }
             }
             catch (Exception e)
@@ -109,7 +111,7 @@ public class TaskDispatcher(
             }
         }
 
-        if (executor.ExecutionTime > DateTimeOffset.UtcNow || scheduled != null)
+        if (executor.ExecutionTime > DateTimeOffset.UtcNow || recurring != null)
         {
             scheduler.Schedule(executor);
         }

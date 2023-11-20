@@ -20,7 +20,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
     }
 
     /// <inheritdoc />
-    public Task PersistTask(QueuedTask task, CancellationToken ct = default)
+    public Task Persist(QueuedTask task, CancellationToken ct = default)
     {
         logger.LogInformation("Persist Task: {type}", task.Type);
 
@@ -29,7 +29,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
     }
 
     /// <inheritdoc />
-    public Task<QueuedTask[]> RetrievePendingTasks(CancellationToken ct = default)
+    public Task<QueuedTask[]> RetrievePending(CancellationToken ct = default)
     {
         logger.LogInformation("Retrieve Pending Tasks");
 
@@ -42,25 +42,25 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
     }
 
     /// <inheritdoc />
-    public Task SetTaskQueued(Guid taskId, CancellationToken ct = default) =>
-        SetTaskStatus(taskId, QueuedTaskStatus.Queued, null, ct);
+    public Task SetQueued(Guid taskId, CancellationToken ct = default) =>
+        SetStatus(taskId, QueuedTaskStatus.Queued, null, ct);
 
     /// <inheritdoc />
-    public Task SetTaskInProgress(Guid taskId, CancellationToken ct = default) =>
-        SetTaskStatus(taskId, QueuedTaskStatus.InProgress, null, ct);
+    public Task SetInProgress(Guid taskId, CancellationToken ct = default) =>
+        SetStatus(taskId, QueuedTaskStatus.InProgress, null, ct);
 
     /// <inheritdoc />
-    public Task SetTaskCompleted(Guid taskId) =>
-        SetTaskStatus(taskId, QueuedTaskStatus.Completed);
+    public Task SetCompleted(Guid taskId) =>
+        SetStatus(taskId, QueuedTaskStatus.Completed);
 
-    public Task SetTaskCancelledByUser(Guid taskId) =>
-        SetTaskStatus(taskId, QueuedTaskStatus.Cancelled);
+    public Task SetCancelledByUser(Guid taskId) =>
+        SetStatus(taskId, QueuedTaskStatus.Cancelled);
 
-    public Task SetTaskCancelledByService(Guid taskId, Exception exception) =>
-        SetTaskStatus(taskId, QueuedTaskStatus.ServiceStopped, exception);
+    public Task SetCancelledByService(Guid taskId, Exception exception) =>
+        SetStatus(taskId, QueuedTaskStatus.ServiceStopped, exception);
 
     /// <inheritdoc />
-    public Task SetTaskStatus(Guid taskId, QueuedTaskStatus status, Exception? exception = null,
+    public Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception = null,
                               CancellationToken ct = default)
     {
         logger.LogInformation("Set Task {taskId} with Status {status}", taskId, status);

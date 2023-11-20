@@ -17,8 +17,8 @@ public class WorkerExecutor(
 
     public async ValueTask DoWork(TaskHandlerExecutor task, CancellationToken token)
     {
-        using var scope       = serviceScopeFactory.CreateScope();
-        var       taskStorage = scope.ServiceProvider.GetService<ITaskStorage>();
+        using var     scope       = serviceScopeFactory.CreateScope();
+        ITaskStorage? taskStorage = scope.ServiceProvider.GetService<ITaskStorage>();
 
         try
         {
@@ -32,17 +32,10 @@ public class WorkerExecutor(
                 return;
             }
 
-            token.ThrowIfCancellationRequested();
-
             RegisterInfo(task, "Starting task with id {0}.", task.PersistenceId);
 
-            token.ThrowIfCancellationRequested();
-
             if (taskStorage != null)
-            {
-                await taskStorage.SetTaskInProgress(task.PersistenceId, token).ConfigureAwait(false);
-                token.ThrowIfCancellationRequested();
-            }
+                await taskStorage.SetInProgress(task.PersistenceId, token).ConfigureAwait(false);
 
             await ExecuteCallback(task.HandlerStartedCallback, task, "Started").ConfigureAwait(false);
 
@@ -83,7 +76,7 @@ public class WorkerExecutor(
             }
 
             if (taskStorage != null)
-                await taskStorage.SetTaskCompleted(task.PersistenceId).ConfigureAwait(false);
+                await taskStorage.SetCompleted(task.PersistenceId).ConfigureAwait(false);
 
             await ExecuteCallback(task.HandlerCompletedCallback, task, "Completed").ConfigureAwait(false);
 
@@ -92,7 +85,7 @@ public class WorkerExecutor(
         catch (OperationCanceledException ex)
         {
             if (taskStorage != null)
-                await taskStorage.SetTaskCancelledByService(task.PersistenceId, ex).ConfigureAwait(false);
+                await taskStorage.SetCancelledByService(task.PersistenceId, ex).ConfigureAwait(false);
 
             await ExecuteCallback(task.HandlerErrorCallback, task, ex,
                 $"Task with id {task.PersistenceId} was cancelled").ConfigureAwait(false);
@@ -102,7 +95,7 @@ public class WorkerExecutor(
         catch (Exception ex)
         {
             if (taskStorage != null)
-                await taskStorage.SetTaskStatus(task.PersistenceId, QueuedTaskStatus.Failed, ex)
+                await taskStorage.SetStatus(task.PersistenceId, QueuedTaskStatus.Failed, ex)
                                  .ConfigureAwait(false);
 
             await ExecuteCallback(task.HandlerErrorCallback, task, ex,
@@ -112,25 +105,24 @@ public class WorkerExecutor(
         }
         finally
         {
+            cancellationSourceProvider.Delete(task.PersistenceId);
             await QueueNextOccourrence(task, taskStorage);
         }
     }
 
     private async Task QueueNextOccourrence(TaskHandlerExecutor task, ITaskStorage? taskStorage)
     {
-        if (task.ScheduledTask == null) return;
+        if (task.RecurringTask == null) return;
 
         if (taskStorage != null)
         {
             var currentRun = await taskStorage.GetCurrentRunCount(task.PersistenceId);
-            var nextRun    = task.ScheduledTask.CalculateNextRun(DateTimeOffset.UtcNow, currentRun+1);
+            var nextRun    = task.RecurringTask.CalculateNextRun(DateTimeOffset.UtcNow, currentRun + 1);
             await taskStorage.UpdateCurrentRun(task.PersistenceId, nextRun)
                              .ConfigureAwait(false);
 
             if (nextRun.HasValue)
-            {
                 scheduler.Schedule(task);
-            }
         }
     }
 

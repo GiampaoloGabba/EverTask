@@ -32,7 +32,7 @@ public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTa
                               .ConfigureAwait(false);
     }
 
-    public async Task PersistTask(QueuedTask taskEntity, CancellationToken ct = default)
+    public async Task Persist(QueuedTask taskEntity, CancellationToken ct = default)
     {
         using var       scope     = serviceScopeFactory.CreateScope();
         await using var dbContext = scope.ServiceProvider.GetRequiredService<ITaskStoreDbContext>();
@@ -44,7 +44,7 @@ public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTa
         logger.LogInformation("Task {name} persisted", taskEntity.Type);
     }
 
-    public async Task<QueuedTask[]> RetrievePendingTasks(CancellationToken ct = default)
+    public async Task<QueuedTask[]> RetrievePending(CancellationToken ct = default)
     {
         using var       scope     = serviceScopeFactory.CreateScope();
         await using var dbContext = scope.ServiceProvider.GetRequiredService<ITaskStoreDbContext>();
@@ -62,22 +62,22 @@ public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTa
                               .ConfigureAwait(false);
     }
 
-    public async Task SetTaskQueued(Guid taskId, CancellationToken ct = default) =>
-        await SetTaskStatus(taskId, QueuedTaskStatus.Queued, null, ct).ConfigureAwait(false);
+    public async Task SetQueued(Guid taskId, CancellationToken ct = default) =>
+        await SetStatus(taskId, QueuedTaskStatus.Queued, null, ct).ConfigureAwait(false);
 
-    public async Task SetTaskInProgress(Guid taskId, CancellationToken ct = default) =>
-        await SetTaskStatus(taskId, QueuedTaskStatus.InProgress, null, ct).ConfigureAwait(false);
+    public async Task SetInProgress(Guid taskId, CancellationToken ct = default) =>
+        await SetStatus(taskId, QueuedTaskStatus.InProgress, null, ct).ConfigureAwait(false);
 
-    public async Task SetTaskCompleted(Guid taskId) =>
-        await SetTaskStatus(taskId, QueuedTaskStatus.Completed).ConfigureAwait(false);
+    public async Task SetCompleted(Guid taskId) =>
+        await SetStatus(taskId, QueuedTaskStatus.Completed).ConfigureAwait(false);
 
-    public async Task SetTaskCancelledByUser(Guid taskId) =>
-        await SetTaskStatus(taskId, QueuedTaskStatus.Cancelled).ConfigureAwait(false);
+    public async Task SetCancelledByUser(Guid taskId) =>
+        await SetStatus(taskId, QueuedTaskStatus.Cancelled).ConfigureAwait(false);
 
-    public async Task SetTaskCancelledByService(Guid taskId, Exception exception) =>
-        await SetTaskStatus(taskId, QueuedTaskStatus.ServiceStopped, exception).ConfigureAwait(false);
+    public async Task SetCancelledByService(Guid taskId, Exception exception) =>
+        await SetStatus(taskId, QueuedTaskStatus.ServiceStopped, exception).ConfigureAwait(false);
 
-    public async Task SetTaskStatus(Guid taskId, QueuedTaskStatus status, Exception? exception = null,
+    public async Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception = null,
                                     CancellationToken ct = default)
     {
         logger.LogInformation("Set Task {taskId} with Status {status}", taskId, status);

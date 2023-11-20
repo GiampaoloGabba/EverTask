@@ -75,7 +75,7 @@ public class TimerSchedulerTests
     public async Task DispatcherQueueAsync_should_enqueue_item_in_workerQueue()
     {
         var taskHandlerExecutor = CreateTaskHandlerExecutor();
-        await _timerScheduler.DispatcherQueueAsync(taskHandlerExecutor);
+        await _timerScheduler.DispatchToWorkerQueue(taskHandlerExecutor);
 
         _mockWorkerQueue.Verify(wq => wq.Queue(taskHandlerExecutor), Times.Once);
     }
@@ -87,7 +87,7 @@ public class TimerSchedulerTests
         _mockWorkerQueue.Setup(wq => wq.Queue(It.IsAny<TaskHandlerExecutor>()))
                         .ThrowsAsync(new Exception("Test Exception"));
 
-        await _timerScheduler.DispatcherQueueAsync(taskHandlerExecutor);
+        await _timerScheduler.DispatchToWorkerQueue(taskHandlerExecutor);
 
         // verify that logger is called and error is registered
         _mockLogger.Verify(

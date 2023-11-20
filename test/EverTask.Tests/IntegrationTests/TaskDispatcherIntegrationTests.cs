@@ -110,7 +110,7 @@ public class TaskDispatcherIntegrationTests
 
         await dispatcher.Dispatch(new TestTaskRequest("Test"));
 
-        var pending = await storage.RetrievePendingTasks();
+        var pending = await storage.RetrievePending();
         pending.Length.ShouldBe(1);
         pending[0].Request.ShouldBe("{\"Name\":\"Test\"}");
         pending[0].Status.ShouldBe(QueuedTaskStatus.Queued);
