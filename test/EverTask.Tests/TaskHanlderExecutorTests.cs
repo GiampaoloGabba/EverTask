@@ -1,5 +1,6 @@
 ﻿using EverTask.Handler;
 using EverTask.Monitoring;
+using EverTask.Scheduler.Builder;
 using EverTask.Storage;
 using Newtonsoft.Json;
 
@@ -28,7 +29,7 @@ public class TaskHanlderExecutorTests
         var guid               = Guid.NewGuid();
         var task               = new TestTaskRequest("test");
         var taskHandlerWrapper = new TaskHandlerWrapperImp<TestTaskRequest>();
-        var executor           = taskHandlerWrapper.Handle(task, null, _provider, guid);
+        var executor           = taskHandlerWrapper.Handle(task, null, null, _provider, guid);
 
         executor.PersistenceId.ShouldBe(guid);
         executor.Task.ShouldBe(task);
@@ -43,7 +44,7 @@ public class TaskHanlderExecutorTests
         var expectedOffset = new DateTimeOffset(inputOffset.UtcDateTime);
 
         var handlerWrapper = new TaskHandlerWrapperImp<TestTaskRequest>();
-        var executor       = handlerWrapper.Handle(task, inputOffset, _provider, Guid.NewGuid());
+        var executor       = handlerWrapper.Handle(task, inputOffset, null, _provider, Guid.NewGuid());
 
         executor.ExecutionTime.ShouldBe(expectedOffset);
     }
@@ -52,14 +53,15 @@ public class TaskHanlderExecutorTests
     public void Should_throw_for_not_registered()
     {
         var taskHandlerWrapper = new TaskHandlerWrapperImp<TestTaskRequestNoHandler>();
-        Should.Throw<ArgumentNullException>(() => taskHandlerWrapper.Handle(null!, null, _provider));
+        Should.Throw<ArgumentNullException>(() => taskHandlerWrapper.Handle(null!, null, null, _provider));
     }
 
     [Fact]
     public void Should_throw_for_not_serializable()
     {
         var taskHandlerWrapper = new TaskHandlerWrapperImp<TestTaskRequestNoSerializable>();
-        var executor = taskHandlerWrapper.Handle(new TestTaskRequestNoSerializable(IPAddress.None), null, _provider);
+        var executor =
+            taskHandlerWrapper.Handle(new TestTaskRequestNoSerializable(IPAddress.None), null, null, _provider);
 
         Should.Throw<JsonSerializationException>(() => executor.ToQueuedTask());
     }
@@ -68,7 +70,7 @@ public class TaskHanlderExecutorTests
     public void Should_return_queued_task()
     {
         var taskHandlerWrapper = new TaskHandlerWrapperImp<TestTaskRequest>();
-        var executor           = taskHandlerWrapper.Handle(new TestTaskRequest("test"), null, _provider);
+        var executor           = taskHandlerWrapper.Handle(new TestTaskRequest("test"), null, null, _provider);
 
         var queuedTask = executor.ToQueuedTask();
 
@@ -85,7 +87,7 @@ public class TaskHanlderExecutorTests
         var guid               = Guid.NewGuid();
         var task               = new TestTaskRequest("test");
         var taskHandlerWrapper = new TaskHandlerWrapperImp<TestTaskRequest>();
-        var executor           = taskHandlerWrapper.Handle(task, null, _provider, guid);
+        var executor           = taskHandlerWrapper.Handle(task, null, null, _provider, guid);
 
         var queuedTask = executor.ToQueuedTask();
 
@@ -96,14 +98,14 @@ public class TaskHanlderExecutorTests
     public void Should_throw_for_null_Request()
     {
         var executor =
-            new TaskHandlerExecutor(null!, new TestTaskHanlder(), null, null!, null, null, null, Guid.NewGuid());
+            new TaskHandlerExecutor(null!, new TestTaskHanlder(), null, null, null!, null, null, null, Guid.NewGuid());
         Should.Throw<ArgumentNullException>(() => executor.ToQueuedTask());
     }
 
     [Fact]
     public void Should_throw_for_null_Handler_Handle()
     {
-        var executor = new TaskHandlerExecutor(new TestTaskRequest("Test"), null!, null, null!, null, null, null,
+        var executor = new TaskHandlerExecutor(new TestTaskRequest("Test"), null!, null, null, null!, null, null, null,
             Guid.NewGuid());
         Should.Throw<ArgumentNullException>(() => executor.ToQueuedTask());
     }
@@ -124,7 +126,8 @@ public class TaskHanlderExecutorTests
             HandlerErrorCallback: null,
             HandlerStartedCallback: null,
             HandlerCompletedCallback: null,
-            PersistenceId: persistenceId);
+            PersistenceId: persistenceId,
+            RecurringTask: null);
 
         var queuedTask = executor.ToQueuedTask();
 
@@ -148,7 +151,8 @@ public class TaskHanlderExecutorTests
             HandlerErrorCallback: null,
             HandlerStartedCallback: null,
             HandlerCompletedCallback: null,
-            PersistenceId: Guid.NewGuid());
+            PersistenceId: Guid.NewGuid(),
+            RecurringTask: null);
 
         Should.Throw<ArgumentNullException>(() => executor.ToQueuedTask());
     }
@@ -164,7 +168,8 @@ public class TaskHanlderExecutorTests
             HandlerErrorCallback: null,
             HandlerStartedCallback: null,
             HandlerCompletedCallback: null,
-            PersistenceId: Guid.NewGuid());
+            PersistenceId: Guid.NewGuid(),
+            RecurringTask: null);
 
         Should.Throw<ArgumentNullException>(() => executor.ToQueuedTask());
     }
@@ -185,7 +190,8 @@ public class TaskHanlderExecutorTests
             HandlerErrorCallback: null,
             HandlerStartedCallback: null,
             HandlerCompletedCallback: null,
-            PersistenceId: persistenceId);
+            PersistenceId: persistenceId,
+            RecurringTask: null);
 
         var eventData = EverTaskEventData.FromExecutor(executor, SeverityLevel.Information, "test", null);
 

@@ -26,6 +26,7 @@ public class QueueTests
             new TestTaskHanlder2(),
             null,
             null!,
+            null!,
             null,
             null,
             null,

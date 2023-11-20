@@ -12,12 +12,14 @@ public class TaskDispatcherTests
     private readonly Mock<IWorkerQueue> _workerQueueMock;
     private readonly Mock<IWorkerBlacklist> _blackListMock;
     private readonly Mock<IScheduler> _delayedQueue;
+    private readonly Mock<CancellationSourceProvider> _cancSourceProviderMock;
 
     public TaskDispatcherTests()
     {
-        _workerQueueMock = new Mock<IWorkerQueue>();
-        _blackListMock   = new Mock<IWorkerBlacklist>();
-        _delayedQueue    = new Mock<IScheduler>();
+        _workerQueueMock        = new Mock<IWorkerQueue>();
+        _blackListMock          = new Mock<IWorkerBlacklist>();
+        _delayedQueue           = new Mock<IScheduler>();
+        _cancSourceProviderMock = new Mock<CancellationSourceProvider>();
 
         var serviceProviderMock      = new Mock<IServiceProvider>();
         var serviceConfigurationMock = new Mock<EverTaskServiceConfiguration>();
@@ -39,7 +41,8 @@ public class TaskDispatcherTests
             _delayedQueue.Object,
             serviceConfigurationMock.Object,
             loggerMock.Object,
-            _blackListMock.Object);
+            _blackListMock.Object,
+            _cancSourceProviderMock.Object);
     }
 
     [Fact]
