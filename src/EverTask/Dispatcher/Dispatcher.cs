@@ -5,12 +5,12 @@
 // Source: https://github.com/jbogard/MediatR/blob/master/src/MediatR/Mediator.cs
 
 /// <inheritdoc />
-public class TaskDispatcher(
+public class Dispatcher(
     IServiceProvider serviceProvider,
     IWorkerQueue workerQueue,
     IScheduler scheduler,
     EverTaskServiceConfiguration serviceConfiguration,
-    IEverTaskLogger<TaskDispatcher> logger,
+    IEverTaskLogger<Dispatcher> logger,
     IWorkerBlacklist workerBlacklist,
     ICancellationSourceProvider cancellationSourceProvider,
     ITaskStorage? taskStorage = null) : ITaskDispatcherInternal
@@ -28,10 +28,10 @@ public class TaskDispatcher(
         ExecuteDispatch(task, executionTime, null, null, cancellationToken);
 
     /// <inheritdoc />
-    public async Task<Guid> Dispatch(IEverTask task, Action<ITaskSchedulerBuilder> schedulerBuilder, CancellationToken cancellationToken = default)
+    public async Task<Guid> Dispatch(IEverTask task, Action<IRecurringTaskBuilder> recurring, CancellationToken cancellationToken = default)
     {
         var builder = new RecurringTaskBuilder();
-        schedulerBuilder(builder);
+        recurring(builder);
 
         return await ExecuteDispatch(task, null, builder.RecurringTask, null,cancellationToken).ConfigureAwait(false);
     }

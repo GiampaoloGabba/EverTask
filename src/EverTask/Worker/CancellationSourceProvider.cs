@@ -5,15 +5,15 @@ namespace EverTask.Worker;
 public interface ICancellationSourceProvider
 {
     CancellationToken CreateToken(Guid id, CancellationToken sourceToken);
+    CancellationTokenSource? TryGet(Guid id);
     void Delete(Guid id);
     void CancelTokenForTask(Guid id);
 }
 
-public class CancellationSourceProvider : ICancellationSourceProvider
+internal sealed class CancellationSourceProvider : ICancellationSourceProvider
 {
     private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _sources = new();
 
-    //tryadd
     public CancellationToken CreateToken(Guid id, CancellationToken sourceToken)
     {
         if (_sources.ContainsKey(id))
@@ -23,6 +23,12 @@ public class CancellationSourceProvider : ICancellationSourceProvider
         _sources.TryAdd(id, cts);
 
         return cts.Token;
+    }
+
+    public CancellationTokenSource? TryGet(Guid id)
+    {
+        _sources.TryGetValue(id, out var cts);
+        return cts;
     }
 
     public void Delete(Guid id)

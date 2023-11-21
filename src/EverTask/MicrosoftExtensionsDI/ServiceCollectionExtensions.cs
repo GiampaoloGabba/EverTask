@@ -18,7 +18,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IWorkerBlacklist, WorkerBlacklist>();
         services.TryAddSingleton<IWorkerQueue, WorkerQueue>();
         services.TryAddSingleton<IScheduler, TimerScheduler>();
-        services.TryAddSingleton<ITaskDispatcherInternal, TaskDispatcher>();
+        services.TryAddSingleton<ITaskDispatcherInternal, Dispatcher>();
         services.TryAddSingleton<ITaskDispatcher>(provider => provider.GetRequiredService<ITaskDispatcherInternal>());
         services.TryAddSingleton<ICancellationSourceProvider, CancellationSourceProvider>();
         services.TryAddSingleton<IEverTaskWorkerExecutor, WorkerExecutor>();

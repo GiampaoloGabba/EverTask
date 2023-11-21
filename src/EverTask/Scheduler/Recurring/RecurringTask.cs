@@ -4,15 +4,16 @@ namespace EverTask.Scheduler.Builder;
 
 public class RecurringTask
 {
+    public bool            RunNow          { get; set; }
     public TimeSpan?       InitialDelay    { get; set; }
     public DateTimeOffset? SpecificRunTime { get; set; }
     public MinuteInterval? MinuteInterval  { get; set; }
     public DayInterval?    DayInterval     { get; set; }
     public MonthInterval?  MonthInterval   { get; set; }
-    public int             MaxRuns         { get; set; }
+    public int             MaxRuns         { get; set; } = 1;
 
     //saving cronexp as string to easy serialization/deserialization
-    public string?         CronExpression  { get; set; }
+    public string? CronExpression { get; set; }
 
     //used to serialization/deserialization
     public RecurringTask() { }
@@ -24,7 +25,7 @@ public class RecurringTask
 
         if (currentRun == 0)
         {
-            var runtime = SpecificRunTime;
+            var runtime = RunNow ? DateTimeOffset.UtcNow : SpecificRunTime;
             if (runtime == null && InitialDelay != null)
                 runtime = current.Add(InitialDelay.Value);
 
@@ -57,11 +58,12 @@ public class RecurringTask
     }
 
     #region ToString in human readable format
+
     public override string ToString()
     {
         var parts = new List<string>();
 
-        if (InitialDelay == null && SpecificRunTime == null)
+        if (RunNow)
             parts.Add("Run immediately");
 
         if (InitialDelay != null)
@@ -111,5 +113,6 @@ public class RecurringTask
 
         return string.Join(" ", parts);
     }
+
     #endregion
 }

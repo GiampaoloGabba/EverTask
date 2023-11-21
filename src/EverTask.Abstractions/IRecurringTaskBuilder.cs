@@ -1,6 +1,6 @@
 ﻿namespace EverTask.Abstractions;
 
-public interface ITaskSchedulerBuilder
+public interface IRecurringTaskBuilder
 {
     IThenableSchedulerBuilder RunNow();
     IThenableSchedulerBuilder RunDelayed(TimeSpan delay);

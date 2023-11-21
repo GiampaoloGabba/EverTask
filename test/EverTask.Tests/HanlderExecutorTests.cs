@@ -6,11 +6,11 @@ using Newtonsoft.Json;
 
 namespace EverTask.Tests;
 
-public class TaskHanlderExecutorTests
+public class HanlderExecutorTests
 {
     private readonly IServiceProvider _provider;
 
-    public TaskHanlderExecutorTests()
+    public HanlderExecutorTests()
     {
         var serviceProviderMock = new Mock<IServiceProvider>();
 
@@ -117,6 +117,7 @@ public class TaskHanlderExecutorTests
         var handler       = new object();
         var executionTime = DateTimeOffset.UtcNow;
         var persistenceId = Guid.NewGuid();
+        var recurringTask = new RecurringTask{ RunNow = true, MaxRuns = 2 };
 
         var executor = new TaskHandlerExecutor(
             Task: task,
@@ -127,7 +128,7 @@ public class TaskHanlderExecutorTests
             HandlerStartedCallback: null,
             HandlerCompletedCallback: null,
             PersistenceId: persistenceId,
-            RecurringTask: null);
+            RecurringTask: recurringTask);
 
         var queuedTask = executor.ToQueuedTask();
 
@@ -138,6 +139,10 @@ public class TaskHanlderExecutorTests
         queuedTask.Status.ShouldBe(QueuedTaskStatus.WaitingQueue);
         queuedTask.ScheduledExecutionUtc.ShouldBe(executionTime);
         queuedTask.CreatedAtUtc.ShouldBe(DateTimeOffset.UtcNow, TimeSpan.FromSeconds(1));
+        queuedTask.RecurringTask.ShouldBeEquivalentTo(JsonConvert.SerializeObject(recurringTask));
+        queuedTask.IsRecurring.ShouldBe(true);
+        queuedTask.RecurringInfo.ShouldBe(recurringTask.ToString());
+        queuedTask.MaxRuns.ShouldBe(2);
     }
 
     [Fact]

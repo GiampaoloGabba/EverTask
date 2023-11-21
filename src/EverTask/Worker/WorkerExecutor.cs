@@ -3,7 +3,7 @@
 public interface IEverTaskWorkerExecutor
 {
     public event Func<EverTaskEventData, Task>? TaskEventOccurredAsync;
-    internal ValueTask DoWork(TaskHandlerExecutor task, CancellationToken token);
+    internal ValueTask DoWork(TaskHandlerExecutor task, CancellationToken serviceToken);
 }
 
 public class WorkerExecutor(
@@ -16,14 +16,14 @@ public class WorkerExecutor(
 {
     public event Func<EverTaskEventData, Task>? TaskEventOccurredAsync;
 
-    public async ValueTask DoWork(TaskHandlerExecutor task, CancellationToken token)
+    public async ValueTask DoWork(TaskHandlerExecutor task, CancellationToken serviceToken)
     {
         using var     scope       = serviceScopeFactory.CreateScope();
         ITaskStorage? taskStorage = scope.ServiceProvider.GetService<ITaskStorage>();
 
         try
         {
-            token.ThrowIfCancellationRequested();
+            serviceToken.ThrowIfCancellationRequested();
 
             if (workerBlacklist.IsBlacklisted(task.PersistenceId))
             {
@@ -36,13 +36,13 @@ public class WorkerExecutor(
             RegisterInfo(task, "Starting task with id {0}.", task.PersistenceId);
 
             if (taskStorage != null)
-                await taskStorage.SetInProgress(task.PersistenceId, token).ConfigureAwait(false);
+                await taskStorage.SetInProgress(task.PersistenceId, serviceToken).ConfigureAwait(false);
 
             await ExecuteCallback(task.HandlerStartedCallback, task, "Started").ConfigureAwait(false);
 
-            token.ThrowIfCancellationRequested();
+            serviceToken.ThrowIfCancellationRequested();
 
-            var taskToken = cancellationSourceProvider.CreateToken(task.PersistenceId, token);
+            var taskToken = cancellationSourceProvider.CreateToken(task.PersistenceId, serviceToken);
 
             var handlerOptions = task.Handler as IEverTaskHandlerOptions;
             var retryPolicy    = handlerOptions?.RetryPolicy ?? configuration.DefaultRetryPolicy;
@@ -63,7 +63,7 @@ public class WorkerExecutor(
                 }
             }, taskToken).ConfigureAwait(false);
 
-            token.ThrowIfCancellationRequested();
+            serviceToken.ThrowIfCancellationRequested();
 
             if (task.Handler is IAsyncDisposable asyncDisposable)
             {
@@ -87,7 +87,13 @@ public class WorkerExecutor(
         catch (OperationCanceledException ex)
         {
             if (taskStorage != null)
-                await taskStorage.SetCancelledByService(task.PersistenceId, ex).ConfigureAwait(false);
+            {
+                if (serviceToken.IsCancellationRequested)
+                    await taskStorage.SetCancelledByService(task.PersistenceId, ex).ConfigureAwait(false);
+                else
+                    await taskStorage.SetCancelledByUser(task.PersistenceId).ConfigureAwait(false);
+            }
+
 
             await ExecuteCallback(task.HandlerErrorCallback, task, ex,
                 $"Task with id {task.PersistenceId} was cancelled").ConfigureAwait(false);

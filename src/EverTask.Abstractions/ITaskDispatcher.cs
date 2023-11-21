@@ -32,14 +32,14 @@ public interface ITaskDispatcher
     /// Asynchronously schedules a recurring task to the background queue to be executed at specified times.
     /// </summary>
     /// <param name="task">The IEverTask to be executed.</param>
-    /// <param name="schedulerBuilder">
-    /// The <see cref="ITaskSchedulerBuilder"/> used to configure the recurring task.
+    /// <param name="recurring">
+    /// The <see cref="IRecurringTaskBuilder"/> used to configure the recurring task.
     /// </param>
     /// <param name="cancellationToken">
     /// Optional. A token for canceling the dispatch operation.
     /// </param>
     /// <returns>A task that represents the asynchronous queue operation.</returns>
-    Task<Guid> Dispatch(IEverTask task, Action<ITaskSchedulerBuilder> schedulerBuilder, CancellationToken cancellationToken = default);
+    Task<Guid> Dispatch(IEverTask task, Action<IRecurringTaskBuilder> recurring, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Asynchronously schedules a task to the background queue to be executed at a specified time.

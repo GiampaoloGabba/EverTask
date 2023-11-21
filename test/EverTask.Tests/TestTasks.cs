@@ -90,7 +90,7 @@ public class TestTaskConcurrent1Handler : EverTaskHandler<TestTaskConcurrent1>
     public override async Task Handle(TestTaskConcurrent1 backgroundTask, CancellationToken cancellationToken)
     {
         await Task.Delay(300, cancellationToken);
-        TestTaskConcurrent1.Counter = 1;
+        TestTaskConcurrent1.Counter = TestTaskConcurrent1.Counter+1;
         TestTaskConcurrent1.EndTime = DateTime.Now;
     }
 }

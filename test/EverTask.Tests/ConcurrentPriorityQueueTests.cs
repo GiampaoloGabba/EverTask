@@ -148,22 +148,4 @@ public class ConcurrentPriorityQueueTests
         // Verify if all items are peeked and still in the queue
         queue.Count.ShouldBe(numberOfItems);
     }
-
-    private void EnqueueItems(ConcurrentPriorityQueue<int, int> queue, int numberOfItems)
-    {
-        for (int i = 0; i < numberOfItems; i++)
-        {
-            queue.Enqueue(i, i);
-        }
-    }
-
-    private List<Task> CreateTasks(Action action, int numberOfTasks)
-    {
-        var tasks = new List<Task>();
-        for (int i = 0; i < numberOfTasks; i++)
-        {
-            tasks.Add(Task.Run(action));
-        }
-        return tasks;
-    }
 }

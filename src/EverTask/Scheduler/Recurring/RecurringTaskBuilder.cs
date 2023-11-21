@@ -2,11 +2,15 @@
 
 namespace EverTask.Scheduler.Builder;
 
-internal class RecurringTaskBuilder : ITaskSchedulerBuilder
+internal class RecurringTaskBuilder : IRecurringTaskBuilder
 {
     internal readonly RecurringTask RecurringTask = new();
 
-    public IThenableSchedulerBuilder RunNow() => RunAt(DateTimeOffset.UtcNow);
+    public IThenableSchedulerBuilder RunNow()
+    {
+        RecurringTask.RunNow = true;
+        return RunAt(DateTimeOffset.UtcNow);
+    }
 
     public IThenableSchedulerBuilder RunDelayed(TimeSpan delay)
     {
