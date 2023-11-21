@@ -21,7 +21,7 @@ on task persistence, ensuring that pending tasks resume upon application restart
 - **Persistence**<br>Resumes pending tasks after application restarts.
 - **Managed Parallelism**<br>Efficiently handles concurrent task execution with configurable parallelism.
 - **Scheduled, Delayed and recurring tasks**<br>Schedule tasks for future execution or delay them using a TimeSpan. You can also create recurring tasks, for now only with cron expressions, but a fluent scheduler is on the way!
-- **Resilient execution**<br>A powerful resilience feature to ensure your tasks are robust against transient failures. Fully customizable even with your custom retry policies.
+- **Resilient execution**<br>A powerful resilience feature to ensure your tasks are robust against transient failures. Fully customizable even with your custom retry policies, easily integrable with [Polly](https://github.com/App-vNext/Polly)
 - **Optional specialized CPU-bound execution**<br>Optimized handling for CPU-intensive tasks with an option to execute in a separate thread, ensuring efficient processing without impacting I/O-bound operations. Use judiciously for tasks requiring significant computational resources.
 - **Timeout management**<br>Configure the maximum execution time for your tasks.
 - **Error Handling**<br>Method overrides for error observation and task completion/cancellation.
@@ -199,9 +199,6 @@ Scheduling Only with Cron
 // Schedule a recurring task based solely on a Cron schedule
 await _dispatcher.Dispatch(task, builder => builder.Schedule().UseCron("*/2 * * * *").MaxRuns(3));
 ```
-
-&nbsp;
-
 > 💡 **Remember:** Delayed, scheduled and recurring tasks are also persistent. If your app restarts, you won't lose these tasks –
 > they'll be executed at the right time!
 
@@ -214,7 +211,7 @@ it starts, use the `Cancel` method of `ITaskDispatcher` with this ID.
 // Dispatching a task and getting its unique ID
 Guid taskId = _dispatcher.Dispatch(new SampleTaskRequest("Cancelable Task"));
 
-// Cancelling the task (if not started yet)
+// Cancelling the task
 _dispatcher.Cancel(taskId);
 ```
 
@@ -257,7 +254,7 @@ public class MyCustomTimeoutTaskHandler : EverTaskHandler<MyTask>
 ```
 
 ## CPU-bound Task Handling
-In addition to its default async-await behavior, which is ideal for I/O-bound operations (like database reads, email sending, file generation, etc.), EverTask provides a specialized handling mechanism for CPU-bound tasks. This is crucial for tasks that involve intensive computational work, such as data processing or complex calculations.
+In addition to its default async-await behavior, which is ideal for I/O-bound operations (like database operations, email sending, file generation, etc.), EverTask provides a specialized handling mechanism for CPU-bound tasks. This is crucial for tasks that involve intensive computational work, such as data processing or complex calculations.
 
 This is controlled by the `CpuBoundOperation` property in the `EverTaskHandler`.
 
@@ -266,7 +263,7 @@ public class MyCustomCPUIntensiveTaskHandler : EverTaskHandler<MyCPUIntensiveTas
 {
     public MyCustomCPUIntensiveTaskHandler()
     {
-    CpuBoundOperation = true;
+        CpuBoundOperation = true;
     }
 
     public override Task Handle(CancellationToken cancellationToken)
@@ -287,11 +284,13 @@ achieved through customizable retry policies, which are applied to task executio
 
 Tasks by default use the `LinearRetryPolicy`, set in the global configuration (`SetDefaultRetryPolicy`). This default policy attempts three executions with a 500-millisecond delay between them, addressing temporary issues that might hinder task completion.
 
+You can also set your customized global deault policy:
+
 ```csharp
-// Example of setting a global default RetryPolicy
+// Example of setting a customized global default RetryPolicy
 builder.Services.AddEverTask(opt =>
 {
-    opt.SetDefaultRetryPolicy(new LinearRetryPolicy(3, TimeSpan.FromMilliseconds(500)));
+    opt.SetDefaultRetryPolicy(new LinearRetryPolicy(4, TimeSpan.FromMilliseconds(200)));
 });
 ```
 
@@ -306,7 +305,7 @@ public class MyTaskHandler : EverTaskHandler<MyTask>
 }
 ```
 
-#### Customizing Retry Policies
+#### Customizing Retry Policies per task
 
 For each task handler, you can define or override the default retry policy settings. This includes changing the number
 of execution attempts, fixed execution times, or providing an array of `TimeSpan` values for the retry delays.
@@ -354,19 +353,31 @@ public class MyCustomRetryTaskHandler : EverTaskHandler<MyCustomRetryTask>
 
 #### Implementing Custom Retry Policies
 
-EverTask's design allows for the implementation of custom retry policies. Create your own policy by implementing
-the `IRetryPolicy` interface. This enables you to craft unique retry mechanisms tailored to specific requirements of
-your tasks.
+EverTask's design allows for the implementation of custom retry policies. You can create your own policy by implementing the `IRetryPolicy` interface. This enables you to craft unique retry mechanisms tailored to the specific requirements of your tasks.
+
+Below is an example of implementing a custom retry policy using [Polly](https://github.com/App-vNext/Polly):
+
 
 ```csharp
+using Polly;
+
 public class MyCustomRetryPolicy : IRetryPolicy
 {
+    private readonly AsyncRetryPolicy _pollyRetryPolicy;
+    
     public async Task Execute(Func<CancellationToken, Task> action, CancellationToken token = default)
     {
-        // Implementation of your custom retry logic
+        // Define your Polly retry policy here.
+        // For example, a policy that retries three times with an exponential backoff.
+        _pollyRetryPolicy = Policy
+            .Handle<Exception>() // Specify the exceptions you want to handle/retry on
+            .WaitAndRetryAsync(3, retryAttempt =>
+                TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)) // exponential back-off: 2, 4, 8 seconds
+            );
     }
 }
 ```
+
 
 The on your handler:
 
@@ -384,6 +395,14 @@ public class MyCustomRetryTaskHandler : EverTaskHandler<MyCustomRetryTask>
         // Task handling logic
     }
 }
+```
+Of course, you can also set your polly policy as a default if you wish:
+```csharp
+// Example of setting a customized global default RetryPolicy
+builder.Services.AddEverTask(opt =>
+{
+    opt.SetDefaultRetryPolicy(new MyCustomRetryPolicy());
+});
 ```
 
 ## Handling WorkerSerivce stops with CancellationToken in Task Handlers
