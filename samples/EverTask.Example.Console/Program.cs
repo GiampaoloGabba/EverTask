@@ -22,11 +22,14 @@ Console.WriteLine($"=== START DISPATCH: {DateTimeOffset.Now}");
 
 var dispatcher = host.Services.GetRequiredService<ITaskDispatcher>();
 
-await dispatcher.Dispatch(new SampleTaskRequest("Hello World 30 seconds"), TimeSpan.FromSeconds(30));
+//await dispatcher.Dispatch(new SampleTaskRequest("Hello World 30 seconds"), TimeSpan.FromSeconds(30));
 
 var scheduleTime = DateTimeOffset.Now.AddSeconds(10);
 
-await dispatcher.Dispatch(new SampleTaskRequest("Hello World 10 seconds"), scheduleTime);
+//await dispatcher.Dispatch(new SampleTaskRequest("Hello World 10 seconds"), scheduleTime);
+
+
+await dispatcher.Dispatch(new SampleTaskRequest("|||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||| Hello World every 10 seconds for 3 times** "), taskBuilder => taskBuilder.Schedule().UseCron("*/10 * * * * *").MaxRuns(3));
 
 Console.ReadKey();
 await host.StopAsync();

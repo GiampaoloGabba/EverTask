@@ -21,10 +21,20 @@ public class TimerScheduler : IScheduler
 
     internal ConcurrentPriorityQueue<TaskHandlerExecutor, DateTimeOffset> GetQueue() => _queue;
 
-    public void Schedule(TaskHandlerExecutor item)
+    public void Schedule(TaskHandlerExecutor item, DateTimeOffset? nextRecurringRun = null)
     {
-        ArgumentNullException.ThrowIfNull(item.ExecutionTime);
-        _queue.Enqueue(item, item.ExecutionTime.Value);
+        if (item.RecurringTask != null && nextRecurringRun != null)
+        {
+            _logger.LogWarning("Next run {NextRecurringRun}", nextRecurringRun.Value);
+            _queue.Enqueue(item, nextRecurringRun.Value);
+            UpdateTimer();
+        }
+        else
+        {
+            ArgumentNullException.ThrowIfNull(item.ExecutionTime);
+            _queue.Enqueue(item, item.ExecutionTime.Value);
+        }
+
         UpdateTimer();
     }
 

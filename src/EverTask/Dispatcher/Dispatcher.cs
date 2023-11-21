@@ -73,9 +73,11 @@ public class Dispatcher(
         if (task == null)
             throw new ArgumentNullException(nameof(task));
 
+        DateTimeOffset? nextRun = null;
+
         if (recurring != null)
         {
-            var nextRun = recurring.CalculateNextRun(DateTimeOffset.UtcNow, currentRun ?? 0);
+            nextRun = recurring.CalculateNextRun(DateTimeOffset.UtcNow, currentRun ?? 0);
 
             if (nextRun == null)
                 throw new ArgumentException("Invalid scheduler recurring expression", nameof(recurring));
@@ -113,7 +115,7 @@ public class Dispatcher(
 
         if (executor.ExecutionTime > DateTimeOffset.UtcNow || recurring != null)
         {
-            scheduler.Schedule(executor);
+            scheduler.Schedule(executor, nextRun);
         }
         else
         {

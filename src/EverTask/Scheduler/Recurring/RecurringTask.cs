@@ -33,7 +33,8 @@ public class RecurringTask
                 return runtime.Value;
         }
 
-        return CalculateNextSchedule(current);
+        var next = CalculateNextSchedule(current);
+        return next;
     }
 
     private DateTimeOffset? CalculateNextSchedule(DateTimeOffset current)

@@ -1,6 +1,8 @@
-﻿using EverTask.Handler;
+﻿using Cronos;
+using EverTask.Handler;
 using EverTask.Logger;
 using EverTask.Scheduler;
+using EverTask.Scheduler.Builder;
 using Microsoft.Extensions.Logging;
 
 namespace EverTask.Tests;
@@ -29,6 +31,22 @@ public class TimerSchedulerTests
         var itemInQueue = _timerScheduler.GetQueue().Dequeue();
 
         Assert.Equal(executionTime, itemInQueue.ExecutionTime);
+    }
+
+    [Fact]
+    public void Schedule_should_enqueue_recurring_item_with_correct_execution_time()
+    {
+        var cronExpresison      = "*/5 * * * *";
+        var nextOccourrence = CronExpression.Parse(cronExpresison)
+                                            .GetNextOccurrence(DateTimeOffset.UtcNow, TimeZoneInfo.Utc);
+        var recurringTask       = new RecurringTask { CronExpression = cronExpresison };
+        var taskHandlerExecutor = CreateTaskHandlerExecutor(null, recurringTask);
+
+        _timerScheduler.Schedule(taskHandlerExecutor, nextOccourrence);
+
+        var itemInQueue = _timerScheduler.GetQueue().Dequeue();
+
+        Assert.Equal(nextOccourrence, itemInQueue.RecurringTask!.CalculateNextRun(DateTimeOffset.UtcNow,0));
     }
 
     [Fact]
@@ -100,12 +118,12 @@ public class TimerSchedulerTests
             Times.Once);
     }
 
-    private TaskHandlerExecutor CreateTaskHandlerExecutor(DateTimeOffset? executionTime = null) =>
+    private TaskHandlerExecutor CreateTaskHandlerExecutor(DateTimeOffset? executionTime = null, RecurringTask? recurringTask = null) =>
         new(
             new TestTaskRequest2(),
             new TestTaskHanlder2(),
             executionTime,
-            null,
+            recurringTask,
             null!,
             null,
             null,

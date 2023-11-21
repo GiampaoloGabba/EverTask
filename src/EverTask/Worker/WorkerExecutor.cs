@@ -130,7 +130,7 @@ public class WorkerExecutor(
                              .ConfigureAwait(false);
 
             if (nextRun.HasValue)
-                scheduler.Schedule(task);
+                scheduler.Schedule(task, nextRun);
         }
     }
 

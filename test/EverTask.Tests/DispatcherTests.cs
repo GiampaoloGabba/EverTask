@@ -1,4 +1,5 @@
-﻿using EverTask.Dispatcher;
+﻿using Cronos;
+using EverTask.Dispatcher;
 using EverTask.Handler;
 using EverTask.Logger;
 using EverTask.Scheduler;
@@ -96,16 +97,18 @@ public class DispatcherTests
         var taskId2 = await _dispatcher.Dispatch(new TestTaskRequest3(), TimeSpan.FromSeconds(5));
         taskId2.ShouldBeOfType<Guid>();
 
-        _delayedQueue.Verify(q => q.Schedule(It.Is<TaskHandlerExecutor>(executor => executor.PersistenceId == taskId)), Times.Once);
-        _delayedQueue.Verify(q => q.Schedule(It.Is<TaskHandlerExecutor>(executor => executor.PersistenceId == taskId2)), Times.Once);
+        _delayedQueue.Verify(q => q.Schedule(It.Is<TaskHandlerExecutor>(executor => executor.PersistenceId == taskId),null), Times.Once);
+        _delayedQueue.Verify(q => q.Schedule(It.Is<TaskHandlerExecutor>(executor => executor.PersistenceId == taskId2),null), Times.Once);
     }
 
     [Fact]
     public async Task Should_put_recurring_cron_task_in_scheduler()
     {
-        var taskId2 = await _dispatcher.Dispatch(new TestTaskRequest3(), recurring=>recurring.Schedule().UseCron("*/5 * * * *"));
+        var cronExpression = "*/5 * * * *";
+        var nextRun = CronExpression.Parse("*/5 * * * *").GetNextOccurrence(DateTimeOffset.UtcNow, TimeZoneInfo.Utc);
+        var taskId2 = await _dispatcher.Dispatch(new TestTaskRequest3(), recurring=>recurring.Schedule().UseCron(cronExpression));
         taskId2.ShouldBeOfType<Guid>();
 
-        _delayedQueue.Verify(q => q.Schedule(It.Is<TaskHandlerExecutor>(executor => executor.PersistenceId == taskId2)), Times.Once);
+        _delayedQueue.Verify(q => q.Schedule(It.Is<TaskHandlerExecutor>(executor => executor.PersistenceId == taskId2),nextRun), Times.Once);
     }
 }
