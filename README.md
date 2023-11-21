@@ -361,25 +361,47 @@ Below is an example of implementing a custom retry policy using [Polly](https://
 ```csharp
 using Polly;
 
+using Polly;
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+
 public class MyCustomRetryPolicy : IRetryPolicy
 {
     private readonly AsyncRetryPolicy _pollyRetryPolicy;
-    
-    public async Task Execute(Func<CancellationToken, Task> action, CancellationToken token = default)
+
+    public MyCustomRetryPolicy()
     {
         // Define your Polly retry policy here.
         // For example, a policy that retries three times with an exponential backoff.
         _pollyRetryPolicy = Policy
             .Handle<Exception>() // Specify the exceptions you want to handle/retry on
             .WaitAndRetryAsync(3, retryAttempt =>
-                TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)) // exponential back-off: 2, 4, 8 seconds
+                TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)), // exponential back-off: 2, 4, 8 seconds
+                onRetry: (exception, timeSpan, retryCount, context) =>
+                {
+                    // You can log the retry attempt here if needed
+                }
             );
+    }
+
+    public async Task Execute(Func<CancellationToken, Task> action, CancellationToken token = default)
+    {
+        // Use Polly's ExecuteAsync method to apply the retry policy to the passed action.
+        // The passed CancellationToken is respected in the retry policy.
+        await _pollyRetryPolicy.ExecuteAsync(async (ct) =>
+        {
+            await action(ct);
+        }, token);
     }
 }
 ```
 
+> 💡 **Note:** The `CancellationToken` provided to the policy is signaled as canceled when the task is halted using `.Cancel`, or if the worker service stops. This ensures that your custom policy remains synchronized with the task's lifecycle.
 
-The on your handler:
+
+
+Then on your handler:
 
 ```csharp
 public class MyCustomRetryTaskHandler : EverTaskHandler<MyCustomRetryTask>
