@@ -26,6 +26,17 @@ public class TestTaskConcurrent2() : IEverTask
     public static DateTime EndTime   { get; set; }
 };
 
+public class TestTaskDelayed1() : IEverTask
+{
+    public static int Counter { get; set; } = 0;
+};
+
+public class TestTaskDelayed2() : IEverTask
+{
+    public static int Counter { get; set; } = 0;
+};
+
+
 public class TestTaskWithRetryPolicy() : IEverTask
 {
     public static int Counter { get; set; } = 0;
@@ -90,11 +101,10 @@ public class TestTaskConcurrent1Handler : EverTaskHandler<TestTaskConcurrent1>
     public override async Task Handle(TestTaskConcurrent1 backgroundTask, CancellationToken cancellationToken)
     {
         await Task.Delay(300, cancellationToken);
-        TestTaskConcurrent1.Counter = TestTaskConcurrent1.Counter+1;
-        TestTaskConcurrent1.EndTime = DateTime.Now;
+        TestTaskConcurrent1.Counter += 1;
+        TestTaskConcurrent1.EndTime =  DateTime.Now;
     }
 }
-
 public class TestTaskConcurrent2Handler : EverTaskHandler<TestTaskConcurrent2>
 {
     public override async Task Handle(TestTaskConcurrent2 backgroundTask, CancellationToken cancellationToken)
@@ -105,6 +115,26 @@ public class TestTaskConcurrent2Handler : EverTaskHandler<TestTaskConcurrent2>
         TestTaskConcurrent2.EndTime = DateTime.Now;
     }
 }
+
+public class TestTaskDelayed1Handler : EverTaskHandler<TestTaskDelayed1>
+{
+    public override async Task Handle(TestTaskDelayed1 backgroundTask, CancellationToken cancellationToken)
+    {
+        await Task.Delay(300, cancellationToken);
+        TestTaskDelayed1.Counter += 1;
+    }
+}
+
+
+public class TestTaskDelayed2Handler : EverTaskHandler<TestTaskDelayed2>
+{
+    public override async Task Handle(TestTaskDelayed2 backgroundTask, CancellationToken cancellationToken)
+    {
+        await Task.Delay(300, cancellationToken);
+        TestTaskDelayed2.Counter += 1;
+    }
+}
+
 
 public class TestTaskWithRetryPolicyHandler : EverTaskHandler<TestTaskWithRetryPolicy>
 {

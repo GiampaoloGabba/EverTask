@@ -160,7 +160,7 @@ public class WorkerServiceIntegrationTests
 
         var cts = new CancellationTokenSource();
 
-        await Task.Delay(300);
+        await Task.Delay(200);
 
         cts.CancelAfter(50);
         await _host.StopAsync(cts.Token);
@@ -424,6 +424,9 @@ public class WorkerServiceIntegrationTests
         _workerQueue = _host.Services.GetRequiredService<IWorkerQueue>();
 
         await _host.StartAsync();
+
+        TestTaskConcurrent1.Counter = 0;
+        TestTaskConcurrent2.Counter = 0;
 
         var task1 = new TestTaskConcurrent1();
         await _dispatcher.Dispatch(task1);

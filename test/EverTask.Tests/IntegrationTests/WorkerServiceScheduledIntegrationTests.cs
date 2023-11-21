@@ -41,7 +41,7 @@ public class WorkerServiceScheduledIntegrationTests
 
         var task = new TestTaskConcurrent1();
         TestTaskConcurrent1.Counter = 0;
-        await _dispatcher.Dispatch(task, TimeSpan.FromSeconds(1.5));
+        await _dispatcher.Dispatch(task, TimeSpan.FromSeconds(1.2));
 
         await Task.Delay(1000);
 
@@ -73,9 +73,9 @@ public class WorkerServiceScheduledIntegrationTests
     {
         await _host.StartAsync();
 
-        var task = new TestTaskConcurrent1();
-        TestTaskConcurrent1.Counter = 0;
-        var specificDate = DateTimeOffset.Now.AddSeconds(1.5);
+        var task = new TestTaskDelayed1();
+        TestTaskDelayed1.Counter = 0;
+        var specificDate = DateTimeOffset.Now.AddSeconds(1.2);
         await _dispatcher.Dispatch(task, specificDate);
 
         await Task.Delay(1000);
@@ -100,7 +100,7 @@ public class WorkerServiceScheduledIntegrationTests
 
         await _host.StopAsync(cts.Token);
 
-        TestTaskConcurrent1.Counter.ShouldBe(1);
+        TestTaskDelayed1.Counter.ShouldBe(1);
     }
 
     [Fact]
@@ -108,8 +108,8 @@ public class WorkerServiceScheduledIntegrationTests
     {
         await _host.StartAsync();
 
-        var task = new TestTaskConcurrent1();
-        TestTaskConcurrent1.Counter = 0;
+        var task = new TestTaskDelayed2();
+        TestTaskDelayed2.Counter = 0;
         await _dispatcher.Dispatch(task, builder => builder.RunDelayed(TimeSpan.FromSeconds(0.5)).Then().UseCron("* * * * * *").MaxRuns(3));
 
         await Task.Delay(300);
@@ -133,7 +133,7 @@ public class WorkerServiceScheduledIntegrationTests
 
         await _host.StopAsync(cts.Token);
 
-        TestTaskConcurrent1.Counter.ShouldBe(3);
+        TestTaskDelayed2.Counter.ShouldBe(3);
     }
 
 }
