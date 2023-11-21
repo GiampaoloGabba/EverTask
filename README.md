@@ -12,25 +12,26 @@
 EverTask is a .NET library for executing background tasks in .NET applications. It is designed to be simple and focuses
 on task persistence, ensuring that pending tasks resume upon application restart.
 
-> This project is in its initial stages, more detailed documentation will be provided in the future.
+> More detailed documentation will be provided in the future.
 
 ## Features
 
-- **Background execution**: Easily run background tasks with parameters in .NET
-- **Persistence**: Resumes pending tasks after application restarts.
-- **Managed Parallelism**: Efficiently handles concurrent task execution with configurable parallelism.
-- **Scheduled and Delayed tasks**: Schedule tasks for future execution or delay them using a TimeSpan. *Recurring tasks are coming soon. First with cron, then with a fluent builder*
-- **Resilient execution**: A powerful resilience feature to ensure your tasks are robust against transient failures. Fully customizable even with your custom retry policies.
-- **Monitoring**: Monitor your task with the included in-memory monitoring or remotely with SignalR! [![NuGet](https://img.shields.io/nuget/vpre/EverTask.Monitor.AspnetCore.SignalR.svg?label=EverTask.Monitor.AspnetCore.SignalR)](https://www.nuget.org/packages/EverTask.Monitor.AspnetCore.SignalR)
-- **Task timeout**: Configure the maximum execution time for your tasks.
-- **Error Handling**: Method overrides for error observation and task completion/cancellation.
-- **SQL Storage**: Includes support for SQL Server storage, enabling persistent task management. [![NuGet](https://img.shields.io/nuget/vpre/evertask.sqlserver.svg?label=Evertask.SqlServer)](https://www.nuget.org/packages/evertask.sqlserver)
-- **In-Memory Storage**: Provides an in-memory storage solution for testing and lightweight applications.
-- **Serilog Integration**: Supports integration with Serilog for detailed and customizable logging. [![NuGet](https://img.shields.io/nuget/vpre/evertask.serilog.svg?label=Evertask.Serilog)](https://www.nuget.org/packages/evertask.serilog)
-- **Extensible Storage & Logging**: Designed to allow easy plug-in of additional database solutions or logging systems.
-- **Async All The Way**: Fully asynchronous architecture, enhancing performance and scalability in modern environments.
-- **Simplicity by Design**: Created for simplicity, using the latest .NET technologies.
-- **Inspiration from MediaTr**: Implementation based on creating requests and handlers.
+- **Background execution**:<br>
+  Easily run background tasks with parameters in .NET
+- **Persistence**<br>Resumes pending tasks after application restarts.
+- **Managed Parallelism**<br>Efficiently handles concurrent task execution with configurable parallelism.
+- **Scheduled, Delayed and recurring tasks**<br>Schedule tasks for future execution or delay them using a TimeSpan. You can also create recurring tasks, for now only with cron expressions, but a fluent scheduler is on the way!
+- **Resilient execution**<br>A powerful resilience feature to ensure your tasks are robust against transient failures. Fully customizable even with your custom retry policies.
+- **Monitoring (local and remote)**<br>Monitor your task with the included in-memory monitoring or remotely with SignalR!<br>[![NuGet](https://img.shields.io/nuget/vpre/EverTask.Monitor.AspnetCore.SignalR.svg?label=EverTask.Monitor.AspnetCore.SignalR)](https://www.nuget.org/packages/EverTask.Monitor.AspnetCore.SignalR)
+- **Task timeout**<br>Configure the maximum execution time for your tasks.
+- **Error Handling**<br>Method overrides for error observation and task completion/cancellation.
+- **SQL Storage**<br>Includes support for SQL Server storage, enabling persistent task management.<br>[![NuGet](https://img.shields.io/nuget/vpre/evertask.sqlserver.svg?label=Evertask.SqlServer)](https://www.nuget.org/packages/evertask.sqlserver)
+- **In-Memory Storage**<br>Provides an in-memory storage solution for testing and lightweight applications.
+- **Serilog Integration**<br>Supports integration with Serilog for detailed and customizable logging.<br>[![NuGet](https://img.shields.io/nuget/vpre/evertask.serilog.svg?label=Evertask.Serilog)](https://www.nuget.org/packages/evertask.serilog)
+- **Extensible Storage & Logging**<br>Designed to allow easy plug-in of additional database solutions or logging systems.
+- **Async All The Way**<br>Fully asynchronous architecture, enhancing performance and scalability in modern environments.
+- **Simplicity by Design**<br>Created for simplicity, using the latest .NET technologies.
+- **Inspiration from MediaTr**<br>Implementation based on creating requests and handlers.
 
 ## Efficient Task Processing
 
@@ -167,7 +168,40 @@ var scheduledTime = DateTimeOffset.Now.AddHours(2); // 2 hours from now
 _dispatcher.Dispatch(new SampleTaskRequest("Scheduled Task"), scheduledTime);
 ```
 
-> 💡 **Remember:** Delayed and scheduled tasks are also persistent. If your app restarts, you won't lose these tasks –
+### Recurring Tasks
+In addition to delayed and scheduled tasks, you can also configure recurring tasks. These tasks repeat at specified intervals, providing a powerful way to automate ongoing processes.
+
+> Currently, EverTask supports only cron expressions for task scheduling. However, a fluent builder that will further simplify this process is nearly ready.
+
+#### Implementing Recurring Tasks
+You can schedule recurring tasks using various approaches. Below are some examples with explanations:
+
+Immediate Execution with Cron Schedule:
+```csharp
+// Execute task immediately, then repeat according to a Cron schedule
+await _dispatcher.Dispatch(task, builder => builder.RunNow().Then().UseCron("*/2 * * * *").MaxRuns(3));
+```
+Delayed Start with Cron Schedule:
+```csharp
+// Execute task after a short delay, then repeat according to a Cron schedule
+await _dispatcher.Dispatch(task, builder => builder.RunDelayed(TimeSpan.FromSeconds(0.5)).Then().UseCron("*/2 * * * *"));
+```
+
+Scheduled Start with Cron Schedule
+```csharp
+// Schedule task to start at a specific time, then repeat according to a Cron schedule
+await _dispatcher.Dispatch(task, builder => builder.RunAt(dateTimeOffset)).Then().UseCron("*/2 * * * *").MaxRuns(3));
+```
+
+Scheduling Only with Cron
+```csharp
+// Schedule a recurring task based solely on a Cron schedule
+await _dispatcher.Dispatch(task, builder => builder.Schedule().UseCron("*/2 * * * *").MaxRuns(3));
+```
+
+&nbsp;
+
+> 💡 **Remember:** Delayed, scheduled and recurring tasks are also persistent. If your app restarts, you won't lose these tasks –
 > they'll be executed at the right time!
 
 ## Task Cancellation
@@ -183,8 +217,8 @@ Guid taskId = _dispatcher.Dispatch(new SampleTaskRequest("Cancelable Task"));
 _dispatcher.Cancel(taskId);
 ```
 
-> 💡 **Note:** Cancellation is effective only if the task has not yet begun. Once a task is in progress, the Cancel
-> method will not affect its execution.
+> 💡 **Note:** The `Cancel` method triggers the `CancellationToken` in the task's `Handle` method. Tasks should check this token regularly to enable cooperative cancellation. Remember, this only affects tasks in progress; tasks cancelled before execution won't run.
+
 
 ## Task Execution Timeout Control
 
