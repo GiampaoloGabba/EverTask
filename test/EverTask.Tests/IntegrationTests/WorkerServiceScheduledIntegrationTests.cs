@@ -110,7 +110,7 @@ public class WorkerServiceScheduledIntegrationTests
 
         var task = new TestTaskDelayed2();
         TestTaskDelayed2.Counter = 0;
-        await _dispatcher.Dispatch(task, builder => builder.RunDelayed(TimeSpan.FromSeconds(0.5)).Then().UseCron("* * * * * *").MaxRuns(3));
+        await _dispatcher.Dispatch(task, builder => builder.RunDelayed(TimeSpan.FromSeconds(0.5)).Then().UseCron("* * * * * */2").MaxRuns(3));
 
         await Task.Delay(300);
 
@@ -122,10 +122,11 @@ public class WorkerServiceScheduledIntegrationTests
         pt = await _storage.GetAll();
         pt[0].CurrentRunCount.ShouldBe(1);
 
-        await Task.Delay(3000);
+        await Task.Delay(6000);
         pt = await _storage.GetAll();
         pt.Length.ShouldBe(1);
         pt[0].CurrentRunCount.ShouldBe(3);
+        pt[0].RunsAudits.Count.ShouldBe(3);
         pt[0].StatusAudits.Count.ShouldBe(9);
 
         var cts = new CancellationTokenSource();

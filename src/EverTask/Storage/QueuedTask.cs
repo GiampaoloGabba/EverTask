@@ -19,6 +19,7 @@ public class QueuedTask
 
     public QueuedTaskStatus         Status       { get; set; }
     public ICollection<StatusAudit> StatusAudits { get; set; } = new List<StatusAudit>();
+    public ICollection<RunsAudit>   RunsAudits   { get; set; } = new List<RunsAudit>();
 }
 
 public class StatusAudit
@@ -27,6 +28,17 @@ public class StatusAudit
     public Guid             QueuedTaskId { get; set; }
     public DateTimeOffset   UpdatedAtUtc { get; set; }
     public QueuedTaskStatus NewStatus    { get; set; }
+    public string?          Exception    { get; set; }
+
+    public QueuedTask QueuedTask { get; set; } = null!;
+}
+
+public class RunsAudit
+{
+    public long             Id           { get; set; }
+    public Guid             QueuedTaskId { get; set; }
+    public DateTimeOffset   ExecutedAt   { get; set; }
+    public QueuedTaskStatus Status       { get; set; }
     public string?          Exception    { get; set; }
 
     public QueuedTask QueuedTask { get; set; } = null!;

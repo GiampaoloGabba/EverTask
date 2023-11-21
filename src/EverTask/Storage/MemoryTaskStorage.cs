@@ -99,6 +99,14 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
 
         if (task != null)
         {
+            task.RunsAudits.Add(new RunsAudit
+            {
+                QueuedTaskId = taskId,
+                ExecutedAt   = task.LastExecutionUtc ?? DateTimeOffset.UtcNow,
+                Status       = task.Status,
+                Exception    = task.Exception
+            });
+
             task.NextRunUtc = nextRun;
             var currentRun = task.CurrentRunCount ?? 0;
 

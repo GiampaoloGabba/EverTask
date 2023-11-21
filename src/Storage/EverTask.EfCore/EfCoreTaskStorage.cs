@@ -169,6 +169,15 @@ public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTa
 
         if (task != null)
         {
+
+            task.RunsAudits.Add(new RunsAudit
+            {
+                QueuedTaskId = taskId,
+                ExecutedAt   = DateTimeOffset.UtcNow,
+                Status       = task.Status,
+                Exception    = task.Exception
+            });
+
             task.NextRunUtc = nextRun;
             var currentRun = task.CurrentRunCount ?? 0;
             task.CurrentRunCount = currentRun + 1;
