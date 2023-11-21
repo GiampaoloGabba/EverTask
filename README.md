@@ -22,9 +22,10 @@ on task persistence, ensuring that pending tasks resume upon application restart
 - **Managed Parallelism**<br>Efficiently handles concurrent task execution with configurable parallelism.
 - **Scheduled, Delayed and recurring tasks**<br>Schedule tasks for future execution or delay them using a TimeSpan. You can also create recurring tasks, for now only with cron expressions, but a fluent scheduler is on the way!
 - **Resilient execution**<br>A powerful resilience feature to ensure your tasks are robust against transient failures. Fully customizable even with your custom retry policies.
-- **Monitoring (local and remote)**<br>Monitor your task with the included in-memory monitoring or remotely with SignalR!<br>[![NuGet](https://img.shields.io/nuget/vpre/EverTask.Monitor.AspnetCore.SignalR.svg?label=EverTask.Monitor.AspnetCore.SignalR)](https://www.nuget.org/packages/EverTask.Monitor.AspnetCore.SignalR)
-- **Task timeout**<br>Configure the maximum execution time for your tasks.
+- **Optional specialized CPU-bound execution**<br>Optimized handling for CPU-intensive tasks with an option to execute in a separate thread, ensuring efficient processing without impacting I/O-bound operations. Use judiciously for tasks requiring significant computational resources.
+- **Timeout management**<br>Configure the maximum execution time for your tasks.
 - **Error Handling**<br>Method overrides for error observation and task completion/cancellation.
+- **Monitoring (local and remote)**<br>Monitor your task with the included in-memory monitoring or remotely with SignalR!<br>[![NuGet](https://img.shields.io/nuget/vpre/EverTask.Monitor.AspnetCore.SignalR.svg?label=EverTask.Monitor.AspnetCore.SignalR)](https://www.nuget.org/packages/EverTask.Monitor.AspnetCore.SignalR)
 - **SQL Storage**<br>Includes support for SQL Server storage, enabling persistent task management.<br>[![NuGet](https://img.shields.io/nuget/vpre/evertask.sqlserver.svg?label=Evertask.SqlServer)](https://www.nuget.org/packages/evertask.sqlserver)
 - **In-Memory Storage**<br>Provides an in-memory storage solution for testing and lightweight applications.
 - **Serilog Integration**<br>Supports integration with Serilog for detailed and customizable logging.<br>[![NuGet](https://img.shields.io/nuget/vpre/evertask.serilog.svg?label=Evertask.Serilog)](https://www.nuget.org/packages/evertask.serilog)
@@ -220,7 +221,7 @@ _dispatcher.Cancel(taskId);
 > 💡 **Note:** The `Cancel` method triggers the `CancellationToken` in the task's `Handle` method. Tasks should check this token regularly to enable cooperative cancellation. Remember, this only affects tasks in progress; tasks cancelled before execution won't run.
 
 
-## Task Execution Timeout Control
+## Task Execution Timeout
 
 EverTask provides a flexible approach to managing task execution times with its timeout functionality.
 
@@ -254,6 +255,28 @@ public class MyCustomTimeoutTaskHandler : EverTaskHandler<MyTask>
     }
 }
 ```
+
+## CPU-bound Task Handling
+In addition to its default async-await behavior, which is ideal for I/O-bound operations (like database reads, email sending, file generation, etc.), EverTask provides a specialized handling mechanism for CPU-bound tasks. This is crucial for tasks that involve intensive computational work, such as data processing or complex calculations.
+
+This is controlled by the `CpuBoundOperation` property in the `EverTaskHandler`.
+
+```csharp
+public class MyCustomCPUIntensiveTaskHandler : EverTaskHandler<MyCPUIntensiveTask>
+{
+    public MyCustomCPUIntensiveTaskHandler()
+    {
+    CpuBoundOperation = true;
+    }
+
+    public override Task Handle(CancellationToken cancellationToken)
+    {
+        // CPU-intensive task logic
+    }
+}
+```
+
+> 💡 **Note:** When using CpuBoundOperation to execute tasks in a separate thread, be mindful of potential overhead and concurrency issues. This feature is best used for genuinely CPU-intensive tasks. Excessive use can lead to increased resource utilization and complexity.
 
 ## Resilience and Retry Policies
 

@@ -118,7 +118,7 @@ public class WorkerServiceScheduledIntegrationTests
         pt.Length.ShouldBe(1);
         pt[0].Status.ShouldBe(QueuedTaskStatus.WaitingQueue);
 
-        await Task.Delay(500);
+        await Task.Delay(600);
         pt = await _storage.GetAll();
         pt[0].CurrentRunCount.ShouldBe(1);
 

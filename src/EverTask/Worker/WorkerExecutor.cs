@@ -18,6 +18,8 @@ public class WorkerExecutor(
 
     public async ValueTask DoWork(TaskHandlerExecutor task, CancellationToken serviceToken)
     {
+        //Task storage could be a dbcontext wich is not thread safe.
+        //So its safer to just use a new scope for each task
         using var     scope       = serviceScopeFactory.CreateScope();
         ITaskStorage? taskStorage = scope.ServiceProvider.GetService<ITaskStorage>();
 
@@ -25,13 +27,8 @@ public class WorkerExecutor(
         {
             serviceToken.ThrowIfCancellationRequested();
 
-            if (workerBlacklist.IsBlacklisted(task.PersistenceId))
-            {
-                RegisterInfo(task, "Task with id {0} is signaled to be cancelled and will not be executed.",
-                    task.PersistenceId);
-                workerBlacklist.Remove(task.PersistenceId);
+            if (IsTaskBlacklisted(task))
                 return;
-            }
 
             RegisterInfo(task, "Starting task with id {0}.", task.PersistenceId);
 
@@ -40,14 +37,64 @@ public class WorkerExecutor(
 
             await ExecuteCallback(task.HandlerStartedCallback, task, "Started").ConfigureAwait(false);
 
-            serviceToken.ThrowIfCancellationRequested();
+            await ExecuteTask(task, serviceToken);
 
-            var taskToken = cancellationSourceProvider.CreateToken(task.PersistenceId, serviceToken);
+            await ExecuteDispose(task);
 
-            var handlerOptions = task.Handler as IEverTaskHandlerOptions;
-            var retryPolicy    = handlerOptions?.RetryPolicy ?? configuration.DefaultRetryPolicy;
-            var timeout        = handlerOptions?.Timeout ?? configuration.DefaultTimeout;
+            if (taskStorage != null)
+                await taskStorage.SetCompleted(task.PersistenceId).ConfigureAwait(false);
 
+            await ExecuteCallback(task.HandlerCompletedCallback, task, "Completed").ConfigureAwait(false);
+
+            RegisterInfo(task, "Task with id {0} was completed.", task.PersistenceId);
+        }
+        catch (Exception ex)
+        {
+            await HandleExceptionAsync(ex, task, serviceToken, taskStorage);
+        }
+        finally
+        {
+            cancellationSourceProvider.Delete(task.PersistenceId);
+            await QueueNextOccourrence(task, taskStorage);
+        }
+    }
+
+    private bool IsTaskBlacklisted(TaskHandlerExecutor task)
+    {
+        if (workerBlacklist.IsBlacklisted(task.PersistenceId))
+        {
+            RegisterInfo(task, "Task with id {0} is signaled to be cancelled and will not be executed.", task.PersistenceId);
+            workerBlacklist.Remove(task.PersistenceId);
+            return true;
+        }
+
+        return false;
+    }
+
+    private async Task ExecuteTask(TaskHandlerExecutor task, CancellationToken serviceToken)
+    {
+        serviceToken.ThrowIfCancellationRequested();
+
+        var taskToken = cancellationSourceProvider.CreateToken(task.PersistenceId, serviceToken);
+
+        var handlerOptions = task.Handler as IEverTaskHandlerOptions;
+        var retryPolicy    = handlerOptions?.RetryPolicy ?? configuration.DefaultRetryPolicy;
+        var timeout        = handlerOptions?.Timeout ?? configuration.DefaultTimeout;
+        var cpuBound       = handlerOptions?.CpuBoundOperation ?? false;
+
+        if (cpuBound)
+        {
+            await Task.Run(async () => await DoExecute(), taskToken).ConfigureAwait(false);
+        }
+        else
+        {
+            await DoExecute();
+        }
+
+        return;
+
+        async Task DoExecute()
+        {
             await retryPolicy.Execute(async retryToken =>
             {
                 if (timeout.HasValue && timeout.Value > TimeSpan.Zero)
@@ -62,75 +109,6 @@ public class WorkerExecutor(
                     await task.HandlerCallback.Invoke(task.Task, retryToken).ConfigureAwait(false);
                 }
             }, taskToken).ConfigureAwait(false);
-
-            serviceToken.ThrowIfCancellationRequested();
-
-            if (task.Handler is IAsyncDisposable asyncDisposable)
-            {
-                try
-                {
-                    await asyncDisposable.DisposeAsync();
-                }
-                catch (Exception e)
-                {
-                    RegisterError(e, task, "Unable to dispose Task with id {0}.", task.PersistenceId);
-                }
-            }
-
-            if (taskStorage != null)
-                await taskStorage.SetCompleted(task.PersistenceId).ConfigureAwait(false);
-
-            await ExecuteCallback(task.HandlerCompletedCallback, task, "Completed").ConfigureAwait(false);
-
-            RegisterInfo(task, "Task with id {0} was completed.", task.PersistenceId);
-        }
-        catch (OperationCanceledException ex)
-        {
-            if (taskStorage != null)
-            {
-                if (serviceToken.IsCancellationRequested)
-                    await taskStorage.SetCancelledByService(task.PersistenceId, ex).ConfigureAwait(false);
-                else
-                    await taskStorage.SetCancelledByUser(task.PersistenceId).ConfigureAwait(false);
-            }
-
-
-            await ExecuteCallback(task.HandlerErrorCallback, task, ex,
-                $"Task with id {task.PersistenceId} was cancelled").ConfigureAwait(false);
-
-            RegisterWarning(ex, task, "Task with id {0} was cancelled by service while stopping.", task.PersistenceId);
-        }
-        catch (Exception ex)
-        {
-            if (taskStorage != null)
-                await taskStorage.SetStatus(task.PersistenceId, QueuedTaskStatus.Failed, ex)
-                                 .ConfigureAwait(false);
-
-            await ExecuteCallback(task.HandlerErrorCallback, task, ex,
-                $"Error occurred executing the task with id {task.PersistenceId}").ConfigureAwait(false);
-
-            RegisterError(ex, task, "Error occurred executing task with id {0}.", task.PersistenceId);
-        }
-        finally
-        {
-            cancellationSourceProvider.Delete(task.PersistenceId);
-            await QueueNextOccourrence(task, taskStorage);
-        }
-    }
-
-    private async Task QueueNextOccourrence(TaskHandlerExecutor task, ITaskStorage? taskStorage)
-    {
-        if (task.RecurringTask == null) return;
-
-        if (taskStorage != null)
-        {
-            var currentRun = await taskStorage.GetCurrentRunCount(task.PersistenceId);
-            var nextRun    = task.RecurringTask.CalculateNextRun(DateTimeOffset.UtcNow, currentRun + 1);
-            await taskStorage.UpdateCurrentRun(task.PersistenceId, nextRun)
-                             .ConfigureAwait(false);
-
-            if (nextRun.HasValue)
-                scheduler.Schedule(task, nextRun);
         }
     }
 
@@ -153,6 +131,21 @@ public class WorkerExecutor(
             }
 
             throw new TimeoutException();
+        }
+    }
+
+    private async Task ExecuteDispose(TaskHandlerExecutor task)
+    {
+        if (task.Handler is IAsyncDisposable asyncDisposable)
+        {
+            try
+            {
+                await asyncDisposable.DisposeAsync();
+            }
+            catch (Exception e)
+            {
+                RegisterError(e, task, "Unable to dispose Task with id {0}.", task.PersistenceId);
+            }
         }
     }
 
@@ -190,6 +183,56 @@ public class WorkerExecutor(
                 task.PersistenceId);
         }
     }
+
+    private async Task HandleExceptionAsync(Exception ex, TaskHandlerExecutor task, CancellationToken serviceToken,
+                                            ITaskStorage? taskStorage)
+    {
+        if (ex is OperationCanceledException oce)
+        {
+            if (taskStorage != null)
+            {
+                if (serviceToken.IsCancellationRequested)
+                    await taskStorage.SetCancelledByService(task.PersistenceId, oce).ConfigureAwait(false);
+                else
+                    await taskStorage.SetCancelledByUser(task.PersistenceId).ConfigureAwait(false);
+            }
+
+            await ExecuteCallback(task.HandlerErrorCallback, task, oce,
+                $"Task with id {task.PersistenceId} was cancelled").ConfigureAwait(false);
+
+            RegisterWarning(oce, task, "Task with id {0} was cancelled by service while stopping.", task.PersistenceId);
+        }
+        else
+        {
+            // Logica per le altre eccezioni
+            if (taskStorage != null)
+                await taskStorage.SetStatus(task.PersistenceId, QueuedTaskStatus.Failed, ex)
+                                 .ConfigureAwait(false);
+
+            await ExecuteCallback(task.HandlerErrorCallback, task, ex,
+                $"Error occurred executing the task with id {task.PersistenceId}").ConfigureAwait(false);
+
+            RegisterError(ex, task, "Error occurred executing task with id {0}.", task.PersistenceId);
+        }
+    }
+
+    private async Task QueueNextOccourrence(TaskHandlerExecutor task, ITaskStorage? taskStorage)
+    {
+        if (task.RecurringTask == null) return;
+
+        if (taskStorage != null)
+        {
+            var currentRun = await taskStorage.GetCurrentRunCount(task.PersistenceId);
+            var nextRun    = task.RecurringTask.CalculateNextRun(DateTimeOffset.UtcNow, currentRun + 1);
+            await taskStorage.UpdateCurrentRun(task.PersistenceId, nextRun)
+                             .ConfigureAwait(false);
+
+            if (nextRun.HasValue)
+                scheduler.Schedule(task, nextRun);
+        }
+    }
+
+    #region Logging and event pubblishing
 
     private void RegisterInfo(TaskHandlerExecutor executor, string message, params object[] messageArgs)
     {
@@ -251,4 +294,6 @@ public class WorkerExecutor(
             _ = handler(data);
         }
     }
+
+    #endregion
 }

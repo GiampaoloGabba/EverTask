@@ -69,6 +69,40 @@ public class WorkerServiceIntegrationTests
     }
 
     [Fact]
+    public async Task Should_execute_cpu_bound_task_and_clear_cancellation_source()
+    {
+        await _host.StartAsync();
+
+        var task = new TestTaskCpubound();
+        TestTaskCpubound.Counter = 0;
+        var taskId = await _dispatcher.Dispatch(task);
+        await Task.Delay(100);
+        var ctsToken = _cancSourceProvider.TryGet(taskId);
+
+        await Task.Delay(600);
+
+        var pt = await _storage.RetrievePending();
+        pt.Length.ShouldBe(0);
+
+        var tasks = await _storage.GetAll();
+
+        tasks.Length.ShouldBe(1);
+        tasks[0].Status.ShouldBe(QueuedTaskStatus.Completed);
+        tasks[0].LastExecutionUtc.ShouldNotBeNull();
+        tasks[0].Exception.ShouldBeNull();
+
+        Should.Throw<ObjectDisposedException>(() => ctsToken?.Token);
+        _cancSourceProvider.TryGet(taskId).ShouldBeNull();
+
+        var cts = new CancellationTokenSource();
+        cts.CancelAfter(2000);
+
+        await _host.StopAsync(cts.Token);
+
+        TestTaskCpubound.Counter.ShouldBe(1);
+    }
+
+    [Fact]
     public async Task Should_cancel_non_started_task_and_not_creating_cancellation_source()
     {
         await _host.StartAsync();
@@ -299,14 +333,14 @@ public class WorkerServiceIntegrationTests
     [Fact]
     public async Task Should_execute_pending_and_concurrent_task()
     {
+        TestTaskConcurrent1.Counter = 0;
+        TestTaskConcurrent2.Counter = 0;
+
         var task1 = new TestTaskConcurrent1();
         await _dispatcher.Dispatch(task1);
 
         var task2 = new TestTaskConcurrent2();
         await _dispatcher.Dispatch(task2);
-
-        TestTaskConcurrent1.Counter = 0;
-        TestTaskConcurrent2.Counter = 0;
 
         var dequeued = await _workerQueue.Dequeue(CancellationToken.None);
         dequeued.Task.ShouldBe(task1);
@@ -318,7 +352,7 @@ public class WorkerServiceIntegrationTests
 
         await _host.StartAsync();
 
-        await Task.Delay(600, CancellationToken.None);
+        await Task.Delay(400, CancellationToken.None);
 
         var tasks = await _storage.GetAll();
         tasks.Length.ShouldBe(2);
@@ -326,6 +360,7 @@ public class WorkerServiceIntegrationTests
         tasks[0].Status.ShouldBe(QueuedTaskStatus.Completed);
         tasks[1].Status.ShouldBe(QueuedTaskStatus.Completed);
 
+        //todo: gestire meglio i test task.. usando sempre questa proprietà statica non ha senso e porta a errori
         TestTaskConcurrent1.Counter.ShouldBe(1);
         TestTaskConcurrent2.Counter.ShouldBe(1);
 

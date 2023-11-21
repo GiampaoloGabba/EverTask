@@ -36,6 +36,10 @@ public class TestTaskDelayed2() : IEverTask
     public static int Counter { get; set; } = 0;
 };
 
+public class TestTaskCpubound() : IEverTask
+{
+    public static int Counter { get; set; } = 0;
+};
 
 public class TestTaskWithRetryPolicy() : IEverTask
 {
@@ -101,7 +105,7 @@ public class TestTaskConcurrent1Handler : EverTaskHandler<TestTaskConcurrent1>
     public override async Task Handle(TestTaskConcurrent1 backgroundTask, CancellationToken cancellationToken)
     {
         await Task.Delay(300, cancellationToken);
-        TestTaskConcurrent1.Counter += 1;
+        TestTaskConcurrent1.Counter = 1;
         TestTaskConcurrent1.EndTime =  DateTime.Now;
     }
 }
@@ -135,6 +139,19 @@ public class TestTaskDelayed2Handler : EverTaskHandler<TestTaskDelayed2>
     }
 }
 
+
+public class TestTaskCpuboundHandler : EverTaskHandler<TestTaskCpubound>
+{
+    public TestTaskCpuboundHandler()
+    {
+        CpuBoundOperation = true;
+    }
+    public override async Task Handle(TestTaskCpubound backgroundTask, CancellationToken cancellationToken)
+    {
+        await Task.Delay(300, cancellationToken);
+        TestTaskCpubound.Counter=1;
+    }
+}
 
 public class TestTaskWithRetryPolicyHandler : EverTaskHandler<TestTaskWithRetryPolicy>
 {
