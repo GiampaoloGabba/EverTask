@@ -11,4 +11,10 @@ public interface IEverTaskHandlerOptions
     /// Gets or sets the timeout for this task.Default is null (no timeout)
     /// </summary>
     public TimeSpan? Timeout { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether this task is CPU-bound. Default is false.
+    /// WARNING: CPU-bound tasks are spawned in a separate thread. Use with care and make sure you know all the implications.
+    /// </summary>
+    public bool CpuBoundOperation { get; set; }
 }

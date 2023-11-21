@@ -6,8 +6,12 @@
 /// <typeparam name="TTask">The type of EverTask to handle.</typeparam>
 public abstract class EverTaskHandler<TTask> : IEverTaskHandler<TTask> where TTask : IEverTask
 {
-    public IRetryPolicy? RetryPolicy { get; set; }
-    public TimeSpan?     Timeout     { get; set; } = null;
+    /// <inheritdoc/>
+    public IRetryPolicy? RetryPolicy       { get; set; }
+    /// <inheritdoc/>
+    public TimeSpan?     Timeout           { get; set; }
+    /// <inheritdoc/>
+    public bool          CpuBoundOperation { get; set; }
 
     /// <inheritdoc/>
     public abstract Task Handle(TTask backgroundTask, CancellationToken cancellationToken);
