@@ -11,6 +11,7 @@ public class WorkerServiceIntegrationTests
     private IWorkerQueue _workerQueue;
     private readonly IWorkerBlacklist _workerBlacklist;
     private readonly IEverTaskWorkerExecutor _workerExecutor;
+    private readonly ICancellationSourceProvider _cancSourceProvider;
 
     public WorkerServiceIntegrationTests()
     {
@@ -25,25 +26,28 @@ public class WorkerServiceIntegrationTests
                     services.AddSingleton<ITaskStorage, MemoryTaskStorage>();
                 }).Build();
 
-        _dispatcher      = _host.Services.GetRequiredService<ITaskDispatcher>();
-        _storage         = _host.Services.GetRequiredService<ITaskStorage>();
-        _workerQueue     = _host.Services.GetRequiredService<IWorkerQueue>();
-        _workerBlacklist = _host.Services.GetRequiredService<IWorkerBlacklist>();
-        _workerExecutor  = _host.Services.GetRequiredService<IEverTaskWorkerExecutor>();
+        _dispatcher         = _host.Services.GetRequiredService<ITaskDispatcher>();
+        _storage            = _host.Services.GetRequiredService<ITaskStorage>();
+        _workerQueue        = _host.Services.GetRequiredService<IWorkerQueue>();
+        _workerBlacklist    = _host.Services.GetRequiredService<IWorkerBlacklist>();
+        _workerExecutor     = _host.Services.GetRequiredService<IEverTaskWorkerExecutor>();
+        _cancSourceProvider = _host.Services.GetRequiredService<ICancellationSourceProvider>();
     }
 
     [Fact]
-    public async Task Should_execute_task()
+    public async Task Should_execute_task_and_clear_cancellation_source()
     {
         await _host.StartAsync();
 
         var task = new TestTaskConcurrent1();
         TestTaskConcurrent1.Counter = 0;
-        await _dispatcher.Dispatch(task);
+        var taskId = await _dispatcher.Dispatch(task);
+        await Task.Delay(100);
+        var ctsToken = _cancSourceProvider.TryGet(taskId);
 
         await Task.Delay(600);
 
-        var pt = await _storage.RetrievePendingTasks();
+        var pt = await _storage.RetrievePending();
         pt.Length.ShouldBe(0);
 
         var tasks = await _storage.GetAll();
@@ -52,6 +56,9 @@ public class WorkerServiceIntegrationTests
         tasks[0].Status.ShouldBe(QueuedTaskStatus.Completed);
         tasks[0].LastExecutionUtc.ShouldNotBeNull();
         tasks[0].Exception.ShouldBeNull();
+
+        Should.Throw<ObjectDisposedException>(() => ctsToken?.Token);
+        _cancSourceProvider.TryGet(taskId).ShouldBeNull();
 
         var cts = new CancellationTokenSource();
         cts.CancelAfter(2000);
@@ -62,7 +69,7 @@ public class WorkerServiceIntegrationTests
     }
 
     [Fact]
-    public async Task Should_cancel_task()
+    public async Task Should_cancel_non_started_task_and_not_creating_cancellation_source()
     {
         await _host.StartAsync();
 
@@ -76,7 +83,9 @@ public class WorkerServiceIntegrationTests
 
         await Task.Delay(200);
 
-        var pt = await _storage.RetrievePendingTasks();
+        _cancSourceProvider.TryGet(taskId).ShouldBeNull();
+
+        var pt = await _storage.RetrievePending();
         pt.Length.ShouldBe(0);
 
         var tasks = await _storage.GetAll();
@@ -85,6 +94,43 @@ public class WorkerServiceIntegrationTests
         tasks[0].Status.ShouldBe(QueuedTaskStatus.Cancelled);
         tasks[0].LastExecutionUtc.ShouldNotBeNull();
         tasks[0].Exception.ShouldBeNull();
+
+        var cts = new CancellationTokenSource();
+        cts.CancelAfter(2000);
+
+        await _host.StopAsync(cts.Token);
+
+        TestTaskConcurrent1.Counter.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task Should_cancel_started_task_and_relative_cancellation_source()
+    {
+        await _host.StartAsync();
+
+        var task = new TestTaskConcurrent1();
+        TestTaskConcurrent1.Counter = 0;
+        var taskId = await _dispatcher.Dispatch(task);
+
+        await Task.Delay(100);
+        var ctsToken = _cancSourceProvider.TryGet(taskId);
+
+        await _dispatcher.Cancel(taskId);
+
+        await Task.Delay(200);
+
+        var pt = await _storage.RetrievePending();
+        pt.Length.ShouldBe(0);
+
+        var tasks = await _storage.GetAll();
+
+        tasks.Length.ShouldBe(1);
+        tasks[0].Status.ShouldBe(QueuedTaskStatus.Cancelled);
+        tasks[0].LastExecutionUtc.ShouldNotBeNull();
+        tasks[0].Exception.ShouldBeNull();
+
+        Should.Throw<ObjectDisposedException>(() => ctsToken?.Token);
+        _cancSourceProvider.TryGet(taskId).ShouldBeNull();
 
         var cts = new CancellationTokenSource();
         cts.CancelAfter(2000);
@@ -110,18 +156,18 @@ public class WorkerServiceIntegrationTests
 
         var task = new TestTaskConcurrent1();
         TestTaskConcurrent1.Counter = 0;
-        var taskId = await _dispatcher.Dispatch(task);
+        await _dispatcher.Dispatch(task);
 
         var cts = new CancellationTokenSource();
 
-        await Task.Delay(300);
+        await Task.Delay(200);
 
         cts.CancelAfter(50);
         await _host.StopAsync(cts.Token);
 
         await Task.Delay(300);
 
-        var pt = await _storage.RetrievePendingTasks();
+        var pt = await _storage.RetrievePending();
         pt.Length.ShouldBe(1);
 
         var tasks = await _storage.GetAll();
@@ -136,6 +182,7 @@ public class WorkerServiceIntegrationTests
         TestTaskConcurrent1.Counter.ShouldBe(0);
     }
 
+
     [Fact]
     public async Task Should_execute_task_with_standard_retry_policy()
     {
@@ -147,7 +194,7 @@ public class WorkerServiceIntegrationTests
 
         await Task.Delay(1600);
 
-        var pt = await _storage.RetrievePendingTasks();
+        var pt = await _storage.RetrievePending();
         pt.Length.ShouldBe(0);
 
         var tasks = await _storage.GetAll();
@@ -176,7 +223,7 @@ public class WorkerServiceIntegrationTests
 
         await Task.Delay(700);
 
-        var pt = await _storage.RetrievePendingTasks();
+        var pt = await _storage.RetrievePending();
         pt.Length.ShouldBe(0);
 
         var tasks = await _storage.GetAll();
@@ -205,7 +252,7 @@ public class WorkerServiceIntegrationTests
 
         await Task.Delay(900);
 
-        var pt = await _storage.RetrievePendingTasks();
+        var pt = await _storage.RetrievePending();
         pt.Length.ShouldBe(0);
 
         var tasks = await _storage.GetAll();
@@ -233,7 +280,7 @@ public class WorkerServiceIntegrationTests
 
         await Task.Delay(1600);
 
-        var pt = await _storage.RetrievePendingTasks();
+        var pt = await _storage.RetrievePending();
         pt.Length.ShouldBe(0);
 
         var tasks = await _storage.GetAll();
@@ -266,7 +313,7 @@ public class WorkerServiceIntegrationTests
         dequeued = await _workerQueue.Dequeue(CancellationToken.None);
         dequeued.Task.ShouldBe(task2);
 
-        var pt = await _storage.RetrievePendingTasks();
+        var pt = await _storage.RetrievePending();
         pt.Length.ShouldBe(2);
 
         await _host.StartAsync();
@@ -377,6 +424,9 @@ public class WorkerServiceIntegrationTests
         _workerQueue = _host.Services.GetRequiredService<IWorkerQueue>();
 
         await _host.StartAsync();
+
+        TestTaskConcurrent1.Counter = 0;
+        TestTaskConcurrent2.Counter = 0;
 
         var task1 = new TestTaskConcurrent1();
         await _dispatcher.Dispatch(task1);

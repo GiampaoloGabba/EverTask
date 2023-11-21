@@ -1,11 +1,4 @@
-﻿using EverTask.Dispatcher;
-using EverTask.Logger;
-using EverTask.Monitoring;
-using EverTask.Resilience;
-using EverTask.Scheduler;
-using Microsoft.Extensions.Hosting;
-
-namespace Microsoft.Extensions.DependencyInjection;
+﻿namespace Microsoft.Extensions.DependencyInjection;
 
 public static class ServiceCollectionExtensions
 {
@@ -25,9 +18,10 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IWorkerBlacklist, WorkerBlacklist>();
         services.TryAddSingleton<IWorkerQueue, WorkerQueue>();
         services.TryAddSingleton<IScheduler, TimerScheduler>();
-        services.AddSingleton<ITaskDispatcherInternal, TaskDispatcher>();
-        services.AddSingleton<ITaskDispatcher>(provider => provider.GetRequiredService<ITaskDispatcherInternal>());
-        services.AddSingleton<IEverTaskWorkerExecutor, WorkerExecutor>();
+        services.TryAddSingleton<ITaskDispatcherInternal, Dispatcher>();
+        services.TryAddSingleton<ITaskDispatcher>(provider => provider.GetRequiredService<ITaskDispatcherInternal>());
+        services.TryAddSingleton<ICancellationSourceProvider, CancellationSourceProvider>();
+        services.TryAddSingleton<IEverTaskWorkerExecutor, WorkerExecutor>();
         services.AddHostedService<WorkerService>();
         services.AddEverTaskHandlers(options);
 

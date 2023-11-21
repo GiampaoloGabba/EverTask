@@ -49,12 +49,27 @@ public class TaskStoreEfDbContext(
                     .HasForeignKey(af => af.QueuedTaskId)
                     .OnDelete(DeleteBehavior.Cascade);
 
+        modelBuilder.Entity<QueuedTask>()
+                    .HasMany(a => a.RunsAudits)
+                    .WithOne(af => af.QueuedTask)
+                    .HasForeignKey(af => af.QueuedTaskId)
+                    .OnDelete(DeleteBehavior.Cascade);
+
         modelBuilder.Entity<StatusAudit>()
                     .HasIndex(q => q.QueuedTaskId)
                     .IsUnique(false);
 
         modelBuilder.Entity<StatusAudit>()
                     .Property(e => e.NewStatus)
+                    .HasConversion<string>().HasMaxLength(15)
+                    .IsRequired();
+
+        modelBuilder.Entity<RunsAudit>()
+                    .HasIndex(q => q.QueuedTaskId)
+                    .IsUnique(false);
+
+        modelBuilder.Entity<RunsAudit>()
+                    .Property(e => e.Status)
                     .HasConversion<string>().HasMaxLength(15)
                     .IsRequired();
     }

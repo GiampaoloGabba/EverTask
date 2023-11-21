@@ -26,6 +26,7 @@ public class QueueTests
             new TestTaskHanlder2(),
             null,
             null!,
+            null!,
             null,
             null,
             null,
@@ -43,10 +44,10 @@ public class QueueTests
     [Fact]
     public async Task Should_update_persisted_task_status()
     {
-        await _memoryStorage.PersistTask(_executor.ToQueuedTask());
+        await _memoryStorage.Persist(_executor.ToQueuedTask());
 
         await _workerQueue.Queue(_executor);
-        var persist = await _memoryStorage.RetrievePendingTasks();
+        var persist = await _memoryStorage.RetrievePending();
         persist.Length.ShouldBe(1);
         persist[0].Status.ShouldBe(QueuedTaskStatus.Queued);
     }
@@ -54,10 +55,10 @@ public class QueueTests
     [Fact]
     public async Task Should_update_Audit_correctly_when_updating_status()
     {
-        await _memoryStorage.PersistTask(_executor.ToQueuedTask());
+        await _memoryStorage.Persist(_executor.ToQueuedTask());
 
         await _workerQueue.Queue(_executor);
-        var persist = await _memoryStorage.RetrievePendingTasks();
+        var persist = await _memoryStorage.RetrievePending();
         persist.Length.ShouldBe(1);
         persist[0].Status.ShouldBe(QueuedTaskStatus.Queued);
 

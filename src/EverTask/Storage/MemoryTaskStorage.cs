@@ -1,5 +1,4 @@
 ﻿using System.Linq.Expressions;
-using EverTask.Logger;
 
 namespace EverTask.Storage;
 
@@ -21,7 +20,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
     }
 
     /// <inheritdoc />
-    public Task PersistTask(QueuedTask task, CancellationToken ct = default)
+    public Task Persist(QueuedTask task, CancellationToken ct = default)
     {
         logger.LogInformation("Persist Task: {type}", task.Type);
 
@@ -30,37 +29,38 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
     }
 
     /// <inheritdoc />
-    public Task<QueuedTask[]> RetrievePendingTasks(CancellationToken ct = default)
+    public Task<QueuedTask[]> RetrievePending(CancellationToken ct = default)
     {
         logger.LogInformation("Retrieve Pending Tasks");
 
-        var pending = _pendingTasks.Where(t => t.Status == QueuedTaskStatus.Queued ||
-                                                t.Status == QueuedTaskStatus.Pending ||
-                                                t.Status == QueuedTaskStatus.ServiceStopped ||
-                                                t.Status == QueuedTaskStatus.InProgress);
+        var pending = _pendingTasks.Where(t => (t.MaxRuns == null || t.CurrentRunCount <= t.MaxRuns)
+                                               && (t.Status == QueuedTaskStatus.Queued ||
+                                                   t.Status == QueuedTaskStatus.Pending ||
+                                                   t.Status == QueuedTaskStatus.ServiceStopped ||
+                                                   t.Status == QueuedTaskStatus.InProgress));
         return Task.FromResult(pending.ToArray());
     }
 
     /// <inheritdoc />
-    public Task SetTaskQueued(Guid taskId, CancellationToken ct = default) =>
-        SetTaskStatus(taskId, QueuedTaskStatus.Queued, null, ct);
+    public Task SetQueued(Guid taskId, CancellationToken ct = default) =>
+        SetStatus(taskId, QueuedTaskStatus.Queued, null, ct);
 
     /// <inheritdoc />
-    public Task SetTaskInProgress(Guid taskId, CancellationToken ct = default) =>
-        SetTaskStatus(taskId, QueuedTaskStatus.InProgress, null, ct);
+    public Task SetInProgress(Guid taskId, CancellationToken ct = default) =>
+        SetStatus(taskId, QueuedTaskStatus.InProgress, null, ct);
 
     /// <inheritdoc />
-    public Task SetTaskCompleted(Guid taskId) =>
-        SetTaskStatus(taskId, QueuedTaskStatus.Completed);
+    public Task SetCompleted(Guid taskId) =>
+        SetStatus(taskId, QueuedTaskStatus.Completed);
 
-    public Task SetTaskCancelledByUser(Guid taskId) =>
-        SetTaskStatus(taskId, QueuedTaskStatus.Cancelled);
+    public Task SetCancelledByUser(Guid taskId) =>
+        SetStatus(taskId, QueuedTaskStatus.Cancelled);
 
-    public Task SetTaskCancelledByService(Guid taskId, Exception exception) =>
-        SetTaskStatus(taskId, QueuedTaskStatus.ServiceStopped, exception);
+    public Task SetCancelledByService(Guid taskId, Exception exception) =>
+        SetStatus(taskId, QueuedTaskStatus.ServiceStopped, exception);
 
     /// <inheritdoc />
-    public Task SetTaskStatus(Guid taskId, QueuedTaskStatus status, Exception? exception = null,
+    public Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception = null,
                               CancellationToken ct = default)
     {
         logger.LogInformation("Set Task {taskId} with Status {status}", taskId, status);
@@ -79,7 +79,38 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
                 NewStatus    = status,
                 Exception    = exception.ToDetailedString()
             });
+        }
 
+        return Task.CompletedTask;
+    }
+
+    public Task<int> GetCurrentRunCount(Guid taskId)
+    {
+        logger.LogInformation("Get the current run counter for Task {taskId}", taskId);
+        var task = _pendingTasks.FirstOrDefault(x => x.Id == taskId);
+
+        return Task.FromResult(task?.CurrentRunCount ?? 1);
+    }
+
+    public Task UpdateCurrentRun(Guid taskId, DateTimeOffset? nextRun)
+    {
+        logger.LogInformation("Update the current run counter for Task {taskId}", taskId);
+        var task = _pendingTasks.FirstOrDefault(x => x.Id == taskId);
+
+        if (task != null)
+        {
+            task.RunsAudits.Add(new RunsAudit
+            {
+                QueuedTaskId = taskId,
+                ExecutedAt   = task.LastExecutionUtc ?? DateTimeOffset.UtcNow,
+                Status       = task.Status,
+                Exception    = task.Exception
+            });
+
+            task.NextRunUtc = nextRun;
+            var currentRun = task.CurrentRunCount ?? 0;
+
+            task.CurrentRunCount = currentRun + 1;
         }
 
         return Task.CompletedTask;

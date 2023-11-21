@@ -1,6 +1,4 @@
-﻿using EverTask.Logger;
-
-namespace EverTask.Scheduler;
+﻿namespace EverTask.Scheduler;
 
 public class TimerScheduler : IScheduler
 {
@@ -21,32 +19,32 @@ public class TimerScheduler : IScheduler
         _timer           = new Timer(TimerCallback, null, Timeout.Infinite, Timeout.Infinite);
     }
 
-    internal ConcurrentPriorityQueue<TaskHandlerExecutor, DateTimeOffset> GetQueue()
-    {
-        return _queue;
-    }
+    internal ConcurrentPriorityQueue<TaskHandlerExecutor, DateTimeOffset> GetQueue() => _queue;
 
-    public void Schedule(TaskHandlerExecutor item)
+    public void Schedule(TaskHandlerExecutor item, DateTimeOffset? nextRecurringRun = null)
     {
-        ArgumentNullException.ThrowIfNull(item.ExecutionTime);
-        _queue.Enqueue(item, item.ExecutionTime.Value);
+        if (item.RecurringTask != null && nextRecurringRun != null)
+        {
+            _logger.LogWarning("Next run {NextRecurringRun}", nextRecurringRun.Value);
+            _queue.Enqueue(item, nextRecurringRun.Value);
+            UpdateTimer();
+        }
+        else
+        {
+            ArgumentNullException.ThrowIfNull(item.ExecutionTime);
+            _queue.Enqueue(item, item.ExecutionTime.Value);
+        }
 
-        // Calcola il prossimo tempo di attivazione del timer
         UpdateTimer();
     }
 
     internal void TimerCallback(object? state)
     {
-        while (_queue.TryPeek(out var item, out DateTimeOffset nextDeliveryTime) &&
-               nextDeliveryTime <= DateTimeOffset.UtcNow)
+        while (_queue.TryPeek(out var item, out var nextDeliveryTime) && nextDeliveryTime <= DateTimeOffset.UtcNow)
         {
             if (_queue.TryDequeue(out item, out _))
-            {
                 ProcessItem(item);
-            }
         }
-
-        // Update timer for the next event
         UpdateTimer();
     }
 
@@ -66,12 +64,10 @@ public class TimerScheduler : IScheduler
         }
     }
 
-    private void ProcessItem(TaskHandlerExecutor item)
-    {
-        DispatcherQueueAsync(item).ConfigureAwait(false);
-    }
+    private void ProcessItem(TaskHandlerExecutor item) =>
+        DispatchToWorkerQueue(item).ConfigureAwait(false);
 
-    internal async Task DispatcherQueueAsync(TaskHandlerExecutor item)
+    internal async Task DispatchToWorkerQueue(TaskHandlerExecutor item)
     {
         try
         {
@@ -82,7 +78,7 @@ public class TimerScheduler : IScheduler
             _logger.LogError(ex, "Unable to dispatch task with id {taskId}.", item.PersistenceId);
             if (_taskStorage != null)
                 await _taskStorage
-                      .SetTaskStatus(item.PersistenceId, QueuedTaskStatus.Failed, ex, CancellationToken.None)
+                      .SetStatus(item.PersistenceId, QueuedTaskStatus.Failed, ex, CancellationToken.None)
                       .ConfigureAwait(false);
         }
     }

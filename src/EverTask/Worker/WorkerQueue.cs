@@ -1,6 +1,4 @@
-﻿using EverTask.Logger;
-
-namespace EverTask.Worker;
+﻿namespace EverTask.Worker;
 
 public class WorkerQueue(
     EverTaskServiceConfiguration configuration,
@@ -19,7 +17,7 @@ public class WorkerQueue(
             return;
 
         if (taskStorage != null)
-            await taskStorage.SetTaskQueued(task.PersistenceId).ConfigureAwait(false);
+            await taskStorage.SetQueued(task.PersistenceId).ConfigureAwait(false);
         try
         {
             logger.LogInformation("Queuing task with id {taskId}", task.PersistenceId);
@@ -29,7 +27,7 @@ public class WorkerQueue(
         {
             logger.LogError(e, "Unable to queuing task with id {taskId}", task.PersistenceId);
             if (taskStorage != null)
-                await taskStorage.SetTaskStatus(task.PersistenceId, QueuedTaskStatus.Failed, e).ConfigureAwait(false);
+                await taskStorage.SetStatus(task.PersistenceId, QueuedTaskStatus.Failed, e).ConfigureAwait(false);
         }
     }
 

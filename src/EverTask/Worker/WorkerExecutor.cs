@@ -1,30 +1,29 @@
-﻿using EverTask.Logger;
-using EverTask.Monitoring;
-
-namespace EverTask.Worker;
+﻿namespace EverTask.Worker;
 
 public interface IEverTaskWorkerExecutor
 {
     public event Func<EverTaskEventData, Task>? TaskEventOccurredAsync;
-    internal ValueTask DoWork(TaskHandlerExecutor task, CancellationToken token);
+    internal ValueTask DoWork(TaskHandlerExecutor task, CancellationToken serviceToken);
 }
 
 public class WorkerExecutor(
     IWorkerBlacklist workerBlacklist,
     EverTaskServiceConfiguration configuration,
     IServiceScopeFactory serviceScopeFactory,
+    IScheduler scheduler,
+    ICancellationSourceProvider cancellationSourceProvider,
     IEverTaskLogger<WorkerExecutor> logger) : IEverTaskWorkerExecutor
 {
     public event Func<EverTaskEventData, Task>? TaskEventOccurredAsync;
 
-    public async ValueTask DoWork(TaskHandlerExecutor task, CancellationToken token)
+    public async ValueTask DoWork(TaskHandlerExecutor task, CancellationToken serviceToken)
     {
-        using var scope       = serviceScopeFactory.CreateScope();
-        var       taskStorage = scope.ServiceProvider.GetService<ITaskStorage>();
+        using var     scope       = serviceScopeFactory.CreateScope();
+        ITaskStorage? taskStorage = scope.ServiceProvider.GetService<ITaskStorage>();
 
         try
         {
-            token.ThrowIfCancellationRequested();
+            serviceToken.ThrowIfCancellationRequested();
 
             if (workerBlacklist.IsBlacklisted(task.PersistenceId))
             {
@@ -34,26 +33,20 @@ public class WorkerExecutor(
                 return;
             }
 
-            token.ThrowIfCancellationRequested();
-
             RegisterInfo(task, "Starting task with id {0}.", task.PersistenceId);
 
-            token.ThrowIfCancellationRequested();
-
             if (taskStorage != null)
-            {
-                await taskStorage.SetTaskInProgress(task.PersistenceId, token).ConfigureAwait(false);
-                token.ThrowIfCancellationRequested();
-            }
+                await taskStorage.SetInProgress(task.PersistenceId, serviceToken).ConfigureAwait(false);
 
             await ExecuteCallback(task.HandlerStartedCallback, task, "Started").ConfigureAwait(false);
 
-            token.ThrowIfCancellationRequested();
+            serviceToken.ThrowIfCancellationRequested();
+
+            var taskToken = cancellationSourceProvider.CreateToken(task.PersistenceId, serviceToken);
 
             var handlerOptions = task.Handler as IEverTaskHandlerOptions;
-
-            var retryPolicy = handlerOptions?.RetryPolicy ?? configuration.DefaultRetryPolicy;
-            var timeout     = handlerOptions?.Timeout ?? configuration.DefaultTimeout;
+            var retryPolicy    = handlerOptions?.RetryPolicy ?? configuration.DefaultRetryPolicy;
+            var timeout        = handlerOptions?.Timeout ?? configuration.DefaultTimeout;
 
             await retryPolicy.Execute(async retryToken =>
             {
@@ -68,9 +61,9 @@ public class WorkerExecutor(
                 {
                     await task.HandlerCallback.Invoke(task.Task, retryToken).ConfigureAwait(false);
                 }
-            }, token).ConfigureAwait(false);
+            }, taskToken).ConfigureAwait(false);
 
-            token.ThrowIfCancellationRequested();
+            serviceToken.ThrowIfCancellationRequested();
 
             if (task.Handler is IAsyncDisposable asyncDisposable)
             {
@@ -85,7 +78,7 @@ public class WorkerExecutor(
             }
 
             if (taskStorage != null)
-                await taskStorage.SetTaskCompleted(task.PersistenceId).ConfigureAwait(false);
+                await taskStorage.SetCompleted(task.PersistenceId).ConfigureAwait(false);
 
             await ExecuteCallback(task.HandlerCompletedCallback, task, "Completed").ConfigureAwait(false);
 
@@ -94,7 +87,13 @@ public class WorkerExecutor(
         catch (OperationCanceledException ex)
         {
             if (taskStorage != null)
-                await taskStorage.SetTaskCancelledByService(task.PersistenceId, ex).ConfigureAwait(false);
+            {
+                if (serviceToken.IsCancellationRequested)
+                    await taskStorage.SetCancelledByService(task.PersistenceId, ex).ConfigureAwait(false);
+                else
+                    await taskStorage.SetCancelledByUser(task.PersistenceId).ConfigureAwait(false);
+            }
+
 
             await ExecuteCallback(task.HandlerErrorCallback, task, ex,
                 $"Task with id {task.PersistenceId} was cancelled").ConfigureAwait(false);
@@ -104,13 +103,34 @@ public class WorkerExecutor(
         catch (Exception ex)
         {
             if (taskStorage != null)
-                await taskStorage.SetTaskStatus(task.PersistenceId, QueuedTaskStatus.Failed, ex)
+                await taskStorage.SetStatus(task.PersistenceId, QueuedTaskStatus.Failed, ex)
                                  .ConfigureAwait(false);
 
             await ExecuteCallback(task.HandlerErrorCallback, task, ex,
                 $"Error occurred executing the task with id {task.PersistenceId}").ConfigureAwait(false);
 
             RegisterError(ex, task, "Error occurred executing task with id {0}.", task.PersistenceId);
+        }
+        finally
+        {
+            cancellationSourceProvider.Delete(task.PersistenceId);
+            await QueueNextOccourrence(task, taskStorage);
+        }
+    }
+
+    private async Task QueueNextOccourrence(TaskHandlerExecutor task, ITaskStorage? taskStorage)
+    {
+        if (task.RecurringTask == null) return;
+
+        if (taskStorage != null)
+        {
+            var currentRun = await taskStorage.GetCurrentRunCount(task.PersistenceId);
+            var nextRun    = task.RecurringTask.CalculateNextRun(DateTimeOffset.UtcNow, currentRun + 1);
+            await taskStorage.UpdateCurrentRun(task.PersistenceId, nextRun)
+                             .ConfigureAwait(false);
+
+            if (nextRun.HasValue)
+                scheduler.Schedule(task, nextRun);
         }
     }
 
@@ -131,6 +151,7 @@ public class WorkerExecutor(
             {
                 throw;
             }
+
             throw new TimeoutException();
         }
     }

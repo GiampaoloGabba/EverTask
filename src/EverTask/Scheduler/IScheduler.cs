@@ -2,5 +2,5 @@
 
 public interface IScheduler
 {
-    void Schedule(TaskHandlerExecutor item);
+    void Schedule(TaskHandlerExecutor item, DateTimeOffset? nextRecurringRun = null);
 }

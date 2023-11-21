@@ -5,6 +5,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Cronos" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
@@ -16,19 +17,6 @@
   <ItemGroup>
     <None Include="..\..\assets\logo-nuget.png" Pack="true" PackagePath="" />
     <None Include="..\..\README.md" Pack="true" PackagePath="" />
-    <None Remove="Scheduler\Builder\**" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Compile Remove="Scheduler\Builder\**" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <EmbeddedResource Remove="Scheduler\Builder\**" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Folder Include="Resilience\" />
   </ItemGroup>
 
 </Project>

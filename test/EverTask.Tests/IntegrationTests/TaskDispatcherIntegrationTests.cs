@@ -108,15 +108,19 @@ public class TaskDispatcherIntegrationTests
         var dispatcher = provider.GetRequiredService<ITaskDispatcher>();
         var storage    = provider.GetRequiredService<ITaskStorage>();
 
-        await dispatcher.Dispatch(new TestTaskRequest("Test"));
+        await dispatcher.Dispatch(new TestTaskRequest("Test"), builder => builder.Schedule().UseCron("5 * * * *"));
 
-        var pending = await storage.RetrievePendingTasks();
+        var pending = await storage.GetAll();
         pending.Length.ShouldBe(1);
         pending[0].Request.ShouldBe("{\"Name\":\"Test\"}");
-        pending[0].Status.ShouldBe(QueuedTaskStatus.Queued);
+        pending[0].Status.ShouldBe(QueuedTaskStatus.WaitingQueue);
         pending[0].Type.ShouldBe(typeof(TestTaskRequest).AssemblyQualifiedName);
         pending[0].Handler.ShouldBe(typeof(TestTaskHanlder).AssemblyQualifiedName);
         pending[0].Id.ShouldBeOfType<Guid>();
+        pending[0].IsRecurring.ShouldBe(true);
+        pending[0].RecurringInfo.ShouldBe("Use Cron expression: 5 * * * *");
+        pending[0].RecurringTask.ShouldBe("{\"RunNow\":false,\"InitialDelay\":null,\"SpecificRunTime\":null,\"MinuteInterval\":null,\"DayInterval\":null,\"MonthInterval\":null,\"MaxRuns\":1,\"CronExpression\":\"5 * * * *\"}");
+
     }
 
     [Fact]
@@ -147,5 +151,19 @@ public class TaskDispatcherIntegrationTests
         Assert.NotNull(dequeued.ExecutionTime);
 
         dequeued.ExecutionTime!.Value.ShouldBe(futureDate);
+    }
+
+    [Fact]
+    public async Task Should_put_Recurring_Item_into_Timed_Scheduler()
+    {
+        var task       = new TestTaskRequest("Test");
+        await _dispatcher.Dispatch(task, recurring=>recurring.Schedule().UseCron("5 * * * *"));
+
+        var dequeued = ((TimerScheduler)_scheduler).GetQueue().Peek();
+        dequeued.Task.ShouldBe(task);
+
+        Assert.NotNull(dequeued.ExecutionTime);
+
+        dequeued.ExecutionTime!.Value.ShouldBeGreaterThan(DateTimeOffset.UtcNow);
     }
 }

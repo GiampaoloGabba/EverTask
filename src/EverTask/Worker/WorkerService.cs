@@ -1,6 +1,4 @@
-﻿using EverTask.Dispatcher;
-using EverTask.Logger;
-using Microsoft.Extensions.Hosting;
+﻿using Microsoft.Extensions.Hosting;
 
 namespace EverTask.Worker;
 
@@ -40,7 +38,7 @@ public class WorkerService(
             return;
         }
 
-        var pendingTasks = await taskStorage.RetrievePendingTasks(ct).ConfigureAwait(false);
+        var pendingTasks = await taskStorage.RetrievePending(ct).ConfigureAwait(false);
         var contTask     = 0;
         logger.LogTrace("Found {count} tasks to execute", pendingTasks.Length);
 
@@ -48,7 +46,8 @@ public class WorkerService(
         {
             contTask++;
             logger.LogTrace("Processing task {task} of {count} tasks to execute", contTask, pendingTasks.Length);
-            IEverTask? task = null;
+            IEverTask?     task          = null;
+            RecurringTask? scheduledTask = null;
 
             try
             {
@@ -63,22 +62,34 @@ public class WorkerService(
                 logger.LogError(e, "Unable to deserialize task with id {taskId}.", taskInfo.Id);
             }
 
+            try
+            {
+                if (!string.IsNullOrEmpty(taskInfo.RecurringTask))
+                {
+                    scheduledTask = JsonConvert.DeserializeObject<RecurringTask>(taskInfo.RecurringTask);
+                }
+            }
+            catch (Exception e)
+            {
+                logger.LogError(e, "Unable to deserialize recurring task info with id {taskId}.", taskInfo.Id);
+            }
+
             if (task != null)
             {
                 try
                 {
-                    await taskDispatcher.ExecuteDispatch(task, taskInfo.ScheduledExecutionUtc, ct, taskInfo.Id)
+                    await taskDispatcher.ExecuteDispatch(task, taskInfo.ScheduledExecutionUtc, scheduledTask, taskInfo.CurrentRunCount, ct, taskInfo.Id)
                                         .ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
-                    await taskStorage.SetTaskStatus(taskInfo.Id, QueuedTaskStatus.Failed, ex, ct).ConfigureAwait(false);
+                    await taskStorage.SetStatus(taskInfo.Id, QueuedTaskStatus.Failed, ex, ct).ConfigureAwait(false);
                     logger.LogError(ex, "Error occurred executing task with id {taskId}.", taskInfo.Id);
                 }
             }
             else
             {
-                await taskStorage.SetTaskStatus(
+                await taskStorage.SetStatus(
                     taskInfo.Id,
                     QueuedTaskStatus.Failed,
                     new Exception("Unable to create the IBackground task from the specified properties"),

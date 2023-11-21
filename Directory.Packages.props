@@ -48,6 +48,7 @@
     <PackageVersion Include="Microsoft.EntityFrameworkCore.InMemory" Version="7.0.14" />
   </ItemGroup>
   <ItemGroup>
+    <PackageVersion Include="Cronos" Version="0.7.1" />
     <PackageVersion Include="Newtonsoft.Json" Version="13.0.3" />
     <PackageVersion Include="Serilog.Sinks.Console" Version="5.0.0" />
   </ItemGroup>

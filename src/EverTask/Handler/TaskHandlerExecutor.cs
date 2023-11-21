@@ -8,6 +8,7 @@ public record TaskHandlerExecutor(
     IEverTask Task,
     object Handler,
     DateTimeOffset? ExecutionTime,
+    RecurringTask? RecurringTask,
     Func<IEverTask, CancellationToken, Task> HandlerCallback,
     Func<Guid, Exception?, string, ValueTask>? HandlerErrorCallback,
     Func<Guid, ValueTask>? HandlerStartedCallback,
@@ -21,9 +22,24 @@ public static class TaskHandlerExecutorExtensions
         ArgumentNullException.ThrowIfNull(executor.Task);
         ArgumentNullException.ThrowIfNull(executor.Handler);
 
-        var request       = JsonConvert.SerializeObject(executor.Task);
-        var requestType   = executor.Task.GetType().AssemblyQualifiedName;
-        var handlerType   = executor.Handler.GetType().AssemblyQualifiedName;
+        var request     = JsonConvert.SerializeObject(executor.Task);
+        var requestType = executor.Task.GetType().AssemblyQualifiedName;
+        var handlerType = executor.Handler.GetType().AssemblyQualifiedName;
+
+        bool            isRecurring      = false;
+        string?         scheduleTask     = null;
+        DateTimeOffset? nextRun          = null;
+        string?         scheduleTaskInfo = null;
+        int?            maxRuns          = null;
+
+        if (executor.RecurringTask != null)
+        {
+            scheduleTask     = JsonConvert.SerializeObject(executor.RecurringTask);
+            isRecurring      = true;
+            nextRun          = executor.RecurringTask.CalculateNextRun(DateTimeOffset.UtcNow, 0);
+            scheduleTaskInfo = executor.RecurringTask.ToString();
+            maxRuns          = executor.RecurringTask.MaxRuns;
+        }
 
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(requestType);
@@ -37,7 +53,13 @@ public static class TaskHandlerExecutorExtensions
             Handler               = handlerType,
             Status                = QueuedTaskStatus.WaitingQueue,
             CreatedAtUtc          = DateTimeOffset.UtcNow,
-            ScheduledExecutionUtc = executor.ExecutionTime
+            ScheduledExecutionUtc = executor.ExecutionTime,
+            IsRecurring           = isRecurring,
+            RecurringTask         = scheduleTask,
+            RecurringInfo         = scheduleTaskInfo,
+            MaxRuns               = maxRuns,
+            NextRunUtc            = nextRun,
+            CurrentRunCount       = 0
         };
     }
 }

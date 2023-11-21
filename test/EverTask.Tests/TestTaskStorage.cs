@@ -15,7 +15,7 @@ public class TestTaskStorage : ITaskStorage
         return Task.FromResult(Array.Empty<QueuedTask>());
     }
 
-    public Task PersistTask(QueuedTask executor, CancellationToken ct = default)
+    public Task Persist(QueuedTask executor, CancellationToken ct = default)
     {
         if (executor.Type.Contains("ThrowStorageError"))
             throw new Exception();
@@ -23,37 +23,47 @@ public class TestTaskStorage : ITaskStorage
         return Task.CompletedTask;
     }
 
-    public Task<QueuedTask[]> RetrievePendingTasks(CancellationToken ct = default)
+    public Task<QueuedTask[]> RetrievePending(CancellationToken ct = default)
     {
         return Task.FromResult(Array.Empty<QueuedTask>());
     }
 
-    public Task SetTaskQueued(Guid taskId, CancellationToken ct = default)
+    public Task SetQueued(Guid taskId, CancellationToken ct = default)
     {
         return Task.CompletedTask;
     }
 
-    public Task SetTaskInProgress(Guid taskId, CancellationToken ct = default)
+    public Task SetInProgress(Guid taskId, CancellationToken ct = default)
     {
         return Task.CompletedTask;
     }
 
-    public Task SetTaskCompleted(Guid taskId)
+    public Task SetCompleted(Guid taskId)
     {
         return Task.CompletedTask;
     }
 
-    public Task SetTaskCancelledByUser(Guid taskId)
+    public Task SetCancelledByUser(Guid taskId)
     {
         return Task.CompletedTask;
     }
 
-    public Task SetTaskCancelledByService(Guid taskId, Exception exception)
+    public Task SetCancelledByService(Guid taskId, Exception exception)
     {
         return Task.CompletedTask;
     }
 
-    public Task SetTaskStatus(Guid taskId, QueuedTaskStatus status, Exception? exception = null, CancellationToken ct = default)
+    public Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception = null, CancellationToken ct = default)
+    {
+        return Task.CompletedTask;
+    }
+
+    public Task<int> GetCurrentRunCount(Guid taskId)
+    {
+        return Task.FromResult(0);
+    }
+
+    public Task UpdateCurrentRun(Guid taskId, DateTimeOffset? nextRun)
     {
         return Task.CompletedTask;
     }
