@@ -86,7 +86,7 @@ internal static class HandlerRegistrar
         }
     }
 
-    private static bool CouldCloseTo(this Type openConcretion, Type closedInterface)
+    internal static bool CouldCloseTo(this Type openConcretion, Type closedInterface)
     {
         var openInterface = closedInterface.GetGenericTypeDefinition();
         var arguments     = closedInterface.GenericTypeArguments;
