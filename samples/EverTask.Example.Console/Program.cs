@@ -35,7 +35,7 @@ var scheduleTime = DateTimeOffset.Now.AddSeconds(10);
 await dispatcher.Dispatch(
     new SampleTaskRequest(
         "|||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||| Hello World every 10 seconds for 3 times** "),
-    taskBuilder => taskBuilder.Schedule().EveryHour().AtMinute(10).MaxRuns(3));
+    taskBuilder => taskBuilder.Schedule().EveryDay().MaxRuns(3));
 
 Console.ReadKey();
 await host.StopAsync();

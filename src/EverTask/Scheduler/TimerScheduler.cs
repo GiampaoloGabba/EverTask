@@ -8,6 +8,10 @@ public class TimerScheduler : IScheduler
     private readonly ConcurrentPriorityQueue<TaskHandlerExecutor, DateTimeOffset> _queue;
     private readonly Timer _timer;
 
+#if DEBUG
+    //for tests purpose
+    internal TimeSpan LastSetDelay { get; private set; }
+#endif
     public TimerScheduler(IWorkerQueue workerQueue,
                           IEverTaskLogger<TimerScheduler> logger,
                           ITaskStorage? taskStorage = null)
@@ -47,7 +51,7 @@ public class TimerScheduler : IScheduler
         UpdateTimer();
     }
 
-    private void UpdateTimer()
+    internal void UpdateTimer()
     {
         if (_queue.TryPeek(out var item, out DateTimeOffset nextDeliveryTime))
         {
@@ -57,17 +61,15 @@ public class TimerScheduler : IScheduler
 
                 if (delay < TimeSpan.Zero) delay = TimeSpan.Zero;
 
-                //todo: to check first
-                //if (delay.TotalDays > 60)
-                 //   delay = TimeSpan.FromDays(1);
+                //no need to put big timers in queue. just recheck sooner if there is something
+                //also the change event is always update when new tasks with big priority are added
+                if (delay >= TimeSpan.FromHours(2)) delay = TimeSpan.FromHours(1.5);
 
+#if DEBUG
+                //for tests purpose
+                LastSetDelay = delay;
+#endif
                 _timer.Change(delay, Timeout.InfiniteTimeSpan);
-            }
-            catch (ArgumentOutOfRangeException ex)
-            {
-                _logger.LogWarning(ex, "The task execution date is too far in the future, unable to set the timer event. IT will retry in 24 hours. Task id {taskId}, execution time {executionTime}", item.PersistenceId, nextDeliveryTime);
-                _timer.Change(TimeSpan.FromDays(1), Timeout.InfiniteTimeSpan);
-
             }
             catch (Exception ex)
             {

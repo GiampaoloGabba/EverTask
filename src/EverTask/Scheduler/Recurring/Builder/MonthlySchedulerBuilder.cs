@@ -14,6 +14,13 @@ public class MonthlySchedulerBuilder(RecurringTask task) : IMonthlySchedulerBuil
         return new DailyTimeSchedulerBuilder(task);
     }
 
+    public IDailyTimeSchedulerBuilder OnDays(params int[] days)
+    {
+        ArgumentNullException.ThrowIfNull(task.MonthInterval);
+        task.MonthInterval.OnDays = days.Distinct().ToArray();
+        return new DailyTimeSchedulerBuilder(task);
+    }
+
     public IDailyTimeSchedulerBuilder OnFirst(DayOfWeek day)
     {
         ArgumentNullException.ThrowIfNull(task.MonthInterval);

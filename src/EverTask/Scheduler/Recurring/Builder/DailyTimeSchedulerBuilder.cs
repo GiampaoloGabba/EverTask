@@ -15,7 +15,7 @@ public class DailyTimeSchedulerBuilder(RecurringTask task) : IDailyTimeScheduler
         return new BuildableSchedulerBuilder(task);
     }
 
-    public IBuildableSchedulerBuilder AtTime(params TimeOnly[] times)
+    public IBuildableSchedulerBuilder AtTimes(params TimeOnly[] times)
     {
         if (task.DayInterval == null && task.MonthInterval == null)
             throw new InvalidOperationException("DayInterval or MonthInterval must be set");

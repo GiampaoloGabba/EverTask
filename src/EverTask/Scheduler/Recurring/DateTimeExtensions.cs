@@ -2,10 +2,8 @@
 
 public static class DateTimeOffsetExtensions
 {
-    public static DateTimeOffset AdjustDayToValidMonthDay(this DateTimeOffset nextMonth, int? day)
+    public static DateTimeOffset AdjustDayToValidMonthDay(this DateTimeOffset nextMonth, int day)
     {
-        day ??= 1;
-
         // Check if the day is valid for the given month
         var daysInMonth = DateTime.DaysInMonth(nextMonth.Year, nextMonth.Month);
         if (day > daysInMonth)
@@ -14,7 +12,7 @@ public static class DateTimeOffsetExtensions
             day = daysInMonth;
         }
 
-        var newMonth = nextMonth.Adjust(day: day.Value);
+        var newMonth = nextMonth.Adjust(day: day);
 
         if (newMonth < nextMonth)
             newMonth = nextMonth.AddMonths(1);
@@ -53,6 +51,24 @@ public static class DateTimeOffsetExtensions
         return dateTime;
     }
 
+    public static DateTimeOffset NextValidDay(this DateTimeOffset dateTime, int[] validDays)
+    {
+        while (!validDays.Contains(dateTime.Day))
+        {
+            dateTime = dateTime.AddDays(1);
+        }
+        return dateTime;
+    }
+
+    public static DateTimeOffset NextValidHour(this DateTimeOffset dateTime, int[] validHour)
+    {
+        while (!validHour.Contains(dateTime.Hour))
+        {
+            dateTime = dateTime.AddHours(1);
+        }
+        return dateTime;
+    }
+
     public static DateTimeOffset NextValidMonth(this DateTimeOffset dateTime, int[] validMonths)
     {
         while (!validMonths.Contains(dateTime.Month))
@@ -68,8 +84,8 @@ public static class DateTimeOffsetExtensions
         {
             dateTime = dateTime.AddDays(1);
 
-            // If you've moved into the next month, reset to the first day of that month
-            if (dateTime.Day > DateTime.DaysInMonth(dateTime.Year, dateTime.Month))
+            // If you moved into the next month, reset to the first day of that month
+            if (dateTime.Day == DateTime.DaysInMonth(dateTime.Year, dateTime.Month))
             {
                 dateTime = dateTime.Adjust(day: 1);
             }

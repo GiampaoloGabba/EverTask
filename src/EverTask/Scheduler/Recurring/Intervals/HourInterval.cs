@@ -1,8 +1,8 @@
 ﻿namespace EverTask.Scheduler.Recurring.Intervals;
 
-public class HourInterval
+public class HourInterval : IInterval
 {
-    //used to serialization/deserialization
+    //used for serialization/deserialization
     public HourInterval() { }
 
     public HourInterval(int interval)
@@ -10,7 +10,31 @@ public class HourInterval
         Interval = interval;
     }
 
-    public int Interval { get; set; }
-    public int OnMinute { get; set; }
-    public int OnSecond { get; set; }
+    public HourInterval(int interval, int[] onHours)
+    {
+        Interval = interval;
+        OnHours = onHours.Distinct().ToArray();
+    }
+
+    public int Interval { get; }
+    public int? OnMinute { get; set; }
+    public int? OnSecond { get; set; }
+    public int[] OnHours { get; set; } = Array.Empty<int>();
+
+
+    public DateTimeOffset? GetNextOccurrence(DateTimeOffset current)
+    {
+        var next = current.AddHours(Interval);
+
+        if (OnHours.Any())
+            next = next.NextValidHour(OnHours);
+
+        if (OnMinute != null)
+            next = next.Adjust(minute: OnMinute);
+
+        if (OnSecond != null)
+            next = next.Adjust(second: OnSecond);
+
+        return next;
+    }
 }

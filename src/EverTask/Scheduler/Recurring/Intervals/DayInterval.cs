@@ -1,8 +1,8 @@
 ﻿namespace EverTask.Scheduler.Recurring.Intervals;
 
-public class DayInterval
+public class DayInterval : IInterval
 {
-    //used to serialization/deserialization
+    //used for serialization/deserialization
     public DayInterval() { }
 
     public DayInterval(int interval)
@@ -16,7 +16,26 @@ public class DayInterval
         OnDays   = onDays.Distinct().ToArray();
     }
 
-    public int         Interval { get; set; } = 1;
+    public int         Interval { get;  } = 1;
     public TimeOnly[]  OnTimes  { get; set; } = [TimeOnly.Parse("00:00")];
-    public DayOfWeek[] OnDays   { get; set; } = Array.Empty<DayOfWeek>();
+    public DayOfWeek[] OnDays   { get; } = Array.Empty<DayOfWeek>();
+
+    public void Validate()
+    {
+        if (Interval == 0 && !OnDays.Any())
+            throw new ArgumentException("Invalid Day Interval, you must specify at least one day.",
+                nameof(DayInterval));
+    }
+
+    public DateTimeOffset? GetNextOccurrence(DateTimeOffset current)
+    {
+        Validate();
+
+        var nextDay = current.AddDays(Interval);
+
+        if (OnDays.Any())
+            nextDay = nextDay.NextValidDayOfWeek(OnDays);
+
+        return nextDay.GetNextRequestedTime(current, OnTimes);
+    }
 }

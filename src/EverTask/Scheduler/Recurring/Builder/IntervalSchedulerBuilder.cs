@@ -6,7 +6,7 @@ public class IntervalSchedulerBuilder(RecurringTask task) : IIntervalSchedulerBu
 {
     public IBuildableSchedulerBuilder UseCron(string cronExpression)
     {
-        task.CronExpression = cronExpression;
+        task.CronInterval = new CronInterval(cronExpression);
         return new BuildableSchedulerBuilder(task);
     }
 
@@ -40,6 +40,12 @@ public class IntervalSchedulerBuilder(RecurringTask task) : IIntervalSchedulerBu
     {
         task.MonthInterval = new MonthInterval(1);
         return new MonthlySchedulerBuilder(task);
+    }
+
+    public IHourSchedulerBuilder OnHours()
+    {
+        task.HourInterval = new HourInterval(1);
+        return new HourSchedulerBuilder(task);
     }
 
     public IDailyTimeSchedulerBuilder OnDays(params DayOfWeek[] days)

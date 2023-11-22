@@ -49,12 +49,13 @@ public interface IMinuteSchedulerBuilder
 public interface IDailyTimeSchedulerBuilder : IBuildableSchedulerBuilder
 {
     IBuildableSchedulerBuilder AtTime(TimeOnly time);
-    IBuildableSchedulerBuilder AtTime(params TimeOnly[] times);
+    IBuildableSchedulerBuilder AtTimes(params TimeOnly[] times);
 }
 
 public interface IMonthlySchedulerBuilder : IBuildableSchedulerBuilder
 {
     IDailyTimeSchedulerBuilder OnDay(int day);
+    IDailyTimeSchedulerBuilder OnDays(params int[] day);
     IDailyTimeSchedulerBuilder OnFirst(DayOfWeek day);
 }
 

@@ -8,134 +8,69 @@ public class RecurringTask
     public bool            RunNow          { get; set; }
     public TimeSpan?       InitialDelay    { get; set; }
     public DateTimeOffset? SpecificRunTime { get; set; }
+    public CronInterval?   CronInterval    { get; set; }
     public SecondInterval? SecondInterval  { get; set; }
     public MinuteInterval? MinuteInterval  { get; set; }
     public HourInterval?   HourInterval    { get; set; }
     public DayInterval?    DayInterval     { get; set; }
     public MonthInterval?  MonthInterval   { get; set; }
-    public int             MaxRuns         { get; set; } = 1;
+    public int?            MaxRuns         { get; set; }
 
-    //saving cronexp as string to easy serialization/deserialization
-    public string? CronExpression { get; set; }
-
-    //used to serialization/deserialization
+    //used for serialization/deserialization
     public RecurringTask() { }
+
 
     public DateTimeOffset? CalculateNextRun(DateTimeOffset current, int currentRun)
     {
         if (currentRun >= MaxRuns) return null;
 
         current = current.ToUniversalTime();
+        var next = GetNextOccurrence(current);
 
-        if (currentRun == 0)
+        DateTimeOffset? runtime = null;
+
+        if (currentRun > 0) return next;
+
+        if (RunNow)
         {
-            DateTimeOffset? runtime = null;
-
-            if (RunNow)
-            {
-                runtime = DateTimeOffset.UtcNow;
-            }
-            else if (SpecificRunTime.HasValue)
-            {
-                runtime = SpecificRunTime.Value.ToUniversalTime();
-            }
-            else if (InitialDelay.HasValue)
-            {
-                runtime = current.Add(InitialDelay.Value);
-            }
-
-            if (runtime.HasValue && runtime.Value <= current.AddSeconds(1))
-            {
-                return runtime.Value;
-            }
+            runtime = DateTimeOffset.UtcNow;
+        }
+        else if (SpecificRunTime.HasValue)
+        {
+            runtime = SpecificRunTime.Value.ToUniversalTime();
+        }
+        else if (InitialDelay.HasValue)
+        {
+            runtime = current.Add(InitialDelay.Value);
         }
 
-        return CalculateNextSchedule(current);
+        if (next == null) return runtime;
+
+        // Return runtime only if it's before next and also before the current time, but not too much before...
+        // and there is at least a 30 seconds gap between runtime and next.
+        // This prevents closely spaced executions in case of delays or missed runs.
+        if (runtime < next && runtime < current.AddSeconds(1) && runtime > current.AddSeconds(-20) && (next.Value - runtime.Value).TotalSeconds >= 30)
+            return runtime;
+
+        return next;
     }
 
-    private DateTimeOffset? CalculateNextSchedule(DateTimeOffset current)
+    private DateTimeOffset? GetNextOccurrence(DateTimeOffset current)
     {
-        if (!string.IsNullOrEmpty(CronExpression))
-            return GetNextCronOccurrence(current);
+        if (!string.IsNullOrEmpty(CronInterval?.CronExpression))
+            return CronInterval.GetNextOccurrence(current);
 
-        var nextRun = GetNextMonthOccurrence(current);
-        nextRun     = GetNextDayOccurrence(nextRun);
-        nextRun     = GetNextHourOccurrence(nextRun);
-        nextRun     = GetNextMinuteOccurrence(nextRun);
-        return GetNextSecondOccurrence(nextRun);
+        var nextRun = MonthInterval?.GetNextOccurrence(current) ?? current;
+        nextRun = DayInterval?.GetNextOccurrence(nextRun) ?? nextRun;
+        nextRun = HourInterval?.GetNextOccurrence(nextRun) ?? nextRun;
+        nextRun = MinuteInterval?.GetNextOccurrence(nextRun) ?? nextRun;
+        nextRun = SecondInterval?.GetNextOccurrence(nextRun) ?? nextRun;
+
+        if (nextRun < current.AddSeconds(1))
+            return null;
+
+        return nextRun;
     }
-
-    private DateTimeOffset? GetNextCronOccurrence(DateTimeOffset current)
-    {
-        if (CronExpression == null) return null;
-
-        var fields = CronExpression.Split(' ');
-
-        var cronParsed = fields.Length switch
-        {
-            6 => Cronos.CronExpression.Parse(CronExpression, CronFormat.IncludeSeconds),
-            5 => Cronos.CronExpression.Parse(CronExpression, CronFormat.Standard),
-            _ => throw new ArgumentException("Invalid Cron Expression", nameof(CronExpression))
-        };
-
-        return cronParsed?.GetNextOccurrence(current, TimeZoneInfo.Utc)?.ToUniversalTime();
-    }
-
-    private DateTimeOffset GetNextMonthOccurrence(DateTimeOffset current)
-    {
-        if (MonthInterval == null) return current;
-
-        if (MonthInterval.Interval == 0 && !MonthInterval.OnMonths.Any())
-            throw new ArgumentException("Invalid Month Interval, you must specify at least one month.",
-                nameof(DayInterval));
-
-        var nextMonth = current.AddMonths(MonthInterval.Interval);
-
-        if (MonthInterval.OnMonths.Any())
-            nextMonth = nextMonth.NextValidMonth(MonthInterval.OnMonths);
-
-        nextMonth = MonthInterval.OnFirst != null
-                        ? nextMonth.FindFirstOccurrenceOfDayOfWeekInMonth(MonthInterval.OnFirst.Value)
-                        : nextMonth.AdjustDayToValidMonthDay(MonthInterval.OnDay)
-                                   .NextValidMonth(MonthInterval.OnMonths);
-
-        return nextMonth.GetNextRequestedTime(current, MonthInterval.OnTimes, false);
-    }
-
-    private DateTimeOffset GetNextDayOccurrence(DateTimeOffset current)
-    {
-        if (DayInterval == null) return current;
-
-        if (DayInterval.Interval == 0 && !DayInterval.OnDays.Any())
-            throw new ArgumentException("Invalid Day Interval, you must specify at least one day.",
-                nameof(DayInterval));
-
-        var nextDay = current.AddDays(DayInterval.Interval);
-
-        if (DayInterval.OnDays.Any())
-            nextDay = nextDay.NextValidDayOfWeek(DayInterval.OnDays);
-
-        return nextDay.GetNextRequestedTime(current, DayInterval.OnTimes);
-    }
-
-    private DateTimeOffset GetNextHourOccurrence(DateTimeOffset current)
-    {
-        if (HourInterval == null) return current;
-
-        var nextHour = current.AddHours(HourInterval.Interval);
-        return nextHour.Adjust(minute: HourInterval.OnMinute, second: HourInterval.OnSecond);
-    }
-
-    private DateTimeOffset GetNextMinuteOccurrence(DateTimeOffset current)
-    {
-        if (MinuteInterval == null) return current;
-
-        var next = current.AddMinutes(MinuteInterval.Interval);
-        return MinuteInterval.OnSecond != 0 ? next.Adjust(second: MinuteInterval.OnSecond) : next;
-    }
-
-    private DateTimeOffset GetNextSecondOccurrence(DateTimeOffset current) =>
-        SecondInterval == null ? current : current.AddSeconds(SecondInterval.Interval);
 
     #region ToString in human readable format
 
@@ -155,23 +90,39 @@ public class RecurringTask
         if (parts.Any())
             parts.Add("then");
 
-        if (CronExpression != null)
+        if (CronInterval != null)
         {
             parts.Add("Use Cron expression:");
-            parts.Add(CronExpression);
+            parts.Add(CronInterval.CronExpression);
             return string.Join(" ", parts);
         }
 
+        if (SecondInterval is { Interval: > 0 }) parts.Add($"every {SecondInterval.Interval} second(s)");
+
         if (MinuteInterval != null)
         {
-            parts.Add($"every {MinuteInterval.Interval} minute(s)");
+            if (MinuteInterval.Interval > 0)
+                parts.Add($"every {MinuteInterval.Interval} minute(s)");
             if (MinuteInterval.OnSecond != 0)
                 parts.Add($"at second {MinuteInterval.OnSecond}");
         }
 
+        if (HourInterval != null)
+        {
+            if (HourInterval.Interval > 0)
+                parts.Add($"every {HourInterval.Interval} hour(s)");
+            if (HourInterval.OnHours.Any())
+                parts.Add($"at hour(s) {string.Join(" - ", HourInterval.OnHours)}");
+            if (HourInterval.OnMinute != null)
+                parts.Add($"at minute {HourInterval.OnMinute}");
+            if (HourInterval.OnSecond != null)
+                parts.Add($"at second {HourInterval.OnSecond}");
+        }
+
         if (DayInterval != null)
         {
-            parts.Add($"every {DayInterval.Interval} day(s)");
+            if (DayInterval.Interval > 0)
+                parts.Add($"every {DayInterval.Interval} day(s)");
             if (DayInterval.OnTimes.Any())
                 parts.Add($"at {string.Join(" - ", DayInterval.OnTimes)}");
             if (DayInterval.OnDays.Any())
@@ -180,11 +131,14 @@ public class RecurringTask
 
         if (MonthInterval != null)
         {
-            parts.Add($"every {MonthInterval.Interval} month(s)");
+            if (MonthInterval.Interval > 0)
+                parts.Add($"every {MonthInterval.Interval} month(s)");
             if (MonthInterval.OnDay != null)
                 parts.Add($"on day {MonthInterval.OnDay}");
             if (MonthInterval.OnFirst != null)
                 parts.Add($"on first {MonthInterval.OnFirst}");
+            if (MonthInterval.OnDays.Any())
+                parts.Add($"on {string.Join(" - ", MonthInterval.OnDays)}");
             if (MonthInterval.OnTimes.Any())
                 parts.Add($"at {string.Join(" - ", MonthInterval.OnTimes)}");
             if (MonthInterval.OnMonths.Any())

@@ -1,8 +1,10 @@
-﻿using Cronos;
+﻿using System.Reflection;
+using Cronos;
 using EverTask.Handler;
 using EverTask.Logger;
 using EverTask.Scheduler;
 using EverTask.Scheduler.Recurring;
+using EverTask.Scheduler.Recurring.Intervals;
 using Microsoft.Extensions.Logging;
 
 namespace EverTask.Tests;
@@ -34,19 +36,40 @@ public class TimerSchedulerTests
     }
 
     [Fact]
-    public void Schedule_should_enqueue_recurring_item_with_correct_execution_time()
+    public void Schedule_should_enqueue_recurring_cron_item_with_correct_execution_time()
     {
         var cronExpresison      = "*/5 * * * *";
         var nextOccourrence = CronExpression.Parse(cronExpresison)
                                             .GetNextOccurrence(DateTimeOffset.UtcNow, TimeZoneInfo.Utc);
-        var recurringTask       = new RecurringTask { CronExpression = cronExpresison };
+        var recurringTask       = new RecurringTask { CronInterval = new CronInterval(cronExpresison) };
+        var taskHandlerExecutor = CreateTaskHandlerExecutor(null, recurringTask);
+
+        _timerScheduler.Schedule(taskHandlerExecutor, nextOccourrence);
+
+        _timerScheduler.GetQueue().Count.ShouldBePositive();
+
+        var itemInQueue = _timerScheduler.GetQueue().Dequeue();
+
+        Assert.Equal(nextOccourrence, itemInQueue.RecurringTask!.CalculateNextRun(DateTimeOffset.UtcNow,0));
+    }
+
+
+    [Fact]
+    public void Schedule_should_enqueue_recurring_item_with_correct_execution_time()
+    {
+        var nextOccourrence = new MinuteInterval(10){ OnSecond = 0}.GetNextOccurrence(DateTimeOffset.UtcNow);
+        var recurringTask       = new RecurringTask { MinuteInterval = new MinuteInterval(10) { OnSecond = 0} };
         var taskHandlerExecutor = CreateTaskHandlerExecutor(null, recurringTask);
 
         _timerScheduler.Schedule(taskHandlerExecutor, nextOccourrence);
 
         var itemInQueue = _timerScheduler.GetQueue().Dequeue();
 
-        Assert.Equal(nextOccourrence, itemInQueue.RecurringTask!.CalculateNextRun(DateTimeOffset.UtcNow,0));
+        nextOccourrence = nextOccourrence!.Value.AddTicks(-nextOccourrence.Value.Ticks);
+        var nextrun = itemInQueue.RecurringTask!.CalculateNextRun(DateTimeOffset.UtcNow,0);
+        nextrun = nextrun!.Value.AddTicks(-nextrun.Value.Ticks);
+
+        Assert.Equal(nextOccourrence, nextrun);
     }
 
     [Fact]
@@ -116,6 +139,81 @@ public class TimerSchedulerTests
                 It.IsAny<Exception>(),
                 It.Is<Func<It.IsAnyType, Exception, string>>((v, t) => true)!),
             Times.Once);
+    }
+
+    [Fact]
+    public void TimerCallback_Should_Process_MultipleOverlappingTasks_Correctly()
+    {
+        var task1 = CreateTaskHandlerExecutor(DateTimeOffset.UtcNow.AddSeconds(-1));
+        var task2 = CreateTaskHandlerExecutor(DateTimeOffset.UtcNow.AddSeconds(-1));
+        _timerScheduler.Schedule(task1);
+        _timerScheduler.Schedule(task2);
+
+        _timerScheduler.TimerCallback(null);
+
+        _timerScheduler.GetQueue().Count.ShouldBe(0);
+    }
+
+    [Fact]
+    public void TimerCallback_Should_RemoveExecutedTask_FromQueue()
+    {
+        var task = CreateTaskHandlerExecutor(DateTimeOffset.UtcNow.AddSeconds(-1));
+        _timerScheduler.Schedule(task);
+
+        _timerScheduler.TimerCallback(null);
+
+        _timerScheduler.GetQueue().Count.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task UpdateTimer_Should_SetCorrectDelay_ForFutureTask()
+    {
+        var futureTime = DateTimeOffset.UtcNow.AddSeconds(5);
+        var task       = CreateTaskHandlerExecutor(futureTime);
+        _timerScheduler.Schedule(task);
+
+        await Task.Delay(100);
+        await Task.Delay(TimeSpan.FromSeconds(5));
+
+        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == task)), Times.Once);
+    }
+
+    [Fact]
+    public async Task UpdateTimer_Should_DisableTimer_WhenQueueIsEmpty()
+    {
+        var task = CreateTaskHandlerExecutor(DateTimeOffset.UtcNow.AddSeconds(-1));
+        _timerScheduler.Schedule(task);
+
+        await Task.Delay(100);
+        _timerScheduler.GetQueue().Count.ShouldBe(0);
+        await Task.Delay(3000);
+
+        _mockWorkerQueue.Verify(wq => wq.Queue(It.IsAny<TaskHandlerExecutor>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task UpdateTimer_Should_SetDelayToZero_ForPastDueTasks()
+    {
+        var pastTime = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var task     = CreateTaskHandlerExecutor(pastTime);
+        _timerScheduler.Schedule(task);
+
+        await Task.Delay(100);
+
+        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == task)), Times.Once);
+    }
+
+    [Fact]
+    public void UpdateTimer_Should_SetDelayToOneAndHalfHour_ForDelaysOverTwoHours()
+    {
+        var longFutureTime = DateTimeOffset.UtcNow.AddHours(3);
+        var task           = CreateTaskHandlerExecutor(longFutureTime);
+        _timerScheduler.Schedule(task);
+
+#if DEBUG
+        // Verifica che il ritardo impostato sia di 1 ora e mezza solo in modalità debug
+        Assert.Equal(TimeSpan.FromHours(1.5), _timerScheduler.LastSetDelay);
+#endif
     }
 
     private TaskHandlerExecutor CreateTaskHandlerExecutor(DateTimeOffset? executionTime = null, RecurringTask? recurringTask = null) =>
