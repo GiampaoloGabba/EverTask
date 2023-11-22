@@ -1,4 +1,6 @@
-﻿namespace EverTask.Handler;
+﻿using EverTask.Scheduler.Recurring;
+
+namespace EverTask.Handler;
 
 // This code was adapted from MediatR by Jimmy Bogard.
 // Specific inspiration was taken from the NotificationHandlerWrapper.cs file.

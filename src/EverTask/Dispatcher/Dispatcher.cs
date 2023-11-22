@@ -1,4 +1,7 @@
-﻿namespace EverTask.Dispatcher;
+﻿using EverTask.Scheduler.Recurring;
+using EverTask.Scheduler.Recurring.Builder;
+
+namespace EverTask.Dispatcher;
 
 // This code was adapted from MediatR by Jimmy Bogard.
 // Specific inspiration was taken from the Mediator.cs file.

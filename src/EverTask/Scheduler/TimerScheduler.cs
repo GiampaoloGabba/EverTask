@@ -33,9 +33,8 @@ public class TimerScheduler : IScheduler
         {
             ArgumentNullException.ThrowIfNull(item.ExecutionTime);
             _queue.Enqueue(item, item.ExecutionTime.Value);
+            UpdateTimer();
         }
-
-        UpdateTimer();
     }
 
     internal void TimerCallback(object? state)
@@ -50,12 +49,32 @@ public class TimerScheduler : IScheduler
 
     private void UpdateTimer()
     {
-        if (_queue.TryPeek(out _, out DateTimeOffset nextDeliveryTime))
+        if (_queue.TryPeek(out var item, out DateTimeOffset nextDeliveryTime))
         {
-            var delay = nextDeliveryTime - DateTimeOffset.UtcNow;
+            try
+            {
+                var delay = nextDeliveryTime - DateTimeOffset.UtcNow;
 
-            if (delay < TimeSpan.Zero) delay = TimeSpan.Zero;
-            _timer.Change(delay, Timeout.InfiniteTimeSpan);
+                if (delay < TimeSpan.Zero) delay = TimeSpan.Zero;
+
+                //todo: to check first
+                //if (delay.TotalDays > 60)
+                 //   delay = TimeSpan.FromDays(1);
+
+                _timer.Change(delay, Timeout.InfiniteTimeSpan);
+            }
+            catch (ArgumentOutOfRangeException ex)
+            {
+                _logger.LogWarning(ex, "The task execution date is too far in the future, unable to set the timer event. IT will retry in 24 hours. Task id {taskId}, execution time {executionTime}", item.PersistenceId, nextDeliveryTime);
+                _timer.Change(TimeSpan.FromDays(1), Timeout.InfiniteTimeSpan);
+
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Unable to set the timer for the next run for task with id {taskId}.", item.PersistenceId);
+                _taskStorage?.SetStatus(item.PersistenceId, QueuedTaskStatus.Failed, ex, CancellationToken.None)
+                            .ConfigureAwait(false);
+            }
         }
         else
         {

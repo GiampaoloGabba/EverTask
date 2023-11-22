@@ -1,4 +1,5 @@
-﻿using EverTask.Scheduler.Builder;
+﻿using EverTask.Scheduler.Recurring;
+using EverTask.Scheduler.Recurring.Builder;
 
 namespace EverTask.Tests
 {

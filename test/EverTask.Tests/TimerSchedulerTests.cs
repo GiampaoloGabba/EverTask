@@ -2,7 +2,7 @@
 using EverTask.Handler;
 using EverTask.Logger;
 using EverTask.Scheduler;
-using EverTask.Scheduler.Builder;
+using EverTask.Scheduler.Recurring;
 using Microsoft.Extensions.Logging;
 
 namespace EverTask.Tests;
