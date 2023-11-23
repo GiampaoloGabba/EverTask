@@ -20,7 +20,7 @@ on task persistence, ensuring that pending tasks resume upon application restart
   Easily run background tasks with parameters in .NET
 - **Persistence**<br>Resumes pending tasks after application restarts.
 - **Managed Parallelism**<br>Efficiently handles concurrent task execution with configurable parallelism.
-- **Scheduled, Delayed and recurring tasks**<br>Schedule tasks for future execution or delay them using a TimeSpan. You can also create recurring tasks, for now only with cron expressions, but a fluent scheduler is on the way!
+- **Scheduled, Delayed and recurring tasks**<br>Schedule tasks for future execution or delay them using a TimeSpan. You can also create recurring tasks, with cron or with a powerful fluent builder!
 - **Resilient execution**<br>A powerful resilience feature to ensure your tasks are robust against transient failures. Fully customizable even with your custom retry policies, easily integrable with [Polly](https://github.com/App-vNext/Polly)
 - **Optional specialized CPU-bound execution**<br>Optimized handling for CPU-intensive tasks with an option to execute in a separate thread, ensuring efficient processing without impacting I/O-bound operations. Use judiciously for tasks requiring significant computational resources.
 - **Timeout management**<br>Configure the maximum execution time for your tasks.
@@ -169,36 +169,138 @@ var scheduledTime = DateTimeOffset.Now.AddHours(2); // 2 hours from now
 _dispatcher.Dispatch(new SampleTaskRequest("Scheduled Task"), scheduledTime);
 ```
 
-### Recurring Tasks
+## Recurring Tasks
 In addition to delayed and scheduled tasks, you can also configure recurring tasks. These tasks repeat at specified intervals, providing a powerful way to automate ongoing processes.
 
-> Currently, EverTask supports only cron expressions for task scheduling. However, a fluent builder that will further simplify this process is nearly ready.
+You can schedule recurring tasks using various approaches, with cron and with a fluent scheduler. Below are some examples with explanations:
 
-#### Implementing Recurring Tasks
-You can schedule recurring tasks using various approaches. Below are some examples with explanations:
+### Fluent Scheduling with EverTask
+EverTask's powerful fluent builder offers a wide range of scheduling capabilities for your background tasks. Whether you need simple scheduling or complex recurring patterns, the fluent builder simplifies the process with an intuitive and readable syntax. Here are some examples demonstrating different ways to configure your tasks:
 
-Immediate Execution with Cron Schedule:
+#### Basic Scheduling Examples
+```csharp
+// Scheduling a task to run every minute at the 30th second
+await dispatcher.Dispatch(new SampleTaskRequest("Test"),
+builder => builder.Schedule().EveryMinute().AtSecond(30));
+
+// Scheduling a task to run every hour at the 45th minute, limited to 10 runs
+await dispatcher.Dispatch(new SampleTaskRequest("Test"),
+builder => builder.RunNow().Then().EveryHour().AtMinute(45).MaxRuns(10));
+
+// Scheduling a task to run daily at specific times
+var times = new[] { new TimeOnly(12, 0), new TimeOnly(18, 0) };
+await dispatcher.Dispatch(new SampleTaskRequest("Test"),
+builder => builder.Schedule().Every(3).Days().AtTimes(times));
+```
+
+#### Advanced Recurring Schedules
+```csharp
+
+// Scheduling a task to run on specific days of the week
+var days = new[] { DayOfWeek.Monday, DayOfWeek.Wednesday, DayOfWeek.Friday };
+await dispatcher.Dispatch(new SampleTaskRequest("Test"), 
+    builder => builder.Schedule().EveryMonth().OnDays(days));
+
+// Running a task immediately, then every month on the 15th
+await dispatcher.Dispatch(new SampleTaskRequest("Test"), 
+    builder => builder.RunNow().Then().EveryMonth().OnDay(15));
+
+// Scheduling a task to run on the first Monday of every month
+await dispatcher.Dispatch(new SampleTaskRequest("First Monday"), 
+    builder => builder.Schedule().EveryMonth().OnFirst(DayOfWeek.Monday));
+
+// Scheduling a task to run on every second month, starting from February
+int[] everyOtherMonth = { 2, 4, 6, 8, 10, 12 };
+await dispatcher.Dispatch(new SampleTaskRequest("Bi-monthly"), 
+    builder => builder.Schedule().OnMonths(everyOtherMonth));
+```
+
+#### Delayed and Scheduled Task Execution
+```csharp
+// Delaying task execution by 30 seconds
+await dispatcher.Dispatch(new SampleTaskRequest("Delayed"), 
+    builder => builder.RunDelayed(TimeSpan.FromSeconds(30)));
+
+// Scheduling a task for a specific future time
+var dateTimeOffset = new DateTimeOffset(2023, 12, 25, 10, 0, 0, TimeSpan.Zero);
+await dispatcher.Dispatch(new SampleTaskRequest("Scheduled"), 
+    builder => builder.RunAt(dateTimeOffset));
+```
+
+#### Combining Various Scheduling Techniques
+```csharp
+// Running a task now, then scheduling it to run every hour at the 15th minute
+await dispatcher.Dispatch(new SampleTaskRequest("Combined"), 
+    builder => builder.RunNow().Then().EveryHour().AtMinute(15));
+
+// Delaying the first run of a task, then executing it every day at noon
+await dispatcher.Dispatch(new SampleTaskRequest("Delayed Daily"), 
+    builder => builder.RunDelayed(TimeSpan.FromMinutes(10)).Then().EveryDay().AtTime(new TimeOnly(12, 0)));
+
+// Scheduling a task to run on specific months (January, April, July, October)
+int[] specificMonths = { 1, 4, 7, 10 };
+await dispatcher.Dispatch(new SampleTaskRequest("Quarterly"), 
+    builder => builder.RunAt(DateTimeOffset.UtcNow.AddHours(1)).Then().OnMonths(specificMonths));
+```
+
+#### Customizing Maximum Runs
+```csharp
+// Scheduling a task to run every day, with a maximum of 5 executions
+await dispatcher.Dispatch(new SampleTaskRequest("Max Runs"), 
+    builder => builder.Schedule().EveryDay().MaxRuns(5));
+```
+
+These examples illustrate the flexibility and power of EverTask's fluent builder. With its comprehensive range of scheduling options, EverTask makes it easy to configure and manage background tasks in your .NET applications.
+
+### Scheduling with Cron Expression
+Cron expressions are powerful tools for defining complex time-based schedules. Originating from Unix systems, they provide a concise way to specify patterns for recurring tasks. A cron expression consists of fields representing different time units, like minutes, hours, days, and months.
+
+With EverTask, you can leverage the power of cron expressions to schedule tasks with great flexibility. Whether you need a task to run every hour, on specific days of the week, or at a particular time each month, cron expressions make it possible.
+
+Implementing Cron Scheduling in EverTask
+Here are some examples of using cron expressions in EverTask to schedule tasks:
+
+
+#### Immediate Execution with Cron Schedule:
 ```csharp
 // Execute task immediately, then repeat according to a Cron schedule
 await _dispatcher.Dispatch(task, builder => builder.RunNow().Then().UseCron("*/2 * * * *").MaxRuns(3));
 ```
-Delayed Start with Cron Schedule:
+#### Delayed Start with Cron Schedule:
 ```csharp
 // Execute task after a short delay, then repeat according to a Cron schedule
 await _dispatcher.Dispatch(task, builder => builder.RunDelayed(TimeSpan.FromSeconds(0.5)).Then().UseCron("*/2 * * * *"));
 ```
 
-Scheduled Start with Cron Schedule
+#### Scheduled Start with Cron Schedule
 ```csharp
 // Schedule task to start at a specific time, then repeat according to a Cron schedule
 await _dispatcher.Dispatch(task, builder => builder.RunAt(dateTimeOffset)).Then().UseCron("*/2 * * * *").MaxRuns(3));
 ```
 
-Scheduling Only with Cron
+#### Every 30 Minutes
 ```csharp
-// Schedule a recurring task based solely on a Cron schedule
-await _dispatcher.Dispatch(task, builder => builder.Schedule().UseCron("*/2 * * * *").MaxRuns(3));
+var cronEvery30Minutes = "*/30 * * * *";
+await dispatcher.Dispatch(new SampleTaskRequest("Every 30 Minutes"), 
+    builder => builder.Schedule().UseCron(cronEvery30Minutes));
 ```
+
+#### Every Day at Noon
+```csharp
+var cronAtNoon = "0 12 * * *";
+await dispatcher.Dispatch(new SampleTaskRequest("Daily at Noon"), 
+    builder => builder.Schedule().UseCron(cronAtNoon));
+```
+
+#### Every Monday Morning
+```csharp
+var cronEveryMondayMorning = "0 8 * * 1"; // 8 AM on Monday
+await dispatcher.Dispatch(new SampleTaskRequest("Every Monday Morning"), 
+    builder => builder.Schedule().UseCron(cronEveryMondayMorning));
+```
+
+<hr>
+
 > 💡 **Remember:** Delayed, scheduled and recurring tasks are also persistent. If your app restarts, you won't lose these tasks –
 > they'll be executed at the right time!
 

@@ -15,7 +15,6 @@ public class RecurringTaskAndIntervalBuilderChainTests
     public void Should_Set_RunNow_Then_UseCron()
     {
         var cronExpression = "*/30 * * * *"; // Every 30 minutes
-
         _builder.RunNow().Then().UseCron(cronExpression);
 
         Assert.True(_builder.RecurringTask.RunNow);
