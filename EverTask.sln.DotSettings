@@ -5,6 +5,9 @@
 	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_002EExample_002EAspnetCore_003B_002A_003B_002A_003B_002A/@EntryIndexedValue">True</s:Boolean>
 	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_002EExample_002EConsole_003B_002A_003B_002A_003B_002A/@EntryIndexedValue">True</s:Boolean>
 	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_002ESerilog_003B_002A_003BEverTask_002ESerilog_002ELogEventEnricherProperty_003B_002A/@EntryIndexedValue">True</s:Boolean>
+	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_002ESqlServer_003B_002A_003BEverTask_002EEfCore_002EData_002EMigrations_002E_002A_003B_002A/@EntryIndexedValue">True</s:Boolean>
+	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_002ESqlServer_003B_002A_003BEverTask_002ESqlServer_002EMigrations_002E_002A_003B_002A/@EntryIndexedValue">True</s:Boolean>
+	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_002ESqlServer_003B_002A_003BEverTask_002ESqlServer_002ETaskStoreEfDbContextFactory_003B_002A/@EntryIndexedValue">True</s:Boolean>
 	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_002ETests_002ELogging_003B_002A_003B_002A_003B_002A/@EntryIndexedValue">True</s:Boolean>
 	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_002ETests_002EStorage_003B_002A_003B_002A_003B_002A/@EntryIndexedValue">True</s:Boolean>
 	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_002ETests_003B_002A_003B_002A_003B_002A/@EntryIndexedValue">True</s:Boolean>
@@ -12,6 +15,15 @@
 	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_003B_002A_003BEverTask_002EDispatcher_002E_003CExecuteDispatch_003Ed_005F_005F10_003B_002A/@EntryIndexedValue">True</s:Boolean>
 	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_003B_002A_003BEverTask_002EHandler_002ETaskHandlerExecutor_003B_002Ector/@EntryIndexedValue">True</s:Boolean>
 	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_003B_002A_003BEverTask_002EMonitoring_002EEverTaskEventData_003B_002Ector/@EntryIndexedValue">True</s:Boolean>
+	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_003B_002A_003BEverTask_002EScheduler_002ETimerScheduler_003B_002A_005FLastSetDelay/@EntryIndexedValue">True</s:Boolean>
 	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_003B_002A_003BEverTask_002EStorage_002EStatusAudit_003B_002A/@EntryIndexedValue">True</s:Boolean>
 	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_003B_002A_003BEverTask_002EWorker_002EWorkerQueue_003BMoveNext/@EntryIndexedValue">True</s:Boolean>
-	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_003B_002A_003BEverTask_002EWorker_002EWorkerQueue_003BQueue/@EntryIndexedValue">True</s:Boolean></wpf:ResourceDictionary>
+	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_003B_002A_003BEverTask_002EWorker_002EWorkerQueue_003BQueue/@EntryIndexedValue">True</s:Boolean>
+	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_003B_002A_003BMicrosoft_002EExtensions_002EDependencyInjection_002EEverTaskServiceConfiguration_003BRegisterTasksFromAssemblies/@EntryIndexedValue">True</s:Boolean>
+	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_003B_002A_003BMicrosoft_002EExtensions_002EDependencyInjection_002EEverTaskServiceConfiguration_003BSetChannelOptions/@EntryIndexedValue">True</s:Boolean>
+	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_003B_002A_003BMicrosoft_002EExtensions_002EDependencyInjection_002EEverTaskServiceConfiguration_003BSetDefaultRetryPolicy/@EntryIndexedValue">True</s:Boolean>
+	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_003B_002A_003BMicrosoft_002EExtensions_002EDependencyInjection_002EEverTaskServiceConfiguration_003BSetDefaultTimeout/@EntryIndexedValue">True</s:Boolean>
+	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_003B_002A_003BMicrosoft_002EExtensions_002EDependencyInjection_002EEverTaskServiceConfiguration_003BSetThrowIfUnableToPersist/@EntryIndexedValue">True</s:Boolean>
+	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_003B_002A_003BMicrosoft_002EExtensions_002EDependencyInjection_002EEverTaskServiceConfiguration_003Bset_005FDefaultRetryPolicy/@EntryIndexedValue">True</s:Boolean>
+	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_003B_002A_003BMicrosoft_002EExtensions_002EDependencyInjection_002EEverTaskServiceConfiguration_003Bset_005FDefaultTimeout/@EntryIndexedValue">True</s:Boolean>
+	<s:Boolean x:Key="/Default/Environment/Filtering/ExcludeCoverageFilters/=EverTask_003B_002A_003BMicrosoft_002EExtensions_002EDependencyInjection_002EHandlerRegistrar_003BAddConcretionsThatCouldBeClosed/@EntryIndexedValue">True</s:Boolean></wpf:ResourceDictionary>

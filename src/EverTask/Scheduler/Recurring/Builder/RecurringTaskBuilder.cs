@@ -1,6 +1,4 @@
-﻿using Cronos;
-
-namespace EverTask.Scheduler.Builder;
+﻿namespace EverTask.Scheduler.Recurring.Builder;
 
 internal class RecurringTaskBuilder : IRecurringTaskBuilder
 {
@@ -32,19 +30,7 @@ public class ThenableSchedulerBuilder(RecurringTask recurringTask) : IThenableSc
     public IIntervalSchedulerBuilder Then() => new IntervalSchedulerBuilder(recurringTask);
 }
 
-public class IntervalSchedulerBuilder(RecurringTask recurringTask) : IIntervalSchedulerBuilder
-{
-    public IBuildableSchedulerBuilder UseCron(string cronExpression)
-    {
-        recurringTask.CronExpression = cronExpression;
-        return new BuildableSchedulerBuilder(recurringTask);
-    }
-}
-
 public class BuildableSchedulerBuilder(RecurringTask recurringTask) : IBuildableSchedulerBuilder
 {
-    public void MaxRuns(int maxRuns)
-    {
-        recurringTask.MaxRuns = maxRuns;
-    }
+    public void MaxRuns(int maxRuns) => recurringTask.MaxRuns = maxRuns;
 }

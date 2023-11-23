@@ -3,6 +3,7 @@ using EverTask.Dispatcher;
 using EverTask.Handler;
 using EverTask.Logger;
 using EverTask.Scheduler;
+using EverTask.Scheduler.Recurring.Intervals;
 
 namespace EverTask.Tests;
 
@@ -107,6 +108,16 @@ public class DispatcherTests
         var cronExpression = "*/5 * * * *";
         var nextRun = CronExpression.Parse("*/5 * * * *").GetNextOccurrence(DateTimeOffset.UtcNow, TimeZoneInfo.Utc);
         var taskId2 = await _dispatcher.Dispatch(new TestTaskRequest3(), recurring=>recurring.Schedule().UseCron(cronExpression));
+        taskId2.ShouldBeOfType<Guid>();
+
+        _delayedQueue.Verify(q => q.Schedule(It.Is<TaskHandlerExecutor>(executor => executor.PersistenceId == taskId2),nextRun), Times.Once);
+    }
+
+    [Fact]
+    public async Task Should_put_recurring_fluent_task_in_scheduler()
+    {
+        var nextRun = new DayInterval(3).GetNextOccurrence(DateTimeOffset.UtcNow);
+        var taskId2 = await _dispatcher.Dispatch(new TestTaskRequest3(), recurring=>recurring.Schedule().Every(3).Days());
         taskId2.ShouldBeOfType<Guid>();
 
         _delayedQueue.Verify(q => q.Schedule(It.Is<TaskHandlerExecutor>(executor => executor.PersistenceId == taskId2),nextRun), Times.Once);

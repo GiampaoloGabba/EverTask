@@ -1,6 +1,6 @@
 ﻿using EverTask.Handler;
 using EverTask.Monitoring;
-using EverTask.Scheduler.Builder;
+using EverTask.Scheduler.Recurring;
 using EverTask.Storage;
 using Newtonsoft.Json;
 

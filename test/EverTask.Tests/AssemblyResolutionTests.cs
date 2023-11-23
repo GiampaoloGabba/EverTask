@@ -96,4 +96,33 @@ public class AssemblyResolutionTests
         handlers.Length.ShouldBe(1);
         handlers[0].ShouldBeOfType<TestTaskHanlder>();
     }
+
+
+    [Fact]
+    public void CouldCloseTo_Should_ReturnFalse_ForIncompatibleTypes()
+    {
+        var openType            = typeof(OpenGenericClass<>);
+        var closedInterfaceType = typeof(ITestInterface<string>); // Incompatibile con OpenGenericClass<T>
+
+        var result = openType.CouldCloseTo(closedInterfaceType);
+
+        Assert.False(result);
+    }
+
+    [Fact]
+    public void CouldCloseTo_Should_ReturnFalse_ForNonGenericTypes()
+    {
+        var nonGenericType      = typeof(ClosedGenericClass);
+        var closedInterfaceType = typeof(ITestInterface<int>);
+
+        var result = nonGenericType.CouldCloseTo(closedInterfaceType);
+
+        Assert.False(result);
+    }
 }
+
+
+public interface ITestInterface<T> { }
+
+public class OpenGenericClass<T> : ITestInterface<T> { }
+public class ClosedGenericClass : ITestInterface<int> { }

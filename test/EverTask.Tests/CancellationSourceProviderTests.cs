@@ -32,5 +32,4 @@ public class CancellationSourceProviderTests
         //handle should throw disposed exception
         Should.Throw<ObjectDisposedException>(() => token.WaitHandle);
     }
-    
 }

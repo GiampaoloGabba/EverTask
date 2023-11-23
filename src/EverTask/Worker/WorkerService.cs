@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Hosting;
+﻿using EverTask.Scheduler.Recurring;
+using Microsoft.Extensions.Hosting;
 
 namespace EverTask.Worker;
 
