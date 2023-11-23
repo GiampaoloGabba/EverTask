@@ -118,7 +118,7 @@ public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTa
         }
     }
 
-    private async Task Audit(ITaskStoreDbContext dbContext, Guid taskId, QueuedTaskStatus status, Exception? exception,
+    internal async Task Audit(ITaskStoreDbContext dbContext, Guid taskId, QueuedTaskStatus status, Exception? exception,
                              CancellationToken ct)
     {
         var detailedException = exception.ToDetailedString();
