@@ -201,9 +201,9 @@ var days = new[] { DayOfWeek.Monday, DayOfWeek.Wednesday, DayOfWeek.Friday };
 await dispatcher.Dispatch(new SampleTaskRequest("Test"), 
     builder => builder.Schedule().EveryMonth().OnDays(days));
 
-// Running a task immediately, then every month on the 15th
+// Running a task immediately, then every 2 month on the 15th
 await dispatcher.Dispatch(new SampleTaskRequest("Test"), 
-    builder => builder.RunNow().Then().EveryMonth().OnDay(15));
+    builder => builder.RunNow().Then().Every(2).Months().OnDay(15));
 
 // Scheduling a task to run on the first Monday of every month
 await dispatcher.Dispatch(new SampleTaskRequest("First Monday"), 
@@ -229,9 +229,9 @@ await dispatcher.Dispatch(new SampleTaskRequest("Scheduled"),
 
 #### Combining Various Scheduling Techniques
 ```csharp
-// Running a task now, then scheduling it to run every hour at the 15th minute
+// Running a task now, then scheduling it to run every 2 hours at the 15th minute
 await dispatcher.Dispatch(new SampleTaskRequest("Combined"), 
-    builder => builder.RunNow().Then().EveryHour().AtMinute(15));
+    builder => builder.RunNow().Then().Every(2).Hours().AtMinute(15));
 
 // Delaying the first run of a task, then executing it every day at noon
 await dispatcher.Dispatch(new SampleTaskRequest("Delayed Daily"), 
