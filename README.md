@@ -808,16 +808,15 @@ emphasizes reliability in task persistence, ensuring that only serializable task
 
 ## Future Developments
 
-| Feature                               | Description                                                                                                                                                                                       |
-|---------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **Web Dashboard**                     | Implement a simple web dashboard for monitoring tasks. Also there will be some management capability (start/stop a task, change some execution parameters)                                        |
-| **WebApi**                  | Webapi endpoints to list and manage tasks execution in EverTask remotely                                                                                                                          |
-| **Fluent builder for recurring Tasks** | Recurring tasks using a fluent builder.                                                                                                                                                           |
-| **Support for new monitoring Options** | Email alerts, application insights integration, open telemetry integration, ecc..                                                                                                                 |
-| **Support for new Storage Options**   | Considering the inclusion of additional storage options like Redis, MySql, Postgres, and various DocumentDBs initially supported by EfCore, with the possibility of expanding to other databases. |
-| **Queue customization**               | Create custom queues (each with his own, custom, degree of parallelism) to split task execution (for example by priority)                                                                         |
-| **Clustering tasks**                  | I'm toying with the idea to allow multiple server running evertask to create a simple cluster for tasks execution, with rules like loading balance, fail-over                                     |
-| **Improving documentation**           | docs needs more love...                                                                                                                                                                           |
+| Feature                               | Description                                                                                                                                                                                               |
+|---------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Web Dashboard**                     | Implement a simple web dashboard for monitoring tasks. Also there will be some management capability (start/stop a task, change some execution parameters)                                                |
+| **WebApi**                  | Webapi endpoints to list and manage tasks execution in EverTask remotely                                                                                                                                  |
+| **Support for new monitoring Options** | Email alerts, application insights integration, open telemetry integration, ecc..                                                                                                                         |
+| **Support for new Storage Options**   | Considering the inclusion of additional storage options like Sqlite, Redis, MySql, Postgres, and various DocumentDBs initially supported by EfCore, with the possibility of expanding to other databases. |
+| **Queue customization**               | Create custom queues (each with his own, custom, degree of parallelism) to split task execution (for example by priority)                                                                                 |
+| **Clustering tasks**                  | I'm toying with the idea to allow multiple server running evertask to create a simple cluster for tasks execution, with rules like loading balance, fail-over                                             |
+| **Improving documentation**           | docs needs more love...                                                                                                                                                                                   |
 
 &nbsp;
 
