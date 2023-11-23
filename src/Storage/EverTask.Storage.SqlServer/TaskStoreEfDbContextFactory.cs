@@ -1,8 +1,4 @@
-﻿using EverTask.Storage.EfCore;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Design;
-using Microsoft.EntityFrameworkCore.Migrations;
-using Microsoft.Extensions.Options;
+﻿using Microsoft.EntityFrameworkCore.Design;
 
 namespace EverTask.Storage.SqlServer;
 

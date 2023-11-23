@@ -1,6 +1,4 @@
-﻿using EverTask.Scheduler.Recurring.Intervals;
-
-namespace EverTask.Scheduler.Recurring.Builder;
+﻿namespace EverTask.Scheduler.Recurring.Builder;
 
 public class EverySchedulerBuilder : IEverySchedulerBuilder
 {

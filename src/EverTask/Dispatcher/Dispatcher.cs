@@ -1,5 +1,4 @@
-﻿using EverTask.Scheduler.Recurring;
-using EverTask.Scheduler.Recurring.Builder;
+﻿using EverTask.Scheduler.Recurring.Builder;
 
 namespace EverTask.Dispatcher;
 

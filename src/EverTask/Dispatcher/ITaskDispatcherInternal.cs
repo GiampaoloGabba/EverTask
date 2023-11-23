@@ -1,6 +1,4 @@
-﻿using EverTask.Scheduler.Recurring;
-
-namespace EverTask.Dispatcher;
+﻿namespace EverTask.Dispatcher;
 
 public interface ITaskDispatcherInternal : ITaskDispatcher
 {
