@@ -1,10 +1,9 @@
-﻿using EverTask;
-using EverTask.Logger;
-using EverTask.Serilog;
+﻿using EverTask.Logger;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Serilog;
 
-namespace Microsoft.Extensions.DependencyInjection;
+namespace EverTask.Logging.Serilog;
 
 public static class ServiceCollectionExtensions
 {

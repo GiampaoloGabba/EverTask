@@ -2,9 +2,8 @@
 using EverTask.Logger;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using EverTask.Storage;
 
-namespace EverTask.EfCore;
+namespace EverTask.Storage.EfCore;
 
 public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTaskLogger<EfCoreTaskStorage> logger)
     : ITaskStorage

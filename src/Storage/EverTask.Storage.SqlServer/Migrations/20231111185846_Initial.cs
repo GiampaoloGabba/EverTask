@@ -1,10 +1,11 @@
 ﻿using System;
+using EverTask.Storage.EfCore;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
-namespace EverTask.EfCore.Data.Migrations
+namespace EverTask.Storage.SqlServer.Migrations
 {
     /// <inheritdoc />
     public partial class Initial : Migration

@@ -1,5 +1,5 @@
 ﻿using Xunit;
-using EverTask.EfCore;
+using EverTask.Storage.EfCore;
 using EverTask.Storage;
 using Shouldly;
 

@@ -1,11 +1,11 @@
 ﻿using System;
-using EverTask.EfCore;
+using EverTask.Storage.EfCore;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
-namespace EverTask.SqlServer.Migrations
+namespace EverTask.Storage.SqlServer.Migrations
 {
     /// <inheritdoc />
     public partial class AddRunsAudits : Migration

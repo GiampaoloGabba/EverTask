@@ -1,4 +1,4 @@
-﻿namespace EverTask.EfCore;
+﻿namespace EverTask.Storage.EfCore;
 
 public class TaskStoreOptions
 {

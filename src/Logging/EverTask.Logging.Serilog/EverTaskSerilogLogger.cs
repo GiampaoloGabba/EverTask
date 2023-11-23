@@ -5,7 +5,7 @@ using Serilog.Core;
 using Serilog.Events;
 using ILogger = Serilog.ILogger;
 
-namespace EverTask.Serilog;
+namespace EverTask.Logging.Serilog;
 
 public class EverTaskSerilogLogger<T>(ILogger logger) : IEverTaskLogger<T>
 {

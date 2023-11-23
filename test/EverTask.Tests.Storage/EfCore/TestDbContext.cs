@@ -1,4 +1,4 @@
-﻿using EverTask.EfCore;
+﻿using EverTask.Storage.EfCore;
 using EverTask.Storage;
 using Microsoft.EntityFrameworkCore;
 

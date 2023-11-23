@@ -1,4 +1,5 @@
-﻿using EverTask.EfCore;
+﻿using EverTask.Storage.EfCore;
+using EverTask.Storage.SqlServer;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Xunit;

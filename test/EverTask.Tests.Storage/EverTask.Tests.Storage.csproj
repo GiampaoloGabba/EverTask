@@ -24,8 +24,8 @@
   </ItemGroup>
   
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Storage\EverTask.EfCore\EverTask.EfCore.csproj" />
-    <ProjectReference Include="..\..\src\Storage\EverTask.SqlServer\EverTask.SqlServer.csproj" />
+    <ProjectReference Include="..\..\src\Storage\EverTask.Storage.EfCore\EverTask.Storage.EfCore.csproj" />
+    <ProjectReference Include="..\..\src\Storage\EverTask.Storage.SqlServer\EverTask.Storage.SqlServer.csproj" />
   </ItemGroup>
 
 </Project>

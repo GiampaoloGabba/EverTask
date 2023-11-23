@@ -29,11 +29,11 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EverTask", "src\EverTask\Ev
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EverTask.Abstractions", "src\EverTask.Abstractions\EverTask.Abstractions.csproj", "{4992D71B-E01C-461A-9DCA-C2767E5E8E55}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EverTask.Serilog", "src\Logging\EverTask.Serilog\EverTask.Serilog.csproj", "{511F9BA8-56A0-487D-BDEF-6D3A65D600FF}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EverTask.Logging.Serilog", "src\Logging\EverTask.Logging.Serilog\EverTask.Logging.Serilog.csproj", "{511F9BA8-56A0-487D-BDEF-6D3A65D600FF}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EverTask.EfCore", "src\Storage\EverTask.EfCore\EverTask.EfCore.csproj", "{F2A0340F-C884-4314-A209-01494ECCACEE}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EverTask.Storage.EfCore", "src\Storage\EverTask.Storage.EfCore\EverTask.Storage.EfCore.csproj", "{F2A0340F-C884-4314-A209-01494ECCACEE}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EverTask.SqlServer", "src\Storage\EverTask.SqlServer\EverTask.SqlServer.csproj", "{59C7A64C-3583-4D6D-9F47-EFB1E8E395B2}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EverTask.Storage.SqlServer", "src\Storage\EverTask.Storage.SqlServer\EverTask.Storage.SqlServer.csproj", "{59C7A64C-3583-4D6D-9F47-EFB1E8E395B2}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EverTask.Example.AspnetCore", "samples\EverTask.Example.AspnetCore\EverTask.Example.AspnetCore.csproj", "{AD3210EB-3FE1-41BE-8EBF-436403E8C438}"
 EndProject
@@ -46,6 +46,8 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EverTask.Tests.Storage", "test\EverTask.Tests.Storage\EverTask.Tests.Storage.csproj", "{A40C03EB-A2D8-49ED-A4B5-828FDE5DF48D}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EverTask.Monitor.AspnetCore.SignalR", "src\Monitoring\EverTask.Monitor.AspnetCore.SignalR\EverTask.Monitor.AspnetCore.SignalR.csproj", "{D68A8148-9FC3-4982-BA6E-7821B098D8B1}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EverTask.Storage.Sqlite", "src\Storage\EverTask.Storage.Sqlite\EverTask.Storage.Sqlite.csproj", "{639C703E-88C5-4850-B97F-03AAB9BBDAE9}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -97,6 +99,10 @@ Global
 		{D68A8148-9FC3-4982-BA6E-7821B098D8B1}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{D68A8148-9FC3-4982-BA6E-7821B098D8B1}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{D68A8148-9FC3-4982-BA6E-7821B098D8B1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{639C703E-88C5-4850-B97F-03AAB9BBDAE9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{639C703E-88C5-4850-B97F-03AAB9BBDAE9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{639C703E-88C5-4850-B97F-03AAB9BBDAE9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{639C703E-88C5-4850-B97F-03AAB9BBDAE9}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{EF3FB892-548E-49F8-A96E-2C3D289507F8} = {6267E2ED-942C-497D-BFC9-B3CE0AFC276F}
@@ -113,5 +119,6 @@ Global
 		{A40C03EB-A2D8-49ED-A4B5-828FDE5DF48D} = {5267E2ED-942C-497D-BFC9-B3CE0AFC276F}
 		{9267E2ED-942C-497D-BFC9-B3CE0AFC276F} = {6267E2ED-942C-497D-BFC9-B3CE0AFC276F}
 		{D68A8148-9FC3-4982-BA6E-7821B098D8B1} = {9267E2ED-942C-497D-BFC9-B3CE0AFC276F}
+		{639C703E-88C5-4850-B97F-03AAB9BBDAE9} = {8267E2ED-942C-497D-BFC9-B3CE0AFC276F}
 	EndGlobalSection
 EndGlobal

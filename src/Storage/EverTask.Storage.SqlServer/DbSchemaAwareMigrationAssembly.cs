@@ -1,13 +1,13 @@
 ﻿using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
-using EverTask.EfCore;
+using EverTask.Storage.EfCore;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Migrations.Internal;
 
-namespace EverTask.SqlServer;
+namespace EverTask.Storage.SqlServer;
 
 [SuppressMessage("Usage", "EF1001:Internal EF Core API usage.")]
 public class DbSchemaAwareMigrationAssembly(

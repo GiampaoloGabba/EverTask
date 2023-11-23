@@ -1,4 +1,4 @@
-using EverTask.Example.AspnetCore.Controllers;
+using EverTask.Logging.Serilog;
 using EverTask.Monitor.AspnetCore.SignalR;
 using Serilog;
 using Serilog.Settings.Configuration;

@@ -1,4 +1,4 @@
-﻿using EverTask.EfCore;
+﻿using EverTask.Storage.EfCore;
 using Xunit;
 
 namespace EverTask.Tests.Storage.EfCore;

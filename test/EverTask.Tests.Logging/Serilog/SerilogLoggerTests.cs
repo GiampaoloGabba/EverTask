@@ -1,4 +1,4 @@
-﻿using EverTask.Serilog;
+﻿using EverTask.Logging.Serilog;
 using Microsoft.Extensions.Logging;
 using Serilog;
 using Serilog.Core;

@@ -1,11 +1,10 @@
-﻿using Microsoft.EntityFrameworkCore;
+﻿using EverTask.Storage.EfCore;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Migrations;
-using EverTask.EfCore;
-using EverTask.SqlServer;
-using EverTask.Storage;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
-namespace Microsoft.Extensions.DependencyInjection;
+namespace EverTask.Storage.SqlServer;
 
 public static class ServiceCollectionExtensions
 {

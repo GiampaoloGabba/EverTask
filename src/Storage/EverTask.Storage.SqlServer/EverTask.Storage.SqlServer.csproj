@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\EverTask.EfCore\EverTask.EfCore.csproj" />
+    <ProjectReference Include="..\EverTask.Storage.EfCore\EverTask.Storage.EfCore.csproj" />
     <ProjectReference Include="..\..\EverTask\EverTask.csproj" />
   </ItemGroup>
 

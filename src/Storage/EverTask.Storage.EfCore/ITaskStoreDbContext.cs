@@ -1,6 +1,6 @@
 ﻿using EverTask.Storage;
 
-namespace EverTask.EfCore;
+namespace EverTask.Storage.EfCore;
 
 public interface ITaskStoreDbContext : IDisposable, IAsyncDisposable
 {

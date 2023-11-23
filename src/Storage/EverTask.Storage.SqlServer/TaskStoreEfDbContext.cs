@@ -1,9 +1,8 @@
-﻿using EverTask.EfCore;
-using EverTask.Storage;
+﻿using EverTask.Storage.EfCore;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
-namespace EverTask.SqlServer;
+namespace EverTask.Storage.SqlServer;
 
 public class TaskStoreEfDbContext(
     DbContextOptions<TaskStoreEfDbContext> options,
