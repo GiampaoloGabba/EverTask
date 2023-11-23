@@ -12,7 +12,7 @@
 EverTask is a .NET library for executing background tasks in .NET applications. It is designed to be simple and focuses
 on task persistence, ensuring that pending tasks resume upon application restart.
 
-> More detailed documentation will be provided in the future.
+> 💡**Note:** We're currently enhancing our documentation and examples. Stay tuned for a range of new, practical usage scenarios and detailed guides!
 
 ## Features
 
