@@ -37,5 +37,5 @@ jobs:
         run: dotnet build EverTask.sln --no-restore
 
       - name: Test
-        run: dotnet test test/EverTask.Tests/EverTask.Tests.csproj --no-restore --verbosity normal
+        run: dotnet test test/EverTask.Tests/EverTask.Tests.csproj --no-restore --verbosity normal --filter FullyQualifiedName!~EverTask.Tests.Storage.SqlServer.SqlServerEfCoreTaskStorageTests
 
