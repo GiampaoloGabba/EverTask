@@ -9,8 +9,8 @@
 
 ## Overview
 
-EverTask is a .NET library for executing background tasks in .NET applications. It is designed to be simple and focuses
-on task persistence, ensuring that pending tasks resume upon application restart.
+EverTask is a .NET library for executing background tasks (fire and forget, scheduled and recurring). It is designed to be simple and focuses
+on task persistence, monitoring and resilience. Advanced scenarios like custom resilience policies, task cancellations, continuations and rescheduling are also supported!
 
 > 💡**Note:** We're currently enhancing our documentation and examples. Stay tuned for a range of new, practical usage scenarios and detailed guides!
 
@@ -25,21 +25,26 @@ on task persistence, ensuring that pending tasks resume upon application restart
 - **Optional specialized CPU-bound execution**<br>Optimized handling for CPU-intensive tasks with an option to execute in a separate thread, ensuring efficient processing without impacting I/O-bound operations. Use judiciously for tasks requiring significant computational resources.
 - **Timeout management**<br>Configure the maximum execution time for your tasks.
 - **Error Handling**<br>Method overrides for error observation and task completion/cancellation.
-- **Monitoring (local and remote)**<br>Monitor your task with the included in-memory monitoring or remotely with SignalR!<br>[![NuGet](https://img.shields.io/nuget/vpre/EverTask.Monitor.AspnetCore.SignalR.svg?label=EverTask.Monitor.AspnetCore.SignalR)](https://www.nuget.org/packages/EverTask.Monitor.AspnetCore.SignalR)
-- **SQL Storage**<br>Includes support for SQL Server storage, enabling persistent task management.<br>[![NuGet](https://img.shields.io/nuget/vpre/evertask.sqlserver.svg?label=Evertask.SqlServer)](https://www.nuget.org/packages/evertask.sqlserver)
-- **In-Memory Storage**<br>Provides an in-memory storage solution for testing and lightweight applications.
+- **Monitoring (local and remote)**<br>Monitor your task with the included in-memory monitoring or remotely with SignalR! ([Sentry Crons](https://docs.sentry.io/product/crons/) is coming soon)<br>[![NuGet](https://img.shields.io/nuget/vpre/EverTask.Monitor.AspnetCore.SignalR.svg?label=EverTask.Monitor.AspnetCore.SignalR)](https://www.nuget.org/packages/EverTask.Monitor.AspnetCore.SignalR)
+- **SQL Storage**<br>Includes support for SQL Server storage (Sqlite is already implemented and coming soon), enabling persistent task management.<br>[![NuGet](https://img.shields.io/nuget/vpre/evertask.sqlserver.svg?label=Evertask.SqlServer)](https://www.nuget.org/packages/evertask.sqlserver)
+- **In-Memory Storage**<br>Provides an in-memory storage solution for testing pruposes.
 - **Serilog Integration**<br>Supports integration with Serilog for detailed and customizable logging.<br>[![NuGet](https://img.shields.io/nuget/vpre/evertask.serilog.svg?label=Evertask.Serilog)](https://www.nuget.org/packages/evertask.serilog)
 - **Extensible Storage & Logging**<br>Designed to allow easy plug-in of additional database solutions or logging systems.
+- **Task Continuations and Rescheduling** Advanced Workflow Management
 - **Async All The Way**<br>Fully asynchronous architecture, enhancing performance and scalability in modern environments.
-- **Simplicity by Design**<br>Created for simplicity, using the latest .NET technologies.
 - **Inspiration from MediaTr**<br>Implementation based on creating requests and handlers.
+
+> 💡**Note:** We are also implementing a web dashboard and + Web API to manage your tasks remotely
+
 
 ## Efficient Task Processing
 
 EverTask employs a non-polling approach for task management, utilizing the .NET's `System.Threading.Channels` to create
-a `BoundedQueue`. This queue efficiently manages task execution without the need for constant database polling. Upon
-application restart after a stop, any unprocessed tasks are retrieved from the database in bulk and re-queued in the
-channel's queue for execution by the background service. This design ensures a seamless and efficient task processing
+a `BoundedQueue` that efficiently manages task execution without the need for constant database polling.<br>
+Recurring tasks are handled in a custom `ConcurrentPriorityQueue`
+
+Upon application restart after a stop, any unprocessed tasks are retrieved from the database in bulk and re-queued in the
+for execution by the background service. This design ensures a seamless and efficient task processing
 cycle, even across application restarts.
 
 ## Basic Configuration
@@ -808,15 +813,15 @@ emphasizes reliability in task persistence, ensuring that only serializable task
 
 ## Future Developments
 
-| Feature                               | Description                                                                                                                                                                                               |
-|---------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **Web Dashboard**                     | Implement a simple web dashboard for monitoring tasks. Also there will be some management capability (start/stop a task, change some execution parameters)                                                |
-| **WebApi**                  | Webapi endpoints to list and manage tasks execution in EverTask remotely                                                                                                                                  |
-| **Support for new monitoring Options** | Email alerts, application insights integration, open telemetry integration, ecc..                                                                                                                         |
+| Feature                               | Description                                                                                                                                                                                             |
+|---------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Web Dashboard**                     | Implement a simple web dashboard for monitoring tasks. Also there will be some management capability (start/stop a task, change some execution parameters)                                              |
+| **WebApi**                  | Webapi endpoints to list and manage tasks execution in EverTask remotely                                                                                                                                |
+| **Support for new monitoring Options** | Sentry Crons, Email alerts, application insights, open telemetry, ecc..                                                                                                           |
 | **Support for new Storage Options**   | Considering the inclusion of additional storage options like Sqlite, Redis, MySql, Postgres, and various DocumentDBs initially supported by EfCore, with the possibility of expanding to other databases. |
-| **Queue customization**               | Create custom queues (each with his own, custom, degree of parallelism) to split task execution (for example by priority)                                                                                 |
-| **Clustering tasks**                  | I'm toying with the idea to allow multiple server running evertask to create a simple cluster for tasks execution, with rules like loading balance, fail-over                                             |
-| **Improving documentation**           | docs needs more love...                                                                                                                                                                                   |
+| **Queue customization**               | Create custom queues (each with his own, custom, degree of parallelism) to split task execution (for example by priority)                                                                               |
+| **Clustering tasks**                  | I'm toying with the idea to allow multiple server running evertask to create a simple cluster for tasks execution, with rules like loading balance, fail-over                                           |
+| **Improving documentation**           | docs needs more love...                                                                                                                                                                                 |
 
 &nbsp;
 
@@ -841,6 +846,3 @@ Their approach and architecture have been instrumental in shaping the functional
 
 This project includes code from [MediatR](https://github.com/jbogard/MediatR), which is licensed under the Apache 2.0
 License. The full text of the license can be found in the [LICENSE](LICENSE) file.
-
-
-
