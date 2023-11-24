@@ -1,9 +1,10 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using EverTask.Storage;
 using EverTask.Storage.EfCore;
-using EverTask.Storage;
+using EverTask.Tests.Storage.EfCore;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 
-namespace EverTask.Tests.Storage.EfCore;
+namespace EverTask.Tests.Storage;
 
 public class InMemoryEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase
 {
@@ -31,7 +32,7 @@ public class InMemoryEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase
     protected override async Task CleanUpDatabase()
     {
         _dbContext.QueuedTasks.RemoveRange(_dbContext.QueuedTasks.ToList());
-        _dbContext.QueuedTaskStatusAudit.RemoveRange(_dbContext.QueuedTaskStatusAudit.ToList());
+        _dbContext.StatusAudit.RemoveRange(_dbContext.StatusAudit.ToList());
         await _dbContext.SaveChangesAsync(CancellationToken.None);
     }
 

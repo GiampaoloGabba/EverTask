@@ -1,20 +1,19 @@
-﻿using EverTask.Storage.EfCore;
-using EverTask.Storage;
+﻿using EverTask.Storage;
+using EverTask.Storage.EfCore;
 using EverTask.Storage.SqlServer;
 using EverTask.Tests.Storage.EfCore;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Options;
 using Respawn;
 using Shouldly;
 using Xunit;
 
-namespace EverTask.Tests.Storage.SqlServer;
+namespace EverTask.Tests.Storage;
 
 public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase
 {
     private ITaskStoreDbContext _dbContext = null!;
     private ITaskStorage _taskStorage = null!;
-    private Respawner _respawner = null!;
+    private Respawner? _respawner;
     private string _connectionString = "";
 
     protected override void Initialize()
@@ -22,7 +21,7 @@ public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase
         _connectionString = "Server=(localdb)\\mssqllocaldb;Database=EverTaskTestDb;Trusted_Connection=True;MultipleActiveResultSets=true";
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddEverTask(opt=>opt.RegisterTasksFromAssembly(typeof(ServiceRegistrationTests).Assembly))
+        services.AddEverTask(opt=>opt.RegisterTasksFromAssembly(typeof(SqlServerEfCoreTaskStorageTests).Assembly))
                 .AddSqlServerStorage(_connectionString, opt => opt.AutoApplyMigrations = true);
 
         var serviceProvider = services.BuildServiceProvider();
@@ -31,15 +30,24 @@ public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase
         _taskStorage = services.BuildServiceProvider().GetRequiredService<ITaskStorage>();
     }
 
+    [Fact]
+    public void Should_be_registered_and_resolved_correctly()
+    {
+        Assert.NotNull(_dbContext);
+        Assert.NotNull(_taskStorage);
+        _dbContext.Schema.ShouldBe("EverTask");
+    }
+
+    private async Task<Respawner> GetRespawner() =>
+        _respawner ??= await Respawner.CreateAsync(_connectionString, new RespawnerOptions
+        { TablesToIgnore = new Respawn.Graph.Table[] { "__EFMigrationsHistory" } });
+
     protected override async Task CleanUpDatabase()
     {
-        _respawner = await Respawner.CreateAsync(_connectionString, new RespawnerOptions
-        {
-            TablesToIgnore = new Respawn.Graph.Table[] { "__EFMigrationsHistory" }
-        });
-
-        await _respawner.ResetAsync(_connectionString);
-        await Task.Delay(700);
+        _dbContext.RunsAudit.RemoveRange(_dbContext.RunsAudit.ToList());
+        _dbContext.StatusAudit.RemoveRange(_dbContext.StatusAudit.ToList());
+        _dbContext.QueuedTasks.RemoveRange(_dbContext.QueuedTasks.ToList());
+        await _dbContext.SaveChangesAsync(CancellationToken.None);
     }
 
     protected override ITaskStoreDbContext CreateDbContext()
@@ -50,11 +58,5 @@ public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase
     protected override ITaskStorage GetStorage()
     {
         return _taskStorage;
-    }
-
-    [Fact]
-    public void Should_be_registered_and_resolved_correctly()
-    {
-        _dbContext.Schema.ShouldBe("EverTask");
     }
 }

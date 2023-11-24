@@ -1,6 +1,6 @@
-﻿namespace EverTask.Storage.EfCore;
+﻿namespace EverTask.Storage.SqlServer;
 
-public class TaskStoreOptions
+public class SqlServerTaskStoreOptions : ITaskStoreOptions
 {
     public bool    AutoApplyMigrations { get; set; } = true;
     public string? SchemaName          { get; set; } = "EverTask";

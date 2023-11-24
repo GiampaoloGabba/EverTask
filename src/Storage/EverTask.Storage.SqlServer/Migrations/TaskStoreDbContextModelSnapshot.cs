@@ -10,7 +10,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 namespace EverTask.Storage.SqlServer.Migrations
 {
-    [DbContext(typeof(TaskStoreEfDbContext))]
+    [DbContext(typeof(SqlServerTaskStoreContext))]
     partial class TaskStoreDbContextModelSnapshot : ModelSnapshot
     {
         protected override void BuildModel(ModelBuilder modelBuilder)
@@ -18,7 +18,7 @@ namespace EverTask.Storage.SqlServer.Migrations
 #pragma warning disable 612, 618
             modelBuilder
                 .HasDefaultSchema("EverTask")
-                .HasAnnotation("ProductVersion", "7.0.0")
+                .HasAnnotation("ProductVersion", "7.0.14")
                 .HasAnnotation("Relational:MaxIdentifierLength", 128);
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
@@ -140,7 +140,7 @@ namespace EverTask.Storage.SqlServer.Migrations
 
                     b.HasIndex("QueuedTaskId");
 
-                    b.ToTable("QueuedTaskStatusAudit", "EverTask");
+                    b.ToTable("StatusAudit", "EverTask");
                 });
 
             modelBuilder.Entity("EverTask.Storage.RunsAudit", b =>

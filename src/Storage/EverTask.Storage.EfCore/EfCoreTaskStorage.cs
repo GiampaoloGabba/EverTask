@@ -128,7 +128,7 @@ public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTa
             NewStatus    = status,
             Exception    = detailedException
         };
-        dbContext.QueuedTaskStatusAudit.Add(statusAudit);
+        dbContext.StatusAudit.Add(statusAudit);
 
         try
         {

@@ -4,22 +4,22 @@ namespace EverTask.Storage.SqlServer;
 
 #if DEBUG
 //used for migrations
-public class TaskStoreEfDbContextFactory : IDesignTimeDbContextFactory<TaskStoreEfDbContext>
+public class TaskStoreEfDbContextFactory : IDesignTimeDbContextFactory<SqlServerTaskStoreContext>
 {
-    public TaskStoreEfDbContext CreateDbContext(string[] args)
+    public SqlServerTaskStoreContext CreateDbContext(string[] args)
     {
-        var builder          = new DbContextOptionsBuilder<TaskStoreEfDbContext>();
+        var builder          = new DbContextOptionsBuilder<SqlServerTaskStoreContext>();
         var connectionString = "dbcontext";
         builder.UseSqlServer(connectionString,
                    opt => opt.MigrationsHistoryTable(HistoryRepository.DefaultTableName, "EverTask"))
                .ReplaceService<IMigrationsAssembly, DbSchemaAwareMigrationAssembly>();
 
-        var options = new OptionsWrapper<TaskStoreOptions>(new TaskStoreOptions
+        var options = new OptionsWrapper<ITaskStoreOptions>(new SqlServerTaskStoreOptions
         {
             AutoApplyMigrations = true
         });
 
-        return new TaskStoreEfDbContext(builder.Options, options);
+        return new SqlServerTaskStoreContext(builder.Options, options);
     }
 }
 #endif

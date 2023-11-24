@@ -1,14 +1,17 @@
-﻿namespace EverTask.Storage.SqlServer;
+﻿using Microsoft.Extensions.Options;
 
-public class TaskStoreEfDbContext(
-    DbContextOptions<TaskStoreEfDbContext> options,
-    IOptions<TaskStoreOptions> storeOptions)
-    : DbContext(options), ITaskStoreDbContext
+namespace EverTask.Storage.EfCore;
+
+public abstract class TaskStoreEfDbContext<T>(
+    DbContextOptions<T> options,
+    IOptions<ITaskStoreOptions> storeOptions)
+    : DbContext(options), ITaskStoreDbContext where T : DbContext
 {
     public string? Schema { get; } = storeOptions.Value.SchemaName;
 
-    public DbSet<QueuedTask>  QueuedTasks           => Set<QueuedTask>();
-    public DbSet<StatusAudit> QueuedTaskStatusAudit => Set<StatusAudit>();
+    public DbSet<QueuedTask>  QueuedTasks => Set<QueuedTask>();
+    public DbSet<StatusAudit> StatusAudit => Set<StatusAudit>();
+    public DbSet<RunsAudit>   RunsAudit   => Set<RunsAudit>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

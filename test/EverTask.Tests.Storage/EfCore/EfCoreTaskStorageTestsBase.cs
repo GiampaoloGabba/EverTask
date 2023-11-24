@@ -7,7 +7,6 @@ namespace EverTask.Tests.Storage.EfCore;
 
 public abstract class EfCoreTaskStorageTestsBase
 {
-    private readonly List<QueuedTask> _queuedTasks;
     private readonly ITaskStorage _storage;
     private readonly ITaskStoreDbContext _mockedDbContext;
 
@@ -16,59 +15,59 @@ public abstract class EfCoreTaskStorageTestsBase
 
     public EfCoreTaskStorageTestsBase()
     {
-        _queuedTasks = new List<QueuedTask>
-        {
-            new QueuedTask
-            {
-                Id                    = Guid.NewGuid(),
-                CreatedAtUtc          = DateTimeOffset.UtcNow,
-                LastExecutionUtc      = DateTimeOffset.UtcNow,
-                ScheduledExecutionUtc = DateTimeOffset.UtcNow.AddDays(1),
-                Type                  = "Type1",
-                Request               = "Request1",
-                Handler               = "Handler1",
-                Status                = QueuedTaskStatus.InProgress,
-                /*StatusAudits = new List<StatusAudit>()
-                {
-                    new StatusAudit
-                    {
-                        UpdatedAtUtc = DateTimeOffset.UtcNow,
-                        NewStatus    = QueuedTaskStatus.Queued
-                    },
-                    new StatusAudit
-                    {
-                        UpdatedAtUtc = DateTimeOffset.UtcNow,
-                        NewStatus    = QueuedTaskStatus.InProgress
-                    }
-                }*/
-            },
-            new QueuedTask
-            {
-                Id                    = Guid.NewGuid(),
-                CreatedAtUtc          = DateTimeOffset.UtcNow.AddMinutes(1),
-                LastExecutionUtc      = DateTimeOffset.UtcNow.AddMinutes(1),
-                ScheduledExecutionUtc = DateTimeOffset.UtcNow.AddDays(1).AddMinutes(1),
-                Type                  = "Type2",
-                Request               = "Request2",
-                Handler               = "Handler2",
-                Status                = QueuedTaskStatus.Queued,
-                /*StatusAudits = new List<StatusAudit>()
-                {
-                    new StatusAudit
-                    {
-                        UpdatedAtUtc = DateTimeOffset.UtcNow,
-                        NewStatus    = QueuedTaskStatus.Queued
-                    }
-                }*/
-            },
-        };
-
         Initialize();
         _storage         = GetStorage();
         _mockedDbContext = CreateDbContext();
-
-        _storage.Persist(_queuedTasks[0]);
     }
+
+    public List<QueuedTask> QueuedTasks =>
+    [
+        new QueuedTask
+        {
+            Id                    = Guid.NewGuid(),
+            CreatedAtUtc          = DateTimeOffset.UtcNow,
+            LastExecutionUtc      = DateTimeOffset.UtcNow,
+            ScheduledExecutionUtc = DateTimeOffset.UtcNow.AddDays(1),
+            Type                  = "Type1",
+            Request               = "Request1",
+            Handler               = "Handler1",
+            Status                = QueuedTaskStatus.InProgress,
+            /*StatusAudits = new List<StatusAudit>()
+            {
+                new StatusAudit
+                {
+                    UpdatedAtUtc = DateTimeOffset.UtcNow,
+                    NewStatus    = QueuedTaskStatus.Queued
+                },
+                new StatusAudit
+                {
+                    UpdatedAtUtc = DateTimeOffset.UtcNow,
+                    NewStatus    = QueuedTaskStatus.InProgress
+                }
+            }*/
+        },
+
+        new QueuedTask
+        {
+            Id                    = Guid.NewGuid(),
+            CreatedAtUtc          = DateTimeOffset.UtcNow.AddMinutes(1),
+            LastExecutionUtc      = DateTimeOffset.UtcNow.AddMinutes(1),
+            ScheduledExecutionUtc = DateTimeOffset.UtcNow.AddDays(1).AddMinutes(1),
+            Type                  = "Type2",
+            Request               = "Request2",
+            Handler               = "Handler2",
+            Status                = QueuedTaskStatus.Queued,
+            /*StatusAudits = new List<StatusAudit>()
+            {
+                new StatusAudit
+                {
+                    UpdatedAtUtc = DateTimeOffset.UtcNow,
+                    NewStatus    = QueuedTaskStatus.Queued
+                }
+            }*/
+        }
+    ];
+
 
     protected virtual void Initialize()
     {
@@ -77,12 +76,11 @@ public abstract class EfCoreTaskStorageTestsBase
     [Fact]
     public async Task Get_ReturnsExpectedTasks()
     {
-        await CleanUpDatabase();
-
-        _mockedDbContext.QueuedTasks.AddRange(_queuedTasks);
+        var queued = QueuedTasks;
+        _mockedDbContext.QueuedTasks.AddRange(queued);
         await _mockedDbContext.SaveChangesAsync(CancellationToken.None);
 
-        var result = await _storage.Get(x => x.Type == "Type1");
+        var result = await _storage.Get(x => x.Id == queued.FirstOrDefault()!.Id);
 
         result.Length.ShouldBe(1);
         result[0].Type.ShouldBe("Type1");
@@ -92,21 +90,21 @@ public abstract class EfCoreTaskStorageTestsBase
     [Fact]
     public async Task GetAll_ReturnsAllTasks()
     {
-        await CleanUpDatabase();
-        _mockedDbContext.QueuedTasks.AddRange(_queuedTasks);
+        var queued = QueuedTasks;
+        _mockedDbContext.QueuedTasks.AddRange(queued);
         await _mockedDbContext.SaveChangesAsync(CancellationToken.None);
         var result = await _storage.GetAll();
-        Assert.Equal(_queuedTasks.Count, result.Length);
+        Assert.Equal(QueuedTasks.Count, result.Count(x=>queued.Any(y=>y.Id == x.Id)));
     }
 
     [Fact]
     public async Task PersistTask_ShouldPersistTask()
     {
-        await CleanUpDatabase();
-        await _storage.Persist(_queuedTasks[1]);
-        _mockedDbContext.QueuedTasks.Count().ShouldBe(1);
+        var queued = QueuedTasks[1];
+        await _storage.Persist(queued);
+        _mockedDbContext.QueuedTasks.Count(x => x.Id == queued.Id).ShouldBe(1);
 
-        var result = await _storage.Get(x => x.Type == "Type2");
+        var result = await _storage.Get(x => x.Id == queued.Id);
 
         result.ShouldNotBeNull();
         result[0].Type.ShouldBe("Type2");
@@ -115,12 +113,12 @@ public abstract class EfCoreTaskStorageTestsBase
     [Fact]
     public async Task Should_RetrivePendingTasks()
     {
-        await CleanUpDatabase();
-        await _storage.Persist(_queuedTasks[0]);
+        var queued = QueuedTasks[0];
+        await _storage.Persist(queued);
         await _storage.RetrievePending();
-        _mockedDbContext.QueuedTasks.Count().ShouldBe(1);
+        _mockedDbContext.QueuedTasks.Count(x => x.Id == queued.Id).ShouldBe(1);
 
-        var result = await _storage.Get(x => x.Type == "Type1");
+        var result = await _storage.Get(x => x.Id == queued.Id);
 
         result.ShouldNotBeNull();
         result[0].Type.ShouldBe("Type1");
@@ -129,82 +127,82 @@ public abstract class EfCoreTaskStorageTestsBase
     [Fact]
     public async Task Should_SetTaskQueued()
     {
-        await CleanUpDatabase();
-        await Task.Delay(1000);
-        await _storage.Persist(_queuedTasks[0]);
-        var result         = await _storage.Get(x => x.Type == "Type1");
-        var startingLength = _mockedDbContext.QueuedTaskStatusAudit.Count(x => x.QueuedTaskId == result[0].Id);
+        var queued = QueuedTasks[0];
+        await _storage.Persist(queued);
+        var result         = await _storage.Get(x => x.Id == queued.Id);
+        var startingLength = _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == result[0].Id);
 
         await _storage.SetQueued(result[0].Id);
 
-        result = await _storage.Get(x => x.Type == "Type1");
+        result = await _storage.Get(x => x.Id == queued.Id);
         result[0].Status.ShouldBe(QueuedTaskStatus.Queued);
 
-        _mockedDbContext.QueuedTaskStatusAudit.Count(x => x.QueuedTaskId == result[0].Id).ShouldBe(startingLength + 1);
-        _mockedDbContext.QueuedTaskStatusAudit.OrderBy(x=>x.UpdatedAtUtc).LastOrDefault(x => x.QueuedTaskId == result[0].Id)?.NewStatus
+        _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == result[0].Id).ShouldBe(startingLength + 1);
+        //using ToList because sqlite doesnt support order by DateTimeOffset
+        _mockedDbContext.StatusAudit.ToList().OrderBy(x=>x.UpdatedAtUtc).LastOrDefault(x => x.QueuedTaskId == result[0].Id)?.NewStatus
                         .ShouldBe(QueuedTaskStatus.Queued);
     }
 
     [Fact]
     public async Task Should_SetTaskInProgress()
     {
-        await CleanUpDatabase();
-        await _storage.Persist(_queuedTasks[0]);
-        var result         = await _storage.Get(x => x.Type == "Type1");
-        var startingLength = _mockedDbContext.QueuedTaskStatusAudit.Count(x => x.QueuedTaskId == result[0].Id);
+        var queued = QueuedTasks[0];
+        await _storage.Persist(queued);
+        var result         = await _storage.Get(x => x.Id == queued.Id);
+        var startingLength = _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == result[0].Id);
 
         await _storage.SetInProgress(result[0].Id);
 
-        result = await _storage.Get(x => x.Type == "Type1");
+        result = await _storage.Get(x => x.Id == queued.Id);
         result[0].Status.ShouldBe(QueuedTaskStatus.InProgress);
 
-        _mockedDbContext.QueuedTaskStatusAudit.Count(x => x.QueuedTaskId == result[0].Id).ShouldBe(startingLength + 1);
-        _mockedDbContext.QueuedTaskStatusAudit.OrderBy(x => x.Id).LastOrDefault(x => x.QueuedTaskId == result[0].Id)
+        _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == result[0].Id).ShouldBe(startingLength + 1);
+        _mockedDbContext.StatusAudit.OrderBy(x => x.Id).LastOrDefault(x => x.QueuedTaskId == result[0].Id)
                         ?.NewStatus.ShouldBe(QueuedTaskStatus.InProgress);
     }
 
     [Fact]
     public async Task Should_SetTaskCompleted()
     {
-        await CleanUpDatabase();
-        await _storage.Persist(_queuedTasks[0]);
-        var result         = await _storage.Get(x => x.Type == "Type1");
-        var startingLength = _mockedDbContext.QueuedTaskStatusAudit.Count(x => x.QueuedTaskId == result[0].Id);
+        var queued = QueuedTasks[0];
+        await _storage.Persist(queued);
+        var result         = await _storage.Get(x => x.Id == queued.Id);
+        var startingLength = _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == result[0].Id);
 
         await _storage.SetCompleted(result[0].Id);
 
-        result = await _storage.Get(x => x.Type == "Type1");
+        result = await _storage.Get(x => x.Id == queued.Id);
         result[0].Status.ShouldBe(QueuedTaskStatus.Completed);
 
-        _mockedDbContext.QueuedTaskStatusAudit.Count(x => x.QueuedTaskId == result[0].Id).ShouldBe(startingLength + 1);
-        _mockedDbContext.QueuedTaskStatusAudit.OrderBy(x => x.Id).LastOrDefault(x => x.QueuedTaskId == result[0].Id)
+        _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == result[0].Id).ShouldBe(startingLength + 1);
+        _mockedDbContext.StatusAudit.OrderBy(x => x.Id).LastOrDefault(x => x.QueuedTaskId == result[0].Id)
                         ?.NewStatus.ShouldBe(QueuedTaskStatus.Completed);
     }
 
     [Fact]
     public async Task Should_SetTaskCancelledByUser()
     {
-        await CleanUpDatabase();
-        await _storage.Persist(_queuedTasks[0]);
-        var result = await _storage.Get(x => x.Type == "Type1");
+        var queued = QueuedTasks[0];
+        await _storage.Persist(queued);
+        var result = await _storage.Get(x => x.Id == queued.Id);
 
         await _storage.SetCancelledByUser(result[0].Id);
 
-        result = await _storage.Get(x => x.Type == "Type1");
+        result = await _storage.Get(x => x.Id == queued.Id);
         result[0].Status.ShouldBe(QueuedTaskStatus.Cancelled);
     }
 
     [Fact]
     public async Task Should_SetTaskCancelledByService()
     {
-        await CleanUpDatabase();
-        await _storage.Persist(_queuedTasks[0]);
-        var result = await _storage.Get(x => x.Type == "Type1");
+        var queued = QueuedTasks[0];
+        await _storage.Persist(queued);
+        var result = await _storage.Get(x => x.Id == queued.Id);
 
         var exception = new Exception("Test Exception");
         await _storage.SetCancelledByService(result[0].Id, exception);
 
-        result = await _storage.Get(x => x.Type == "Type1");
+        result = await _storage.Get(x => x.Id == queued.Id);
         result[0].Status.ShouldBe(QueuedTaskStatus.ServiceStopped);
         result[0].Exception!.ShouldContain("Test Exception");
     }
@@ -212,9 +210,9 @@ public abstract class EfCoreTaskStorageTestsBase
     [Fact]
     public async Task GetCurrentRunCount_Should_ReturnCorrectCount()
     {
-        await CleanUpDatabase();
-        await _storage.Persist(_queuedTasks[0]);
-        var taskId = _queuedTasks[0].Id;
+        var queued = QueuedTasks[0];
+        await _storage.Persist(queued);
+        var taskId = queued.Id;
 
         var count = await _storage.GetCurrentRunCount(taskId);
         count.ShouldBe(0); // Inizialmente zero
@@ -227,9 +225,9 @@ public abstract class EfCoreTaskStorageTestsBase
     [Fact]
     public async Task UpdateCurrentRun_Should_UpdateRunCountAndNextRun()
     {
-        await CleanUpDatabase();
-        await _storage.Persist(_queuedTasks[0]);
-        var taskId  = _queuedTasks[0].Id;
+        var queued = QueuedTasks[0];
+        await _storage.Persist(queued);
+        var taskId  = queued.Id;
         var nextRun = DateTimeOffset.UtcNow.AddDays(1);
 
         await _storage.UpdateCurrentRun(taskId, nextRun);

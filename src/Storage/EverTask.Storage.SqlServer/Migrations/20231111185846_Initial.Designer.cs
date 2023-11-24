@@ -11,7 +11,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 namespace EverTask.Storage.SqlServer.Migrations
 {
-    [DbContext(typeof(TaskStoreEfDbContext))]
+    [DbContext(typeof(SqlServerTaskStoreContext))]
     [Migration("20231111185846_Initial")]
     partial class Initial
     {
