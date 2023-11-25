@@ -1,4 +1,4 @@
-﻿using EverTask.EfCore;
+﻿using EverTask.Storage.EfCore;
 using EverTask.Storage;
 using Microsoft.EntityFrameworkCore;
 
@@ -11,7 +11,8 @@ public class TestDbContext : DbContext, ITaskStoreDbContext
     {
     }
 
-    public         string?            Schema                { get; }      = "EverTask";
-    public virtual DbSet<QueuedTask>  QueuedTasks           { get; set; } = null!;
-    public virtual DbSet<StatusAudit> QueuedTaskStatusAudit { get; set; } = null!;
+    public         string?            Schema      { get; }      = "EverTask";
+    public virtual DbSet<QueuedTask>  QueuedTasks { get; set; } = null!;
+    public virtual DbSet<StatusAudit> StatusAudit { get; set; } = null!;
+    public         DbSet<RunsAudit>   RunsAudit   { get; set; }      = null!;
 }

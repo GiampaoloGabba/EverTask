@@ -1,0 +1,19 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\EverTask.Storage.EfCore\EverTask.Storage.EfCore.csproj" />
+    <ProjectReference Include="..\..\EverTask\EverTask.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\..\assets\logo-nuget.png" Pack="true" PackagePath="" />
+    <None Include="..\..\..\README.md" Pack="true" PackagePath="" />
+  </ItemGroup>
+
+</Project>

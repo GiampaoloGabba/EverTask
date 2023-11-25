@@ -8,6 +8,8 @@ global using EverTask.Logger;
 global using EverTask.Monitoring;
 global using EverTask.Resilience;
 global using EverTask.Scheduler;
+global using EverTask.Scheduler.Recurring;
+global using EverTask.Scheduler.Recurring.Intervals;
 global using EverTask.Storage;
 global using EverTask.Worker;
 global using Microsoft.Extensions.DependencyInjection;

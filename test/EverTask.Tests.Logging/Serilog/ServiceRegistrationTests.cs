@@ -1,4 +1,5 @@
 ﻿using EverTask.Logger;
+using EverTask.Logging.Serilog;
 using Microsoft.Extensions.DependencyInjection;
 using Serilog;
 using Xunit;

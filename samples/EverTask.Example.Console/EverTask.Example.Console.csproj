@@ -13,7 +13,7 @@
 
     <ItemGroup>
       <ProjectReference Include="..\..\src\EverTask\EverTask.csproj" />
-      <ProjectReference Include="..\..\src\Logging\EverTask.Serilog\EverTask.Serilog.csproj" />
+      <ProjectReference Include="..\..\src\Logging\EverTask.Logging.Serilog\EverTask.Logging.Serilog.csproj" />
     </ItemGroup>
 
 </Project>
