@@ -84,7 +84,8 @@ public class WorkerExecutor(
 
         if (cpuBound)
         {
-            await Task.Run(async () => await DoExecute(), taskToken).ConfigureAwait(false);
+            //https://github.com/davidfowl/AspNetCoreDiagnosticScenarios/blob/master/AsyncGuidance.md#avoid-using-taskrun-for-long-running-work-that-blocks-the-thread
+            await (_ = await Task.Factory.StartNew(async () => await DoExecute(),taskToken, TaskCreationOptions.LongRunning, TaskScheduler.Default));
         }
         else
         {
@@ -95,18 +96,20 @@ public class WorkerExecutor(
 
         async Task DoExecute()
         {
+            //Use WaitAsync for cancelling:
+            //https://github.com/davidfowl/AspNetCoreDiagnosticScenarios/blob/master/AsyncGuidance.md#cancelling-uncancellable-operations
             await retryPolicy.Execute(async retryToken =>
             {
                 if (timeout.HasValue && timeout.Value > TimeSpan.Zero)
                 {
                     await ExecuteWithTimeout(
-                        innerToken => task.HandlerCallback.Invoke(task.Task, innerToken),
+                        innerToken => task.HandlerCallback.Invoke(task.Task, innerToken).WaitAsync(retryToken),
                         timeout.Value,
                         retryToken).ConfigureAwait(false);
                 }
                 else
                 {
-                    await task.HandlerCallback.Invoke(task.Task, retryToken).ConfigureAwait(false);
+                    await task.HandlerCallback.Invoke(task.Task, retryToken).WaitAsync(retryToken).ConfigureAwait(false);
                 }
             }, taskToken).ConfigureAwait(false);
         }
@@ -131,6 +134,11 @@ public class WorkerExecutor(
             }
 
             throw new TimeoutException();
+        }
+        finally
+        {
+            //https://github.com/davidfowl/AspNetCoreDiagnosticScenarios/blob/master/AsyncGuidance.md#always-dispose-cancellationtokensources-used-for-timeouts
+            timeoutCts.Cancel();
         }
     }
 
