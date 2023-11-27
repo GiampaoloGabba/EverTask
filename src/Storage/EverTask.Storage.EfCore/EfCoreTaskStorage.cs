@@ -36,19 +36,6 @@ public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTa
         using var       scope     = serviceScopeFactory.CreateScope();
         await using var dbContext = scope.ServiceProvider.GetRequiredService<ITaskStoreDbContext>();
 
-        /*
-        //For recurring tasks we need to check if the task already exists.
-        //If it does and the schedule is different we need to invalidate the old task and create a new one to put in executor queue
-        //This is to avoid task duplication in the executor queue
-        if (taskEntity.RecurringTask != null)
-        {
-            var existingTask = await dbContext.QueuedTasks
-                                              .AsNoTracking()
-                                              .FirstOrDefaultAsync(
-                                                  t => t.Handler == taskEntity.Handler, ct);
-        }
-        */
-
         dbContext.QueuedTasks.Add(taskEntity);
 
         await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);

@@ -85,8 +85,10 @@ public class TimerScheduler : IScheduler
         }
     }
 
+
+    //https://github.com/davidfowl/AspNetCoreDiagnosticScenarios/blob/master/AsyncGuidance.md#timer-callbacks
     private void ProcessItem(TaskHandlerExecutor item) =>
-        DispatchToWorkerQueue(item).ConfigureAwait(false);
+        _ = DispatchToWorkerQueue(item).ConfigureAwait(false);
 
     internal async Task DispatchToWorkerQueue(TaskHandlerExecutor item)
     {
