@@ -40,9 +40,10 @@ jobs:
         run: |
           dotnet pack src/EverTask.Abstractions/EverTask.Abstractions.csproj --no-build -o nupkg
           dotnet pack src/EverTask/EverTask.csproj --no-build -o nupkg
-          dotnet pack src/Storage/EverTask.EfCore/EverTask.EfCore.csproj --no-build -o nupkg
-          dotnet pack src/Storage/EverTask.SqlServer/EverTask.SqlServer.csproj --no-build -o nupkg
-          dotnet pack src/Logging/EverTask.Serilog/EverTask.Serilog.csproj --no-build -o nupkg
+          dotnet pack src/Storage/EverTask.Storage.EfCore/EverTask.Storage.EfCore.csproj --no-build -o nupkg
+          dotnet pack src/Storage/EverTask.Storage.SqlServer/EverTask.Storage.SqlServer.csproj --no-build -o nupkg
+          dotnet pack src/Storage/EverTask.Storage.Sqlite/EverTask.Storage.Sqlite.csproj --no-build -o nupkg
+          dotnet pack src/Logging/EverTask.Logging.Serilog/EverTask.Logging.Serilog.csproj --no-build -o nupkg
           dotnet pack src/Monitoring/EverTask.Monitor.AspnetCore.SignalR/EverTask.Monitor.AspnetCore.SignalR.csproj --no-build -o nupkg
           dotnet nuget push "nupkg/*.nupkg" --source "https://api.nuget.org/v3/index.json" --api-key ${{ secrets.NUGET_API_KEY }} --skip-duplicate
         env:
