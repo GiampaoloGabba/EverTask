@@ -15,6 +15,7 @@ public class QueuedTask
     public string?         RecurringInfo         { get; set; }
     public int?            CurrentRunCount       { get; set; }
     public int?            MaxRuns               { get; set; }
+    public DateTimeOffset? RunUntil              { get; set; }
     public DateTimeOffset? NextRunUtc            { get; set; }
 
     public QueuedTaskStatus         Status       { get; set; }

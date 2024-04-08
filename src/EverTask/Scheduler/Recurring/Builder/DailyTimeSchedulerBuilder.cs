@@ -30,5 +30,14 @@ public class DailyTimeSchedulerBuilder(RecurringTask task) : IDailyTimeScheduler
         return new BuildableSchedulerBuilder(task);
     }
 
+    public IBuildableSchedulerBuilder RunUntil(DateTimeOffset runUntil)
+    {
+        if (runUntil.ToUniversalTime() < DateTimeOffset.UtcNow)
+            throw new InvalidOperationException("RunUntil cannot be in the past");
+
+        task.RunUntil = runUntil;
+        return new BuildableSchedulerBuilder(task);
+    }
+
     public void MaxRuns(int maxRuns) => task.MaxRuns = maxRuns;
 }

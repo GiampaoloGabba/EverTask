@@ -157,6 +157,19 @@ public class RecurringTaskTests
         Assert.Null(nextRun);
     }
 
+    [Fact]
+    public void CalculateNextRun_ShouldReturnNullIfRunUntilExceeded()
+    {
+        var task = new RecurringTask
+        {
+            RunUntil = DateTimeOffset.UtcNow.AddSeconds(-5)
+        };
+
+        var nextRun = task.CalculateNextRun(DateTimeOffset.UtcNow, 1);
+
+        Assert.Null(nextRun);
+    }
+
     // Testa con MinuteInterval
     [Fact]
     public void CalculateNextRun_WithMinuteInterval_ShouldReturnNextMinute()

@@ -20,6 +20,20 @@ public class IntervalAndMonthlyBuilderChainTests
 
         Assert.Equal(cronExpression, _builder.RecurringTask.CronInterval!.CronExpression);
         Assert.Equal(5, _builder.RecurringTask.MaxRuns);
+        Assert.Null(_builder.RecurringTask.RunUntil);
+    }
+
+    [Fact]
+    public void Should_Set_UseCron_And_RunUntil()
+    {
+        var cronExpression = "0 13 0 * *"; // Every day at 1pm
+
+        var runUntil = DateTimeOffset.UtcNow.AddMinutes(2);
+        _builder.Schedule().UseCron(cronExpression).RunUntil(runUntil);
+
+        Assert.Equal(cronExpression, _builder.RecurringTask.CronInterval!.CronExpression);
+        Assert.Null(_builder.RecurringTask.MaxRuns);
+        Assert.Equal(runUntil, _builder.RecurringTask.RunUntil);
     }
 
     [Fact]

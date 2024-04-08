@@ -65,6 +65,9 @@ namespace EverTask.Storage.SqlServer.Migrations
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 
+                    b.Property<DateTimeOffset?>("RunUntil")
+                        .HasColumnType("datetimeoffset");
+
                     b.Property<DateTimeOffset?>("ScheduledExecutionUtc")
                         .HasColumnType("datetimeoffset");
 

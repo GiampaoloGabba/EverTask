@@ -19,6 +19,19 @@ public class HourAndMinuteBuilderChainTests
         Assert.NotNull(_builder.RecurringTask.HourInterval);
         Assert.Equal(30, _builder.RecurringTask.HourInterval.OnMinute);
         Assert.Equal(10, _builder.RecurringTask.MaxRuns);
+        Assert.Null(_builder.RecurringTask.RunUntil);
+    }
+
+    [Fact]
+    public void Should_Set_EveryHour_AtSpecificMinute_And_RunUntil()
+    {
+        var runUntil = DateTimeOffset.UtcNow.AddMinutes(2);
+        _builder.Schedule().EveryHour().AtMinute(30).RunUntil(runUntil);
+
+        Assert.NotNull(_builder.RecurringTask.HourInterval);
+        Assert.Equal(30, _builder.RecurringTask.HourInterval.OnMinute);
+        Assert.Null(_builder.RecurringTask.MaxRuns);
+        Assert.Equal(runUntil, _builder.RecurringTask.RunUntil);
     }
 
     [Fact]

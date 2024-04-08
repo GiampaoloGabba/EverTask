@@ -53,6 +53,7 @@ public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTa
         return await dbContext.QueuedTasks
                               .AsNoTracking()
                               .Where(t => (t.MaxRuns == null || t.CurrentRunCount <= t.MaxRuns)
+                                          && (t.RunUntil == null || t.RunUntil >= DateTimeOffset.UtcNow)
                                           && (t.Status == QueuedTaskStatus.Queued ||
                                               t.Status == QueuedTaskStatus.Pending ||
                                               t.Status == QueuedTaskStatus.ServiceStopped ||

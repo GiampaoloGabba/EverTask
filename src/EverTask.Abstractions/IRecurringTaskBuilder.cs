@@ -37,12 +37,14 @@ public interface IEverySchedulerBuilder
 public interface IHourSchedulerBuilder
 {
     IMinuteSchedulerBuilder AtMinute(int minute);
+    IBuildableSchedulerBuilder RunUntil(DateTimeOffset dateTimeOffset);
     void MaxRuns(int maxRuns);
 }
 
 public interface IMinuteSchedulerBuilder
 {
     IBuildableSchedulerBuilder AtSecond(int second);
+    IBuildableSchedulerBuilder RunUntil(DateTimeOffset dateTimeOffset);
     void MaxRuns(int maxRuns);
 }
 
@@ -66,5 +68,6 @@ public interface IThenableSchedulerBuilder
 
 public interface IBuildableSchedulerBuilder
 {
+    IBuildableSchedulerBuilder RunUntil(DateTimeOffset dateTimeOffset);
     void MaxRuns(int maxRuns);
 }

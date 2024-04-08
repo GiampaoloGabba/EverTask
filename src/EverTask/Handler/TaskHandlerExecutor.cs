@@ -31,6 +31,7 @@ public static class TaskHandlerExecutorExtensions
         DateTimeOffset? nextRun          = null;
         string?         scheduleTaskInfo = null;
         int?            maxRuns          = null;
+        DateTimeOffset? runUntil         = null;
 
         if (executor.RecurringTask != null)
         {
@@ -39,6 +40,7 @@ public static class TaskHandlerExecutorExtensions
             nextRun          = executor.RecurringTask.CalculateNextRun(DateTimeOffset.UtcNow, 0);
             scheduleTaskInfo = executor.RecurringTask.ToString();
             maxRuns          = executor.RecurringTask.MaxRuns;
+            runUntil         = executor.RecurringTask.RunUntil;
         }
 
         ArgumentNullException.ThrowIfNull(request);
@@ -58,6 +60,7 @@ public static class TaskHandlerExecutorExtensions
             RecurringTask         = scheduleTask,
             RecurringInfo         = scheduleTaskInfo,
             MaxRuns               = maxRuns,
+            RunUntil              = runUntil,
             NextRunUtc            = nextRun,
             CurrentRunCount       = 0
         };

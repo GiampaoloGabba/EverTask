@@ -20,6 +20,19 @@ public class EveryAndMonthlyBuilderChainTests
         Assert.NotNull(_builder.RecurringTask.SecondInterval);
         Assert.Equal(1, _builder.RecurringTask.SecondInterval.Interval);
         Assert.Equal(20, _builder.RecurringTask.MaxRuns);
+        Assert.Null(_builder.RecurringTask.RunUntil);
+    }
+
+    [Fact]
+    public void Should_Set_EverySecond_And_RunUntil()
+    {
+        var runUntil = DateTimeOffset.UtcNow.AddMinutes(2);
+        _builder.Schedule().EverySecond().RunUntil(runUntil);
+
+        Assert.NotNull(_builder.RecurringTask.SecondInterval);
+        Assert.Equal(1, _builder.RecurringTask.SecondInterval.Interval);
+        Assert.Null(_builder.RecurringTask.MaxRuns);
+        Assert.Equal(runUntil, _builder.RecurringTask.RunUntil);
     }
 
     [Fact]

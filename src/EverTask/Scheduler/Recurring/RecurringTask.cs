@@ -1,6 +1,4 @@
-﻿using Cronos;
-
-namespace EverTask.Scheduler.Recurring;
+﻿namespace EverTask.Scheduler.Recurring;
 
 public class RecurringTask
 {
@@ -14,6 +12,7 @@ public class RecurringTask
     public DayInterval?    DayInterval     { get; set; }
     public MonthInterval?  MonthInterval   { get; set; }
     public int?            MaxRuns         { get; set; }
+    public DateTimeOffset? RunUntil        { get; set; }
 
     //used for serialization/deserialization
     public RecurringTask() { }
@@ -24,6 +23,9 @@ public class RecurringTask
         if (currentRun >= MaxRuns) return null;
 
         current = current.ToUniversalTime();
+
+        if (RunUntil!=null && RunUntil >= DateTimeOffset.UtcNow) return null;
+
         var next = GetNextOccurrence(current);
 
         DateTimeOffset? runtime = null;
@@ -48,7 +50,8 @@ public class RecurringTask
         // Return runtime only if it's before next and also before the current time, but not too much before...
         // and there is at least a 30 seconds gap between runtime and next.
         // This prevents closely spaced executions in case of delays or missed runs.
-        if (runtime < next && runtime < current.AddSeconds(1) && runtime > current.AddSeconds(-20) && (next.Value - runtime.Value).TotalSeconds >= 30)
+        if (runtime < next && runtime < current.AddSeconds(1) && runtime > current.AddSeconds(-20) &&
+            (next.Value - runtime.Value).TotalSeconds >= 30)
             return runtime;
 
         return next;
@@ -57,7 +60,13 @@ public class RecurringTask
     private DateTimeOffset? GetNextOccurrence(DateTimeOffset current)
     {
         if (!string.IsNullOrEmpty(CronInterval?.CronExpression))
-            return CronInterval.GetNextOccurrence(current);
+        {
+            var nextCron = CronInterval.GetNextOccurrence(current);
+            if (nextCron == null || nextCron > RunUntil)
+                return null;
+
+            return nextCron;
+        }
 
         var nextRun = MonthInterval?.GetNextOccurrence(current) ?? current;
         nextRun = DayInterval?.GetNextOccurrence(nextRun) ?? nextRun;
@@ -65,7 +74,7 @@ public class RecurringTask
         nextRun = MinuteInterval?.GetNextOccurrence(nextRun) ?? nextRun;
         nextRun = SecondInterval?.GetNextOccurrence(nextRun) ?? nextRun;
 
-        if (nextRun < current.AddSeconds(1))
+        if (nextRun < current.AddSeconds(1) || nextRun > RunUntil)
             return null;
 
         return nextRun;
@@ -84,7 +93,7 @@ public class RecurringTask
             parts.Add($"Start after a delay of {InitialDelay.Value}");
 
         if (SpecificRunTime.HasValue)
-            parts.Add($"Run at {SpecificRunTime:yyyy-MM-dd HH:mm:ss}");
+            parts.Add($"Run at {SpecificRunTime.Value.ToLocalTime():yyyy-MM-dd HH:mm:ss}");
 
         if (parts.Any())
             parts.Add("then");
@@ -143,6 +152,12 @@ public class RecurringTask
             if (MonthInterval.OnMonths.Any())
                 parts.Add($"in {string.Join(" - ", MonthInterval.OnMonths)}");
         }
+
+        if (RunUntil != null)
+            parts.Add($"until {RunUntil.Value.ToLocalTime():yyyy-MM-dd HH:mm:ss}");
+
+        if (MaxRuns != null)
+            parts.Add($"up to {MaxRuns} times");
 
         return string.Join(" ", parts);
     }

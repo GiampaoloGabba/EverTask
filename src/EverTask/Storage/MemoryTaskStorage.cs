@@ -34,8 +34,8 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         logger.LogInformation("Retrieve Pending Tasks");
 
         var pending = _pendingTasks.Where(t => (t.MaxRuns == null || t.CurrentRunCount <= t.MaxRuns)
-                                               && (t.Status == QueuedTaskStatus.Queued ||
-                                                   t.Status == QueuedTaskStatus.Pending ||
+                                               && (t.RunUntil == null || t.RunUntil >= DateTimeOffset.UtcNow)
+                                               && (t.Status is QueuedTaskStatus.Queued or QueuedTaskStatus.Pending ||
                                                    t.Status == QueuedTaskStatus.ServiceStopped ||
                                                    t.Status == QueuedTaskStatus.InProgress));
         return Task.FromResult(pending.ToArray());
@@ -61,7 +61,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
 
     /// <inheritdoc />
     public Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception = null,
-                              CancellationToken ct = default)
+                          CancellationToken ct = default)
     {
         logger.LogInformation("Set Task {taskId} with Status {status}", taskId, status);
 

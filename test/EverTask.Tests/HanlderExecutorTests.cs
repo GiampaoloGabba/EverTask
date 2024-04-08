@@ -117,7 +117,8 @@ public class HanlderExecutorTests
         var handler       = new object();
         var executionTime = DateTimeOffset.UtcNow;
         var persistenceId = Guid.NewGuid();
-        var recurringTask = new RecurringTask{ RunNow = true, MaxRuns = 2 };
+        var runUntil      = DateTimeOffset.UtcNow.AddMinutes(2);
+        var recurringTask = new RecurringTask{ RunNow = true, RunUntil = runUntil, MaxRuns = 2 };
 
         var executor = new TaskHandlerExecutor(
             Task: task,
@@ -142,6 +143,7 @@ public class HanlderExecutorTests
         queuedTask.RecurringTask.ShouldBeEquivalentTo(JsonConvert.SerializeObject(recurringTask));
         queuedTask.IsRecurring.ShouldBe(true);
         queuedTask.RecurringInfo.ShouldBe(recurringTask.ToString());
+        queuedTask.RunUntil.ShouldBe(runUntil);
         queuedTask.MaxRuns.ShouldBe(2);
     }
 

@@ -58,8 +58,7 @@ public class Dispatcher(
                                             CancellationToken ct = default,
                                             Guid? existingTaskId = null)
     {
-        if (task == null)
-            throw new ArgumentNullException(nameof(task));
+        ArgumentNullException.ThrowIfNull(task);
 
         var executionTime = executionDelay != null
                                 ? DateTimeOffset.UtcNow.Add(executionDelay.Value)
@@ -72,8 +71,7 @@ public class Dispatcher(
                                             RecurringTask? recurring = null, int? currentRun = null,
                                             CancellationToken ct = default, Guid? existingTaskId = null)
     {
-        if (task == null)
-            throw new ArgumentNullException(nameof(task));
+        ArgumentNullException.ThrowIfNull(task);
 
         DateTimeOffset? nextRun = null;
 
