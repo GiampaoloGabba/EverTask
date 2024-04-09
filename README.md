@@ -192,6 +192,10 @@ builder => builder.Schedule().EveryMinute().AtSecond(30));
 await dispatcher.Dispatch(new SampleTaskRequest("Test"),
 builder => builder.RunNow().Then().EveryHour().AtMinute(45).MaxRuns(10));
 
+// Scheduling a task to run every hour at the 45th minute, for the next 2 days
+await dispatcher.Dispatch(new SampleTaskRequest("Test"),
+builder => builder.RunNow().Then().EveryHour().AtMinute(45).RunUntil(DateTimeOffset.UtcNow.AddDays(2));
+
 // Scheduling a task to run daily at specific times
 var times = new[] { new TimeOnly(12, 0), new TimeOnly(18, 0) };
 await dispatcher.Dispatch(new SampleTaskRequest("Test"),
@@ -255,7 +259,12 @@ await dispatcher.Dispatch(new SampleTaskRequest("Max Runs"),
     builder => builder.Schedule().EveryDay().MaxRuns(5));
 ```
 
-These examples illustrate the flexibility and power of EverTask's fluent builder. With its comprehensive range of scheduling options, EverTask makes it easy to configure and manage background tasks in your .NET applications.
+#### Run untile a specific date
+```csharp
+// Scheduling a task to run every day, for the next 5 days
+await dispatcher.Dispatch(new SampleTaskRequest("Max Runs"), 
+    builder => builder.Schedule().EveryDay().RunUntil(DateTimeOffset.UtcNow.AddDays(5));
+```
 
 ### Scheduling with Cron Expression
 Cron expressions are powerful tools for defining complex time-based schedules. Originating from Unix systems, they provide a concise way to specify patterns for recurring tasks. A cron expression consists of fields representing different time units, like minutes, hours, days, and months.
@@ -283,11 +292,16 @@ await _dispatcher.Dispatch(task, builder => builder.RunDelayed(TimeSpan.FromSeco
 await _dispatcher.Dispatch(task, builder => builder.RunAt(dateTimeOffset)).Then().UseCron("*/2 * * * *").MaxRuns(3));
 ```
 
-#### Every 30 Minutes
+```csharp
+// Schedule task to start at a specific time, then repeat according to a Cron schedule
+await _dispatcher.Dispatch(task, builder => builder.RunAt(dateTimeOffset)).Then().UseCron("*/2 * * * *").MaxRuns(3));
+```
+
+#### Every 30 Minutes for two days
 ```csharp
 var cronEvery30Minutes = "*/30 * * * *";
 await dispatcher.Dispatch(new SampleTaskRequest("Every 30 Minutes"), 
-    builder => builder.Schedule().UseCron(cronEvery30Minutes));
+    builder => builder.Schedule().UseCron(cronEvery30Minutes)).RunUntil(DateTimeOffset.UtcNow.AddDays(2));
 ```
 
 #### Every Day at Noon
