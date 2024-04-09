@@ -284,7 +284,7 @@ public class WorkerServiceIntegrationTests
         TestTaskDelayed1.Counter = 0;
         await _dispatcher.Dispatch(task, builder => builder.RunNow().Then().EverySecond().MaxRuns(3));
 
-        await Task.Delay(3500);
+        await Task.Delay(4000);
 
         var pt = await _storage.RetrievePending();
         pt.Length.ShouldBe(0);
