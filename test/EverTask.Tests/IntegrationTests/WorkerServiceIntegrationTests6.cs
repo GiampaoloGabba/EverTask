@@ -276,6 +276,67 @@ public class WorkerServiceIntegrationTests
     }
 
     [Fact]
+    public async Task Should_execute_task_with_max_run_until_max_run_reached()
+    {
+        await _host.StartAsync();
+
+        var task = new TestTaskDelayed1();
+        TestTaskDelayed1.Counter = 0;
+        await _dispatcher.Dispatch(task, builder => builder.RunNow().Then().EverySecond().MaxRuns(3));
+
+        await Task.Delay(3500);
+
+        var pt = await _storage.RetrievePending();
+        pt.Length.ShouldBe(0);
+
+        var tasks = await _storage.GetAll();
+
+        tasks.Length.ShouldBe(1);
+        tasks[0].Status.ShouldBe(QueuedTaskStatus.Completed);
+        tasks[0].MaxRuns = tasks[0].RunsAudits.Count(x=>x.Status == QueuedTaskStatus.Completed);
+        tasks[0].LastExecutionUtc.ShouldNotBeNull();
+        tasks[0].Exception.ShouldBeNull();
+
+        var cts = new CancellationTokenSource();
+        cts.CancelAfter(2000);
+
+        await _host.StopAsync(cts.Token);
+
+        TestTaskDelayed1.Counter.ShouldBe(3);
+    }
+
+    [Fact]
+    public async Task Should_execute_task_with_run_at_until_expires()
+    {
+        await _host.StartAsync();
+
+        var task = new TestTaskDelayed1();
+        TestTaskDelayed1.Counter = 0;
+        await _dispatcher.Dispatch(task, builder => builder.RunNow().Then().EverySecond().RunUntil(DateTimeOffset.Now.AddSeconds(4)));
+
+        await Task.Delay(4000);
+
+        var pt = await _storage.RetrievePending();
+        pt.Length.ShouldBe(0);
+
+        var tasks = await _storage.GetAll();
+
+        tasks.Length.ShouldBe(1);
+        tasks[0].Status.ShouldBe(QueuedTaskStatus.Completed);
+        tasks[0].RunsAudits.Count(x=>x.Status == QueuedTaskStatus.Completed).ShouldBe(3);
+        tasks[0].LastExecutionUtc.ShouldNotBeNull();
+        tasks[0].Exception.ShouldBeNull();
+
+        var cts = new CancellationTokenSource();
+        cts.CancelAfter(2000);
+
+        await _host.StopAsync(cts.Token);
+
+        TestTaskDelayed1.Counter.ShouldBe(3);
+    }
+
+
+    [Fact]
     public async Task Should_not_execute_task_with_custom_timeout_excedeed()
     {
         await _host.StartAsync();

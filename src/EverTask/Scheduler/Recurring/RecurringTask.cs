@@ -24,7 +24,7 @@ public class RecurringTask
 
         current = current.ToUniversalTime();
 
-        if (RunUntil!=null && RunUntil >= DateTimeOffset.UtcNow) return null;
+        if (RunUntil < current) return null;
 
         var next = GetNextOccurrence(current);
 
@@ -62,7 +62,7 @@ public class RecurringTask
         if (!string.IsNullOrEmpty(CronInterval?.CronExpression))
         {
             var nextCron = CronInterval.GetNextOccurrence(current);
-            if (nextCron == null || nextCron > RunUntil)
+            if (nextCron == null || RunUntil < nextCron)
                 return null;
 
             return nextCron;

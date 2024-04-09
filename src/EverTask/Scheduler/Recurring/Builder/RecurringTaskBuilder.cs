@@ -30,16 +30,17 @@ public class ThenableSchedulerBuilder(RecurringTask recurringTask) : IThenableSc
     public IIntervalSchedulerBuilder Then() => new IntervalSchedulerBuilder(recurringTask);
 }
 
-public class BuildableSchedulerBuilder(RecurringTask recurringTask) : IBuildableSchedulerBuilder
+public class BuildableSchedulerBuilder(RecurringTask task) : IBuildableSchedulerBuilder
 {
     public IBuildableSchedulerBuilder RunUntil(DateTimeOffset runUntil)
     {
-        if (runUntil.ToUniversalTime() < DateTimeOffset.UtcNow)
+        var runUntilUtc = runUntil.ToUniversalTime();
+        if (runUntilUtc < DateTimeOffset.UtcNow)
             throw new InvalidOperationException("RunUntil cannot be in the past");
 
-        recurringTask.RunUntil = runUntil;
-        return new BuildableSchedulerBuilder(recurringTask);
+        task.RunUntil = runUntilUtc;
+        return new BuildableSchedulerBuilder(task);
     }
 
-    public void MaxRuns(int maxRuns) => recurringTask.MaxRuns = maxRuns;
+    public void MaxRuns(int maxRuns) => task.MaxRuns = maxRuns;
 }

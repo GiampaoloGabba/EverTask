@@ -15,10 +15,11 @@ public class HourSchedulerBuilder(RecurringTask task) : IHourSchedulerBuilder
 
     public IBuildableSchedulerBuilder RunUntil(DateTimeOffset runUntil)
     {
-        if (runUntil.ToUniversalTime() < DateTimeOffset.UtcNow)
+        var runUntilUtc = runUntil.ToUniversalTime();
+        if (runUntilUtc < DateTimeOffset.UtcNow)
             throw new InvalidOperationException("RunUntil cannot be in the past");
 
-        task.RunUntil = runUntil;
+        task.RunUntil = runUntilUtc;
         return new BuildableSchedulerBuilder(task);
     }
 
