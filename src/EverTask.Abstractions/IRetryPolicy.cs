@@ -1,6 +1,8 @@
-﻿namespace EverTask.Abstractions;
+﻿using Microsoft.Extensions.Logging;
+
+namespace EverTask.Abstractions;
 
 public interface IRetryPolicy
 {
-    Task Execute(Func<CancellationToken, Task> action, CancellationToken token = default);
+    Task Execute(Func<CancellationToken, Task> action, ILogger attemptLogger, CancellationToken token = default);
 }

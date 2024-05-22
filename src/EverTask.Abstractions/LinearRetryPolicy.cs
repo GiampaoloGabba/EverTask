@@ -1,4 +1,5 @@
 ﻿using EverTask.Abstractions;
+using Microsoft.Extensions.Logging;
 
 namespace EverTask.Resilience;
 
@@ -32,7 +33,7 @@ public class LinearRetryPolicy : IRetryPolicy
         _retryDelays = retryDelays;
     }
 
-    public async Task Execute(Func<CancellationToken, Task> action, CancellationToken token = default)
+    public async Task Execute(Func<CancellationToken, Task> action, ILogger attemptLogger, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(action);
 
@@ -40,6 +41,8 @@ public class LinearRetryPolicy : IRetryPolicy
         var attempt    = 0;
         foreach (var retryDelay in _retryDelays)
         {
+            attemptLogger.LogInformation("Starting attempt {Attempt} or {count}", attempt, _retryDelays.Length);
+
             token.ThrowIfCancellationRequested();
 
             if (attempt > 0)
@@ -62,6 +65,7 @@ public class LinearRetryPolicy : IRetryPolicy
             }
             catch (Exception ex)
             {
+                attemptLogger.LogError(ex, "Attempt {Attempt} failed", attempt);
                 exceptions.Add(ex);
             }
 

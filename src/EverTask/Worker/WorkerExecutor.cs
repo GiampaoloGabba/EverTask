@@ -63,7 +63,8 @@ public class WorkerExecutor(
     {
         if (workerBlacklist.IsBlacklisted(task.PersistenceId))
         {
-            RegisterInfo(task, "Task with id {0} is signaled to be cancelled and will not be executed.", task.PersistenceId);
+            RegisterInfo(task, "Task with id {0} is signaled to be cancelled and will not be executed.",
+                task.PersistenceId);
             workerBlacklist.Remove(task.PersistenceId);
             return true;
         }
@@ -85,7 +86,8 @@ public class WorkerExecutor(
         if (cpuBound)
         {
             //https://github.com/davidfowl/AspNetCoreDiagnosticScenarios/blob/master/AsyncGuidance.md#avoid-using-taskrun-for-long-running-work-that-blocks-the-thread
-            await (_ = await Task.Factory.StartNew(async () => await DoExecute(),taskToken, TaskCreationOptions.LongRunning, TaskScheduler.Default));
+            await (_ = await Task.Factory.StartNew(async () => await DoExecute(), taskToken,
+                           TaskCreationOptions.LongRunning, TaskScheduler.Default));
         }
         else
         {
@@ -99,19 +101,22 @@ public class WorkerExecutor(
             //Use WaitAsync for cancelling:
             //https://github.com/davidfowl/AspNetCoreDiagnosticScenarios/blob/master/AsyncGuidance.md#cancelling-uncancellable-operations
             await retryPolicy.Execute(async retryToken =>
-            {
-                if (timeout.HasValue && timeout.Value > TimeSpan.Zero)
                 {
-                    await ExecuteWithTimeout(
-                        innerToken => task.HandlerCallback.Invoke(task.Task, innerToken).WaitAsync(retryToken),
-                        timeout.Value,
-                        retryToken).ConfigureAwait(false);
+                    if (timeout.HasValue && timeout.Value > TimeSpan.Zero)
+                    {
+                        await ExecuteWithTimeout(
+                            innerToken => task.HandlerCallback.Invoke(task.Task, innerToken).WaitAsync(retryToken),
+                            timeout.Value,
+                            retryToken).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await task.HandlerCallback.Invoke(task.Task, retryToken).WaitAsync(retryToken)
+                                  .ConfigureAwait(false);
+                    }
                 }
-                else
-                {
-                    await task.HandlerCallback.Invoke(task.Task, retryToken).WaitAsync(retryToken).ConfigureAwait(false);
-                }
-            }, taskToken).ConfigureAwait(false);
+                , logger
+                , taskToken).ConfigureAwait(false);
         }
     }
 
