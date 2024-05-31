@@ -22,7 +22,7 @@ public static class ServiceCollectionExtensions
 
         var logger = loggerConfiguration.CreateLogger();
         builder.Services.TryAddSingleton<ILogger>(logger);
-        builder.Services.TryAddSingleton(typeof(IEverTaskLogger<>), typeof(EverTaskSerilogLogger<>));
+        builder.Services.AddSingleton(typeof(IEverTaskLogger<>), typeof(EverTaskSerilogLogger<>));
 
         return builder;
     }
