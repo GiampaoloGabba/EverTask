@@ -1,4 +1,6 @@
-﻿namespace EverTask.Worker;
+﻿using System.Diagnostics;
+
+namespace EverTask.Worker;
 
 public interface IEverTaskWorkerExecutor
 {
@@ -37,7 +39,7 @@ public class WorkerExecutor(
 
             await ExecuteCallback(task.HandlerStartedCallback, task, "Started").ConfigureAwait(false);
 
-            await ExecuteTask(task, serviceToken);
+            var executionTime = await ExecuteTask(task, serviceToken);
 
             await ExecuteDispose(task);
 
@@ -46,7 +48,7 @@ public class WorkerExecutor(
 
             await ExecuteCallback(task.HandlerCompletedCallback, task, "Completed").ConfigureAwait(false);
 
-            RegisterInfo(task, "Task with id {0} was completed.", task.PersistenceId);
+            RegisterInfo(task, "Task with id {0} was completed in {1} ms.", task.PersistenceId, executionTime);
         }
         catch (Exception ex)
         {
@@ -72,7 +74,7 @@ public class WorkerExecutor(
         return false;
     }
 
-    private async Task ExecuteTask(TaskHandlerExecutor task, CancellationToken serviceToken)
+    private async Task<double> ExecuteTask(TaskHandlerExecutor task, CancellationToken serviceToken)
     {
         serviceToken.ThrowIfCancellationRequested();
 
@@ -82,6 +84,9 @@ public class WorkerExecutor(
         var retryPolicy    = handlerOptions?.RetryPolicy ?? configuration.DefaultRetryPolicy;
         var timeout        = handlerOptions?.Timeout ?? configuration.DefaultTimeout;
         var cpuBound       = handlerOptions?.CpuBoundOperation ?? false;
+
+        var stopwatch = new Stopwatch();
+        stopwatch.Start();
 
         if (cpuBound)
         {
@@ -94,7 +99,9 @@ public class WorkerExecutor(
             await DoExecute();
         }
 
-        return;
+        stopwatch.Stop();
+
+        return stopwatch.Elapsed.TotalMilliseconds;
 
         async Task DoExecute()
         {
