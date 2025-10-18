@@ -548,3 +548,4 @@ fabric.properties
 
 # Custom
 /firebase.json
+.claude/
