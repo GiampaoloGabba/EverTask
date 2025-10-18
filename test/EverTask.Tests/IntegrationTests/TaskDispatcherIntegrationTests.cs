@@ -55,7 +55,8 @@ public class TaskDispatcherIntegrationTests
             await _dispatcher.Dispatch(task3);
         });
 
-        Task.Delay(500);
+        // Give time for background tasks to start dispatching
+        await Task.Delay(500);
 
         var dequeued = await _workerQueue.Dequeue(CancellationToken.None);
         dequeued.Task.ShouldBeAssignableTo<IEverTask>();
