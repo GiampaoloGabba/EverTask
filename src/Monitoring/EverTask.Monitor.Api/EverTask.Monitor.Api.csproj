@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\EverTask.Monitor.AspnetCore.SignalR\EverTask.Monitor.AspnetCore.SignalR.csproj" />
+    <ProjectReference Include="..\..\EverTask.Abstractions\EverTask.Abstractions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Embed all wwwroot files as resources for NuGet package -->
+    <EmbeddedResource Include="wwwroot\**\*" />
+
+    <!-- Exclude UI source files from NuGet package (dev-only) -->
+    <None Include="UI\**\*" Pack="false" />
+
+    <None Include="..\..\..\assets\logo-nuget.png" Pack="true" PackagePath="" />
+    <None Include="README.md" Pack="true" PackagePath="" />
+  </ItemGroup>
+</Project>
