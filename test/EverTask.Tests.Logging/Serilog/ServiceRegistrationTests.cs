@@ -23,7 +23,7 @@ public class ServiceRegistrationTests
 
         Assert.NotNull(service);
         Assert.NotNull(serilog);
-        Assert.IsType<EverTaskLogger<ServiceRegistrationTests>>(service);
+        Assert.IsType<EverTaskSerilogLogger<ServiceRegistrationTests>>(service);
     }
 }
 
