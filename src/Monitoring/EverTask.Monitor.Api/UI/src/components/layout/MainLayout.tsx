@@ -9,7 +9,8 @@ export function MainLayout() {
       <Header />
       <div className="flex">
         <Sidebar />
-        <main className="flex-1 p-4 md:p-6 lg:p-8">
+        {/* Main content with left margin to account for fixed sidebar */}
+        <main className="flex-1 p-4 md:p-6 lg:p-8 lg:ml-64">
           <ErrorBoundary>
             <Outlet />
           </ErrorBoundary>

@@ -72,11 +72,11 @@ export function TaskFilters({ filters, onFiltersChange, availableQueues = [] }: 
               <div className="space-y-2">
                 <Label htmlFor="status">Status</Label>
                 <Select
-                  value={localFilters.statuses?.[0]?.toString() || ''}
+                  value={localFilters.statuses?.[0]?.toString() || '__all__'}
                   onValueChange={(value) =>
                     setLocalFilters({
                       ...localFilters,
-                      statuses: value ? [Number(value) as QueuedTaskStatus] : undefined,
+                      statuses: value === '__all__' ? undefined : [Number(value) as QueuedTaskStatus],
                     })
                   }
                 >
@@ -84,7 +84,7 @@ export function TaskFilters({ filters, onFiltersChange, availableQueues = [] }: 
                     <SelectValue placeholder="All statuses" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">All statuses</SelectItem>
+                    <SelectItem value="__all__">All statuses</SelectItem>
                     <SelectItem value={QueuedTaskStatus.WaitingQueue.toString()}>Waiting</SelectItem>
                     <SelectItem value={QueuedTaskStatus.Queued.toString()}>Queued</SelectItem>
                     <SelectItem value={QueuedTaskStatus.InProgress.toString()}>In Progress</SelectItem>
@@ -114,11 +114,11 @@ export function TaskFilters({ filters, onFiltersChange, availableQueues = [] }: 
               <div className="space-y-2">
                 <Label htmlFor="queueName">Queue</Label>
                 <Select
-                  value={localFilters.queueName || ''}
+                  value={localFilters.queueName || '__all__'}
                   onValueChange={(value) =>
                     setLocalFilters({
                       ...localFilters,
-                      queueName: value || undefined,
+                      queueName: value === '__all__' ? undefined : value,
                     })
                   }
                 >
@@ -126,7 +126,7 @@ export function TaskFilters({ filters, onFiltersChange, availableQueues = [] }: 
                     <SelectValue placeholder="All queues" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">All queues</SelectItem>
+                    <SelectItem value="__all__">All queues</SelectItem>
                     <SelectItem value="null">Default Queue</SelectItem>
                     {availableQueues.map((queue) => (
                       <SelectItem key={queue} value={queue}>
@@ -155,7 +155,7 @@ export function TaskFilters({ filters, onFiltersChange, availableQueues = [] }: 
               <div className="space-y-2">
                 <Label htmlFor="isRecurring">Recurring</Label>
                 <Select
-                  value={localFilters.isRecurring?.toString() || ''}
+                  value={localFilters.isRecurring?.toString() || '__all__'}
                   onValueChange={(value) =>
                     setLocalFilters({
                       ...localFilters,
@@ -167,7 +167,7 @@ export function TaskFilters({ filters, onFiltersChange, availableQueues = [] }: 
                     <SelectValue placeholder="All tasks" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">All tasks</SelectItem>
+                    <SelectItem value="__all__">All tasks</SelectItem>
                     <SelectItem value="true">Recurring only</SelectItem>
                     <SelectItem value="false">Non-recurring only</SelectItem>
                   </SelectContent>

@@ -7,7 +7,7 @@ import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { DateRange } from '@/types/dashboard.types';
 import { CheckCircle2, XCircle, TrendingUp, Clock, AlertCircle } from 'lucide-react';
-import { formatNumber, formatPercentage } from '@/utils/formatters';
+import { formatNumber, formatPercentage, formatTime } from '@/utils/formatters';
 
 export function OverviewPage() {
   const { data: overview, isLoading, isError } = useDashboardOverview(DateRange.Today);
@@ -26,13 +26,6 @@ export function OverviewPage() {
       </Alert>
     );
   }
-
-  const formatTime = (ms: number) => {
-    if (ms < 1000) {
-      return `${ms.toFixed(0)} ms`;
-    }
-    return `${(ms / 1000).toFixed(2)} s`;
-  };
 
   return (
     <div className="space-y-6">
@@ -67,7 +60,7 @@ export function OverviewPage() {
           icon={Clock}
           title="Avg Execution Time"
           value={formatTime(overview.avgExecutionTimeMs)}
-          subtitle="Average processing time"
+          subtitle="Actual task execution duration"
         />
       </div>
 

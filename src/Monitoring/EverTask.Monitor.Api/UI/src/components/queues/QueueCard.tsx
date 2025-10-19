@@ -1,7 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { QueueMetricsDto } from '@/types/queue.types';
-import { formatNumber, formatPercentage } from '@/utils/formatters';
+import { formatNumber, formatPercentage, formatTime } from '@/utils/formatters';
 import { useNavigate } from 'react-router-dom';
 import { Layers, TrendingUp, Clock } from 'lucide-react';
 
@@ -11,13 +11,6 @@ interface QueueCardProps {
 
 export function QueueCard({ queue }: QueueCardProps) {
   const navigate = useNavigate();
-
-  const formatTime = (ms: number) => {
-    if (ms < 1000) {
-      return `${ms.toFixed(2)} ms`;
-    }
-    return `${(ms / 1000).toFixed(2)} s`;
-  };
 
   const getSuccessRateColor = (rate: number) => {
     if (rate >= 95) return 'text-green-600 bg-green-50 border-green-200';

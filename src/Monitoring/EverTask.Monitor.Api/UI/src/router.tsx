@@ -42,7 +42,7 @@ const router = createBrowserRouter([
     ],
   },
 ], {
-  basename: '/evertask', // Match Vite base config
+  basename: '/monitoring', // Fixed base path matching vite.config
 });
 
 export default router;

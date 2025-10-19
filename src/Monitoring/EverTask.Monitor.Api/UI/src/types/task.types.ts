@@ -1,4 +1,5 @@
 // Must match backend DTOs exactly (camelCase for JSON serialization)
+// Backend uses JsonStringEnumConverter for JSON but numbers for query params
 
 export enum QueuedTaskStatus {
   WaitingQueue = 0,
@@ -10,6 +11,18 @@ export enum QueuedTaskStatus {
   Failed = 6,
   ServiceStopped = 7
 }
+
+// String to enum mapping (for JSON deserialization from API)
+export const QueuedTaskStatusFromString: Record<string, QueuedTaskStatus> = {
+  'WaitingQueue': QueuedTaskStatus.WaitingQueue,
+  'Queued': QueuedTaskStatus.Queued,
+  'InProgress': QueuedTaskStatus.InProgress,
+  'Pending': QueuedTaskStatus.Pending,
+  'Cancelled': QueuedTaskStatus.Cancelled,
+  'Completed': QueuedTaskStatus.Completed,
+  'Failed': QueuedTaskStatus.Failed,
+  'ServiceStopped': QueuedTaskStatus.ServiceStopped,
+};
 
 export interface TaskListDto {
   id: string;

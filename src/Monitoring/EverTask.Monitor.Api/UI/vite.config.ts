@@ -5,7 +5,7 @@ import path from 'path'
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
-  base: '/evertask/', // Must match EverTaskApiOptions.BasePath default
+  base: '/monitoring/', // Absolute base path to fix asset loading on reload
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
@@ -28,11 +28,11 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/evertask/api': {
+      '/monitoring/api': {
         target: 'http://localhost:5000', // Development backend
         changeOrigin: true,
       },
-      '/evertask/monitor': {
+      '/monitoring/monitor': {
         target: 'http://localhost:5000',
         changeOrigin: true,
         ws: true, // WebSocket support for SignalR
