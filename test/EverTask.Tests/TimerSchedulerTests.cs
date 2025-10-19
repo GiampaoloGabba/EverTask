@@ -252,7 +252,7 @@ public class TimerSchedulerTests
             null,
             null);
 
-    #region PeriodicTimerScheduler Specific Tests (v1.7.0)
+    #region PeriodicTimerScheduler Specific Tests (v2.0.0)
 
     [Fact]
     public async Task PeriodicTimerScheduler_Should_WakeUp_When_UrgentTask_Arrives()

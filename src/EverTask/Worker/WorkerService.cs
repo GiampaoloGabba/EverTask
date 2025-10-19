@@ -21,7 +21,7 @@ public class WorkerService(
             logger.LogWarning(
                 "MaxDegreeOfParallelism is set to 1, which severely limits throughput. " +
                 "For production workloads, consider increasing to {RecommendedParallelism} (ProcessorCount * 2) or higher. " +
-                "Use SetMaxDegreeOfParallelism() in AddEverTask configuration.",
+                "Use SetMaxDegreeOfParallelism() in AddEverTask configuration",
                 recommendedParallelism);
         }
 
@@ -92,13 +92,21 @@ public class WorkerService(
         }
 
         var pendingTasks = await taskStorage.RetrievePending(ct).ConfigureAwait(false);
-        var contTask     = 0;
-        logger.LogTrace("Found {count} tasks to execute", pendingTasks.Length);
+        logger.LogInformation("Found {Count} pending tasks to process", pendingTasks.Length);
 
-        foreach (var taskInfo in pendingTasks)
+        if (pendingTasks.Length == 0)
+            return;
+
+        // Process pending tasks with bounded parallelism to improve startup time
+        // Use configured MaxDegreeOfParallelism to respect user settings
+        var options = new ParallelOptions
         {
-            contTask++;
-            logger.LogTrace("Processing task {task} of {count} tasks to execute", contTask, pendingTasks.Length);
+            MaxDegreeOfParallelism = configuration.MaxDegreeOfParallelism,
+            CancellationToken = ct
+        };
+
+        await Parallel.ForEachAsync(pendingTasks, options, async (taskInfo, token) =>
+        {
             IEverTask?     task          = null;
             RecurringTask? scheduledTask = null;
 
@@ -112,7 +120,7 @@ public class WorkerService(
             }
             catch (Exception e)
             {
-                logger.LogError(e, "Unable to deserialize task with id {taskId}.", taskInfo.Id);
+                logger.LogError(e, "Unable to deserialize task with id {TaskId}", taskInfo.Id);
             }
 
             try
@@ -124,36 +132,53 @@ public class WorkerService(
             }
             catch (Exception e)
             {
-                logger.LogError(e, "Unable to deserialize recurring task info with id {taskId}.", taskInfo.Id);
+                logger.LogError(e, "Unable to deserialize recurring task info with id {TaskId}", taskInfo.Id);
             }
 
             if (task != null)
             {
                 try
                 {
-                    await taskDispatcher.ExecuteDispatch(task, taskInfo.ScheduledExecutionUtc, scheduledTask, taskInfo.CurrentRunCount, ct, taskInfo.Id)
-                                        .ConfigureAwait(false);
+                    await taskDispatcher.ExecuteDispatch(task, taskInfo.ScheduledExecutionUtc, scheduledTask,
+                        taskInfo.CurrentRunCount, token, taskInfo.Id)
+                        .ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
-                    await taskStorage.SetStatus(taskInfo.Id, QueuedTaskStatus.Failed, ex, ct).ConfigureAwait(false);
-                    logger.LogError(ex, "Error occurred executing task with id {taskId}.", taskInfo.Id);
+                    // Create scope per iteration for thread safety (required for DbContext-based storage)
+                    using var itemScope = serviceScopeFactory.CreateScope();
+                    var itemStorage = itemScope.ServiceProvider.GetService<ITaskStorage>();
+
+                    if (itemStorage != null)
+                    {
+                        await itemStorage.SetStatus(taskInfo.Id, QueuedTaskStatus.Failed, ex, token)
+                            .ConfigureAwait(false);
+                    }
+
+                    logger.LogError(ex, "Error occurred executing pending task with id {TaskId}", taskInfo.Id);
                 }
             }
             else
             {
-                await taskStorage.SetStatus(
-                    taskInfo.Id,
-                    QueuedTaskStatus.Failed,
-                    new Exception("Unable to create the IBackground task from the specified properties"),
-                    ct).ConfigureAwait(false);
+                // Create scope per iteration for thread safety (required for DbContext-based storage)
+                using var itemScope = serviceScopeFactory.CreateScope();
+                var itemStorage = itemScope.ServiceProvider.GetService<ITaskStorage>();
+
+                if (itemStorage != null)
+                {
+                    await itemStorage.SetStatus(
+                        taskInfo.Id,
+                        QueuedTaskStatus.Failed,
+                        new Exception("Unable to create the IBackground task from the specified properties"),
+                        token).ConfigureAwait(false);
+                }
             }
-        }
+        }).ConfigureAwait(false);
     }
 
     public override async Task StopAsync(CancellationToken stoppingToken)
     {
-        logger.LogInformation("EverTask BackgroundService is stopping.");
+        logger.LogInformation("EverTask BackgroundService is stopping");
         await base.StopAsync(stoppingToken);
     }
 }

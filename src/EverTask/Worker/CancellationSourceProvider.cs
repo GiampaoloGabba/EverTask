@@ -16,36 +16,50 @@ internal sealed class CancellationSourceProvider : ICancellationSourceProvider
 
     public CancellationToken CreateToken(Guid id, CancellationToken sourceToken)
     {
-        if (_sources.ContainsKey(id))
-            Delete(id);
+        // Create new CTS that will be used or disposed
+        var newCts = CancellationTokenSource.CreateLinkedTokenSource(sourceToken);
 
-        var cts = CancellationTokenSource.CreateLinkedTokenSource(sourceToken);
-        _sources.TryAdd(id, cts);
+        // Use AddOrUpdate to avoid race conditions between check and add
+        var actualCts = _sources.AddOrUpdate(
+            id,
+            newCts, // Add factory - use new CTS if key doesn't exist
+            (_, existingCts) => // Update factory - replace existing CTS
+            {
+                // Dispose the existing one and replace with new
+                try { existingCts.Dispose(); } catch { /* Ignore disposal errors */ }
+                return newCts;
+            });
 
-        return cts.Token;
+        // If AddOrUpdate didn't use our newCts (race condition), dispose it
+        if (actualCts != newCts)
+        {
+            newCts.Dispose();
+        }
+
+        return actualCts.Token;
     }
 
-    public CancellationTokenSource? TryGet(Guid id)
-    {
-        _sources.TryGetValue(id, out var cts);
-        return cts;
-    }
+    public CancellationTokenSource? TryGet(Guid id) => _sources.GetValueOrDefault(id);
 
     public void Delete(Guid id)
     {
-        if (_sources.TryRemove(id, out var cts))
+        if (!_sources.TryRemove(id, out var cts)) return;
+
+        try
         {
             cts.Dispose();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Already disposed by another thread, ignore
         }
     }
 
     public void CancelTokenForTask(Guid id)
     {
-        if (_sources.TryGetValue(id, out var cts))
-        {
-            cts.Cancel();
-            Delete(id);
-        }
+        if (!_sources.TryGetValue(id, out var cts)) return;
+        cts.Cancel();
+        Delete(id);
     }
 
 }

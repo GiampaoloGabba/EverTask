@@ -1,4 +1,6 @@
 ﻿using System.Diagnostics;
+using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 
 namespace EverTask.Worker;
 
@@ -16,6 +18,15 @@ public class WorkerExecutor(
     ICancellationSourceProvider cancellationSourceProvider,
     IEverTaskLogger<WorkerExecutor> logger) : IEverTaskWorkerExecutor
 {
+    // Performance optimization: Cache for event data to avoid repeated serialization
+    private static readonly ConditionalWeakTable<IEverTask, string> TaskJsonCache = new();
+    private static readonly ConcurrentDictionary<Type, string> TypeStringCache = new();
+
+    // Performance optimization: Cache handler options to avoid runtime casts per execution
+    private static readonly ConcurrentDictionary<Type, HandlerOptionsCache> HandlerOptionsInternalCache = new();
+
+    private record HandlerOptionsCache(IRetryPolicy RetryPolicy, TimeSpan? Timeout);
+
     public event Func<EverTaskEventData, Task>? TaskEventOccurredAsync;
 
     public async ValueTask DoWork(TaskHandlerExecutor task, CancellationToken serviceToken)
@@ -80,18 +91,44 @@ public class WorkerExecutor(
 
         var taskToken = cancellationSourceProvider.CreateToken(task.PersistenceId, serviceToken);
 
-        var handlerOptions = task.Handler as IEverTaskHandlerOptions;
-        var retryPolicy    = handlerOptions?.RetryPolicy ?? configuration.DefaultRetryPolicy;
-        var timeout        = handlerOptions?.Timeout ?? configuration.DefaultTimeout;
+        // Performance optimization: Cache handler options to avoid repeated casts
+        // Use GetOrAdd overload with factoryArgument to avoid closure allocation
+        var options = HandlerOptionsInternalCache.GetOrAdd(
+            task.Handler.GetType(),
+            static (_, state) =>
+            {
+                var (handler, config) = state;
+                // Cast only once per handler type (first time)
+                if (handler is IEverTaskHandlerOptions handlerOptions)
+                {
+                    return new HandlerOptionsCache(
+                        handlerOptions.RetryPolicy ?? config.DefaultRetryPolicy,
+                        handlerOptions.Timeout ?? config.DefaultTimeout
+                    );
+                }
 
-        var stopwatch = new Stopwatch();
-        stopwatch.Start();
+                return new HandlerOptionsCache(
+                    config.DefaultRetryPolicy,
+                    config.DefaultTimeout
+                );
+            },
+            (task.Handler, configuration));
 
+        var retryPolicy = options.RetryPolicy;
+        var timeout = options.Timeout;
+
+        // Use GetTimestamp/GetElapsedTime for .NET 7+ to avoid Stopwatch allocation
+#if NET7_0_OR_GREATER
+        var startTime = Stopwatch.GetTimestamp();
         await DoExecute();
-
+        var elapsedTime = Stopwatch.GetElapsedTime(startTime);
+        return elapsedTime.TotalMilliseconds;
+#else
+        var stopwatch = Stopwatch.StartNew();
+        await DoExecute();
         stopwatch.Stop();
-
         return stopwatch.Elapsed.TotalMilliseconds;
+#endif
 
         async Task DoExecute()
         {
@@ -216,7 +253,7 @@ public class WorkerExecutor(
         {
             // Logica per le altre eccezioni
             if (taskStorage != null)
-                await taskStorage.SetStatus(task.PersistenceId, QueuedTaskStatus.Failed, ex)
+                await taskStorage.SetStatus(task.PersistenceId, QueuedTaskStatus.Failed, ex, serviceToken)
                                  .ConfigureAwait(false);
 
             await ExecuteCallback(task.HandlerErrorCallback, task, ex,
@@ -244,65 +281,99 @@ public class WorkerExecutor(
 
     #region Logging and event pubblishing
 
-    private void RegisterInfo(TaskHandlerExecutor executor, string message, params object[] messageArgs)
-    {
+    private void RegisterInfo(TaskHandlerExecutor executor, string message, params object[] messageArgs) =>
         RegisterEvent(SeverityLevel.Information, executor, message, null, messageArgs);
-    }
 
     private void RegisterWarning(Exception? exception, TaskHandlerExecutor executor, string message,
-                                 params object[] messageArgs)
-    {
+                                 params object[] messageArgs) =>
         RegisterEvent(SeverityLevel.Warning, executor, message, exception, messageArgs);
-    }
 
     private void RegisterError(Exception exception, TaskHandlerExecutor executor, string message,
-                               params object[] messageArgs)
-    {
+                               params object[] messageArgs) =>
         RegisterEvent(SeverityLevel.Error, executor, message, exception, messageArgs);
-    }
 
     private void RegisterEvent(SeverityLevel severity, TaskHandlerExecutor executor, string message,
                                Exception? exception = null, params object[] messageArgs)
     {
+        // Format message once for both logging and event publishing
+        // This avoids "Message template should be compile time constant" warning
+        var formattedMessage = messageArgs.Length > 0
+            ? string.Format(message, messageArgs)
+            : message;
+
         switch (severity)
         {
             case SeverityLevel.Information:
-                logger.LogInformation(message, messageArgs);
+                logger.LogInformation(formattedMessage);
                 break;
             case SeverityLevel.Warning:
-                logger.LogWarning(exception, message, messageArgs);
+                logger.LogWarning(exception, formattedMessage);
                 break;
             case SeverityLevel.Error:
             default:
-                logger.LogError(exception, message, messageArgs);
+                logger.LogError(exception, formattedMessage);
                 break;
         }
 
         try
         {
-            PublishEvent(executor, severity, message, exception, messageArgs);
+            PublishEvent(executor, severity, formattedMessage, exception);
         }
         catch (Exception e)
         {
-            logger.LogError(e, "Unable to publish event {message}", message);
+            logger.LogError(e, "Unable to publish event {Message}", formattedMessage);
         }
     }
 
-    internal void PublishEvent(TaskHandlerExecutor task, SeverityLevel severity, string message,
-                               Exception? exception = null, params object[] messageArgs)
+    private void PublishEvent(TaskHandlerExecutor task, SeverityLevel severity, string formattedMessage,
+                              Exception? exception = null)
     {
         var eventHandlers = TaskEventOccurredAsync?.GetInvocationList();
-        if (eventHandlers == null)
+        if (eventHandlers == null || eventHandlers.Length == 0)
             return;
 
-        message = string.Format(message, messageArgs);
+        // Create event data ONCE outside loop, reuse for all subscribers
+        var data = CreateEventDataCached(task, severity, formattedMessage, exception);
 
         foreach (var eventHandler in eventHandlers)
         {
-            var data    = EverTaskEventData.FromExecutor(task, severity, message, exception);
             var handler = (Func<EverTaskEventData, Task>)eventHandler;
-            _ = handler(data);
+
+            // Fire and forget with exception handling to prevent unobserved task exceptions
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await handler(data).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Event handler failed for task {TaskId}", data.TaskId);
+                }
+            });
         }
+    }
+
+    private EverTaskEventData CreateEventDataCached(TaskHandlerExecutor executor, SeverityLevel severity,
+                                                     string message, Exception? exception)
+    {
+        // Cache task JSON (weak reference - GC'd when task is collected)
+        var taskJson = TaskJsonCache.GetValue(executor.Task, JsonConvert.SerializeObject);
+
+        // Cache type strings (permanent cache - types never unload)
+        var taskType = TypeStringCache.GetOrAdd(executor.Task.GetType(), type => type.ToString());
+        var handlerType = TypeStringCache.GetOrAdd(executor.Handler.GetType(), type => type.ToString());
+
+        return new EverTaskEventData(
+            executor.PersistenceId,
+            DateTimeOffset.UtcNow,
+            severity.ToString(),
+            taskType,
+            handlerType,
+            taskJson,
+            message,
+            exception?.ToDetailedString()
+        );
     }
 
     #endregion

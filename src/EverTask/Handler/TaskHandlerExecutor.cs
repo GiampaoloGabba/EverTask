@@ -1,4 +1,6 @@
-﻿namespace EverTask.Handler;
+﻿using System.Collections.Concurrent;
+
+namespace EverTask.Handler;
 
 // This code was adapted from MediatR by Jimmy Bogard.
 // Specific inspiration was taken from the NotificationHandlerExecutor.cs file.
@@ -19,14 +21,25 @@ public record TaskHandlerExecutor(
 
 public static class TaskHandlerExecutorExtensions
 {
+    // Performance optimization: Cache type metadata strings to avoid repeated generation
+    private static readonly ConcurrentDictionary<Type, string> AssemblyQualifiedNameCache = new();
+    private static readonly ConcurrentDictionary<RecurringTask, string> RecurringTaskToStringCache = new();
+
     public static QueuedTask ToQueuedTask(this TaskHandlerExecutor executor)
     {
         ArgumentNullException.ThrowIfNull(executor.Task);
         ArgumentNullException.ThrowIfNull(executor.Handler);
 
-        var request     = JsonConvert.SerializeObject(executor.Task);
-        var requestType = executor.Task.GetType().AssemblyQualifiedName;
-        var handlerType = executor.Handler.GetType().AssemblyQualifiedName;
+        var request = JsonConvert.SerializeObject(executor.Task);
+
+        // Use cached AssemblyQualifiedName to avoid repeated string generation
+        var requestType = AssemblyQualifiedNameCache.GetOrAdd(
+            executor.Task.GetType(),
+            type => type.AssemblyQualifiedName ?? throw new InvalidOperationException($"Type {type} has no AssemblyQualifiedName"));
+
+        var handlerType = AssemblyQualifiedNameCache.GetOrAdd(
+            executor.Handler.GetType(),
+            type => type.AssemblyQualifiedName ?? throw new InvalidOperationException($"Type {type} has no AssemblyQualifiedName"));
 
         bool            isRecurring      = false;
         string?         scheduleTask     = null;
@@ -37,12 +50,17 @@ public static class TaskHandlerExecutorExtensions
 
         if (executor.RecurringTask != null)
         {
-            scheduleTask     = JsonConvert.SerializeObject(executor.RecurringTask);
-            isRecurring      = true;
-            nextRun          = executor.RecurringTask.CalculateNextRun(DateTimeOffset.UtcNow, 0);
-            scheduleTaskInfo = executor.RecurringTask.ToString();
-            maxRuns          = executor.RecurringTask.MaxRuns;
-            runUntil         = executor.RecurringTask.RunUntil;
+            scheduleTask = JsonConvert.SerializeObject(executor.RecurringTask);
+            isRecurring = true;
+            nextRun = executor.RecurringTask.CalculateNextRun(DateTimeOffset.UtcNow, 0);
+
+            // Cache RecurringTask.ToString() result to avoid repeated string generation
+            scheduleTaskInfo = RecurringTaskToStringCache.GetOrAdd(
+                executor.RecurringTask,
+                rt => rt.ToString() ?? "Recurring Task");
+
+            maxRuns = executor.RecurringTask.MaxRuns;
+            runUntil = executor.RecurringTask.RunUntil;
         }
 
         ArgumentNullException.ThrowIfNull(request);
