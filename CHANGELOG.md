@@ -5,6 +5,42 @@ All notable changes to EverTask will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0] - 2025-10-20
+
+### Added
+- **Monitoring & Dashboard** (in testing on branch `api-dashboard`):
+  - New REST API for task monitoring and management (`EverTask.Monitor.Api`)
+  - Real-time dashboard UI for visualizing task execution, queues, and performance metrics
+  - These features are currently in testing phase and will be merged in a future release
+
+### Changed
+- **BREAKING CHANGE**: `RetryPolicy`, `Timeout`, and `QueueName` properties in `IEverTaskHandlerOptions` and `EverTaskHandler<TTask>` are now read-only `virtual` properties instead of settable properties
+  - `QueueName` has been added to `IEverTaskHandlerOptions` for consistency with `RetryPolicy` and `Timeout`
+  - **Migration**: Change from property initialization in constructor to property override:
+    ```csharp
+    // ❌ Old way (no longer works):
+    public class MyHandler : EverTaskHandler<MyTask>
+    {
+        public MyHandler()
+        {
+            RetryPolicy = new LinearRetryPolicy(5, TimeSpan.FromSeconds(1));
+            Timeout = TimeSpan.FromMinutes(10);
+        }
+
+        public override string? QueueName => "critical";
+    }
+
+    // ✅ New way:
+    public class MyHandler : EverTaskHandler<MyTask>
+    {
+        public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(5, TimeSpan.FromSeconds(1));
+        public override TimeSpan? Timeout => TimeSpan.FromMinutes(10);
+        public override string? QueueName => "critical";
+    }
+    ```
+  - **Rationale**: Provides consistency with `QueueName` property pattern and better semantic clarity that these are handler type characteristics, not instance state
+  - All documentation, samples, and tests updated to reflect this pattern
+
 ## [2.0.0] - 2025-10-19
 
 ### Added

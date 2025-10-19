@@ -14,10 +14,11 @@ public class TestTaskWithCustomTimeoutHanlder : EverTaskHandler<TestTaskWithCust
 {
     private readonly TestTaskStateManager? _stateManager;
 
+    public override TimeSpan? Timeout => TimeSpan.FromMilliseconds(300);
+
     public TestTaskWithCustomTimeoutHanlder(TestTaskStateManager? stateManager = null)
     {
         _stateManager = stateManager;
-        Timeout = TimeSpan.FromMilliseconds(300);
     }
 
     public override async Task Handle(TestTaskWithCustomTimeout backgroundTask, CancellationToken cancellationToken)

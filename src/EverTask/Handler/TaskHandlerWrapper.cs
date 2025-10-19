@@ -23,11 +23,11 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
 
         ArgumentNullException.ThrowIfNull(handlerService);
 
-        // Extract QueueName if handler is EverTaskHandler<TTask> (which has the QueueName property)
+        // Extract QueueName from handler options
         string? queueName = null;
-        if (handlerService is EverTask.Abstractions.EverTaskHandler<TTask> taskHandler)
+        if (handlerService is IEverTaskHandlerOptions handlerOptions)
         {
-            queueName = taskHandler.QueueName;
+            queueName = handlerOptions.QueueName;
         }
 
         // Normalize QueueName: if null and recurring, use "recurring"; otherwise use "default"

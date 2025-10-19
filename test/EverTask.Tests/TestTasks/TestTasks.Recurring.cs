@@ -66,11 +66,12 @@ public class TestTaskRecurringWithFailureHandler : EverTaskHandler<TestTaskRecur
 {
     private readonly TestTaskStateManager? _stateManager;
 
+    // Use linear retry policy with 3 attempts and short delays for testing
+    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(3, TimeSpan.FromMilliseconds(50));
+
     public TestTaskRecurringWithFailureHandler(TestTaskStateManager? stateManager = null)
     {
         _stateManager = stateManager;
-        // Use linear retry policy with 3 attempts and short delays for testing
-        RetryPolicy = new LinearRetryPolicy(3, TimeSpan.FromMilliseconds(50));
     }
 
     public override async Task Handle(TestTaskRecurringWithFailure backgroundTask, CancellationToken cancellationToken)

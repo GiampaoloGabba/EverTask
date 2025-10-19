@@ -13,13 +13,13 @@ public class ProcessPaymentHandler : EverTaskHandler<ProcessPaymentTask>
     // Route this handler to the high-priority queue
     public override string? QueueName => "high-priority";
 
+    // Configure retry policy for critical payment processing
+    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(5, TimeSpan.FromSeconds(2));
+    public override TimeSpan? Timeout => TimeSpan.FromMinutes(5);
+
     public ProcessPaymentHandler(ILogger<ProcessPaymentHandler> logger)
     {
         _logger = logger;
-
-        // Configure retry policy for critical payment processing
-        RetryPolicy = new LinearRetryPolicy(5, TimeSpan.FromSeconds(2));
-        Timeout = TimeSpan.FromMinutes(5);
     }
 
     public override async Task Handle(ProcessPaymentTask task, CancellationToken cancellationToken)
@@ -50,11 +50,11 @@ public class GenerateReportHandler : EverTaskHandler<GenerateReportTask>
 
     // Route this handler to the background queue
     public override string? QueueName => "background";
+    public override TimeSpan? Timeout => TimeSpan.FromMinutes(30);
 
     public GenerateReportHandler(ILogger<GenerateReportHandler> logger)
     {
         _logger = logger;
-        Timeout = TimeSpan.FromMinutes(30);
     }
 
     public override async Task Handle(GenerateReportTask task, CancellationToken cancellationToken)
@@ -77,11 +77,12 @@ public class SendEmailHandler : EverTaskHandler<SendEmailTask>
     private readonly ILogger<SendEmailHandler> _logger;
 
     // No QueueName specified - will use default queue
+    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(3, TimeSpan.FromSeconds(5));
+    public override TimeSpan? Timeout => TimeSpan.FromMinutes(2);
+
     public SendEmailHandler(ILogger<SendEmailHandler> logger)
     {
         _logger = logger;
-        RetryPolicy = new LinearRetryPolicy(3, TimeSpan.FromSeconds(5));
-        Timeout = TimeSpan.FromMinutes(2);
     }
 
     public override async Task Handle(SendEmailTask task, CancellationToken cancellationToken)
@@ -130,11 +131,11 @@ public class ProcessImageHandler : EverTaskHandler<ProcessImageTask>
 
     // Route to background queue for CPU-intensive image processing
     public override string? QueueName => "background";
+    public override TimeSpan? Timeout => TimeSpan.FromMinutes(10);
 
     public ProcessImageHandler(ILogger<ProcessImageHandler> logger)
     {
         _logger = logger;
-        Timeout = TimeSpan.FromMinutes(10);
     }
 
     public override async Task Handle(ProcessImageTask task, CancellationToken cancellationToken)

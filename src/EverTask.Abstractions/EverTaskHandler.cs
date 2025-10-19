@@ -7,18 +7,14 @@ namespace EverTask.Abstractions;
 public abstract class EverTaskHandler<TTask> : IEverTaskHandler<TTask> where TTask : IEverTask
 {
     /// <inheritdoc/>
-    public IRetryPolicy? RetryPolicy       { get; set; }
+    public virtual IRetryPolicy? RetryPolicy => null;
     /// <inheritdoc/>
-    public TimeSpan?     Timeout           { get; set; }
+    public virtual TimeSpan?     Timeout     => null;
     /// <inheritdoc/>
     [Obsolete("This property is deprecated and has no effect. EverTask's async/await execution is non-blocking and suitable for all workloads. For CPU-intensive synchronous operations, use Task.Run within your handler instead.")]
     public bool          CpuBoundOperation { get; set; }
 
-    /// <summary>
-    /// Gets the name of the queue where this task should be executed.
-    /// Returns null to use the default queue or automatic routing for recurring tasks.
-    /// Override this property to execute the handler in a specific queue.
-    /// </summary>
+    /// <inheritdoc/>
     public virtual string? QueueName => null;
 
     /// <inheritdoc/>

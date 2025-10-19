@@ -70,11 +70,8 @@ You can override the global policy on a per-handler basis when you need differen
 ```csharp
 public class CriticalTaskHandler : EverTaskHandler<CriticalTask>
 {
-    public CriticalTaskHandler()
-    {
-        // More aggressive retries for critical tasks
-        RetryPolicy = new LinearRetryPolicy(10, TimeSpan.FromSeconds(1));
-    }
+    // More aggressive retries for critical tasks
+    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(10, TimeSpan.FromSeconds(1));
 
     public override async Task Handle(CriticalTask task, CancellationToken cancellationToken)
     {
@@ -88,18 +85,15 @@ public class CriticalTaskHandler : EverTaskHandler<CriticalTask>
 ```csharp
 public class CustomRetryHandler : EverTaskHandler<CustomRetryTask>
 {
-    public CustomRetryHandler()
+    // Exponential backoff-like delays
+    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(new TimeSpan[]
     {
-        // Exponential backoff-like delays
-        RetryPolicy = new LinearRetryPolicy(new TimeSpan[]
-        {
-            TimeSpan.FromSeconds(1),
-            TimeSpan.FromSeconds(2),
-            TimeSpan.FromSeconds(4),
-            TimeSpan.FromSeconds(8),
-            TimeSpan.FromSeconds(16)
-        });
-    }
+        TimeSpan.FromSeconds(1),
+        TimeSpan.FromSeconds(2),
+        TimeSpan.FromSeconds(4),
+        TimeSpan.FromSeconds(8),
+        TimeSpan.FromSeconds(16)
+    });
 
     public override async Task Handle(CustomRetryTask task, CancellationToken cancellationToken)
     {
@@ -149,10 +143,7 @@ public class ExponentialBackoffPolicy : IRetryPolicy
 // Use in handler
 public class MyHandler : EverTaskHandler<MyTask>
 {
-    public MyHandler()
-    {
-        RetryPolicy = new ExponentialBackoffPolicy(maxAttempts: 5);
-    }
+    public override IRetryPolicy? RetryPolicy => new ExponentialBackoffPolicy(maxAttempts: 5);
 }
 ```
 
@@ -195,10 +186,7 @@ public class PollyRetryPolicy : IRetryPolicy
 // Use in handler
 public class ApiCallHandler : EverTaskHandler<ApiCallTask>
 {
-    public ApiCallHandler()
-    {
-        RetryPolicy = new PollyRetryPolicy();
-    }
+    public override IRetryPolicy? RetryPolicy => new PollyRetryPolicy();
 }
 
 // Or set globally
@@ -260,10 +248,8 @@ Different tasks have different performance characteristics, so you'll often want
 ```csharp
 public class QuickTaskHandler : EverTaskHandler<QuickTask>
 {
-    public QuickTaskHandler()
-    {
-        Timeout = TimeSpan.FromSeconds(30); // This handler times out after 30 seconds
-    }
+    // This handler times out after 30 seconds
+    public override TimeSpan? Timeout => TimeSpan.FromSeconds(30);
 
     public override async Task Handle(QuickTask task, CancellationToken cancellationToken)
     {
@@ -273,10 +259,8 @@ public class QuickTaskHandler : EverTaskHandler<QuickTask>
 
 public class LongRunningTaskHandler : EverTaskHandler<LongRunningTask>
 {
-    public LongRunningTaskHandler()
-    {
-        Timeout = TimeSpan.FromHours(2); // This handler gets 2 hours
-    }
+    // This handler gets 2 hours
+    public override TimeSpan? Timeout => TimeSpan.FromHours(2);
 
     public override async Task Handle(LongRunningTask task, CancellationToken cancellationToken)
     {
@@ -307,10 +291,8 @@ Sometimes you need a task to run to completion no matter how long it takes:
 ```csharp
 public class NoTimeoutHandler : EverTaskHandler<NoTimeoutTask>
 {
-    public NoTimeoutHandler()
-    {
-        Timeout = null; // No timeout - runs until complete
-    }
+    // No timeout - runs until complete
+    public override TimeSpan? Timeout => null;
 }
 ```
 
@@ -321,10 +303,7 @@ When a task times out, EverTask cancels its `CancellationToken`. Your task code 
 ```csharp
 public class TimeoutAwareHandler : EverTaskHandler<TimeoutAwareTask>
 {
-    public TimeoutAwareHandler()
-    {
-        Timeout = TimeSpan.FromMinutes(5);
-    }
+    public override TimeSpan? Timeout => TimeSpan.FromMinutes(5);
 
     public override async Task Handle(TimeoutAwareTask task, CancellationToken cancellationToken)
     {
@@ -595,10 +574,7 @@ public override ValueTask OnError(Guid taskId, Exception? exception, string? mes
 // ✅ Good: Retry transient HTTP errors
 public class ApiTaskHandler : EverTaskHandler<ApiTask>
 {
-    public ApiTaskHandler()
-    {
-        RetryPolicy = new LinearRetryPolicy(3, TimeSpan.FromSeconds(2));
-    }
+    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(3, TimeSpan.FromSeconds(2));
 
     public override async Task Handle(ApiTask task, CancellationToken cancellationToken)
     {
@@ -631,18 +607,14 @@ public class ValidationTaskHandler : EverTaskHandler<ValidationTask>
 // ✅ Good: Appropriate timeout for task type
 public class QuickApiCallHandler : EverTaskHandler<QuickApiCallTask>
 {
-    public QuickApiCallHandler()
-    {
-        Timeout = TimeSpan.FromSeconds(30); // Quick API call
-    }
+    // Quick API call
+    public override TimeSpan? Timeout => TimeSpan.FromSeconds(30);
 }
 
 public class ReportGenerationHandler : EverTaskHandler<ReportGenerationTask>
 {
-    public ReportGenerationHandler()
-    {
-        Timeout = TimeSpan.FromMinutes(30); // Long-running report
-    }
+    // Long-running report
+    public override TimeSpan? Timeout => TimeSpan.FromMinutes(30);
 }
 ```
 

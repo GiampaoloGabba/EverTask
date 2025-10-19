@@ -45,10 +45,11 @@ public class TestTaskWithCustomRetryPolicyHanlder : EverTaskHandler<TestTaskWith
 {
     private readonly TestTaskStateManager? _stateManager;
 
+    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(5, TimeSpan.FromMilliseconds(100));
+
     public TestTaskWithCustomRetryPolicyHanlder(TestTaskStateManager? stateManager = null)
     {
         _stateManager = stateManager;
-        RetryPolicy = new LinearRetryPolicy(5, TimeSpan.FromMilliseconds(100));
     }
 
     public override Task Handle(TestTaskWithCustomRetryPolicy backgroundTask, CancellationToken cancellationToken)

@@ -91,12 +91,8 @@ Quick reference for all EverTask configuration options.
 ```csharp
 public class MyHandler : EverTaskHandler<MyTask>
 {
-    public MyHandler()
-    {
-        Timeout = TimeSpan.FromMinutes(10);
-        RetryPolicy = new LinearRetryPolicy(5, TimeSpan.FromSeconds(2));
-    }
-
+    public override TimeSpan? Timeout => TimeSpan.FromMinutes(10);
+    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(5, TimeSpan.FromSeconds(2));
     public override string? QueueName => "high-priority";
 }
 ```

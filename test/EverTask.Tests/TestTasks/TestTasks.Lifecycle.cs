@@ -59,11 +59,12 @@ public class TestTaskLifecycleWithErrorHandler : EverTaskHandler<TestTaskLifecyc
 {
     private readonly TestTaskStateManager? _stateManager;
 
+    // Use single attempt (no retries) for predictable callback order
+    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(1, TimeSpan.FromMilliseconds(1));
+
     public TestTaskLifecycleWithErrorHandler(TestTaskStateManager? stateManager = null)
     {
         _stateManager = stateManager;
-        // Use single attempt (no retries) for predictable callback order
-        RetryPolicy = new LinearRetryPolicy(1, TimeSpan.FromMilliseconds(1));
     }
 
     public override ValueTask OnStarted(Guid taskId)

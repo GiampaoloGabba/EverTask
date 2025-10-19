@@ -262,7 +262,7 @@ public class CompleteLifecycleHandler : EverTaskHandler<CompleteLifecycleTask>
 
 ## Handler Configuration
 
-You can customize individual handlers with options set in their constructor.
+You can customize individual handlers by overriding their virtual properties.
 
 ### Custom Timeout
 
@@ -271,11 +271,8 @@ Need more (or less) time for a particular handler? Override the global timeout:
 ```csharp
 public class LongRunningTaskHandler : EverTaskHandler<LongRunningTask>
 {
-    public LongRunningTaskHandler()
-    {
-        // This handler gets 10 minutes instead of the global default
-        Timeout = TimeSpan.FromMinutes(10);
-    }
+    // This handler gets 10 minutes instead of the global default
+    public override TimeSpan? Timeout => TimeSpan.FromMinutes(10);
 
     public override async Task Handle(LongRunningTask task, CancellationToken cancellationToken)
     {
@@ -292,11 +289,8 @@ Some tasks need more aggressive retries than others. You can override the global
 ```csharp
 public class CriticalTaskHandler : EverTaskHandler<CriticalTask>
 {
-    public CriticalTaskHandler()
-    {
-        // Retry 5 times with 1 second between attempts
-        RetryPolicy = new LinearRetryPolicy(5, TimeSpan.FromSeconds(1));
-    }
+    // Retry 5 times with 1 second between attempts
+    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(5, TimeSpan.FromSeconds(1));
 
     public override async Task Handle(CriticalTask task, CancellationToken cancellationToken)
     {
@@ -330,12 +324,8 @@ See [Advanced Features - Multi-Queue](advanced-features.md#multi-queue) for more
 ```csharp
 public class CustomizedHandler : EverTaskHandler<CustomizedTask>
 {
-    public CustomizedHandler()
-    {
-        Timeout = TimeSpan.FromMinutes(5);
-        RetryPolicy = new LinearRetryPolicy(3, TimeSpan.FromSeconds(2));
-    }
-
+    public override TimeSpan? Timeout => TimeSpan.FromMinutes(5);
+    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(3, TimeSpan.FromSeconds(2));
     public override string? QueueName => "background";
 
     public override async Task Handle(CustomizedTask task, CancellationToken cancellationToken)
