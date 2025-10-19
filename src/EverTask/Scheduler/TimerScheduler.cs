@@ -1,8 +1,10 @@
-﻿namespace EverTask.Scheduler;
+﻿using EverTask.Configuration;
+
+namespace EverTask.Scheduler;
 
 public class TimerScheduler : IScheduler
 {
-    private readonly IWorkerQueue _workerQueue;
+    private readonly IWorkerQueueManager _queueManager;
     private readonly ITaskStorage? _taskStorage;
     private readonly IEverTaskLogger<TimerScheduler> _logger;
     private readonly ConcurrentPriorityQueue<TaskHandlerExecutor, DateTimeOffset> _queue;
@@ -12,11 +14,11 @@ public class TimerScheduler : IScheduler
     //for tests purpose
     internal TimeSpan LastSetDelay { get; private set; }
 #endif
-    public TimerScheduler(IWorkerQueue workerQueue,
+    public TimerScheduler(IWorkerQueueManager queueManager,
                           IEverTaskLogger<TimerScheduler> logger,
                           ITaskStorage? taskStorage = null)
     {
-        _workerQueue     = workerQueue;
+        _queueManager    = queueManager;
         _taskStorage     = taskStorage;
         _logger          = logger;
         _queue           = new ConcurrentPriorityQueue<TaskHandlerExecutor, DateTimeOffset>();
@@ -94,11 +96,16 @@ public class TimerScheduler : IScheduler
     {
         try
         {
-            await _workerQueue.Queue(item).ConfigureAwait(false);
+            // Determine the target queue with automatic routing for recurring tasks
+            string queueName = item.QueueName ?? (item.RecurringTask != null ? QueueNames.Recurring : QueueNames.Default);
+
+            _logger.LogDebug("Dispatching scheduled task {TaskId} to queue '{QueueName}'", item.PersistenceId, queueName);
+
+            await _queueManager.TryEnqueue(queueName, item).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Unable to dispatch task with id {taskId}.", item.PersistenceId);
+            _logger.LogError(ex, "Unable to dispatch task with id {taskId} to queue.", item.PersistenceId);
             if (_taskStorage != null)
                 await _taskStorage
                       .SetStatus(item.PersistenceId, QueuedTaskStatus.Failed, ex, CancellationToken.None)

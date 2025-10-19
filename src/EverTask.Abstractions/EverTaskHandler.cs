@@ -13,6 +13,13 @@ public abstract class EverTaskHandler<TTask> : IEverTaskHandler<TTask> where TTa
     /// <inheritdoc/>
     public bool          CpuBoundOperation { get; set; }
 
+    /// <summary>
+    /// Gets the name of the queue where this task should be executed.
+    /// Returns null to use the default queue or automatic routing for recurring tasks.
+    /// Override this property to execute the handler in a specific queue.
+    /// </summary>
+    public virtual string? QueueName => null;
+
     /// <inheritdoc/>
     public abstract Task Handle(TTask backgroundTask, CancellationToken cancellationToken);
 

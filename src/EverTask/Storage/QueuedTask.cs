@@ -17,6 +17,7 @@ public class QueuedTask
     public int?            MaxRuns               { get; set; }
     public DateTimeOffset? RunUntil              { get; set; }
     public DateTimeOffset? NextRunUtc            { get; set; }
+    public string?         QueueName             { get; set; }
 
     public QueuedTaskStatus         Status       { get; set; }
     public ICollection<StatusAudit> StatusAudits { get; set; } = new List<StatusAudit>();

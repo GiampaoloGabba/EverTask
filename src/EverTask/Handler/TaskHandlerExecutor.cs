@@ -13,7 +13,8 @@ public record TaskHandlerExecutor(
     Func<Guid, Exception?, string, ValueTask>? HandlerErrorCallback,
     Func<Guid, ValueTask>? HandlerStartedCallback,
     Func<Guid, ValueTask>? HandlerCompletedCallback,
-    Guid PersistenceId);
+    Guid PersistenceId,
+    string? QueueName);
 
 public static class TaskHandlerExecutorExtensions
 {
@@ -62,7 +63,8 @@ public static class TaskHandlerExecutorExtensions
             MaxRuns               = maxRuns,
             RunUntil              = runUntil,
             NextRunUtc            = nextRun,
-            CurrentRunCount       = 0
+            CurrentRunCount       = 0,
+            QueueName             = executor.QueueName
         };
     }
 }

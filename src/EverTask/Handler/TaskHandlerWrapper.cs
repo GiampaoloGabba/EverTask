@@ -21,6 +21,13 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
 
         ArgumentNullException.ThrowIfNull(handlerService);
 
+        // Extract QueueName if handler is EverTaskHandler<TTask> (which has the QueueName property)
+        string? queueName = null;
+        if (handlerService is EverTask.Abstractions.EverTaskHandler<TTask> taskHandler)
+        {
+            queueName = taskHandler.QueueName;
+        }
+
         return new TaskHandlerExecutor(
             task,
             handlerService,
@@ -30,7 +37,8 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
             (persistenceId, exception, message) => handlerService.OnError(persistenceId, exception, message),
             persistenceId => handlerService.OnStarted(persistenceId),
             persistenceId => handlerService.OnCompleted(persistenceId),
-            existingTaskId ?? Guid.NewGuid()
+            existingTaskId ?? Guid.NewGuid(),
+            queueName
         );
     }
 }

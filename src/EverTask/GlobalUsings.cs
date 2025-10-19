@@ -19,3 +19,4 @@ global using Newtonsoft.Json;
 using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("EverTask.Tests")]
+[assembly: InternalsVisibleTo("DynamicProxyGenAssembly2")]

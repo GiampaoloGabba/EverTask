@@ -3,7 +3,7 @@
 namespace EverTask.Worker;
 
 public class WorkerService(
-    IWorkerQueue workerQueue,
+    IWorkerQueueManager queueManager,
     IServiceScopeFactory serviceScopeFactory,
     ITaskDispatcherInternal taskDispatcher,
     EverTaskServiceConfiguration configuration,
@@ -12,18 +12,60 @@ public class WorkerService(
 {
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
-        logger.LogTrace("EverTask BackgroundService is running.");
-        logger.LogTrace("MaxDegreeOfParallelism: {maxDegreeOfParallelism}", configuration.MaxDegreeOfParallelism);
+        logger.LogTrace("EverTask BackgroundService is running");
 
+        // Process pending tasks from storage
         await ProcessPendingAsync(ct).ConfigureAwait(false);
+
+        // Get all configured queues
+        var queues = queueManager.GetAllQueues().ToList();
+        logger.LogInformation("Starting consumption of {QueueCount} queue(s): {QueueNames}",
+            queues.Count, string.Join(", ", queues.Select(q => q.Name)));
+
+        // Create consumption tasks for each queue with its own parallelism
+        var queueConsumptionTasks = queues
+            .Select(q => ConsumeQueue(q.Name, q.Queue, ct))
+            .ToList();
+
+        // Run all queue consumers concurrently
+        await Task.WhenAll(queueConsumptionTasks).ConfigureAwait(false);
+    }
+
+    private async Task ConsumeQueue(string queueName, IWorkerQueue queue, CancellationToken ct)
+    {
+        // Get the configuration for this specific queue
+        var queueConfig = queue switch
+        {
+            WorkerQueue wq => wq.Configuration,
+            _ => new Configuration.QueueConfiguration
+            {
+                Name = queueName,
+                MaxDegreeOfParallelism = configuration.MaxDegreeOfParallelism
+            }
+        };
+
+        logger.LogTrace("Starting consumption of queue '{QueueName}' with MaxDegreeOfParallelism: {MaxDegreeOfParallelism}",
+            queueName, queueConfig.MaxDegreeOfParallelism);
 
         var options = new ParallelOptions
         {
-            MaxDegreeOfParallelism = configuration.MaxDegreeOfParallelism,
-            CancellationToken      = ct
+            MaxDegreeOfParallelism = queueConfig.MaxDegreeOfParallelism,
+            CancellationToken = ct
         };
 
-        await Parallel.ForEachAsync(workerQueue.DequeueAll(ct), options, workerExecutor.DoWork).ConfigureAwait(false);
+        try
+        {
+            await Parallel.ForEachAsync(queue.DequeueAll(ct), options, workerExecutor.DoWork).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            logger.LogInformation("Queue '{QueueName}' consumption cancelled", queueName);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error in queue '{QueueName}' consumption", queueName);
+            throw;
+        }
     }
 
     private async Task ProcessPendingAsync(CancellationToken ct = default)

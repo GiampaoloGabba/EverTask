@@ -1,4 +1,5 @@
-﻿using EverTask.Scheduler.Recurring.Builder;
+﻿using EverTask.Configuration;
+using EverTask.Scheduler.Recurring.Builder;
 
 namespace EverTask.Dispatcher;
 
@@ -9,7 +10,7 @@ namespace EverTask.Dispatcher;
 /// <inheritdoc />
 public class Dispatcher(
     IServiceProvider serviceProvider,
-    IWorkerQueue workerQueue,
+    IWorkerQueueManager queueManager,
     IScheduler scheduler,
     EverTaskServiceConfiguration serviceConfiguration,
     IEverTaskLogger<Dispatcher> logger,
@@ -119,7 +120,9 @@ public class Dispatcher(
         }
         else
         {
-            await workerQueue.Queue(executor).ConfigureAwait(false);
+            // Determine queue name with automatic routing for recurring tasks
+            string? queueName = executor.QueueName ?? (executor.RecurringTask != null ? QueueNames.Recurring : QueueNames.Default);
+            await queueManager.TryEnqueue(queueName, executor).ConfigureAwait(false);
         }
 
         return executor.PersistenceId;
