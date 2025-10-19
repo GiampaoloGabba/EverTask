@@ -66,9 +66,18 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
 
         // Sveglia il timer se è dormiente (coda era vuota)
         // Se già sveglio, WaitAsync ritorna immediatamente senza bloccare
-        if (_wakeUpSignal.CurrentCount == 0)
+        // Thread-safe: Se multiple thread chiamano Release() concorrentemente,
+        // solo il primo avrà successo, gli altri ignoreranno SemaphoreFullException
+        try
         {
-            _wakeUpSignal.Release();
+            if (_wakeUpSignal.CurrentCount == 0)
+            {
+                _wakeUpSignal.Release();
+            }
+        }
+        catch (SemaphoreFullException)
+        {
+            // Semaforo già segnalato da un altro thread - ignora
         }
     }
 

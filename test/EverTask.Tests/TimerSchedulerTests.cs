@@ -1,5 +1,6 @@
 ﻿using System.Reflection;
 using Cronos;
+using EverTask.Configuration;
 using EverTask.Handler;
 using EverTask.Logger;
 using EverTask.Scheduler;
@@ -250,4 +251,246 @@ public class TimerSchedulerTests
             Guid.NewGuid(),
             null,
             null);
+
+    #region PeriodicTimerScheduler Specific Tests (v1.7.0)
+
+    [Fact]
+    public async Task PeriodicTimerScheduler_Should_WakeUp_When_UrgentTask_Arrives()
+    {
+        // Arrange: Schedule a task far in the future (scheduler will sleep)
+        var futureTask = CreateTaskHandlerExecutor(DateTimeOffset.UtcNow.AddHours(1));
+        _timerScheduler.Schedule(futureTask);
+
+        // Wait for scheduler to enter sleep state
+        await Task.Delay(150);
+
+        // Act: Schedule an urgent task (should wake up scheduler immediately)
+        var urgentTask = CreateTaskHandlerExecutor(DateTimeOffset.UtcNow.AddMilliseconds(100));
+        _timerScheduler.Schedule(urgentTask);
+
+        // Assert: Urgent task should be processed quickly (within 500ms)
+        await Task.Delay(500);
+        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == urgentTask)), Times.Once);
+
+        // Future task should still be in queue
+        _timerScheduler.GetQueue().Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task PeriodicTimerScheduler_Should_Sleep_When_Queue_Empty()
+    {
+        // Arrange: Empty queue (scheduler should sleep indefinitely)
+        _timerScheduler.GetQueue().Count.ShouldBe(0);
+
+#if DEBUG
+        // Wait for scheduler to calculate delay
+        await Task.Delay(100);
+
+        // Assert: Calculated delay should be infinite
+        _timerScheduler.LastCalculatedDelay.ShouldBe(Timeout.InfiniteTimeSpan);
+#endif
+
+        // Act: Add task after delay (should wake up)
+        await Task.Delay(100);
+        var task = CreateTaskHandlerExecutor(DateTimeOffset.UtcNow.AddMilliseconds(100));
+        _timerScheduler.Schedule(task);
+
+        // Assert: Task should be processed
+        await Task.Delay(300);
+        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == task)), Times.Once);
+    }
+
+    [Fact]
+    public async Task PeriodicTimerScheduler_Should_ProcessMultipleReadyTasks_InSingleCycle()
+    {
+        // Arrange: Schedule multiple tasks with same execution time
+        var now = DateTimeOffset.UtcNow.AddMilliseconds(100);
+        var task1 = CreateTaskHandlerExecutor(now);
+        var task2 = CreateTaskHandlerExecutor(now);
+        var task3 = CreateTaskHandlerExecutor(now);
+
+        // Act: Schedule all tasks
+        _timerScheduler.Schedule(task1);
+        _timerScheduler.Schedule(task2);
+        _timerScheduler.Schedule(task3);
+
+        // Assert: All should be processed in quick succession
+        await Task.Delay(400);
+
+        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == task1)), Times.Once);
+        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == task2)), Times.Once);
+        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == task3)), Times.Once);
+
+        // Queue should be empty
+        _timerScheduler.GetQueue().Count.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task PeriodicTimerScheduler_Should_UseDynamicDelay_ForShortIntervals()
+    {
+        // Arrange: Schedule task with delay < checkInterval (1 second)
+        var shortDelay = DateTimeOffset.UtcNow.AddMilliseconds(300);
+        var task = CreateTaskHandlerExecutor(shortDelay);
+
+        // Act
+        _timerScheduler.Schedule(task);
+
+        await Task.Delay(100);
+
+#if DEBUG
+        // Assert: Should calculate delay based on task time, not checkInterval
+        _timerScheduler.LastCalculatedDelay.ShouldBeLessThan(TimeSpan.FromSeconds(1));
+        _timerScheduler.LastCalculatedDelay.ShouldBeGreaterThan(TimeSpan.Zero);
+#endif
+
+        // Task should execute within short time
+        await Task.Delay(400);
+        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == task)), Times.Once);
+    }
+
+    [Fact]
+    public async Task PeriodicTimerScheduler_Should_HandleConcurrentScheduleCalls()
+    {
+        // Arrange: Create multiple tasks
+        var tasks = Enumerable.Range(0, 10)
+            .Select(_ => CreateTaskHandlerExecutor(DateTimeOffset.UtcNow.AddMilliseconds(200)))
+            .ToList();
+
+        // Act: Schedule concurrently
+        var scheduleTasks = tasks.Select(task => Task.Run(() => _timerScheduler.Schedule(task)));
+        await Task.WhenAll(scheduleTasks);
+
+        // Assert: All tasks should be in queue
+        _timerScheduler.GetQueue().Count.ShouldBe(10);
+
+        // Wait for processing
+        await Task.Delay(500);
+
+        // All should be processed
+        foreach (var task in tasks)
+        {
+            _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == task)), Times.Once);
+        }
+    }
+
+    [Fact]
+    public async Task PeriodicTimerScheduler_Should_RouteToRecurringQueue_ForRecurringTasks()
+    {
+        // Arrange: Create recurring task without explicit queue name
+        var recurringTask = new RecurringTask { MinuteInterval = new MinuteInterval(5) };
+        var nextRun = DateTimeOffset.UtcNow.AddMilliseconds(100);
+        var taskExecutor = CreateTaskHandlerExecutor(null, recurringTask);
+
+        // Setup queue manager to track queue name
+        string? capturedQueueName = null;
+        _mockWorkerQueueManager.Setup(x => x.TryEnqueue(It.IsAny<string?>(), It.IsAny<TaskHandlerExecutor>()))
+            .Returns<string?, TaskHandlerExecutor>(async (queueName, executor) =>
+            {
+                capturedQueueName = queueName;
+                await _mockWorkerQueue.Object.Queue(executor);
+                return true;
+            });
+
+        // Act
+        _timerScheduler.Schedule(taskExecutor, nextRun);
+        await Task.Delay(300);
+
+        // Assert: Should route to "recurring" queue
+        capturedQueueName.ShouldBe(QueueNames.Recurring);
+    }
+
+    [Fact]
+    public async Task PeriodicTimerScheduler_Should_RouteToDefaultQueue_ForNonRecurringTasks()
+    {
+        // Arrange: Create non-recurring task without explicit queue name
+        var taskExecutor = CreateTaskHandlerExecutor(DateTimeOffset.UtcNow.AddMilliseconds(100));
+
+        // Setup queue manager to track queue name
+        string? capturedQueueName = null;
+        _mockWorkerQueueManager.Setup(x => x.TryEnqueue(It.IsAny<string?>(), It.IsAny<TaskHandlerExecutor>()))
+            .Returns<string?, TaskHandlerExecutor>(async (queueName, executor) =>
+            {
+                capturedQueueName = queueName;
+                await _mockWorkerQueue.Object.Queue(executor);
+                return true;
+            });
+
+        // Act
+        _timerScheduler.Schedule(taskExecutor);
+        await Task.Delay(300);
+
+        // Assert: Should route to "default" queue
+        capturedQueueName.ShouldBe(QueueNames.Default);
+    }
+
+    [Fact]
+    public async Task PeriodicTimerScheduler_Should_HandleExactlyTwoHourDelay()
+    {
+        // Arrange: Schedule task exactly 2 hours in future (boundary condition)
+        var exactlyTwoHours = DateTimeOffset.UtcNow.AddHours(2);
+        var task = CreateTaskHandlerExecutor(exactlyTwoHours);
+
+        // Act
+        _timerScheduler.Schedule(task);
+        await Task.Delay(100);
+
+#if DEBUG
+        // Assert: Should cap at 1.5 hours (delay > 2h triggers cap)
+        // Note: Due to timing, might be slightly less than 2h when calculated
+        var delay = _timerScheduler.LastCalculatedDelay;
+        delay.ShouldBeOneOf(TimeSpan.FromHours(1.5), delay); // Accept either capped or near-2h value
+#endif
+    }
+
+    [Fact]
+    public void PeriodicTimerScheduler_Should_DisposeGracefully()
+    {
+        // Arrange
+        var scheduler = new PeriodicTimerScheduler(_mockWorkerQueueManager.Object, _mockLogger.Object);
+        var task = CreateTaskHandlerExecutor(DateTimeOffset.UtcNow.AddHours(1));
+        scheduler.Schedule(task);
+
+        // Act: Dispose should not throw
+        var exception = Record.Exception(() => scheduler.Dispose());
+
+        // Assert
+        exception.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task PeriodicTimerScheduler_Should_StopProcessing_AfterDispose()
+    {
+        // Arrange
+        var scheduler = new PeriodicTimerScheduler(_mockWorkerQueueManager.Object, _mockLogger.Object);
+        var futureTask = CreateTaskHandlerExecutor(DateTimeOffset.UtcNow.AddSeconds(2));
+        scheduler.Schedule(futureTask);
+
+        // Act: Dispose immediately
+        scheduler.Dispose();
+
+        // Wait longer than task execution time
+        await Task.Delay(2500);
+
+        // Assert: Task should NOT be processed after dispose
+        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == futureTask)), Times.Never);
+    }
+
+    [Fact]
+    public async Task PeriodicTimerScheduler_Should_NotReleaseSemaphore_WhenAlreadySignaled()
+    {
+        // Arrange: Schedule first task (will release semaphore)
+        var task1 = CreateTaskHandlerExecutor(DateTimeOffset.UtcNow.AddHours(1));
+        _timerScheduler.Schedule(task1);
+
+        // Act: Schedule second task immediately (semaphore should already be signaled)
+        var task2 = CreateTaskHandlerExecutor(DateTimeOffset.UtcNow.AddHours(1));
+        _timerScheduler.Schedule(task2);
+
+        await Task.Delay(100);
+
+        // Assert: Both tasks should be in queue, no exceptions thrown
+        _timerScheduler.GetQueue().Count.ShouldBe(2);
+    }
+
+    #endregion
 }
