@@ -18,7 +18,7 @@ namespace EverTask.Storage.SqlServer.Migrations
 #pragma warning disable 612, 618
             modelBuilder
                 .HasDefaultSchema("EverTask")
-                .HasAnnotation("ProductVersion", "7.0.14")
+                .HasAnnotation("ProductVersion", "7.0.20")
                 .HasAnnotation("Relational:MaxIdentifierLength", 128);
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
@@ -54,6 +54,9 @@ namespace EverTask.Storage.SqlServer.Migrations
 
                     b.Property<DateTimeOffset?>("NextRunUtc")
                         .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("QueueName")
+                        .HasColumnType("nvarchar(max)");
 
                     b.Property<string>("RecurringInfo")
                         .HasColumnType("nvarchar(max)");

@@ -3,6 +3,7 @@ using System;
 using EverTask.Storage.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace EverTask.Storage.Sqlite.Migrations
 {
     [DbContext(typeof(SqliteTaskStoreContext))]
-    partial class SqliteTaskStoreContextModelSnapshot : ModelSnapshot
+    [Migration("20251019000419_AddQueueName")]
+    partial class AddQueueName
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "7.0.20");

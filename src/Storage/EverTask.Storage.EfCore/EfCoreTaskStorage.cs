@@ -8,7 +8,7 @@ namespace EverTask.Storage.EfCore;
 public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTaskLogger<EfCoreTaskStorage> logger)
     : ITaskStorage
 {
-    public async Task<QueuedTask[]> Get(Expression<Func<QueuedTask, bool>> where, CancellationToken ct = default)
+    public virtual async Task<QueuedTask[]> Get(Expression<Func<QueuedTask, bool>> where, CancellationToken ct = default)
     {
         using var       scope     = serviceScopeFactory.CreateScope();
         await using var dbContext = scope.ServiceProvider.GetRequiredService<ITaskStoreDbContext>();
@@ -20,7 +20,7 @@ public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTa
                               .ConfigureAwait(false);
     }
 
-    public async Task<QueuedTask[]> GetAll(CancellationToken ct = default)
+    public virtual async Task<QueuedTask[]> GetAll(CancellationToken ct = default)
     {
         using var       scope     = serviceScopeFactory.CreateScope();
         await using var dbContext = scope.ServiceProvider.GetRequiredService<ITaskStoreDbContext>();
@@ -43,17 +43,19 @@ public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTa
         logger.LogInformation("Task {name} persisted", taskEntity.Type);
     }
 
-    public async Task<QueuedTask[]> RetrievePending(CancellationToken ct = default)
+    public virtual async Task<QueuedTask[]> RetrievePending(CancellationToken ct = default)
     {
         using var       scope     = serviceScopeFactory.CreateScope();
         await using var dbContext = scope.ServiceProvider.GetRequiredService<ITaskStoreDbContext>();
 
         logger.LogInformation("Retrieving Pending Tasks");
 
+        var now = DateTimeOffset.UtcNow;
+
         return await dbContext.QueuedTasks
                               .AsNoTracking()
                               .Where(t => (t.MaxRuns == null || t.CurrentRunCount <= t.MaxRuns)
-                                          && (t.RunUntil == null || t.RunUntil >= DateTimeOffset.UtcNow)
+                                          && (t.RunUntil == null || t.RunUntil >= now)
                                           && (t.Status == QueuedTaskStatus.Queued ||
                                               t.Status == QueuedTaskStatus.Pending ||
                                               t.Status == QueuedTaskStatus.ServiceStopped ||
@@ -141,7 +143,7 @@ public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTa
         }
     }
 
-    public async Task<int> GetCurrentRunCount(Guid taskId)
+    public virtual async Task<int> GetCurrentRunCount(Guid taskId)
     {
         logger.LogInformation("Get the current run counter for Task {taskId}", taskId);
         using var       scope     = serviceScopeFactory.CreateScope();
