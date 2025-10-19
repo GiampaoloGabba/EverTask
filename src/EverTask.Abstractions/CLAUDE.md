@@ -125,13 +125,13 @@ public interface IEverTaskHandler<in TTask> : IEverTaskHandlerOptions, IAsyncDis
 ```
 
 **Inherits From**:
-- `IEverTaskHandlerOptions`: Provides `RetryPolicy`, `Timeout`, `CpuBoundOperation` configuration
+- `IEverTaskHandlerOptions`: Provides `RetryPolicy`, `Timeout` configuration
 - `IAsyncDisposable`: Enables cleanup of resources after task execution
 
 **Lifecycle Flow**:
 1. Handler instance created via DI (scoped per task execution)
 2. `OnStarted(Guid)` called with persistence ID
-3. `Handle(TTask, CancellationToken)` executed with retry policy, timeout, CPU-bound handling
+3. `Handle(TTask, CancellationToken)` executed with retry policy, timeout
 4. `OnCompleted(Guid)` called on success OR `OnError(Guid, Exception, string)` called on failure
 5. `DisposeAsync()` called to clean up resources
 
@@ -153,18 +153,8 @@ public interface IEverTaskHandlerOptions
     // Default: null (no timeout)
     TimeSpan? Timeout { get; set; }
 
-    // Default: false (I/O-bound execution)
-    // WARNING: CPU-bound tasks spawn a separate thread - use with caution
+    // Deprecated: This property has no effect. Use Task.Run within your handler for CPU-intensive synchronous work.
     bool CpuBoundOperation { get; set; }
-}
-```
-
-**Retry Policy**: If not set, defaults to 3 retries with 500ms linear delay. Set to `null` for no retries.
-
-**Timeout**: If set, task execution will be cancelled if it exceeds the timeout. Throws `TimeoutException`.
-
-**CpuBoundOperation**: When `true`, the task is executed via `Task.Run()` on a ThreadPool thread instead of the default I/O-bound execution. Use sparingly for truly CPU-intensive work (e.g., image processing, complex calculations). Most tasks should remain `false` (default).
-
 ### IRetryPolicy
 **Location**: `IRetryPolicy.cs`
 
@@ -279,7 +269,7 @@ public abstract class EverTaskHandler<TTask> : IEverTaskHandler<TTask> where TTa
     // Configuration properties (from IEverTaskHandlerOptions)
     public IRetryPolicy? RetryPolicy       { get; set; } // Default: LinearRetryPolicy(3, 500ms)
     public TimeSpan?     Timeout           { get; set; } // Default: null
-    public bool          CpuBoundOperation { get; set; } // Default: false
+    public bool          CpuBoundOperation { get; set; } // Deprecated
 
     // REQUIRED: Main execution logic
     public abstract Task Handle(TTask backgroundTask, CancellationToken cancellationToken);

@@ -23,7 +23,6 @@ on task persistence, monitoring and resilience. Advanced scenarios like custom r
 - **Managed Parallelism**<br>Efficiently handles concurrent task execution with configurable parallelism per queue.
 - **Scheduled, Delayed and recurring tasks**<br>Schedule tasks for future execution or delay them using a TimeSpan. You can also create recurring tasks, with cron or with a powerful fluent builder!
 - **Resilient execution**<br>A powerful resilience feature to ensure your tasks are robust against transient failures. Fully customizable even with your custom retry policies, easily integrable with [Polly](https://github.com/App-vNext/Polly)
-- **Optional specialized CPU-bound execution**<br>Optimized handling for CPU-intensive tasks with an option to execute in a separate thread, ensuring efficient processing without impacting I/O-bound operations. Use judiciously for tasks requiring significant computational resources.
 - **Timeout management**<br>Configure the maximum execution time for your tasks.
 - **Error Handling**<br>Method overrides for error observation and task completion/cancellation.
 - **Monitoring (local and remote)**<br>Monitor your task with the included in-memory monitoring or remotely with SignalR! ([Sentry Crons](https://docs.sentry.io/product/crons/) is coming soon)<br>[![NuGet](https://img.shields.io/nuget/vpre/EverTask.Monitor.AspnetCore.SignalR.svg?label=EverTask.Monitor.AspnetCore.SignalR)](https://www.nuget.org/packages/EverTask.Monitor.AspnetCore.SignalR)
@@ -48,6 +47,7 @@ Upon application restart after a stop, any unprocessed tasks are retrieved from 
 for execution by the background service. This design ensures a seamless and efficient task processing
 cycle, even across application restarts.
 
+>  💡**Note:** EverTask uses a fully asynchronous, non-blocking architecture. All task handlers use async/await, making the system efficient for both I/O-bound and CPU-intensive operations. For truly CPU-intensive synchronous work, you can use Task.Run within your handler implementation.
 ## Basic Configuration
 
 ```csharp
@@ -162,14 +162,14 @@ public class ReportGenerationHandler : EverTaskHandler<GenerateReportTask>
 ### Performance Considerations
 
 - **Workload Isolation**: Separate high-priority tasks from background processing to prevent interference
-- **Resource Management**: Configure parallelism based on task characteristics (I/O-bound vs CPU-bound)
+- **Resource Management**: Configure parallelism based on task characteristics and workload requirements
 - **Queue Capacity**: Set appropriate capacities to handle burst traffic without memory issues
 - **Monitoring**: Each queue operates independently, making it easier to identify bottlenecks
 
 ### Best Practices
 
 1. **Keep Queue Count Reasonable**: 3-5 queues are typically sufficient for most applications
-2. **Configure Based on Workload**: I/O-bound tasks can have higher parallelism than CPU-bound tasks
+2. **Configure Based on Workload**: Adjust parallelism settings to match your task workload (higher for I/O operations, lower for resource-intensive tasks)
 3. **Use Fallback Wisely**: `FallbackToDefault` provides graceful degradation for non-critical queues
 4. **Monitor Queue Metrics**: Track queue depths and processing rates to optimize configuration
 
@@ -578,27 +578,6 @@ public class MyCustomTimeoutTaskHandler : EverTaskHandler<MyTask>
 }
 ```
 
-## CPU-bound Task Handling
-In addition to its default async-await behavior, which is ideal for I/O-bound operations (like database operations, email sending, file generation, etc.), EverTask provides a specialized handling mechanism for CPU-bound tasks. This is crucial for tasks that involve intensive computational work, such as data processing or complex calculations.
-
-This is controlled by the `CpuBoundOperation` property in the `EverTaskHandler`.
-
-```csharp
-public class MyCustomCPUIntensiveTaskHandler : EverTaskHandler<MyCPUIntensiveTask>
-{
-    public MyCustomCPUIntensiveTaskHandler()
-    {
-        CpuBoundOperation = true;
-    }
-
-    public override Task Handle(CancellationToken cancellationToken)
-    {
-        // CPU-intensive task logic
-    }
-}
-```
-
-> 💡 **Note:** When using CpuBoundOperation to execute tasks in a separate thread, be mindful of potential overhead and concurrency issues. This feature is best used for genuinely CPU-intensive tasks. Excessive use can lead to increased resource utilization and complexity.
 
 ## Resilience and Retry Policies
 

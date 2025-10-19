@@ -6,7 +6,7 @@ namespace EverTask.Tests;
 
 public class TestTaskCpubound() : IEverTask
 {
-    // Legacy static property for backward compatibility - will be phased out
+    // Legacy test - CpuBoundOperation is deprecated and has no effect
     public static int Counter { get; set; } = 0;
 }
 
@@ -17,7 +17,6 @@ public class TestTaskCpuboundHandler : EverTaskHandler<TestTaskCpubound>
     public TestTaskCpuboundHandler(TestTaskStateManager? stateManager = null)
     {
         _stateManager = stateManager;
-        CpuBoundOperation = true;
     }
 
     public override async Task Handle(TestTaskCpubound backgroundTask, CancellationToken cancellationToken)

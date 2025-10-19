@@ -1,4 +1,4 @@
-﻿namespace EverTask.Abstractions;
+namespace EverTask.Abstractions;
 
 /// <summary>
 /// Base abstract class for handling EverTask tasks.
@@ -11,6 +11,7 @@ public abstract class EverTaskHandler<TTask> : IEverTaskHandler<TTask> where TTa
     /// <inheritdoc/>
     public TimeSpan?     Timeout           { get; set; }
     /// <inheritdoc/>
+    [Obsolete("This property is deprecated and has no effect. EverTask's async/await execution is non-blocking and suitable for all workloads. For CPU-intensive synchronous operations, use Task.Run within your handler instead.")]
     public bool          CpuBoundOperation { get; set; }
 
     /// <summary>

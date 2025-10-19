@@ -51,11 +51,9 @@ public class GenerateReportHandler : EverTaskHandler<GenerateReportTask>
     // Route this handler to the background queue
     public override string? QueueName => "background";
 
-    // Mark as CPU-bound since report generation is intensive
     public GenerateReportHandler(ILogger<GenerateReportHandler> logger)
     {
         _logger = logger;
-        CpuBoundOperation = true;
         Timeout = TimeSpan.FromMinutes(30);
     }
 
@@ -136,7 +134,6 @@ public class ProcessImageHandler : EverTaskHandler<ProcessImageTask>
     public ProcessImageHandler(ILogger<ProcessImageHandler> logger)
     {
         _logger = logger;
-        CpuBoundOperation = true;
         Timeout = TimeSpan.FromMinutes(10);
     }
 

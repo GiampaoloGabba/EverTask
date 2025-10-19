@@ -1,4 +1,4 @@
-﻿namespace EverTask.Abstractions;
+namespace EverTask.Abstractions;
 
 public interface IEverTaskHandlerOptions
 {
@@ -14,7 +14,7 @@ public interface IEverTaskHandlerOptions
 
     /// <summary>
     /// Gets or sets whether this task is CPU-bound. Default is false.
-    /// WARNING: CPU-bound tasks are spawned in a separate thread. Use with care and make sure you know all the implications.
     /// </summary>
+    [Obsolete("This property is deprecated and has no effect. EverTask's async/await execution is non-blocking and suitable for all workloads. For CPU-intensive synchronous operations, use Task.Run within your handler instead.")]
     public bool CpuBoundOperation { get; set; }
 }

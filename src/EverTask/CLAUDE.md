@@ -48,7 +48,7 @@ Task Dispatch -> Persistence -> Queue Selection -> Execution -> Monitoring
 
 ### WorkerExecutor (`Worker/WorkerExecutor.cs`)
 
-**Purpose**: Executes tasks with retry policies, timeouts, CPU-bound handling, and lifecycle callbacks.
+**Purpose**: Executes tasks with retry policies, timeouts, and lifecycle callbacks.
 
 **Critical Lines**:
 - `11-17`: Constructor dependencies (blacklist, config, scope factory, scheduler, cancellation provider, logger)
@@ -57,9 +57,6 @@ Task Dispatch -> Persistence -> Queue Selection -> Execution -> Monitoring
 - `32-33`: Blacklist check prevents execution of user-cancelled tasks
 - `37-38`: Storage status update to `InProgress`
 - `40`: `OnStarted` lifecycle callback
-- `77-127`: Task execution with retry policy, timeout, and CPU-bound handling
-- `83-86`: Handler options override defaults (retry policy, timeout, CPU-bound flag)
-- `91-95`: **CPU-Bound Handling**: Uses `Task.Factory.StartNew` with `TaskCreationOptions.LongRunning` (see line 93 comment)
 - `110-127`: Retry policy execution with timeout enforcement via `WaitAsync` (line 109 comment)
 - `130-155`: Timeout implementation using linked `CancellationTokenSource` with proper disposal (line 152 comment)
 - `157-169`: Async dispose of handlers implementing `IAsyncDisposable`
@@ -349,7 +346,6 @@ await dispatcher.Dispatch(new MyTask("data"), recurring => recurring
 
 **Task Execution** (`WorkerExecutor.cs:77-127`):
 - Uses `WaitAsync()` for cancellation (line 115, 121) - see comment line 109
-- CPU-bound tasks use `Task.Factory.StartNew` with `LongRunning` (lines 93-95) - see comment line 93
 - Timeout via linked `CancellationTokenSource` with proper disposal (lines 130-154) - see comment line 152
 
 **Timer Callbacks** (`TimerScheduler.cs:89-91`):
@@ -405,15 +401,15 @@ public interface IRetryPolicy
 - Distinguishes timeout (`TimeoutException`) from user cancellation
 - Properly disposes `CancellationTokenSource` (line 153) - see comment line 152
 
-### CPU-Bound Operations
+### CPU-Bound Operations (Deprecated)
 
-**Configuration**:
-- Per-handler only: Implement `IEverTaskHandlerOptions.CpuBoundOperation` property
-- Execution: `WorkerExecutor.cs:91-100`
+The `CpuBoundOperation` property is **deprecated** and has no effect. EverTask uses a fully asynchronous, non-blocking architecture based on async/await patterns. This makes it inherently efficient for all workload types:
 
-**Implementation** (`WorkerExecutor.cs:93-95`):
-- Uses `Task.Factory.StartNew` with `TaskCreationOptions.LongRunning`
-- Dedicated thread prevents thread pool starvation - see comment line 93
+- **I/O-bound tasks** (database, HTTP, file operations): Threads are released during await, enabling high concurrency
+- **CPU-intensive async tasks**: The thread pool automatically manages workload distribution
+- **CPU-intensive synchronous work**: If needed, use `Task.Run(() => SyncWork())` within your handler
+
+The async architecture eliminates the need for special CPU-bound handling configurations.
 
 ### Lifecycle Callbacks
 
@@ -460,7 +456,6 @@ public class MyTaskHandler : EverTaskHandler<MyTaskRequest>
     public override IRetryPolicy RetryPolicy => new ExponentialRetryPolicy(5, TimeSpan.FromSeconds(2));
     public override TimeSpan? Timeout => TimeSpan.FromMinutes(10);
     public override bool CpuBoundOperation => false;
-
     public override ValueTask OnStarted(Guid taskId)
     {
         Console.WriteLine($"Task {taskId} started");
@@ -664,7 +659,6 @@ public class MyTaskHandler : EverTaskHandler<MyTask>
     public override TimeSpan? Timeout => TimeSpan.FromMinutes(30);
     public override bool CpuBoundOperation => true; // Use dedicated thread
 
-    public override async Task Handle(MyTask task, CancellationToken ct)
     {
         // Handler logic
     }

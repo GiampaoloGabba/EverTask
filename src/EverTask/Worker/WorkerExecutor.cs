@@ -83,21 +83,11 @@ public class WorkerExecutor(
         var handlerOptions = task.Handler as IEverTaskHandlerOptions;
         var retryPolicy    = handlerOptions?.RetryPolicy ?? configuration.DefaultRetryPolicy;
         var timeout        = handlerOptions?.Timeout ?? configuration.DefaultTimeout;
-        var cpuBound       = handlerOptions?.CpuBoundOperation ?? false;
 
         var stopwatch = new Stopwatch();
         stopwatch.Start();
 
-        if (cpuBound)
-        {
-            //https://github.com/davidfowl/AspNetCoreDiagnosticScenarios/blob/master/AsyncGuidance.md#avoid-using-taskrun-for-long-running-work-that-blocks-the-thread
-            await (_ = await Task.Factory.StartNew(async () => await DoExecute(), taskToken,
-                           TaskCreationOptions.LongRunning, TaskScheduler.Default));
-        }
-        else
-        {
-            await DoExecute();
-        }
+        await DoExecute();
 
         stopwatch.Stop();
 
