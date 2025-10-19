@@ -1,5 +1,6 @@
 ﻿using System.Linq.Expressions;
 using EverTask.Logger;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -93,29 +94,28 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
         await Audit(dbContext, taskId, status, exception, ct).ConfigureAwait(false);
 
-        var task = await dbContext.QueuedTasks
-                                  .Where(x => x.Id == taskId)
-                                  .FirstOrDefaultAsync(ct)
-                                  .ConfigureAwait(false);
-
-        if (task != null)
+        try
         {
-            task.Status           = status;
-            task.LastExecutionUtc = lastExecutionUtc;
-            task.Exception        = ex;
+            var rowsAffected = await dbContext.QueuedTasks
+                                              .Where(x => x.Id == taskId)
+                                              .ExecuteUpdateAsync(setters => setters
+                                                  .SetProperty(t => t.Status, status)
+                                                  .SetProperty(t => t.LastExecutionUtc, lastExecutionUtc)
+                                                  .SetProperty(t => t.Exception, ex), ct)
+                                              .ConfigureAwait(false);
 
-            try
+            if (rowsAffected == 0)
             {
-                await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
+                logger.LogWarning("Task {taskId} not found for status update to {status}", taskId, status);
             }
-            catch (Exception e)
-            {
-                logger.LogCritical(e, "Unable to update the status {status} for taskId {taskId}", status, taskId);
-            }
+        }
+        catch (Exception e)
+        {
+            logger.LogCritical(e, "Unable to update the status {status} for taskId {taskId}", status, taskId);
         }
     }
 
-    internal async Task Audit(ITaskStoreDbContext dbContext, Guid taskId, QueuedTaskStatus status, Exception? exception,
+    private async Task Audit(ITaskStoreDbContext dbContext, Guid taskId, QueuedTaskStatus status, Exception? exception,
                              CancellationToken ct)
     {
         var detailedException = exception.ToDetailedString();
@@ -205,40 +205,34 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
 
-        var existingTask = await dbContext.QueuedTasks
-                                          .Where(t => t.Id == task.Id)
-                                          .FirstOrDefaultAsync(ct)
-                                          .ConfigureAwait(false);
-
-        if (existingTask != null)
+        try
         {
-            // Update all relevant properties
-            existingTask.Type                  = task.Type;
-            existingTask.Request               = task.Request;
-            existingTask.Handler               = task.Handler;
-            existingTask.ScheduledExecutionUtc = task.ScheduledExecutionUtc;
-            existingTask.IsRecurring           = task.IsRecurring;
-            existingTask.RecurringTask         = task.RecurringTask;
-            existingTask.RecurringInfo         = task.RecurringInfo;
-            existingTask.MaxRuns               = task.MaxRuns;
-            existingTask.RunUntil              = task.RunUntil;
-            existingTask.NextRunUtc            = task.NextRunUtc;
-            existingTask.QueueName             = task.QueueName;
-            existingTask.TaskKey               = task.TaskKey;
+            var rowsAffected = await dbContext.QueuedTasks
+                                              .Where(t => t.Id == task.Id)
+                                              .ExecuteUpdateAsync(setters => setters
+                                                  .SetProperty(t => t.Type, task.Type)
+                                                  .SetProperty(t => t.Request, task.Request)
+                                                  .SetProperty(t => t.Handler, task.Handler)
+                                                  .SetProperty(t => t.ScheduledExecutionUtc, task.ScheduledExecutionUtc)
+                                                  .SetProperty(t => t.IsRecurring, task.IsRecurring)
+                                                  .SetProperty(t => t.RecurringTask, task.RecurringTask)
+                                                  .SetProperty(t => t.RecurringInfo, task.RecurringInfo)
+                                                  .SetProperty(t => t.MaxRuns, task.MaxRuns)
+                                                  .SetProperty(t => t.RunUntil, task.RunUntil)
+                                                  .SetProperty(t => t.NextRunUtc, task.NextRunUtc)
+                                                  .SetProperty(t => t.QueueName, task.QueueName)
+                                                  .SetProperty(t => t.TaskKey, task.TaskKey), ct)
+                                              .ConfigureAwait(false);
 
-            try
+            if (rowsAffected == 0)
             {
-                await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
-            }
-            catch (Exception e)
-            {
-                logger.LogCritical(e, "Unable to update task {taskId}", task.Id);
-                throw;
+                logger.LogWarning("Task {taskId} not found for update", task.Id);
             }
         }
-        else
+        catch (Exception e)
         {
-            logger.LogWarning("Task {taskId} not found for update", task.Id);
+            logger.LogCritical(e, "Unable to update task {taskId}", task.Id);
+            throw;
         }
     }
 
@@ -248,24 +242,22 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
 
-        var task = await dbContext.QueuedTasks
-                                  .Where(t => t.Id == taskId)
-                                  .FirstOrDefaultAsync(ct)
-                                  .ConfigureAwait(false);
-
-        if (task != null)
+        try
         {
-            dbContext.QueuedTasks.Remove(task);
+            var rowsAffected = await dbContext.QueuedTasks
+                                              .Where(t => t.Id == taskId)
+                                              .ExecuteDeleteAsync(ct)
+                                              .ConfigureAwait(false);
 
-            try
+            if (rowsAffected == 0)
             {
-                await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
+                logger.LogWarning("Task {taskId} not found for removal", taskId);
             }
-            catch (Exception e)
-            {
-                logger.LogCritical(e, "Unable to remove task {taskId}", taskId);
-                throw;
-            }
+        }
+        catch (Exception e)
+        {
+            logger.LogCritical(e, "Unable to remove task {taskId}", taskId);
+            throw;
         }
     }
 }
