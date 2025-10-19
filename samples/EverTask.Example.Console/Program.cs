@@ -31,7 +31,7 @@ builder.Services.AddEverTask(opt =>
 var app = builder.Build();
 
 // Map EverTask monitoring API and dashboard
-app.MapMonitoringApi();
+app.MapEverTaskApi();
 
 // Start the web server
 await app.StartAsync();
