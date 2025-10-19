@@ -4,6 +4,8 @@ using EverTask.Tests.TestHelpers;
 
 namespace EverTask.Tests.IntegrationTests;
 
+// Disable parallel execution for this test class because tests share TestTaskStateManager singleton
+[Collection("ShardedSchedulerTests")]
 public class ShardedSchedulerIntegrationTests
 {
     private IHost _host = null!;
@@ -69,26 +71,28 @@ public class ShardedSchedulerIntegrationTests
         _host = CreateHost(useShardedScheduler: true, shardCount: 4);
         await _host.StartAsync();
 
-        // Reset state manager to avoid interference from previous tests
-        _stateManager.Reset(nameof(TestTaskConcurrent1));
-
         // Act - Schedule 20 tasks with execution time spread across 1-2 seconds
+        var taskIds = new List<Guid>();
         for (int i = 0; i < 20; i++)
         {
-            await _dispatcher.Dispatch(
+            var taskId = await _dispatcher.Dispatch(
                 new TestTaskConcurrent1(),
                 DateTimeOffset.UtcNow.AddSeconds(1 + (i % 2))
             );
+            taskIds.Add(taskId);
         }
 
-        // Wait for all tasks to be executed
-        await TaskWaitHelper.WaitForConditionAsync(
-            () => _stateManager.GetCounter(nameof(TestTaskConcurrent1)) >= 20,
+        // Wait for all tasks to be executed (verify via isolated storage, not shared state manager)
+        await TaskWaitHelper.WaitUntilAsync(
+            async () => await _storage.GetAll(),
+            tasks => tasks.Count(t => taskIds.Contains(t.Id) && t.Status == QueuedTaskStatus.Completed) >= 20,
             timeoutMs: 10000
         );
 
-        // Assert
-        _stateManager.GetCounter(nameof(TestTaskConcurrent1)).ShouldBe(20);
+        // Assert - Verify exactly 20 tasks in THIS test's storage
+        var completedTasks = await _storage.GetAll();
+        completedTasks.Length.ShouldBe(20);
+        completedTasks.ShouldAllBe(t => t.Status == QueuedTaskStatus.Completed);
 
         var cts = new CancellationTokenSource();
         cts.CancelAfter(2000);
@@ -170,18 +174,12 @@ public class ShardedSchedulerIntegrationTests
             taskIds.Add(taskId);
         }
 
-        // Assert - Wait for all tasks to complete
-        // Wait for all 3 tasks to reach 3 runs each
-        var startTime = DateTimeOffset.UtcNow;
-        while (DateTimeOffset.UtcNow - startTime < TimeSpan.FromSeconds(15))
-        {
-            var tasks = await _storage.GetAll();
-            if (tasks.Length == 3 && tasks.All(t => t.CurrentRunCount == 3 && t.Status == QueuedTaskStatus.Completed))
-            {
-                break;
-            }
-            await Task.Delay(100);
-        }
+        // Assert - Wait for all tasks to complete all 3 runs
+        await TaskWaitHelper.WaitUntilAsync(
+            async () => await _storage.GetAll(),
+            tasks => tasks.Length == 3 && tasks.All(t => t.CurrentRunCount == 3 && t.Status == QueuedTaskStatus.Completed),
+            timeoutMs: 20000 // Increased for .NET 6 compatibility (recurring tasks need more time)
+        );
 
         var allTasks = await _storage.GetAll();
         allTasks.Length.ShouldBe(3);
@@ -243,12 +241,6 @@ public class ShardedSchedulerIntegrationTests
         _host = CreateHost(useShardedScheduler: true, shardCount: 8);
         await _host.StartAsync();
 
-        // Reset state manager
-        _stateManager.Reset(nameof(TestTaskConcurrent1));
-
-        // Get the initial count to handle cases where previous tests left tasks
-        var initialCount = _stateManager.GetCounter(nameof(TestTaskConcurrent1));
-
         // Act - Concurrently schedule 50 tasks from multiple threads
         var schedulingTasks = Enumerable.Range(0, 50).Select(async i =>
         {
@@ -264,11 +256,17 @@ public class ShardedSchedulerIntegrationTests
         taskIds.Length.ShouldBe(50);
         taskIds.Distinct().Count().ShouldBe(50); // All unique IDs
 
-        // Wait for all 50 new tasks to complete
-        await TaskWaitHelper.WaitForConditionAsync(
-            () => _stateManager.GetCounter(nameof(TestTaskConcurrent1)) >= 50,
+        // Wait for all 50 tasks to complete (verify via isolated storage, not shared state manager)
+        await TaskWaitHelper.WaitUntilAsync(
+            async () => await _storage.GetAll(),
+            tasks => tasks.Count(t => taskIds.Contains(t.Id) && t.Status == QueuedTaskStatus.Completed) >= 50,
             timeoutMs: 15000
         );
+
+        // Verify all 50 tasks completed successfully
+        var completedTasks = await _storage.GetAll();
+        completedTasks.Length.ShouldBe(50);
+        completedTasks.ShouldAllBe(t => t.Status == QueuedTaskStatus.Completed);
 
         var cts = new CancellationTokenSource();
         cts.CancelAfter(2000);

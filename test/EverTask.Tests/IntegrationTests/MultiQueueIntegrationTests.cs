@@ -370,15 +370,14 @@ public class MultiQueueIntegrationTests : IntegrationTestBase
             sequentialTasks.Add(await Dispatcher!.Dispatch(new TestTaskSequential { Id = $"sequential-{i}" }));
         }
 
-        // Assert - Wait for all tasks to complete
-        foreach (var taskId in parallelTasks)
-        {
-            await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed, timeoutMs: 5000);
-        }
-        foreach (var taskId in sequentialTasks)
-        {
-            await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed, timeoutMs: 5000);
-        }
+        var allTaskIds = parallelTasks.Concat(sequentialTasks).ToList();
+
+        // Assert - Wait for all 6 tasks to complete (more efficient than waiting one by one)
+        await TaskWaitHelper.WaitUntilAsync(
+            async () => await Storage!.GetAll(),
+            tasks => tasks.Count(t => allTaskIds.Contains(t.Id) && t.Status == QueuedTaskStatus.Completed) >= 6,
+            timeoutMs: 8000 // Increased timeout for .NET 6 compatibility
+        );
 
         var tasks = await Storage!.GetAll();
         tasks.Length.ShouldBe(6);
