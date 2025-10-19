@@ -2,6 +2,7 @@
 using EverTask.Storage.EfCore;
 using EverTask.Storage.SqlServer;
 using EverTask.Tests.Storage.EfCore;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -11,7 +12,7 @@ using Xunit;
 
 namespace EverTask.Tests.Storage;
 
-[Collection("Sequential3")]
+[Collection("StorageTests")]
 public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase
 {
     private ITaskStoreDbContext _dbContext = null!;
@@ -30,14 +31,14 @@ public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase
         services.AddEverTask(opt=>opt.RegisterTasksFromAssembly(typeof(SqlServerEfCoreTaskStorageTests).Assembly))
                 .AddSqlServerStorage(_connectionString, opt => opt.AutoApplyMigrations = false);
 
-        // Delete and create database only once for all tests in this class
+        // Create database only once for all tests in this collection
         lock (_lock)
         {
             if (!_dbInitialized)
             {
                 using var scope = services.BuildServiceProvider().CreateScope();
                 var context = scope.ServiceProvider.GetRequiredService<SqlServerTaskStoreContext>();
-                context.Database.EnsureDeleted();
+                // Don't delete - just ensure migrations are applied
                 context.Database.Migrate();
                 _dbInitialized = true;
             }
@@ -63,10 +64,11 @@ public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase
 
     protected override async Task CleanUpDatabase()
     {
-        _dbContext.RunsAudit.RemoveRange(_dbContext.RunsAudit.ToList());
-        _dbContext.StatusAudit.RemoveRange(_dbContext.StatusAudit.ToList());
-        _dbContext.QueuedTasks.RemoveRange(_dbContext.QueuedTasks.ToList());
-        await _dbContext.SaveChangesAsync(CancellationToken.None);
+        // Use Respawn for efficient, reliable cleanup
+        var respawner = await GetRespawner();
+        using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
+        await respawner.ResetAsync(connection);
     }
 
     protected override ITaskStoreDbContext CreateDbContext()

@@ -7,7 +7,7 @@ using Xunit;
 
 namespace EverTask.Tests.Storage;
 
-[Collection("Sequential1")]
+[Collection("StorageTests")]
 public class InMemoryEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase
 {
     private ITaskStoreDbContext _dbContext = null!;
