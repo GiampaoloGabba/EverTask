@@ -1,0 +1,36 @@
+# GitHub Pages configuration for EverTask documentation
+remote_theme: just-the-docs/just-the-docs
+
+title: EverTask Documentation
+description: Persistent, resilient task execution for .NET
+
+# URL configuration
+url: https://GiampaoloGabba.github.io
+baseurl: /EverTask
+
+# Enable automatic navigation in sidebar
+aux_links:
+  "GitHub Repository":
+    - "//github.com/GiampaoloGabba/EverTask"
+  "NuGet Package":
+    - "//www.nuget.org/packages/EverTask"
+
+# Footer content
+footer_content: "Copyright &copy; 2025 Giampaolo Gabba. Distributed under the APACHE 2.0 License."
+
+# Color scheme
+color_scheme: light
+
+# Enable search
+search_enabled: true
+search:
+  heading_level: 2
+  previews: 3
+  preview_words_before: 5
+  preview_words_after: 10
+  tokenizer_separator: /[\s/]+/
+  rel_url: true
+  button: false
+
+# Navigation structure
+nav_sort: case_insensitive

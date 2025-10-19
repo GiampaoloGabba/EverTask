@@ -9,1116 +9,322 @@
 
 ## Overview
 
-EverTask is a .NET library for executing background tasks (fire and forget, scheduled and recurring). It is designed to be simple and focuses
-on task persistence, monitoring and resilience. Advanced scenarios like custom resilience policies, task cancellations, continuations and rescheduling are also supported!
+**EverTask** is a high-performance .NET library for background task execution. It handles everything from simple fire-and-forget operations to complex recurring schedules, with persistence that survives application restarts.
 
-> 💡**Note:** We're currently enhancing our documentation and examples. Stay tuned for a range of new, practical usage scenarios and detailed guides!
+If you've used MediatR, you'll feel right at home with the request/handler pattern. But unlike traditional in-memory task queues, EverTask persists tasks to storage, supports multi-queue workload isolation, and scales to extreme loads (>10k tasks/sec) when needed.
 
-## Features
+Works great with ASP.NET Core, Windows Services, or any .NET project that needs reliable background processing.
 
-- **Background execution**:<br>
-  Easily run background tasks with parameters in .NET
-- **Multi-Queue Support**<br>Configure multiple execution queues with independent parallelism, capacity, and behavior settings for workload isolation and prioritization.
-- **Persistence**<br>Resumes pending tasks after application restarts.
-- **Managed Parallelism**<br>Efficiently handles concurrent task execution with configurable parallelism per queue.
-- **Scheduled, Delayed and recurring tasks**<br>Schedule tasks for future execution or delay them using a TimeSpan. You can also create recurring tasks, with cron or with a powerful fluent builder!
-- **Resilient execution**<br>A powerful resilience feature to ensure your tasks are robust against transient failures. Fully customizable even with your custom retry policies, easily integrable with [Polly](https://github.com/App-vNext/Polly)
-- **Timeout management**<br>Configure the maximum execution time for your tasks.
-- **Error Handling**<br>Method overrides for error observation and task completion/cancellation.
-- **Monitoring (local and remote)**<br>Monitor your task with the included in-memory monitoring or remotely with SignalR! ([Sentry Crons](https://docs.sentry.io/product/crons/) is coming soon)<br>[![NuGet](https://img.shields.io/nuget/vpre/EverTask.Monitor.AspnetCore.SignalR.svg?label=EverTask.Monitor.AspnetCore.SignalR)](https://www.nuget.org/packages/EverTask.Monitor.AspnetCore.SignalR)
-- **SQL Storage**<br>Includes support for SQL Server storage (Sqlite is already implemented and coming soon), enabling persistent task management.<br>[![NuGet](https://img.shields.io/nuget/vpre/evertask.sqlserver.svg?label=Evertask.SqlServer)](https://www.nuget.org/packages/evertask.sqlserver)
-- **In-Memory Storage**<br>Provides an in-memory storage solution for testing pruposes.
-- **Serilog Integration**<br>Supports integration with Serilog for detailed and customizable logging.<br>[![NuGet](https://img.shields.io/nuget/vpre/evertask.serilog.svg?label=Evertask.Serilog)](https://www.nuget.org/packages/evertask.serilog)
-- **Extensible Storage & Logging**<br>Designed to allow easy plug-in of additional database solutions or logging systems.
-- **Task Continuations and Rescheduling** Advanced Workflow Management
-- **Async All The Way**<br>Fully asynchronous architecture, enhancing performance and scalability in modern environments.
-- **Inspiration from MediaTr**<br>Implementation based on creating requests and handlers.
+## Key Features
 
-> 💡**Note:** We are also implementing a web dashboard and + Web API to manage your tasks remotely
+- 🚀 **Background Execution** - Fire-and-forget, scheduled, and recurring tasks with elegant API
+- 🎯 **Multi-Queue Support** (v1.6+) - Isolate workloads by priority, resource type, or business domain
+- 🔑 **Idempotent Task Registration** (v1.6+) - Prevent duplicate recurring tasks with unique keys
+- ⚡ **High-Performance Scheduler** (v2.0+) - PeriodicTimerScheduler with 90% less lock contention and zero CPU when idle
+- 🔥 **Extreme Load Support** (v2.0+) - Optional sharded scheduler for >10k tasks/sec scenarios
+- 💾 **Smart Persistence** - Tasks resume after application restarts (SQL Server, SQLite, In-Memory)
+- 🔄 **Powerful Retry Policies** - Built-in linear retry, custom policies, Polly integration
+- ⏱️ **Timeout Management** - Global and per-task timeout configuration
+- 📊 **Real-Time Monitoring** - Local events + SignalR remote monitoring
+- 🎨 **Fluent Scheduling API** - Intuitive recurring task configuration (every minute, hour, day, week, month, cron)
+- 🔧 **Extensible Architecture** - Custom storage, retry policies, and schedulers
+- 🏎️ **Optimized Performance** (v2.0+) - Reflection caching, lazy serialization, DbContext pooling
+- 📈 **Auto-Scaling Defaults** (v2.0+) - Configuration that scales with your CPU cores
+- 🔌 **Serilog Integration** - Detailed structured logging
+- ✨ **Async All The Way** - Fully asynchronous for maximum scalability
 
+## Quick Start
 
-## Efficient Task Processing
+### Installation
 
-EverTask employs a non-polling approach for task management, utilizing the .NET's `System.Threading.Channels` to create
-a `BoundedQueue` that efficiently manages task execution without the need for constant database polling.<br>
-Recurring tasks are handled in a custom `ConcurrentPriorityQueue`
+```bash
+dotnet add package EverTask
+dotnet add package EverTask.SqlServer  # Or EverTask.Sqlite
+```
 
-Upon application restart after a stop, any unprocessed tasks are retrieved from the database in bulk and re-queued in the
-for execution by the background service. This design ensures a seamless and efficient task processing
-cycle, even across application restarts.
-
->  💡**Note:** EverTask uses a fully asynchronous, non-blocking architecture. All task handlers use async/await, making the system efficient for both I/O-bound and CPU-intensive operations. For truly CPU-intensive synchronous work, you can use Task.Run within your handler implementation.
-## Basic Configuration
+### Configuration
 
 ```csharp
+using EverTask;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Register EverTask with SQL Server storage
 builder.Services.AddEverTask(opt =>
 {
     opt.RegisterTasksFromAssembly(typeof(Program).Assembly);
 })
-.AddMemoryStorage();
-```
-
-## Advanced Configuration
-
-```csharp
-builder.Services.AddEverTask(opt =>
-{
-    opt.SetChannelOptions(500)
-       .SetThrowIfUnableToPersist(true)
-       .RegisterTasksFromAssembly(typeof(AppSettings).Assembly);
-})
-.AddSqlServerStorage(configuration.GetConnectionString("QueueWorkerSqlStorage")!,
+.AddSqlServerStorage(
+    builder.Configuration.GetConnectionString("EverTaskDb")!,
     opt =>
     {
-        opt.SchemaName          = "EverTask";
+        opt.SchemaName = "EverTask";
         opt.AutoApplyMigrations = true;
-    })
-.AddSerilog(opt => 
-    opt.ReadFrom.Configuration(configuration, new ConfigurationReaderOptions { SectionName = "EverTaskSerilog" }));
+    });
+
+var app = builder.Build();
+app.Run();
 ```
 
-For setting up all configurations, refer to the [Fluent Service Configuration](#fluent-service-configuration) section.
+### Create Your First Task
 
-## Multi-Queue Configuration
+Define a task request:
 
-EverTask supports multiple execution queues for workload isolation, prioritization, and better resource management. This allows you to separate critical tasks from background processing and configure each queue with its own parallelism, capacity, and behavior settings.
+```csharp
+public record SendWelcomeEmailTask(string UserEmail, string UserName) : IEverTask;
+```
 
-### Configuring Multiple Queues
+Create a handler:
+
+```csharp
+public class SendWelcomeEmailHandler : EverTaskHandler<SendWelcomeEmailTask>
+{
+    private readonly IEmailService _emailService;
+    private readonly ILogger<SendWelcomeEmailHandler> _logger;
+
+    public SendWelcomeEmailHandler(IEmailService emailService, ILogger<SendWelcomeEmailHandler> logger)
+    {
+        _emailService = emailService;
+        _logger = logger;
+    }
+
+    public override async Task Handle(SendWelcomeEmailTask task, CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("Sending welcome email to {Email}", task.UserEmail);
+
+        await _emailService.SendWelcomeEmailAsync(
+            task.UserEmail,
+            task.UserName,
+            cancellationToken);
+    }
+}
+```
+
+Dispatch the task:
+
+```csharp
+public class UserController : ControllerBase
+{
+    private readonly ITaskDispatcher _dispatcher;
+
+    public UserController(ITaskDispatcher dispatcher) => _dispatcher = dispatcher;
+
+    [HttpPost("register")]
+    public async Task<IActionResult> RegisterUser(UserRegistrationDto dto)
+    {
+        // Create user...
+
+        // Send welcome email in background
+        await _dispatcher.Dispatch(new SendWelcomeEmailTask(dto.Email, dto.Name));
+
+        return Ok();
+    }
+}
+```
+
+## Documentation
+
+📚 **[Full Documentation](https://GiampaoloGabba.github.io/EverTask)** - Complete guides, tutorials, and API reference
+
+### Quick Links
+
+- **[Getting Started](https://GiampaoloGabba.github.io/EverTask/getting-started.html)** - Installation, configuration, and your first task
+- **[Task Creation](https://GiampaoloGabba.github.io/EverTask/task-creation.html)** - Requests, handlers, lifecycle hooks, and best practices
+- **[Task Dispatching](https://GiampaoloGabba.github.io/EverTask/task-dispatching.html)** - Fire-and-forget, delayed, and scheduled tasks
+- **[Recurring Tasks](https://GiampaoloGabba.github.io/EverTask/recurring-tasks.html)** - Fluent scheduling API, cron expressions, idempotent registration
+- **[Advanced Features](https://GiampaoloGabba.github.io/EverTask/advanced-features.html)** - Multi-queue, sharded scheduler, continuations, cancellation
+- **[Resilience & Error Handling](https://GiampaoloGabba.github.io/EverTask/resilience.html)** - Retry policies, timeouts, CancellationToken usage
+- **[Monitoring](https://GiampaoloGabba.github.io/EverTask/monitoring.html)** - Events, SignalR integration, custom monitoring
+- **[Storage Configuration](https://GiampaoloGabba.github.io/EverTask/storage.html)** - SQL Server, SQLite, In-Memory, custom implementations
+- **[Configuration Reference](https://GiampaoloGabba.github.io/EverTask/configuration-reference.html)** - Complete API reference
+- **[Architecture & Internals](https://GiampaoloGabba.github.io/EverTask/architecture.html)** - How EverTask works under the hood
+
+## Showcase: Powerful Features
+
+### Fluent Recurring Scheduler
+
+Schedule recurring tasks with an intuitive, type-safe API:
+
+```csharp
+// Run every day at 3 AM
+await dispatcher.Dispatch(
+    new DailyCleanupTask(),
+    builder => builder.Schedule().EveryDay().AtTime(new TimeOnly(3, 0)));
+
+// Run every Monday, Wednesday, Friday at 9 AM
+var days = new[] { DayOfWeek.Monday, DayOfWeek.Wednesday, DayOfWeek.Friday };
+await dispatcher.Dispatch(
+    new BackupTask(),
+    builder => builder.Schedule().EveryWeek().OnDays(days).AtTime(new TimeOnly(9, 0)));
+
+// Run on the first day of every month
+await dispatcher.Dispatch(
+    new MonthlyBillingTask(),
+    builder => builder.Schedule().EveryMonth().OnDay(1));
+
+// Complex: Every 15 minutes during business hours, weekdays only
+await dispatcher.Dispatch(
+    new HealthCheckTask(),
+    builder => builder.Schedule().UseCron("*/15 9-17 * * 1-5"));
+
+// Limit executions: Run daily for 30 days, then stop
+await dispatcher.Dispatch(
+    new TrialFeatureTask(userId),
+    builder => builder.Schedule()
+        .EveryDay()
+        .MaxRuns(30)
+        .RunUntil(DateTimeOffset.UtcNow.AddDays(30)));
+```
+
+### Multi-Queue Workload Isolation
+
+Keep critical tasks separate from heavy background work:
 
 ```csharp
 builder.Services.AddEverTask(opt =>
 {
     opt.RegisterTasksFromAssembly(typeof(Program).Assembly);
 })
-// Configure the default queue
-.ConfigureDefaultQueue(q => q
-    .SetMaxDegreeOfParallelism(5)
-    .SetChannelCapacity(100)
-    .SetFullBehavior(QueueFullBehavior.FallbackToDefault))
-// Add a high-priority queue for critical tasks
-.AddQueue("high-priority", q => q
-    .SetMaxDegreeOfParallelism(10)
-    .SetChannelCapacity(200)
-    .SetFullBehavior(QueueFullBehavior.Wait)
-    .SetDefaultTimeout(TimeSpan.FromMinutes(5)))
-// Add a background queue for CPU-intensive tasks
+// High-priority queue for critical operations
+.AddQueue("critical", q => q
+    .SetMaxDegreeOfParallelism(20)
+    .SetChannelCapacity(500)
+    .SetDefaultTimeout(TimeSpan.FromMinutes(2)))
+
+// Background queue for CPU-intensive work
 .AddQueue("background", q => q
-    .SetMaxDegreeOfParallelism(2)  // Limit parallelism for CPU-intensive work
-    .SetChannelCapacity(50)
+    .SetMaxDegreeOfParallelism(2)
+    .SetChannelCapacity(100))
+
+// Email queue for bulk operations
+.AddQueue("email", q => q
+    .SetMaxDegreeOfParallelism(10)
+    .SetChannelCapacity(10000)
     .SetFullBehavior(QueueFullBehavior.FallbackToDefault))
-// Configure the recurring queue (automatically created for recurring tasks)
-.ConfigureRecurringQueue(q => q
-    .SetMaxDegreeOfParallelism(3)
-    .SetChannelCapacity(75))
+
 .AddSqlServerStorage(connectionString);
 ```
 
-### Queue Configuration Options
-
-Each queue can be configured with:
-- **MaxDegreeOfParallelism**: Number of concurrent tasks executed in this queue
-- **ChannelCapacity**: Maximum number of tasks that can be queued
-- **QueueFullBehavior**: Behavior when the queue reaches capacity
-  - `Wait`: Block until space is available (default)
-  - `FallbackToDefault`: Try the default queue if the target queue is full
-  - `ThrowException`: Throw an exception immediately
-- **DefaultRetryPolicy**: Default retry policy for tasks in this queue
-- **DefaultTimeout**: Default timeout for tasks in this queue
-
-### Routing Tasks to Specific Queues
-
-You can route tasks to specific queues by overriding the `QueueName` property in your handler:
+Route tasks to queues:
 
 ```csharp
 public class PaymentProcessingHandler : EverTaskHandler<ProcessPaymentTask>
 {
-    // Route this handler to the high-priority queue
-    public override string? QueueName => "high-priority";
+    public override string? QueueName => "critical"; // High-priority queue
 
     public override async Task Handle(ProcessPaymentTask task, CancellationToken cancellationToken)
     {
-        // Critical payment processing logic
-    }
-}
-
-public class ReportGenerationHandler : EverTaskHandler<GenerateReportTask>
-{
-    // Route CPU-intensive tasks to the background queue
-    public override string? QueueName => "background";
-
-    public override async Task Handle(GenerateReportTask task, CancellationToken cancellationToken)
-    {
-        // CPU-intensive report generation
+        // Critical payment processing
     }
 }
 ```
 
-### Automatic Queue Routing
+### Idempotent Task Registration
 
-- **Default Queue**: Tasks without a specified `QueueName` are routed to the "default" queue
-- **Recurring Queue**: Recurring tasks are automatically routed to the "recurring" queue unless explicitly overridden
-- **Fallback Behavior**: When a queue doesn't exist or is full (with `FallbackToDefault` behavior), tasks fall back to the "default" queue
-
-### Performance Considerations
-
-- **Workload Isolation**: Separate high-priority tasks from background processing to prevent interference
-- **Resource Management**: Configure parallelism based on task characteristics and workload requirements
-- **Queue Capacity**: Set appropriate capacities to handle burst traffic without memory issues
-- **Monitoring**: Each queue operates independently, making it easier to identify bottlenecks
-
-### Best Practices
-
-1. **Keep Queue Count Reasonable**: 3-5 queues are typically sufficient for most applications
-2. **Configure Based on Workload**: Adjust parallelism settings to match your task workload (higher for I/O operations, lower for resource-intensive tasks)
-3. **Use Fallback Wisely**: `FallbackToDefault` provides graceful degradation for non-critical queues
-4. **Monitor Queue Metrics**: Track queue depths and processing rates to optimize configuration
-
-## High-Performance Configuration
-
-### Sharded Scheduler (for Extreme High-Load Scenarios)
-
-EverTask provides an optional **sharded scheduler** for workloads exceeding 10,000 scheduled tasks per second. The sharded scheduler divides the workload across multiple independent shards (each with its own timer and priority queue) to reduce lock contention and improve throughput.
-
-#### When to Use
-
-Enable the sharded scheduler if you experience:
-- Sustained load > 10k `Schedule()` calls/second
-- Burst spikes > 20k `Schedule()` calls/second
-- 100k+ tasks scheduled concurrently
-- High lock contention in profiling (> 5% CPU time in scheduler operations)
-
-#### Configuration
-
-```csharp
-builder.Services.AddEverTask(opt => opt
-    .RegisterTasksFromAssembly(typeof(Program).Assembly)
-    .UseShardedScheduler(shardCount: 8) // Recommended: 4-16 shards
-)
-.AddSqlServerStorage(connectionString);
-```
-
-**Auto-scaling** (automatically uses `Environment.ProcessorCount` with minimum 4 shards):
-```csharp
-.UseShardedScheduler() // No parameters = auto-scale
-```
-
-#### Performance Comparison
-
-| Metric | Default Scheduler | Sharded Scheduler (8 shards) |
-|--------|------------------|----------------------------|
-| Schedule() throughput | ~5-10k/sec | ~15-30k/sec |
-| Lock contention | Moderate | Low (8x reduction) |
-| Scheduled tasks capacity | ~50-100k | ~200k+ |
-| Memory overhead | Baseline | +2-3KB (negligible) |
-| Background threads | 1 | N (shard count) |
-
-#### Trade-offs
-
-**Pros:**
-- ✅ 2-4x throughput improvement for high-load scenarios
-- ✅ Better spike handling (independent shard processing)
-- ✅ Complete failure isolation (issues in one shard don't affect others)
-- ✅ Reduced lock contention (divided by shard count)
-
-**Cons:**
-- ❌ Additional memory (~300 bytes per shard - negligible)
-- ❌ Additional background threads (1 per shard)
-- ❌ Slightly more complex debugging (multiple timers)
-
-#### Example: High-Load Configuration
-
-```csharp
-builder.Services.AddEverTask(opt => opt
-    .RegisterTasksFromAssembly(typeof(Program).Assembly)
-    .UseShardedScheduler(shardCount: Environment.ProcessorCount)
-    .SetMaxDegreeOfParallelism(Environment.ProcessorCount * 4)
-    .SetChannelOptions(10000)
-)
-.AddSqlServerStorage(connectionString);
-```
-
-#### How It Works
-
-The sharded scheduler uses hash-based distribution to assign tasks to shards:
-- Each task is assigned to a shard based on its `PersistenceId` hash
-- Tasks are distributed uniformly across all shards
-- Each shard operates independently with its own timer and priority queue
-- Shards process tasks in parallel without interfering with each other
-
-#### Migration
-
-Switching between default and sharded schedulers requires no code changes in your task handlers:
-- Both schedulers implement the same `IScheduler` interface
-- Task execution behavior remains identical
-- Storage format is compatible
-- Zero breaking changes
-
-> 💡 **Tip**: Start with the default scheduler and migrate to the sharded scheduler only if you measure performance bottlenecks. The default scheduler is optimized for most workloads.
-
-## Creating Requests and Handlers
-
-This example demonstrates how to create a request and its corresponding handler in EverTask. The `SampleTaskRequest`
-and `SampleTaskRequestHandler` illustrate the basic structure. Additionally, the handler includes optional overrides
-that allow you to control and monitor the lifecycle of a background task, providing hooks for when a task starts,
-completes, is disposed, or encounters an error.
-
-```csharp
-public record SampleTaskRequest(string TestProperty) : IEverTask;
-```
-
-```csharp
-public class SampleTaskRequestHanlder : EverTaskHandler<SampleTaskRequest>
-{
-    private readonly ILogger<SampleTaskRequestHanlder> _logger;
-
-    public SampleTaskRequestHanlder(ILogger<SampleTaskRequestHanlder> logger)
-    {
-        _logger = logger;
-    }
-
-    public override Task Handle(SampleTaskRequest backgroundTask, CancellationToken cancellationToken)
-    {
-        _logger.LogInformation($"Property value: {backgroundTask.TestProperty}");
-        return Task.CompletedTask;
-    }
-}
-```
-
-### `EverTaskHandler` Optional overrides for lifecycle control
-
-```csharp
-public override ValueTask OnStarted(Guid taskId)
-{
-    _logger.LogInformation($"====== TASK WITH ID {taskId} STARTED IN BACKGROUND ======");
-    return ValueTask.CompletedTask;
-}
-
-public override ValueTask OnCompleted(Guid taskIdtaskId)
-{
-    _logger.LogInformation($"====== TASK WITH ID {taskId} COMPLETED IN BACKGROUND ======");
-    return ValueTask.CompletedTask;
-}
-
-public override ValueTask OnError(Guid taskId, Exception? exception, string? message)
-{
-    _logger.LogError(exception, $"Error in task with ID {taskId}: {message}");
-    return ValueTask.CompletedTask;
-}
-
-protected override ValueTask DisposeAsyncCore()
-{
-    _logger.LogInformation("====== TASK DISPOSED IN BACKGROUND ======");
-    return base.DisposeAsyncCore();
-}
-```
-
-## Task Dispatch
-
-To dispatch a task, obtain an instance of `ITaskDispatcher`. This can be done using Dependency Injection:
-
-```csharp
-// Retrieving ITaskDispatcher via method injection
-var _dispatcher = serviceProvider.GetService<ITaskDispatcher>();
-
-// Alternatively, ITaskDispatcher can be injected directly into the constructor of your class
-_dispatcher.Dispatch(new SampleTaskRequest("Hello World"));
-```
-
-### Dispatching Tasks with Delay
-
-You can also schedule tasks to be executed after a certain delay. This can be achieved using either `TimeSpan`
-or `DateTimeOffset`.
-
-#### Using TimeSpan for Relative Delay
-
-To delay task execution by a relative time period, use `TimeSpan`. This is useful when you want to postpone a task by a
-specific duration, such as 30 minutes or 2 hours from now.
-
-```csharp
-// Delaying task execution by 30 minutes
-var delay = TimeSpan.FromMinutes(30);
-_dispatcher.Dispatch(new SampleTaskRequest("Delayed Task"), delay);
-```
-
-#### Using DateTimeOffset for Absolute Delay
-
-Alternatively, use `DateTimeOffset` for scheduling a task at a specific future point in time. This is particularly
-useful for tasks that need to be executed at a specific date and time, regardless of the current moment.
-
-```csharp
-// Scheduling a task for a specific time in the future
-var scheduledTime = DateTimeOffset.Now.AddHours(2); // 2 hours from now
-_dispatcher.Dispatch(new SampleTaskRequest("Scheduled Task"), scheduledTime);
-```
-
-## Recurring Tasks
-In addition to delayed and scheduled tasks, you can also configure recurring tasks. These tasks repeat at specified intervals, providing a powerful way to automate ongoing processes.
-
-You can schedule recurring tasks using various approaches, with cron and with a fluent scheduler. Below are some examples with explanations:
-
-### Fluent Scheduling with EverTask
-EverTask's powerful fluent builder offers a wide range of scheduling capabilities for your background tasks. Whether you need simple scheduling or complex recurring patterns, the fluent builder simplifies the process with an intuitive and readable syntax. Here are some examples demonstrating different ways to configure your tasks:
-
-#### Basic Scheduling Examples
-```csharp
-// Scheduling a task to run every minute at the 30th second
-await dispatcher.Dispatch(new SampleTaskRequest("Test"),
-builder => builder.Schedule().EveryMinute().AtSecond(30));
-
-// Scheduling a task to run every hour at the 45th minute, limited to 10 runs
-await dispatcher.Dispatch(new SampleTaskRequest("Test"),
-builder => builder.RunNow().Then().EveryHour().AtMinute(45).MaxRuns(10));
-
-// Scheduling a task to run every hour at the 45th minute, for the next 2 days
-await dispatcher.Dispatch(new SampleTaskRequest("Test"),
-builder => builder.RunNow().Then().EveryHour().AtMinute(45).RunUntil(DateTimeOffset.UtcNow.AddDays(2));
-
-// Scheduling a task to run daily at specific times
-var times = new[] { new TimeOnly(12, 0), new TimeOnly(18, 0) };
-await dispatcher.Dispatch(new SampleTaskRequest("Test"),
-builder => builder.Schedule().Every(3).Days().AtTimes(times));
-```
-
-#### Advanced Recurring Schedules
-```csharp
-
-// Scheduling a task to run on specific days of the week
-var days = new[] { DayOfWeek.Monday, DayOfWeek.Wednesday, DayOfWeek.Friday };
-await dispatcher.Dispatch(new SampleTaskRequest("Test"), 
-    builder => builder.Schedule().EveryMonth().OnDays(days));
-
-// Running a task immediately, then every 2 month on the 15th
-await dispatcher.Dispatch(new SampleTaskRequest("Test"), 
-    builder => builder.RunNow().Then().Every(2).Months().OnDay(15));
-
-// Scheduling a task to run on the first Monday of every month
-await dispatcher.Dispatch(new SampleTaskRequest("First Monday"), 
-    builder => builder.Schedule().EveryMonth().OnFirst(DayOfWeek.Monday));
-
-// Scheduling a task to run on every second month, starting from February
-int[] everyOtherMonth = { 2, 4, 6, 8, 10, 12 };
-await dispatcher.Dispatch(new SampleTaskRequest("Bi-monthly"), 
-    builder => builder.Schedule().OnMonths(everyOtherMonth));
-```
-
-#### Delayed and Scheduled Task Execution
-```csharp
-// Delaying task execution by 30 seconds
-await dispatcher.Dispatch(new SampleTaskRequest("Delayed"), 
-    builder => builder.RunDelayed(TimeSpan.FromSeconds(30)));
-
-// Scheduling a task for a specific future time
-var dateTimeOffset = new DateTimeOffset(2023, 12, 25, 10, 0, 0, TimeSpan.Zero);
-await dispatcher.Dispatch(new SampleTaskRequest("Scheduled"), 
-    builder => builder.RunAt(dateTimeOffset));
-```
-
-#### Combining Various Scheduling Techniques
-```csharp
-// Running a task now, then scheduling it to run every 2 hours at the 15th minute
-await dispatcher.Dispatch(new SampleTaskRequest("Combined"), 
-    builder => builder.RunNow().Then().Every(2).Hours().AtMinute(15));
-
-// Delaying the first run of a task, then executing it every day at noon
-await dispatcher.Dispatch(new SampleTaskRequest("Delayed Daily"), 
-    builder => builder.RunDelayed(TimeSpan.FromMinutes(10)).Then().EveryDay().AtTime(new TimeOnly(12, 0)));
-
-// Scheduling a task to run on specific months (January, April, July, October)
-int[] specificMonths = { 1, 4, 7, 10 };
-await dispatcher.Dispatch(new SampleTaskRequest("Quarterly"), 
-    builder => builder.RunAt(DateTimeOffset.UtcNow.AddHours(1)).Then().OnMonths(specificMonths));
-```
-
-#### Customizing Maximum Runs
-```csharp
-// Scheduling a task to run every day, with a maximum of 5 executions
-await dispatcher.Dispatch(new SampleTaskRequest("Max Runs"), 
-    builder => builder.Schedule().EveryDay().MaxRuns(5));
-```
-
-#### Run untile a specific date
-```csharp
-// Scheduling a task to run every day, for the next 5 days
-await dispatcher.Dispatch(new SampleTaskRequest("Max Runs"), 
-    builder => builder.Schedule().EveryDay().RunUntil(DateTimeOffset.UtcNow.AddDays(5));
-```
-
-### Scheduling with Cron Expression
-Cron expressions are powerful tools for defining complex time-based schedules. Originating from Unix systems, they provide a concise way to specify patterns for recurring tasks. A cron expression consists of fields representing different time units, like minutes, hours, days, and months.
-
-With EverTask, you can leverage the power of cron expressions to schedule tasks with great flexibility. Whether you need a task to run every hour, on specific days of the week, or at a particular time each month, cron expressions make it possible.
-
-Implementing Cron Scheduling in EverTask
-Here are some examples of using cron expressions in EverTask to schedule tasks:
-
-
-#### Immediate Execution with Cron Schedule:
-```csharp
-// Execute task immediately, then repeat according to a Cron schedule
-await _dispatcher.Dispatch(task, builder => builder.RunNow().Then().UseCron("*/2 * * * *").MaxRuns(3));
-```
-#### Delayed Start with Cron Schedule:
-```csharp
-// Execute task after a short delay, then repeat according to a Cron schedule
-await _dispatcher.Dispatch(task, builder => builder.RunDelayed(TimeSpan.FromSeconds(0.5)).Then().UseCron("*/2 * * * *"));
-```
-
-#### Scheduled Start with Cron Schedule
-```csharp
-// Schedule task to start at a specific time, then repeat according to a Cron schedule
-await _dispatcher.Dispatch(task, builder => builder.RunAt(dateTimeOffset)).Then().UseCron("*/2 * * * *").MaxRuns(3));
-```
-
-```csharp
-// Schedule task to start at a specific time, then repeat according to a Cron schedule
-await _dispatcher.Dispatch(task, builder => builder.RunAt(dateTimeOffset)).Then().UseCron("*/2 * * * *").MaxRuns(3));
-```
-
-#### Every 30 Minutes for two days
-```csharp
-var cronEvery30Minutes = "*/30 * * * *";
-await dispatcher.Dispatch(new SampleTaskRequest("Every 30 Minutes"), 
-    builder => builder.Schedule().UseCron(cronEvery30Minutes)).RunUntil(DateTimeOffset.UtcNow.AddDays(2));
-```
-
-#### Every Day at Noon
-```csharp
-var cronAtNoon = "0 12 * * *";
-await dispatcher.Dispatch(new SampleTaskRequest("Daily at Noon"), 
-    builder => builder.Schedule().UseCron(cronAtNoon));
-```
-
-#### Every Monday Morning
-```csharp
-var cronEveryMondayMorning = "0 8 * * 1"; // 8 AM on Monday
-await dispatcher.Dispatch(new SampleTaskRequest("Every Monday Morning"), 
-    builder => builder.Schedule().UseCron(cronEveryMondayMorning));
-```
-
-<hr>
-
-> 💡 **Remember:** Delayed, scheduled and recurring tasks are also persistent. If your app restarts, you won't lose these tasks –
-> they'll be executed at the right time!
-
-## Idempotent Task Registration
-
-EverTask supports idempotent task registration using unique task keys. This prevents duplicate scheduled tasks when the application restarts or when the same task is dispatched multiple times.
-
-### Basic Usage
+Use unique keys to safely register recurring tasks at startup without creating duplicates:
 
 ```csharp
 // At application startup
-await dispatcher.Dispatch(
-    new HourlyCleanupTask(),
-    recurring => recurring.Schedule().EveryHour(),
-    taskKey: "hourly-cleanup"  // Unique key
-);
-
-// On restart, same code won't create duplicate
-await dispatcher.Dispatch(
-    new HourlyCleanupTask(),
-    recurring => recurring.Schedule().EveryHour(),
-    taskKey: "hourly-cleanup"  // Returns existing task ID
-);
-```
-
-### Update Behavior
-
-When dispatching with an existing task key:
-
-| Existing Task Status | Behavior |
-|---------------------|----------|
-| **InProgress** | Returns existing task ID (no changes) |
-| **Pending/Queued/WaitingQueue** | Updates task configuration (schedule, parameters) |
-| **Completed/Failed/Cancelled** | Removes old task, creates new one |
-
-### Updating Scheduled Tasks
-
-```csharp
-// Initial registration
-await dispatcher.Dispatch(
-    new ReportTask(format: "PDF"),
-    recurring => recurring.Schedule().EveryDay().AtTime(new TimeOnly(9, 0)),
-    taskKey: "daily-report"
-);
-
-// Later, update schedule and parameters
-await dispatcher.Dispatch(
-    new ReportTask(format: "Excel"),  // Changed parameter
-    recurring => recurring.Schedule().Every(2).Days().AtTime(new TimeOnly(10, 0)),  // Changed schedule
-    taskKey: "daily-report"  // Same key → updates existing
-);
-```
-
-### Use Cases
-
-**Startup Task Registration**
-```csharp
 public class RecurringTasksRegistrar : IHostedService
 {
     private readonly ITaskDispatcher _dispatcher;
 
-    public RecurringTasksRegistrar(ITaskDispatcher dispatcher)
-    {
-        _dispatcher = dispatcher;
-    }
-
     public async Task StartAsync(CancellationToken ct)
     {
-        // Cleanup tasks
+        // Register recurring tasks - safe to call on every startup
         await _dispatcher.Dispatch(
-            new CleanupOldDataTask(),
+            new DailyCleanupTask(),
             r => r.Schedule().EveryDay().AtTime(new TimeOnly(3, 0)),
-            taskKey: "cleanup-old-data");
+            taskKey: "daily-cleanup"); // Won't create duplicates
 
-        // Health check tasks
         await _dispatcher.Dispatch(
             new HealthCheckTask(),
             r => r.Schedule().Every(5).Minutes(),
             taskKey: "health-check");
 
-        // Report generation
         await _dispatcher.Dispatch(
-            new GenerateReportsTask(),
-            r => r.Schedule().EveryDay().AtTime(new TimeOnly(6, 0)),
-            taskKey: "daily-reports");
+            new WeeklySummaryTask(),
+            r => r.Schedule().EveryWeek().OnDay(DayOfWeek.Monday).AtTime(new TimeOnly(8, 0)),
+            taskKey: "weekly-summary");
     }
 
     public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
 }
+
+builder.Services.AddHostedService<RecurringTasksRegistrar>();
 ```
 
-**Dynamic Configuration Updates**
-```csharp
-public async Task UpdateTaskSchedule(string taskKey, TimeOnly newTime)
-{
-    await _dispatcher.Dispatch(
-        new ConfigurableTask(),
-        r => r.Schedule().EveryDay().AtTime(newTime),
-        taskKey: taskKey
-    );
-    // Existing pending task will be updated with new schedule
-}
-```
-
-### Notes
-
-- Task key is case-sensitive
-- Maximum length: 200 characters
-- Null or empty task key = standard behavior (no deduplication)
-- Task key is stored in database with unique constraint
-- Updates preserve `CurrentRunCount` for recurring tasks
-
-## Task Cancellation
-
-When you dispatch, you can capture the returned GUID to keep track of the task. If you need to cancel this task before
-it starts, use the `Cancel` method of `ITaskDispatcher` with this ID.
-
-```csharp
-// Dispatching a task and getting its unique ID
-Guid taskId = _dispatcher.Dispatch(new SampleTaskRequest("Cancelable Task"));
-
-// Cancelling the task
-_dispatcher.Cancel(taskId);
-```
-
-> 💡 **Note:** The `Cancel` method triggers the `CancellationToken` in the task's `Handle` method. Tasks should check this token regularly to enable cooperative cancellation. Remember, this only affects tasks in progress; tasks cancelled before execution won't run.
-
-
-## Task Execution Timeout
-
-EverTask provides a flexible approach to managing task execution times with its timeout functionality.
-
-#### Global Default Timeout
-
-A global default timeout for all tasks can be set using the `SetDefaultTimeout` option in the EverTask configuration. This timeout defines a uniform maximum duration for task execution, after which the `CancellationToken` will be marked as cancelled.
-
-```csharp
-// Example of setting a global default timeout
-builder.Services.AddEverTask(opt =>
-{
-    opt.SetDefaultTimeout(TimeSpan.FromMinutes(5)); // Sets a global timeout of 5 minutes
-});
-```
-
-#### Customizing Timeout per Task Handler
-In addition to the global timeout, individual task handlers can specify their own timeout periods. This is achieved by setting the Timeout property in the task handler, allowing for task-specific timeout durations.
-
-```csharp
-public class MyCustomTimeoutTaskHandler : EverTaskHandler<MyTask>
-{
-    public MyCustomTimeoutTaskHandler()
-    {
-        // Setting a custom timeout for this specific handler
-        Timeout = TimeSpan.FromMinutes(2);
-    }
-    
-    public override Task Handle(CancellationToken cancellationToken)
-    {
-        // Task handling logic
-    }
-}
-```
-
-
-## Resilience and Retry Policies
-
-EverTask now includes a powerful resilience feature to ensure your tasks are robust against transient failures. This is
-achieved through customizable retry policies, which are applied to task executions.
-
-#### Default Linear Retry Policy
-
-Tasks by default use the `LinearRetryPolicy`, set in the global configuration (`SetDefaultRetryPolicy`). This default policy attempts three executions with a 500-millisecond delay between them, addressing temporary issues that might hinder task completion.
-
-You can also set your customized global deault policy:
-
-```csharp
-// Example of setting a customized global default RetryPolicy
-builder.Services.AddEverTask(opt =>
-{
-    opt.SetDefaultRetryPolicy(new LinearRetryPolicy(4, TimeSpan.FromMilliseconds(200)));
-});
-```
-
-```csharp
-// Handler automatically inherits the default LinearRetryPolicy
-public class MyTaskHandler : EverTaskHandler<MyTask>
-{
-    public override Task Handle(CancellationToken cancellationToken)
-    {
-        // Task handling logic
-    }
-}
-```
-
-#### Customizing Retry Policies per task
-
-For each task handler, you can define or override the default retry policy settings. This includes changing the number
-of execution attempts, fixed execution times, or providing an array of `TimeSpan` values for the retry delays.
-
-Retries with a fixed delay:
-
-```csharp
-public class MyCustomRetryTaskHandler : EverTaskHandler<MyCustomRetryTask>
-{
-    public MyCustomRetryTaskHandler()
-    {
-        // Setting a custom LinearRetryPolicy with 2 retries and 300ms delay
-        RetryPolicy = new LinearRetryPolicy(2, TimeSpan.FromMilliseconds(300));
-    }
-    
-    public override Task Handle(CancellationToken cancellationToken)
-    {
-        // Task handling logic
-    }
-}
-```
-
-With an array of timespan:
-
-```csharp
-public class MyCustomRetryTaskHandler : EverTaskHandler<MyCustomRetryTask>
-{
-    public MyCustomRetryTaskHandler()
-    {
-        // Define a LinearRetryPolicy with custom delays
-        RetryPolicy = new LinearRetryPolicy(new TimeSpan[] 
-        {
-            TimeSpan.FromMilliseconds(200),  // First delay
-            TimeSpan.FromMilliseconds(300),  // Second delay
-            TimeSpan.FromMilliseconds(600)   // Third delay
-        });
-    }
-    
-    public override Task Handle(CancellationToken cancellationToken)
-    {
-        // Task handling logic
-    }
-}
-```
-
-#### Implementing Custom Retry Policies
-
-EverTask's design allows for the implementation of custom retry policies. You can create your own policy by implementing the `IRetryPolicy` interface. This enables you to craft unique retry mechanisms tailored to the specific requirements of your tasks.
-
-Below is an example of implementing a custom retry policy using [Polly](https://github.com/App-vNext/Polly):
-
-
-```csharp
-using Polly;
-
-using Polly;
-using System;
-using System.Threading;
-using System.Threading.Tasks;
-
-public class MyCustomRetryPolicy : IRetryPolicy
-{
-    private readonly AsyncRetryPolicy _pollyRetryPolicy;
-
-    public MyCustomRetryPolicy()
-    {
-        // Define your Polly retry policy here.
-        // For example, a policy that retries three times with an exponential backoff.
-        _pollyRetryPolicy = Policy
-            .Handle<Exception>() // Specify the exceptions you want to handle/retry on
-            .WaitAndRetryAsync(3, retryAttempt =>
-                TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)), // exponential back-off: 2, 4, 8 seconds
-                onRetry: (exception, timeSpan, retryCount, context) =>
-                {
-                    // You can log the retry attempt here if needed
-                }
-            );
-    }
-
-    public async Task Execute(Func<CancellationToken, Task> action, CancellationToken token = default)
-    {
-        // Use Polly's ExecuteAsync method to apply the retry policy to the passed action.
-        // The passed CancellationToken is respected in the retry policy.
-        await _pollyRetryPolicy.ExecuteAsync(async (ct) =>
-        {
-            await action(ct);
-        }, token);
-    }
-}
-```
-
-> 💡 **Note:** The `CancellationToken` provided to the policy is signaled as canceled when the task is halted using `.Cancel`, or if the worker service stops. This ensures that your custom policy remains synchronized with the task's lifecycle.
-
-
-
-Then on your handler:
-
-```csharp
-public class MyCustomRetryTaskHandler : EverTaskHandler<MyCustomRetryTask>
-{
-    public MyCustomRetryTaskHandler()
-    {
-        // Setting your custom RetryPolicy
-        RetryPolicy = new MyCustomRetryPolicy();
-    }
-    
-    public override Task Handle(CancellationToken cancellationToken)
-    {
-        // Task handling logic
-    }
-}
-```
-Of course, you can also set your polly policy as a default if you wish:
-```csharp
-// Example of setting a customized global default RetryPolicy
-builder.Services.AddEverTask(opt =>
-{
-    opt.SetDefaultRetryPolicy(new MyCustomRetryPolicy());
-});
-```
-
-## Handling WorkerSerivce stops with CancellationToken in Task Handlers
-
-In EverTask, every task handler's `Handle` method is provided with a `CancellationToken`. This token is crucial for
-effectively managing task interruptions when the EverTask WorkerService is stopped.
-
-If the WorkerService is halted, the `CancellationToken` is set to a cancelled state. Tasks interrupted in this manner
-are marked as `ServiceStopped` and are re-queued upon the application's next restart.
-
-This ensures no tasks are lost due to service stops, and the presence of `CancellationToken` in the `Handle` method
-allows for custom logic to track and manage partial execution of tasks.
-
-## Task Continuations and Rescheduling: Advanced Workflow Management
-
-EverTask supports not only task continuations but also the rescheduling of tasks, providing a comprehensive approach to
-advanced workflow management.
-
-#### Chaining Tasks for Sequential Execution
-
-You can chain tasks for sequential execution by utilizing the lifecycle methods in task handlers. Overriding methods
-like `OnComplete` or `OnError` allows you to dispatch new tasks based on the outcome of the current task.
-
-```csharp
-public class MyTaskHandler : EverTaskHandler<MyTaskRequest>
-{
-    private readonly IEverTaskDispatcher _dispatcher;
-
-    public MyTaskHandler(IEverTaskDispatcher dispatcher)
-    {
-        _dispatcher = dispatcher;
-    }
-
-    public override ValueTask OnCompleted(Guid taskId)
-    {
-        // Dispatch another task upon completion
-        _dispatcher.Dispatch(new AnotherTaskRequest());
-        return base.OnCompleted(taskId);
-    }
-}
-```
-
-#### Task Rescheduling via Lifecycle Methods
-
-In addition to task chaining, EverTask also enables task rescheduling within the same lifecycle methods. This feature is
-particularly useful for tasks that need to be executed repeatedly or at different intervals, depending on certain
-conditions or outcomes.
-
-```csharp
-public class MyReschedulingTaskHandler : EverTaskHandler<MyTaskRequest>
-{
-    private readonly IEverTaskDispatcher _dispatcher;
-
-    public MyReschedulingTaskHandler(IEverTaskDispatcher dispatcher)
-    {
-        _dispatcher = dispatcher;
-    }
-
-    public override ValueTask OnCompleted(Guid taskId)
-    {
-        // Reschedule the same task based on certain conditions or logic
-        _dispatcher.Dispatch(new MyTaskRequest(), TimeSpan.FromMinutes(30)); // Rescheduling after 30 minutes
-        return base.OnCompleted(taskId);
-    }
-}
-```
-
-With these capabilities, EverTask offers unparalleled flexibility in creating sophisticated, custom-tailored workflows
-for background task processing. Whether you need to chain tasks sequentially or reschedule them based on specific
-criteria, EverTask provides the necessary tools for robust and efficient task management.
-
-## Task Monitoring in EverTask
-
-EverTask provides basic task monitoring through the `TaskEventOccurredAsync` event, accessible via dependency injection from `IEverTaskWorkerExecutor`. This event aggregates all the events generated by EverTask's WorkerService. Here's an example of how it can be utilized:
-
-In your service class, you can subscribe to the `TaskEventOccurredAsync` event. For instance:
-```csharp
-public class MyService
-{
-    public MyService(IEverTaskWorkerExecutor executor, ILogger<EverTaskTestController> logger)
-    {
-        executor.TaskEventOccurredAsync += data =>
-        {
-            logger.LogInformation("Message received from EverTask Worker Server: {@eventData}", data);
-            return Task.CompletedTask;
-        };
-    }
-}
-```
-The above code will produce this output:
-```
-Message received from EverTask Worker Server: EverTaskEventData { TaskId = dc49351d-476d-49f0-a1e8-3e2a39182d22, EventDateUtc = 19/11/2023 16:10:20 +00:00, Severity = Information, TaskType = EverTask.Example.AspnetCore.SampleTaskRequest, TaskHandlerType = EverTask.Example.AspnetCore.SampleTaskRequestHanlder, TaskParameters = {"TestProperty":"Hello World"}, Message = Task with id dc49351d-476d-49f0-a1e8-3e2a39182d22 was completed., Exception =  }
-```
-
-
-Here, `data` is of type `EverTaskEventData` which includes detailed information about the event:
-```csharp
-public record EverTaskEventData(
-    Guid TaskId,
-    DateTimeOffset EventDateUtc,
-    string Severity,
-    string TaskType,
-    string TaskHandlerType,
-    string TaskParameters,
-    string Message,
-    string? Exception = null);
-
-//Possible enum values
-public enum SeverityLevel
-{
-    Information,
-    Warning,
-    Error
-}
-```
-This allows users to trigger custom code based on the events produced by EverTask.
-
-### Real-Time Monitoring with SignalR
-[![NuGet](https://img.shields.io/nuget/vpre/EverTask.Monitor.AspnetCore.SignalR.svg?label=EverTask.Monitor.AspnetCore.SignalR)](https://www.nuget.org/packages/EverTask.Monitor.AspnetCore.SignalR)
-
-Additionally, EverTask offers real-time monitoring through a SignalR hub, available with the `EverTask.Monitoring.AspnetCore.SignalR` package for ASP.NET Core applications.
-
-To use it, first register the service in your startup configuration:
-
-```csharp
-builder.Services.AddEverTask(opt =>
-       {
-           opt
-              .RegisterTasksFromAssembly(typeof(Program).Assembly);
-       })
-       .AddMemoryStorage()
-       .AddSignalRMonitoring();
-```
-Then, register the middleware:
-```csharp
-app.MapEverTaskMonitorHub();
-```
-This creates a SignalR hub at the URL `/evertask/monitoring`. You can customize this URL, for example:
-```csharp
-app.MapEverTaskMonitorHub("/task-monitoring");
-```
-The hub sends all events in real-time to all connected clients. The event type is always `EverTaskEventData`.
-
-Future updates will include new monitoring systems such as Email Alerts, ApplicationInsights, OpenTelemetry, etc.
-
-> 💡 **Note:**  Depending on EverTask's configuration, all events are also written to the logs as per the chosen configuration. Additionally, if SQL persistence is used, the task status and its audit trail can always be checked in the database.
-
-&nbsp;
+## What's New in v2.0
+
+Version 2.0 is all about performance. We've optimized every hot path and made the defaults much smarter.
+
+### Scheduler Improvements
+- **PeriodicTimerScheduler** is now the default, cutting lock contention by 90% and using zero CPU when idle
+- **ShardedScheduler** available for extreme loads—delivers 2-4x throughput when you're scheduling >10k tasks/sec
+
+### Storage Optimizations
+- DbContext pooling makes storage operations 30-50% faster
+- SQL Server now uses stored procedures, cutting status update roundtrips in half
+
+### Dispatcher Performance
+- Reflection caching speeds up repeated task dispatching by 93% (~150μs → ~10μs)
+- Lazy serialization eliminates unnecessary JSON conversion entirely
+
+### Worker Executor Enhancements
+- Event data caching slashes monitoring serializations by 99% (60k-80k → ~10-20 per 10k tasks)
+- Handler options caching eliminates 99% of runtime casts
+- Parallel pending task processing makes startup 80% faster with 1000+ queued tasks
+
+### Auto-Scaling Configuration
+No more manual tuning—defaults now scale with your CPU cores:
+- `MaxDegreeOfParallelism`: `Environment.ProcessorCount * 2` (previously hardcoded to 1)
+- `ChannelCapacity`: `Environment.ProcessorCount * 200` (previously hardcoded to 500)
+
+### Better Developer Experience
+- Configuration validation catches problems early with helpful warnings
+- Zero-allocation patterns on .NET 7+
+- Thread safety improvements and race condition fixes throughout
+
+[View Complete Changelog](CHANGELOG.md)
+
+## Quick Links
+
+- 📦 **NuGet Packages**
+  - [EverTask](https://www.nuget.org/packages/evertask) - Core library
+  - [EverTask.SqlServer](https://www.nuget.org/packages/evertask.sqlserver) - SQL Server storage
+  - [EverTask.Sqlite](https://www.nuget.org/packages/evertask.sqlite) - SQLite storage
+  - [EverTask.Serilog](https://www.nuget.org/packages/evertask.serilog) - Serilog integration
+  - [EverTask.Monitor.AspnetCore.SignalR](https://www.nuget.org/packages/EverTask.Monitor.AspnetCore.SignalR) - Real-time monitoring
+
+- 📝 **Resources**
+  - [Changelog](CHANGELOG.md) - Version history and release notes
+  - [Attribution](ATTRIBUTION.md) - Acknowledgements and license information
+  - [GitHub Repository](https://github.com/GiampaoloGabba/EverTask) - Source code and issues
+  - [Examples](samples/) - Sample applications (ASP.NET Core, Console)
+
+## Roadmap
+
+We have some exciting features in the pipeline:
+
+- **Web Dashboard**: A simple web UI for monitoring and managing tasks
+- **WebAPI Endpoints**: RESTful API for remote task management
+- **Additional Monitoring**: Sentry Crons, Application Insights, OpenTelemetry support
+- **More Storage Options**: PostgreSQL, MySQL, Redis, Cosmos DB
+- **Clustering**: Multi-server task distribution with load balancing and failover
+
+## Contributing
+
+Contributions are welcome! Bug reports, feature requests, and pull requests all help make EverTask better.
+
+- Report issues: https://github.com/GiampaoloGabba/EverTask/issues
+- Contribute code: https://github.com/GiampaoloGabba/EverTask/pulls
+
+## License
+
+EverTask is licensed under the [Apache License 2.0](LICENSE).
+
+See [ATTRIBUTION.md](ATTRIBUTION.md) for acknowledgements and attributions.
 
 ---
 
-<a name="fluent-service-configuration"></a>
-# Fluent Service Configuration
-
-`EverTaskService` can be configured using a series of fluent methods, allowing a clear and user-friendly way to set up
-the service. These methods enable precise control over task processing, persistence, and parallel execution. Below are
-the available configuration methods, along with their default values and types:
-
-### `SetChannelOptions (Overloaded Methods)`
-
-- **Type:** `Action<BoundedChannelOptions>` or `int`
-- **Default:** Capacity set to `Environment.ProcessorCount * 200` (minimum 1000), `FullMode` set to `BoundedChannelFullMode.Wait`
-- **Functionality:** Configures the behavior of the task queue. You can directly specify the queue capacity or provide
-  a `BoundedChannelOptions` object. The capacity automatically scales with your CPU cores (e.g., 8-core system = ~1600), defining the maximum number of tasks that can be queued and the behavior when the queue is full.
-
-### `SetThrowIfUnableToPersist`
-
-- **Type:** `bool`
-- **Default:** `true`
-- **Functionality:** Determines whether the service should throw an exception if it is unable to persist a task. When
-  enabled, it ensures that task persistence failures are explicitly managed, aiding in data integrity.
-
-### `SetMaxDegreeOfParallelism`
-
-- **Type:** `int`
-- **Default:** `Environment.ProcessorCount * 2` (minimum 4)
-- **Functionality:** Sets the maximum number of tasks that can be executed concurrently. The default automatically scales with your CPU cores (e.g., 8-core system = 16 parallel workers), optimizing task throughput in multi-core systems. Setting this to `1` will trigger a warning log as it's considered a production anti-pattern.
-
-### `SetDefaultRetryPolicy`
-
-- **Type:** `IRetryPolicy`
-- **Default:** `LinearRetryPolicy` *(with 3 tries every 500 milliseconds)*
-- **Functionality:** Defines a global default retry policy for tasks, using `LinearRetryPolicy` (3 attempts, 500 ms delay) unless overridden in task handlers. Supports custom policies via `IRetryPolicy` interface implementation.
-
-### `SetDefaultTimeout`
-
-- **Type:** `TimeSpan?`
-- **Default:** `null`
-- **Functionality:** Specifies a global default timeout for tasks. If set, the `CancellationToken` provided to task handlers will be cancelled after the timeout duration. Users must handle this cancellation in their task logic. Setting to `null` means tasks have no default timeout and will run until completion or external cancellation.
-
-### `RegisterTasksFromAssembly`
-
-- **Functionality:** Facilitates the registration of task handlers from a single assembly. This is particularly
-  beneficial for applications structured in a modular fashion, enabling easy integration of task handlers.
-
-### `RegisterTasksFromAssemblies`
-
-- **Functionality:** Allows for the registration of task handlers from multiple assemblies. This approach suits larger
-  applications with distributed task handling logic spread across various modules or libraries.
-
-## SQL Server Persistence
-
-[![NuGet](https://img.shields.io/nuget/vpre/evertask.sqlserver.svg?label=Evertask.SqlServer)](https://www.nuget.org/packages/evertask.sqlserver)
-
-- **Schema Management:** EverTask creates a new schema named `EverTask` by default. This approach avoids adding clutter
-  to the main data schema.
-- **Schema Customization:** Allows specifying a different schema or using `null` to default to the main schema.
-- **Migration Table:** If using a custom Schema, event the Entity Framework Core migration table will be placed in that
-  schema.
-- **Migration Handling:** Option to apply database migrations automatically or handle them manually.
-
-## Serilog Integration
-
-[![NuGet](https://img.shields.io/nuget/vpre/evertask.serilog.svg?label=Evertask.SeriLog)](https://www.nuget.org/packages/evertask.serilog)
-
-- **Default Logging:** Uses .NET configured `ILogger` by default.
-- **Serilog Option:** Enables adding Serilog as a separate logger for EverTask, with customizable options.
-- **Example Configuration in appsettings.json:**
-  ```json
-  "EverTaskSerilog": {
-    "MinimumLevel": {
-      "Default": "Information",
-      "Override": {
-        "Default": "Information",
-        "Microsoft": "Warning",
-        "Microsoft.AspNetCore.SpaProxy": "Information",
-        "Microsoft.Hosting.Lifetime": "Information",
-        "Microsoft.EntityFrameworkCore.Database.Command": "Information"
-      }
-    },
-    "WriteTo": [
-      {
-        "Name": "Console"
-      },
-      {
-        "Name": "File",
-        "Args": {
-          "path": "Logs/evertask-log-.txt",
-          "rollingInterval": "Day",
-          "fileSizeLimitBytes": 10485760,
-          "retainedFileCountLimit": 10,
-          "shared": true,
-          "flushToDiskInterval": "00:00:01"
-        }
-      }
-    ],
-    "Enrich": [
-      "FromLogContext",
-      "WithMachineName",
-      "WithThreadId"
-    ],
-    "Properties": {
-      "Application": "CliClub"
-    }
-  }
-
-## EverTask and EverTask.Abstractions
-
-[![NuGet](https://img.shields.io/nuget/vpre/evertask.svg?label=Evertask)](https://www.nuget.org/packages/evertask)
-[![NuGet](https://img.shields.io/nuget/vpre/evertask.abstractions.svg?label=Evertask.Abstractions)](https://www.nuget.org/packages/evertask.abstractions)
-
-EverTask is complemented by the `EverTask.Abstractions` package, designed for use in Application projects where
-additional implementations are not required. This allows separation of concerns, keeping your application layer free
-from infrastructural code.
-
-In your Infrastructure project, where EverTask is added, specify the assembly (or assemblies) containing `IEverTask`
-requests. This modular approach ensures that the application layer remains clean and focused, while the infrastructure
-layer handles task execution and management.
-
-## Serialization and deserialization of Requests for Persistence
-
-EverTask uses Newtonsoft.Json for serializing and deserializing task requests, due to its robust support for
-polymorphism and inheritance, features that are limited in System.Text.Json. It is recommended to use simple objects for
-task requests, preferably primitives or uncomplicated complex objects, to ensure smooth serialization. In cases where
-EverTask is unable to serialize a request, it will throw an exception during the `Dispatch` method. This design choice
-emphasizes reliability in task persistence, ensuring that only serializable tasks are queued for execution.
-
-## Future Developments
-
-| Feature                               | Description                                                                                                                                                                                             |
-|---------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **Web Dashboard**                     | Implement a simple web dashboard for monitoring tasks. Also there will be some management capability (start/stop a task, change some execution parameters)                                              |
-| **WebApi**                  | Webapi endpoints to list and manage tasks execution in EverTask remotely                                                                                                                                |
-| **Support for new monitoring Options** | Sentry Crons, Email alerts, application insights, open telemetry, ecc..                                                                                                           |
-| **Support for new Storage Options**   | Considering the inclusion of additional storage options like Sqlite, Redis, MySql, Postgres, and various DocumentDBs initially supported by EfCore, with the possibility of expanding to other databases. |
-| **Clustering tasks**                  | I'm toying with the idea to allow multiple server running evertask to create a simple cluster for tasks execution, with rules like loading balance, fail-over                                           |
-| **Improving documentation**           | docs needs more love...                                                                                                                                                                                 |
-
-&nbsp;
-
-## 🌟 Acknowledgements
-
-Special thanks to **[jbogard](https://github.com/jbogard)** for the **[MediaTr](https://github.com/jbogard/MediatR)**
-project, providing significant inspiration in the development of key components of this library, especially in the
-creation of:
-
-[`TaskDispatcher.cs`](https://github.com/GiampaoloGabba/EverTask/blob/master/src/EverTask/TaskDispatcher.cs)
-
-[`TaskHandlerExecutor.cs`](https://github.com/GiampaoloGabba/EverTask/blob/master/src/EverTask/Handler/TaskHandlerExecutor.cs)
-
-[`TaskHandlerWrapper.cs`](https://github.com/GiampaoloGabba/EverTask/blob/master/src/EverTask/Handler/TaskHandlerWrapper.cs)
-
-[`HandlerRegistrar.cs`](https://github.com/GiampaoloGabba/EverTask/blob/master/src/EverTask/MicrosoftExtensionsDI/HandlerRegistrar.cs)
-
-I have included comments within these files to acknowledge and reference the specific parts of the MediaTr project that
-inspired them.
-
-Their approach and architecture have been instrumental in shaping the functionality and design of these elements.
-
-This project includes code from [MediatR](https://github.com/jbogard/MediatR), which is licensed under the Apache 2.0
-License. The full text of the license can be found in the [LICENSE](LICENSE) file.
+**Developed with ❤️ by [Giampaolo Gabba](https://github.com/GiampaoloGabba)**
