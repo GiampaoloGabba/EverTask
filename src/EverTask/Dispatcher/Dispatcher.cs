@@ -1,5 +1,7 @@
 ﻿using EverTask.Configuration;
 using EverTask.Scheduler.Recurring.Builder;
+using System.Collections.Concurrent;
+using System.Linq.Expressions;
 
 namespace EverTask.Dispatcher;
 
@@ -18,6 +20,9 @@ public class Dispatcher(
     ICancellationSourceProvider cancellationSourceProvider,
     ITaskStorage? taskStorage = null) : ITaskDispatcherInternal
 {
+    // Cache for compiled TaskHandlerWrapper constructors to avoid reflection overhead
+    private static readonly ConcurrentDictionary<Type, Func<TaskHandlerWrapper>> _wrapperFactoryCache = new();
+
     /// <inheritdoc />
     public Task<Guid> Dispatch(IEverTask task, string? taskKey = null, CancellationToken cancellationToken = default) =>
         ExecuteDispatch(task, null, null, null, cancellationToken, null, taskKey);
@@ -124,48 +129,34 @@ public class Dispatcher(
 
         var taskType = task.GetType();
 
-        var wrapperType = typeof(TaskHandlerWrapperImp<>).MakeGenericType(taskType);
-
-        var handler = (TaskHandlerWrapper?)Activator.CreateInstance(wrapperType) ??
-                      throw new InvalidOperationException($"Could not create wrapper for type {taskType}");
+        var handler = CreateCachedWrapper(taskType);
 
         var executor = handler.Handle(task, executionTime, recurring, serviceProvider, existingTaskId, taskKey);
 
-        // Persist or update task
-        if (existingTaskId == null)
+        // Persist or update task (lazy serialize only if storage exists)
+        if (taskStorage != null)
         {
-            // New task - persist it
+            var taskEntity = executor.ToQueuedTask();
+
             try
             {
-                if (taskStorage != null)
+                if (existingTaskId == null)
                 {
-                    var taskEntity = executor.ToQueuedTask();
+                    // New task - persist it
                     logger.LogInformation("Persisting Task: {type}", taskEntity.Type);
                     await taskStorage.Persist(taskEntity, ct).ConfigureAwait(false);
                 }
-            }
-            catch (Exception e)
-            {
-                logger.LogError(e, "Unable to persists the task {fullType}", task);
-                if (serviceConfiguration.ThrowIfUnableToPersist)
-                    throw;
-            }
-        }
-        else
-        {
-            // Existing task - update it
-            try
-            {
-                if (taskStorage != null)
+                else
                 {
-                    var taskEntity = executor.ToQueuedTask();
+                    // Existing task - update it
                     logger.LogInformation("Updating Task: {type}", taskEntity.Type);
                     await taskStorage.UpdateTask(taskEntity, ct).ConfigureAwait(false);
                 }
             }
             catch (Exception e)
             {
-                logger.LogError(e, "Unable to update the task {fullType}", task);
+                logger.LogError(e, "Unable to {action} the task {fullType}",
+                    existingTaskId == null ? "persist" : "update", task);
                 if (serviceConfiguration.ThrowIfUnableToPersist)
                     throw;
             }
@@ -183,5 +174,29 @@ public class Dispatcher(
         }
 
         return executor.PersistenceId;
+    }
+
+    /// <summary>
+    /// Creates or retrieves a cached TaskHandlerWrapper instance for the specified task type.
+    /// Uses compiled Expression trees to avoid reflection overhead on repeated calls.
+    /// </summary>
+    private static TaskHandlerWrapper CreateCachedWrapper(Type taskType)
+    {
+        var factory = _wrapperFactoryCache.GetOrAdd(taskType, type =>
+        {
+            // Create wrapper type: TaskHandlerWrapperImp<TTask>
+            var wrapperType = typeof(TaskHandlerWrapperImp<>).MakeGenericType(type);
+
+            // Get parameterless constructor
+            var constructor = wrapperType.GetConstructor(Type.EmptyTypes)
+                ?? throw new InvalidOperationException($"Could not find parameterless constructor for {wrapperType}");
+
+            // Compile constructor call into a fast delegate: () => new TaskHandlerWrapperImp<TTask>()
+            var newExpression = Expression.New(constructor);
+            var lambda = Expression.Lambda<Func<TaskHandlerWrapper>>(newExpression);
+            return lambda.Compile();
+        });
+
+        return factory();
     }
 }
