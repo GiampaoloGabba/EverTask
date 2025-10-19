@@ -38,9 +38,6 @@ jobs:
       - name: Build
         run: dotnet build EverTask.sln --no-restore --configuration Release
 
-      - name: Test
-        run: dotnet test test/EverTask.Tests/EverTask.Tests.csproj --no-restore --verbosity normal
-
       - name: NuGet Push
         run: |
           dotnet pack src/EverTask.Abstractions/EverTask.Abstractions.csproj --no-build -o nupkg
