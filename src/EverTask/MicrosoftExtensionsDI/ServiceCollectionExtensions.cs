@@ -1,4 +1,5 @@
 ﻿using EverTask.Configuration;
+using EverTask.Scheduler;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -22,7 +23,25 @@ public static class ServiceCollectionExtensions
         // Register WorkerQueueManager instead of single WorkerQueue
         RegisterQueueManager(services, options);
 
-        services.TryAddSingleton<IScheduler, PeriodicTimerScheduler>();
+        // Conditional scheduler registration
+        if (options.ShardedSchedulerShardCount.HasValue)
+        {
+            // High-performance sharded scheduler
+            services.TryAddSingleton<IScheduler>(sp =>
+                new ShardedScheduler(
+                    sp.GetRequiredService<IWorkerQueueManager>(),
+                    sp.GetRequiredService<IEverTaskLogger<ShardedScheduler>>(),
+                    sp.GetService<ITaskStorage>(),
+                    options.ShardedSchedulerShardCount.Value
+                )
+            );
+        }
+        else
+        {
+            // Default: PeriodicTimerScheduler
+            services.TryAddSingleton<IScheduler, PeriodicTimerScheduler>();
+        }
+
         services.TryAddSingleton<ITaskDispatcherInternal, Dispatcher>();
         services.TryAddSingleton<ITaskDispatcher>(provider => provider.GetRequiredService<ITaskDispatcherInternal>());
         services.TryAddSingleton<ICancellationSourceProvider, CancellationSourceProvider>();

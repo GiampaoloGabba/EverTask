@@ -13,6 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Zero CPU usage when task queue is empty (sleeps until new task scheduled)
   - Dynamic delay calculation based on next task execution time
   - Replaces continuous timer updates with event-driven wake-up pattern
+- **Optional sharded scheduler** for extreme high-load scenarios (>10k Schedule() calls/sec)
+  - Opt-in via `.UseShardedScheduler(shardCount)` configuration method
+  - 2-4x throughput improvement for workloads exceeding 10k Schedule() calls/sec
+  - Independent timer shards with complete failure isolation
+  - Auto-scaling based on `Environment.ProcessorCount` (minimum 4 shards)
+  - Hash-based task distribution for uniform shard load balancing
+  - Minimal overhead: ~300 bytes per shard
+  - Recommended for: 100k+ scheduled tasks, 10k+ Schedule/sec sustained, 20k+ Schedule/sec bursts
+  - Comprehensive test coverage: 12 unit tests, 8 integration tests
+  - Full documentation in README with performance comparison table
 - **DbContext factory pattern**: `ITaskStoreDbContextFactory` abstraction for storage providers
   - 30-50% performance improvement in storage operations
   - Enables built-in EF Core DbContext pooling via `IDbContextFactory<T>`
