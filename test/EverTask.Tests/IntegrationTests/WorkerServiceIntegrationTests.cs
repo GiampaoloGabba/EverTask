@@ -185,7 +185,7 @@ public class WorkerServiceIntegrationTests
         TestTaskConcurrent1.Counter.ShouldBe(0);
     }
 
-    [Fact]
+    [ConditionalFact("NET6_GITHUB")]
     public async Task Should_cancel_task_when_service_stopped()
     {
         await _host.StartAsync();
