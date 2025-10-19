@@ -9,11 +9,15 @@ public interface ITaskDispatcher
     /// Asynchronously enqueues a task to the background queue
     /// </summary>
     /// <param name="task">The IEverTask to be executed.</param>
+    /// <param name="taskKey">
+    /// Optional. A unique key for idempotent task registration. If a task with the same key exists and is active,
+    /// the existing task will be updated; if terminated, it will be replaced with a new one.
+    /// </param>
     /// <param name="cancellationToken">
     /// Optional. A token for canceling the dispatch operation.
     /// </param>
     /// <returns>A task that represents the asyncronous queue operation.</returns>
-    Task<Guid> Dispatch(IEverTask task, CancellationToken cancellationToken = default);
+    Task<Guid> Dispatch(IEverTask task, string? taskKey = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Asynchronously schedules a task to the background queue with a delay before execution.
@@ -22,11 +26,15 @@ public interface ITaskDispatcher
     /// <param name="scheduleDelay">
     /// The amount of time to delay the execution of the task.
     /// </param>
+    /// <param name="taskKey">
+    /// Optional. A unique key for idempotent task registration. If a task with the same key exists and is active,
+    /// the existing task will be updated; if terminated, it will be replaced with a new one.
+    /// </param>
     /// <param name="cancellationToken">
     /// Optional. A token for canceling the dispatch operation.
     /// </param>
     /// <returns>A task that represents the asynchronous queue operation.</returns>
-    Task<Guid> Dispatch(IEverTask task, TimeSpan scheduleDelay, CancellationToken cancellationToken = default);
+    Task<Guid> Dispatch(IEverTask task, TimeSpan scheduleDelay, string? taskKey = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Asynchronously schedules a recurring task to the background queue to be executed at specified times.
@@ -35,11 +43,15 @@ public interface ITaskDispatcher
     /// <param name="recurring">
     /// The <see cref="IRecurringTaskBuilder"/> used to configure the recurring task.
     /// </param>
+    /// <param name="taskKey">
+    /// Optional. A unique key for idempotent task registration. If a task with the same key exists and is active,
+    /// the existing task will be updated; if terminated, it will be replaced with a new one.
+    /// </param>
     /// <param name="cancellationToken">
     /// Optional. A token for canceling the dispatch operation.
     /// </param>
     /// <returns>A task that represents the asynchronous queue operation.</returns>
-    Task<Guid> Dispatch(IEverTask task, Action<IRecurringTaskBuilder> recurring, CancellationToken cancellationToken = default);
+    Task<Guid> Dispatch(IEverTask task, Action<IRecurringTaskBuilder> recurring, string? taskKey = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Asynchronously schedules a task to the background queue to be executed at a specified time.
@@ -48,11 +60,15 @@ public interface ITaskDispatcher
     /// <param name="scheduleTime">
     /// The specific time when the task is to be executed.
     /// </param>
+    /// <param name="taskKey">
+    /// Optional. A unique key for idempotent task registration. If a task with the same key exists and is active,
+    /// the existing task will be updated; if terminated, it will be replaced with a new one.
+    /// </param>
     /// <param name="cancellationToken">
     /// Optional. A token for canceling the dispatch operation.
     /// </param>
     /// <returns>A task that represents the asynchronous queue operation.</returns>
-    Task<Guid> Dispatch(IEverTask task, DateTimeOffset scheduleTime, CancellationToken cancellationToken = default);
+    Task<Guid> Dispatch(IEverTask task, DateTimeOffset scheduleTime, string? taskKey = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Asynchronously cancel a dispatched task

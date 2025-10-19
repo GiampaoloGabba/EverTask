@@ -67,4 +67,19 @@ public class TestTaskStorage : ITaskStorage
     {
         return Task.CompletedTask;
     }
+
+    public Task<QueuedTask?> GetByTaskKey(string taskKey, CancellationToken ct = default)
+    {
+        return Task.FromResult<QueuedTask?>(null);
+    }
+
+    public Task UpdateTask(QueuedTask task, CancellationToken ct = default)
+    {
+        return Task.CompletedTask;
+    }
+
+    public Task Remove(Guid taskId, CancellationToken ct = default)
+    {
+        return Task.CompletedTask;
+    }
 }

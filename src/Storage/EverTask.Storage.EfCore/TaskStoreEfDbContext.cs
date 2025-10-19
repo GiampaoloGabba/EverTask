@@ -42,6 +42,14 @@ public abstract class TaskStoreEfDbContext<T>(
                     .IsUnique(false);
 
         modelBuilder.Entity<QueuedTask>()
+                    .Property(e => e.TaskKey)
+                    .HasMaxLength(200);
+
+        modelBuilder.Entity<QueuedTask>()
+                    .HasIndex(q => q.TaskKey)
+                    .IsUnique();
+
+        modelBuilder.Entity<QueuedTask>()
                     .HasMany(a => a.StatusAudits)
                     .WithOne(af => af.QueuedTask)
                     .HasForeignKey(af => af.QueuedTaskId)

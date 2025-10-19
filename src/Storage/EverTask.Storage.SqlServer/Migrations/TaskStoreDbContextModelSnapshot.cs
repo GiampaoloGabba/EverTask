@@ -79,6 +79,10 @@ namespace EverTask.Storage.SqlServer.Migrations
                         .HasMaxLength(15)
                         .HasColumnType("nvarchar(15)");
 
+                    b.Property<string>("TaskKey")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
                     b.Property<string>("Type")
                         .IsRequired()
                         .HasMaxLength(500)
@@ -87,6 +91,10 @@ namespace EverTask.Storage.SqlServer.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("Status");
+
+                    b.HasIndex("TaskKey")
+                        .IsUnique()
+                        .HasFilter("[TaskKey] IS NOT NULL");
 
                     b.ToTable("QueuedTasks", "EverTask");
                 });

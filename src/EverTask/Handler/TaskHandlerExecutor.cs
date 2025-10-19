@@ -14,7 +14,8 @@ public record TaskHandlerExecutor(
     Func<Guid, ValueTask>? HandlerStartedCallback,
     Func<Guid, ValueTask>? HandlerCompletedCallback,
     Guid PersistenceId,
-    string? QueueName);
+    string? QueueName,
+    string? TaskKey);
 
 public static class TaskHandlerExecutorExtensions
 {
@@ -64,7 +65,8 @@ public static class TaskHandlerExecutorExtensions
             RunUntil              = runUntil,
             NextRunUtc            = nextRun,
             CurrentRunCount       = 0,
-            QueueName             = executor.QueueName
+            QueueName             = executor.QueueName,
+            TaskKey               = executor.TaskKey
         };
     }
 }

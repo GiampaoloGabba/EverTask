@@ -194,4 +194,88 @@ public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTa
             }
         }
     }
+
+    public virtual async Task<QueuedTask?> GetByTaskKey(string taskKey, CancellationToken ct = default)
+    {
+        using var       scope     = serviceScopeFactory.CreateScope();
+        await using var dbContext = scope.ServiceProvider.GetRequiredService<ITaskStoreDbContext>();
+
+        return await dbContext.QueuedTasks
+                              .AsNoTracking()
+                              .Where(t => t.TaskKey == taskKey)
+                              .FirstOrDefaultAsync(ct)
+                              .ConfigureAwait(false);
+    }
+
+    public virtual async Task UpdateTask(QueuedTask task, CancellationToken ct = default)
+    {
+        logger.LogInformation("Updating task {taskId} with key {taskKey}", task.Id, task.TaskKey);
+
+        using var       scope     = serviceScopeFactory.CreateScope();
+        await using var dbContext = scope.ServiceProvider.GetRequiredService<ITaskStoreDbContext>();
+
+        var existingTask = await dbContext.QueuedTasks
+                                          .Where(t => t.Id == task.Id)
+                                          .FirstOrDefaultAsync(ct)
+                                          .ConfigureAwait(false);
+
+        if (existingTask != null)
+        {
+            // Update all relevant properties
+            existingTask.Type                  = task.Type;
+            existingTask.Request               = task.Request;
+            existingTask.Handler               = task.Handler;
+            existingTask.ScheduledExecutionUtc = task.ScheduledExecutionUtc;
+            existingTask.IsRecurring           = task.IsRecurring;
+            existingTask.RecurringTask         = task.RecurringTask;
+            existingTask.RecurringInfo         = task.RecurringInfo;
+            existingTask.MaxRuns               = task.MaxRuns;
+            existingTask.RunUntil              = task.RunUntil;
+            existingTask.NextRunUtc            = task.NextRunUtc;
+            existingTask.QueueName             = task.QueueName;
+            existingTask.TaskKey               = task.TaskKey;
+
+            try
+            {
+                await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
+            }
+            catch (Exception e)
+            {
+                logger.LogCritical(e, "Unable to update task {taskId}", task.Id);
+                throw;
+            }
+        }
+        else
+        {
+            logger.LogWarning("Task {taskId} not found for update", task.Id);
+        }
+    }
+
+    public virtual async Task Remove(Guid taskId, CancellationToken ct = default)
+    {
+        logger.LogInformation("Removing task {taskId}", taskId);
+
+        using var       scope     = serviceScopeFactory.CreateScope();
+        await using var dbContext = scope.ServiceProvider.GetRequiredService<ITaskStoreDbContext>();
+
+        var task = await dbContext.QueuedTasks
+                                  .Where(t => t.Id == taskId)
+                                  .FirstOrDefaultAsync(ct)
+                                  .ConfigureAwait(false);
+
+        if (task != null)
+        {
+            dbContext.QueuedTasks.Remove(task);
+
+            try
+            {
+                await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
+            }
+            catch (Exception e)
+            {
+                logger.LogCritical(e, "Unable to remove task {taskId}", taskId);
+                throw;
+            }
+        }
+    }
 }

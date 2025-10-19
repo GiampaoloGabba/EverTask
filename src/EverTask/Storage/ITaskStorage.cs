@@ -100,4 +100,28 @@ public interface ITaskStorage
     /// <param name="nextRun">The next run date.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
     Task UpdateCurrentRun(Guid taskId, DateTimeOffset? nextRun);
+
+    /// <summary>
+    /// Retrieves a task by its unique task key.
+    /// </summary>
+    /// <param name="taskKey">The unique task key.</param>
+    /// <param name="ct">Optional cancellation token.</param>
+    /// <returns>The queued task with the specified key, or null if not found.</returns>
+    Task<QueuedTask?> GetByTaskKey(string taskKey, CancellationToken ct = default);
+
+    /// <summary>
+    /// Updates an existing task in storage.
+    /// </summary>
+    /// <param name="task">The task to update with new values.</param>
+    /// <param name="ct">Optional cancellation token.</param>
+    /// <returns>A task representing the asynchronous operation.</returns>
+    Task UpdateTask(QueuedTask task, CancellationToken ct = default);
+
+    /// <summary>
+    /// Removes a task from storage.
+    /// </summary>
+    /// <param name="taskId">The ID of the task to remove.</param>
+    /// <param name="ct">Optional cancellation token.</param>
+    /// <returns>A task representing the asynchronous operation.</returns>
+    Task Remove(Guid taskId, CancellationToken ct = default);
 }

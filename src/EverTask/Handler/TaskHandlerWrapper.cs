@@ -9,13 +9,13 @@ namespace EverTask.Handler;
 internal abstract class TaskHandlerWrapper
 {
     public abstract TaskHandlerExecutor Handle(IEverTask task, DateTimeOffset? executionTime, RecurringTask? recurring,
-                                               IServiceProvider serviceFactory, Guid? existingTaskId = null);
+                                               IServiceProvider serviceFactory, Guid? existingTaskId = null, string? taskKey = null);
 }
 
 internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TTask : IEverTask
 {
     public override TaskHandlerExecutor Handle(IEverTask task, DateTimeOffset? executionTime, RecurringTask? recurring,
-                                               IServiceProvider serviceFactory, Guid? existingTaskId = null)
+                                               IServiceProvider serviceFactory, Guid? existingTaskId = null, string? taskKey = null)
     {
         var handlerService = serviceFactory.GetService<IEverTaskHandler<TTask>>();
 
@@ -47,7 +47,8 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
             persistenceId => handlerService.OnStarted(persistenceId),
             persistenceId => handlerService.OnCompleted(persistenceId),
             existingTaskId ?? Guid.NewGuid(),
-            queueName
+            queueName,
+            taskKey
         );
     }
 }

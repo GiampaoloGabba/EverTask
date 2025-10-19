@@ -115,4 +115,52 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
 
         return Task.CompletedTask;
     }
+
+    public Task<QueuedTask?> GetByTaskKey(string taskKey, CancellationToken ct = default)
+    {
+        var task = _pendingTasks.FirstOrDefault(t => t.TaskKey == taskKey);
+        return Task.FromResult(task);
+    }
+
+    public Task UpdateTask(QueuedTask task, CancellationToken ct = default)
+    {
+        logger.LogInformation("Updating task {taskId} with key {taskKey}", task.Id, task.TaskKey);
+
+        var existingTask = _pendingTasks.FirstOrDefault(t => t.Id == task.Id);
+        if (existingTask != null)
+        {
+            // Update all relevant properties
+            existingTask.Type                  = task.Type;
+            existingTask.Request               = task.Request;
+            existingTask.Handler               = task.Handler;
+            existingTask.ScheduledExecutionUtc = task.ScheduledExecutionUtc;
+            existingTask.IsRecurring           = task.IsRecurring;
+            existingTask.RecurringTask         = task.RecurringTask;
+            existingTask.RecurringInfo         = task.RecurringInfo;
+            existingTask.MaxRuns               = task.MaxRuns;
+            existingTask.RunUntil              = task.RunUntil;
+            existingTask.NextRunUtc            = task.NextRunUtc;
+            existingTask.QueueName             = task.QueueName;
+            existingTask.TaskKey               = task.TaskKey;
+        }
+        else
+        {
+            logger.LogWarning("Task {taskId} not found for update", task.Id);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task Remove(Guid taskId, CancellationToken ct = default)
+    {
+        logger.LogInformation("Removing task {taskId}", taskId);
+
+        var task = _pendingTasks.FirstOrDefault(t => t.Id == taskId);
+        if (task != null)
+        {
+            _pendingTasks.Remove(task);
+        }
+
+        return Task.CompletedTask;
+    }
 }
