@@ -60,6 +60,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 30-50% faster storage operations through DbContext pooling
   - Reduced memory allocations via context reuse
   - Better connection pool utilization
+  - **SQL Server optimized status updates**: 50% reduction in database roundtrips for status changes
+    - New `SqlServerTaskStorage` with stored procedure-based `SetStatus()` implementation
+    - Atomic status update + audit insert in single database call (was 2 separate calls)
+    - Transactional consistency guaranteed via stored procedure
+    - Fully backward compatible with EF Core-based implementations
 - **Parallelism improvements**:
   - Default configuration now leverages all CPU cores (8-core = 16 parallel workers vs previous 1)
   - Channel capacity scales with workload (8-core = ~1600 vs previous 500)

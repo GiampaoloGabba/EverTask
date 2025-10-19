@@ -50,7 +50,7 @@ public static class ServiceCollectionExtensions
             ((DbContext)dbContext).Database.Migrate();
         }
 
-        builder.Services.TryAddSingleton<ITaskStorage, EfCoreTaskStorage>();
+        builder.Services.TryAddSingleton<ITaskStorage, SqlServerTaskStorage>();
         return builder;
     }
 }

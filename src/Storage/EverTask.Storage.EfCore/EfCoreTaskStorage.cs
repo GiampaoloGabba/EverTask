@@ -76,7 +76,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     public async Task SetCancelledByService(Guid taskId, Exception exception) =>
         await SetStatus(taskId, QueuedTaskStatus.ServiceStopped, exception).ConfigureAwait(false);
 
-    public async Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception = null,
+    public virtual async Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception = null,
                                     CancellationToken ct = default)
     {
         logger.LogInformation("Set Task {taskId} with Status {status}", taskId, status);
