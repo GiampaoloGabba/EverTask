@@ -48,6 +48,27 @@ public abstract class IntegrationTestBase : IAsyncDisposable
     }
 
     /// <summary>
+    /// Creates an integration test host with custom EverTaskServiceBuilder configuration
+    /// </summary>
+    protected IHost CreateHostWithBuilder(Action<EverTaskServiceBuilder> configureBuilder)
+    {
+        var host = new HostBuilder()
+            .ConfigureServices((hostContext, services) =>
+            {
+                services.AddLogging();
+                var builder = services.AddEverTask(cfg => cfg
+                    .RegisterTasksFromAssembly(typeof(TestTaskRequest).Assembly));
+
+                configureBuilder(builder);
+
+                services.AddSingleton<TestTaskStateManager>();
+            })
+            .Build();
+
+        return host;
+    }
+
+    /// <summary>
     /// Initializes the host and retrieves common services
     /// </summary>
     protected void InitializeHost(
@@ -56,6 +77,22 @@ public abstract class IntegrationTestBase : IAsyncDisposable
         Action<IServiceCollection>? configureServices = null)
     {
         Host = CreateHost(channelCapacity, maxDegreeOfParallelism, configureServices);
+
+        Dispatcher = Host.Services.GetRequiredService<ITaskDispatcher>();
+        Storage = Host.Services.GetRequiredService<ITaskStorage>();
+        WorkerQueue = Host.Services.GetRequiredService<IWorkerQueue>();
+        WorkerBlacklist = Host.Services.GetRequiredService<IWorkerBlacklist>();
+        WorkerExecutor = Host.Services.GetRequiredService<IEverTaskWorkerExecutor>();
+        CancellationSourceProvider = Host.Services.GetRequiredService<ICancellationSourceProvider>();
+        StateManager = Host.Services.GetRequiredService<TestTaskStateManager>();
+    }
+
+    /// <summary>
+    /// Initializes the host with custom builder configuration and retrieves common services
+    /// </summary>
+    protected void InitializeHostWithBuilder(Action<EverTaskServiceBuilder> configureBuilder)
+    {
+        Host = CreateHostWithBuilder(configureBuilder);
 
         Dispatcher = Host.Services.GetRequiredService<ITaskDispatcher>();
         Storage = Host.Services.GetRequiredService<ITaskStorage>();

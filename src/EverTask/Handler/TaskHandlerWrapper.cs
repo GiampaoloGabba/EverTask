@@ -1,4 +1,6 @@
-﻿namespace EverTask.Handler;
+﻿using EverTask.Configuration;
+
+namespace EverTask.Handler;
 
 // This code was adapted from MediatR by Jimmy Bogard.
 // Specific inspiration was taken from the NotificationHandlerWrapper.cs file.
@@ -26,6 +28,13 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
         if (handlerService is EverTask.Abstractions.EverTaskHandler<TTask> taskHandler)
         {
             queueName = taskHandler.QueueName;
+        }
+
+        // Normalize QueueName: if null and recurring, use "recurring"; otherwise use "default"
+        // This ensures QueueName is always set in storage for clarity
+        if (string.IsNullOrEmpty(queueName))
+        {
+            queueName = recurring != null ? QueueNames.Recurring : QueueNames.Default;
         }
 
         return new TaskHandlerExecutor(
