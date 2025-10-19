@@ -11,6 +11,7 @@ using Xunit;
 
 namespace EverTask.Tests.Storage;
 
+[Collection("Sequential3")]
 public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase
 {
     private ITaskStoreDbContext _dbContext = null!;

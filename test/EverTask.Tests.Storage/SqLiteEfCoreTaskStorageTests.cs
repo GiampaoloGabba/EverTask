@@ -8,6 +8,7 @@ using Xunit;
 
 namespace EverTask.Tests.Storage;
 
+[Collection("Sequential2")]
 public class SqliteEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IDisposable
 {
     private ITaskStoreDbContext _dbContext = null!;

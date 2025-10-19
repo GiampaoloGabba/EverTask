@@ -220,7 +220,8 @@ public class QueueParallelismTests
             null,
             null,
             Guid.NewGuid(),
-            queueName
+            queueName,
+            null
         );
     }
 

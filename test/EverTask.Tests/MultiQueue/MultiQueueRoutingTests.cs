@@ -38,7 +38,8 @@ public class MultiQueueRoutingTests
             null,
             null,
             Guid.NewGuid(),
-            "high-priority"
+            "high-priority",
+            null
         );
 
         // Act
@@ -70,6 +71,7 @@ public class MultiQueueRoutingTests
             null,
             null,
             Guid.NewGuid(),
+            null,
             null
         );
 
@@ -103,6 +105,7 @@ public class MultiQueueRoutingTests
             null,
             null,
             Guid.NewGuid(),
+            null,
             null
         );
 
@@ -137,7 +140,8 @@ public class MultiQueueRoutingTests
             null,
             null,
             Guid.NewGuid(),
-            "background"
+            "background",
+            null
         );
 
         // Act
@@ -167,7 +171,8 @@ public class MultiQueueRoutingTests
             null,
             null,
             Guid.NewGuid(),
-            queueName
+            queueName,
+            null
         );
 
         // Assert
@@ -191,7 +196,8 @@ public class MultiQueueRoutingTests
             null,
             null,
             Guid.NewGuid(),
-            queueName
+            queueName,
+            null
         );
 
         // Act

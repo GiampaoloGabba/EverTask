@@ -98,7 +98,7 @@ public class HanlderExecutorTests
     public void Should_throw_for_null_Request()
     {
         var executor =
-            new TaskHandlerExecutor(null!, new TestTaskHanlder(), null, null, null!, null, null, null, Guid.NewGuid(), null);
+            new TaskHandlerExecutor(null!, new TestTaskHanlder(), null, null, null!, null, null, null, Guid.NewGuid(), null, null);
         Should.Throw<ArgumentNullException>(() => executor.ToQueuedTask());
     }
 
@@ -106,7 +106,7 @@ public class HanlderExecutorTests
     public void Should_throw_for_null_Handler_Handle()
     {
         var executor = new TaskHandlerExecutor(new TestTaskRequest("Test"), null!, null, null, null!, null, null, null,
-            Guid.NewGuid(), null);
+            Guid.NewGuid(), null, null);
         Should.Throw<ArgumentNullException>(() => executor.ToQueuedTask());
     }
 
@@ -130,7 +130,8 @@ public class HanlderExecutorTests
             HandlerStartedCallback: null,
             HandlerCompletedCallback: null,
             PersistenceId: persistenceId,
-            QueueName: null);
+            QueueName: null,
+            TaskKey: null);
 
         var queuedTask = executor.ToQueuedTask();
 
@@ -161,7 +162,8 @@ public class HanlderExecutorTests
             HandlerStartedCallback: null,
             HandlerCompletedCallback: null,
             PersistenceId: Guid.NewGuid(),
-            QueueName: null);
+            QueueName: null,
+            TaskKey: null);
 
         Should.Throw<ArgumentNullException>(() => executor.ToQueuedTask());
     }
@@ -179,7 +181,8 @@ public class HanlderExecutorTests
             HandlerStartedCallback: null,
             HandlerCompletedCallback: null,
             PersistenceId: Guid.NewGuid(),
-            QueueName: null);
+            QueueName: null,
+            TaskKey: null);
 
         Should.Throw<ArgumentNullException>(() => executor.ToQueuedTask());
     }
@@ -202,7 +205,8 @@ public class HanlderExecutorTests
             HandlerStartedCallback: null,
             HandlerCompletedCallback: null,
             PersistenceId: persistenceId,
-            QueueName: null);
+            QueueName: null,
+            TaskKey: null);
 
         var eventData = EverTaskEventData.FromExecutor(executor, SeverityLevel.Information, "test", null);
 

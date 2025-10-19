@@ -241,5 +241,6 @@ public class TimerSchedulerTests
             null,
             null,
             Guid.NewGuid(),
+            null,
             null);
 }

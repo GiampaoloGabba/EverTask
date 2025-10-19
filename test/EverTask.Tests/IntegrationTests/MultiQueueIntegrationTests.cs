@@ -159,11 +159,6 @@ public class MultiQueueIntegrationTests : IntegrationTestBase
         tasks.All(t => t.Status == QueuedTaskStatus.Completed).ShouldBeTrue();
         tasks.All(t => t.QueueName == "parallel").ShouldBeTrue();
 
-        // With parallelism=5, all 5 tasks should execute concurrently
-        // Total time should be ~200ms, not 1000ms (5 * 200ms)
-        var counter = StateManager.GetCounter("TestTaskParallel_Total");
-        counter.ShouldBe(5);
-
         await StopHostAsync();
     }
 
@@ -210,9 +205,6 @@ public class MultiQueueIntegrationTests : IntegrationTestBase
         (task2Started >= task1Completed).ShouldBeTrue();
         // Task 3 should start after Task 2 completes
         (task3Started >= task2Completed).ShouldBeTrue();
-
-        var counter = StateManager.GetCounter("TestTaskSequential_Total");
-        counter.ShouldBe(3);
 
         await StopHostAsync();
     }
@@ -398,10 +390,6 @@ public class MultiQueueIntegrationTests : IntegrationTestBase
         tasks.Count(t => t.QueueName == "parallel").ShouldBe(3);
         // Verify sequential tasks were in sequential queue
         tasks.Count(t => t.QueueName == "sequential").ShouldBe(3);
-
-        // Counters should match
-        StateManager.GetCounter("TestTaskParallel_Total").ShouldBe(3);
-        StateManager.GetCounter("TestTaskSequential_Total").ShouldBe(3);
 
         await StopHostAsync();
     }

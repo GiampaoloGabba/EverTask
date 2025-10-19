@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.6.0] - 2025-10-19
 
 ### Added
+- **Idempotent task registration** using unique task keys to prevent duplicate scheduled tasks
+  - `taskKey` optional parameter added to all `ITaskDispatcher.Dispatch()` methods
+  - `TaskKey` property (max 200 chars, nullable, unique index) added to `QueuedTask` storage model
+  - `GetByTaskKey()`, `UpdateTask()`, and `Remove()` methods added to `ITaskStorage` interface
+  - Smart deduplication logic: ignores if InProgress, updates if Pending/Queued, replaces if Completed/Failed
+  - Preserves `CurrentRunCount` when updating recurring tasks
+  - Comprehensive integration test suite in `test/EverTask.Tests/IntegrationTests/TaskKeyIntegrationTests.cs`
+  - Documentation in README.md with examples for startup task registration and dynamic updates
 - Multi-queue support for workload isolation and prioritization
 - `QueueName` property to `EverTaskHandler` base class for queue routing
 - `QueueConfiguration` class for individual queue settings

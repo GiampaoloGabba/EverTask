@@ -418,6 +418,115 @@ await dispatcher.Dispatch(new SampleTaskRequest("Every Monday Morning"),
 > 💡 **Remember:** Delayed, scheduled and recurring tasks are also persistent. If your app restarts, you won't lose these tasks –
 > they'll be executed at the right time!
 
+## Idempotent Task Registration
+
+EverTask supports idempotent task registration using unique task keys. This prevents duplicate scheduled tasks when the application restarts or when the same task is dispatched multiple times.
+
+### Basic Usage
+
+```csharp
+// At application startup
+await dispatcher.Dispatch(
+    new HourlyCleanupTask(),
+    recurring => recurring.Schedule().EveryHour(),
+    taskKey: "hourly-cleanup"  // Unique key
+);
+
+// On restart, same code won't create duplicate
+await dispatcher.Dispatch(
+    new HourlyCleanupTask(),
+    recurring => recurring.Schedule().EveryHour(),
+    taskKey: "hourly-cleanup"  // Returns existing task ID
+);
+```
+
+### Update Behavior
+
+When dispatching with an existing task key:
+
+| Existing Task Status | Behavior |
+|---------------------|----------|
+| **InProgress** | Returns existing task ID (no changes) |
+| **Pending/Queued/WaitingQueue** | Updates task configuration (schedule, parameters) |
+| **Completed/Failed/Cancelled** | Removes old task, creates new one |
+
+### Updating Scheduled Tasks
+
+```csharp
+// Initial registration
+await dispatcher.Dispatch(
+    new ReportTask(format: "PDF"),
+    recurring => recurring.Schedule().EveryDay().AtTime(new TimeOnly(9, 0)),
+    taskKey: "daily-report"
+);
+
+// Later, update schedule and parameters
+await dispatcher.Dispatch(
+    new ReportTask(format: "Excel"),  // Changed parameter
+    recurring => recurring.Schedule().Every(2).Days().AtTime(new TimeOnly(10, 0)),  // Changed schedule
+    taskKey: "daily-report"  // Same key → updates existing
+);
+```
+
+### Use Cases
+
+**Startup Task Registration**
+```csharp
+public class RecurringTasksRegistrar : IHostedService
+{
+    private readonly ITaskDispatcher _dispatcher;
+
+    public RecurringTasksRegistrar(ITaskDispatcher dispatcher)
+    {
+        _dispatcher = dispatcher;
+    }
+
+    public async Task StartAsync(CancellationToken ct)
+    {
+        // Cleanup tasks
+        await _dispatcher.Dispatch(
+            new CleanupOldDataTask(),
+            r => r.Schedule().EveryDay().AtTime(new TimeOnly(3, 0)),
+            taskKey: "cleanup-old-data");
+
+        // Health check tasks
+        await _dispatcher.Dispatch(
+            new HealthCheckTask(),
+            r => r.Schedule().Every(5).Minutes(),
+            taskKey: "health-check");
+
+        // Report generation
+        await _dispatcher.Dispatch(
+            new GenerateReportsTask(),
+            r => r.Schedule().EveryDay().AtTime(new TimeOnly(6, 0)),
+            taskKey: "daily-reports");
+    }
+
+    public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
+}
+```
+
+**Dynamic Configuration Updates**
+```csharp
+public async Task UpdateTaskSchedule(string taskKey, TimeOnly newTime)
+{
+    await _dispatcher.Dispatch(
+        new ConfigurableTask(),
+        r => r.Schedule().EveryDay().AtTime(newTime),
+        taskKey: taskKey
+    );
+    // Existing pending task will be updated with new schedule
+}
+```
+
+### Notes
+
+- Task key is case-sensitive
+- Maximum length: 200 characters
+- Null or empty task key = standard behavior (no deduplication)
+- Task key is stored in database with unique constraint
+- Updates preserve `CurrentRunCount` for recurring tasks
+
 ## Task Cancellation
 
 When you dispatch, you can capture the returned GUID to keep track of the task. If you need to cancel this task before

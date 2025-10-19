@@ -3,9 +3,11 @@ using EverTask.Storage.EfCore;
 using EverTask.Tests.Storage.EfCore;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Xunit;
 
 namespace EverTask.Tests.Storage;
 
+[Collection("Sequential1")]
 public class InMemoryEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase
 {
     private ITaskStoreDbContext _dbContext = null!;

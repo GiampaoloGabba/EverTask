@@ -38,6 +38,7 @@ public class QueueTests
             null,
             null,
             Guid.NewGuid(),
+            null,
             null);
     }
 

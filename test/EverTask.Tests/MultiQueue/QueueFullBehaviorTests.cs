@@ -171,7 +171,8 @@ public class QueueFullBehaviorTests
             null,
             null,
             Guid.NewGuid(),
-            queueName
+            queueName,
+            null
         );
     }
 
