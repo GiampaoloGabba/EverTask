@@ -21,7 +21,7 @@ public static class EndpointRouteBuilderExtensions
     /// </summary>
     /// <param name="endpoints">The endpoint route builder.</param>
     /// <returns>The endpoint route builder for chaining.</returns>
-    public static IEndpointRouteBuilder MapEverTaskApi(this IEndpointRouteBuilder endpoints)
+    public static IEndpointRouteBuilder MapMonitoringApi(this IEndpointRouteBuilder endpoints)
     {
         var options = endpoints.ServiceProvider.GetRequiredService<EverTaskApiOptions>();
 

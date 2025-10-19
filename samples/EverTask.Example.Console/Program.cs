@@ -1,38 +1,100 @@
 ﻿using EverTask.Abstractions;
 using EverTask.Example.Console;
+using EverTask.Monitor.Api.Extensions;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-var builder = Host.CreateDefaultBuilder(args).ConfigureLogging(logging => logging.AddFilter("Microsoft", LogLevel.Warning));
-builder.ConfigureServices(services =>
+var builder = WebApplication.CreateBuilder(args);
+
+// Configure logging
+builder.Logging.AddFilter("Microsoft", LogLevel.Warning);
+
+// Configure EverTask with monitoring API and dashboard
+builder.Services.AddEverTask(opt =>
 {
-    services.AddEverTask(opt =>
-            {
-                opt.SetChannelOptions(50)
-                   .SetThrowIfUnableToPersist(true)
-                   .RegisterTasksFromAssembly(typeof(Program).Assembly);
-            })
-            .AddMemoryStorage();
+    opt.SetChannelOptions(50)
+       .SetThrowIfUnableToPersist(true)
+       .RegisterTasksFromAssembly(typeof(Program).Assembly);
+})
+.AddMemoryStorage()
+.AddMonitoringApi(options =>
+{
+    options.BasePath = "/monitoring";
+    options.EnableUI = true;
+    options.Username = "admin";
+    options.Password = "admin";
+    options.RequireAuthentication = true;
 });
 
-var host = builder.Build();
-await host.StartAsync();
+var app = builder.Build();
 
-Console.WriteLine($"=== START DISPATCH: {DateTimeOffset.Now}");
+// Map EverTask monitoring API and dashboard
+app.MapMonitoringApi();
 
-var dispatcher = host.Services.GetRequiredService<ITaskDispatcher>();
+// Start the web server
+await app.StartAsync();
 
-//await dispatcher.Dispatch(new SampleTaskRequest("Hello World in 30 seconds"), TimeSpan.FromSeconds(30));
+Console.WriteLine("===========================================");
+Console.WriteLine("EverTask Example with Monitoring Dashboard");
+Console.WriteLine("===========================================");
+Console.WriteLine($"API:       http://localhost:5000/monitoring/api");
+Console.WriteLine($"Dashboard: http://localhost:5000/monitoring");
+Console.WriteLine($"Username:  admin");
+Console.WriteLine($"Password:  admin");
+Console.WriteLine("===========================================");
+Console.WriteLine($"Started at: {DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss}");
+Console.WriteLine("===========================================");
+Console.WriteLine();
 
-var scheduleTime = DateTimeOffset.Now.AddSeconds(10);
+// Dispatch some example tasks
+var dispatcher = app.Services.GetRequiredService<ITaskDispatcher>();
 
-//await dispatcher.Dispatch(new SampleTaskRequest("Hello World in 10 seconds"), scheduleTime);
+Console.WriteLine("Dispatching example tasks...");
 
+// Immediate task
+await dispatcher.Dispatch(new SampleTaskRequest("Immediate task - Hello World!"));
+Console.WriteLine("✓ Dispatched immediate task");
 
-//await dispatcher.Dispatch(new SampleTaskRequest("Hello World every 10 seconds for 3 times "), taskBuilder => taskBuilder.Schedule().UseCron("*/10 * * * * *").MaxRuns(3));
+// Delayed task (10 seconds)
+await dispatcher.Dispatch(new SampleTaskRequest("Delayed task - Hello in 10 seconds"), TimeSpan.FromSeconds(10));
+Console.WriteLine("✓ Dispatched delayed task (10 seconds)");
 
-await dispatcher.Dispatch(new SampleTaskRequest("Test"), taskBuilder => taskBuilder.Schedule().EveryDay().MaxRuns(3));
+// Scheduled task (specific time)
+var scheduleTime = DateTimeOffset.Now.AddSeconds(30);
+await dispatcher.Dispatch(new SampleTaskRequest($"Scheduled task - Hello at {scheduleTime:HH:mm:ss}"), scheduleTime);
+Console.WriteLine($"✓ Dispatched scheduled task (at {scheduleTime:HH:mm:ss})");
+
+// Recurring task (every minute, max 5 runs)
+await dispatcher.Dispatch(
+    new SampleTaskRequest("Recurring task - Hello every minute"),
+    taskBuilder => taskBuilder.Schedule().EveryMinute().MaxRuns(5)
+);
+Console.WriteLine("✓ Dispatched recurring task (every minute, max 5 runs)");
+
+// Recurring task with cron (every 30 seconds, max 10 runs)
+await dispatcher.Dispatch(
+    new SampleTaskRequest("Recurring task - Hello every 30 seconds"),
+    taskBuilder => taskBuilder.Schedule().UseCron("*/30 * * * * *").MaxRuns(10)
+);
+Console.WriteLine("✓ Dispatched recurring cron task (every 30 seconds, max 10 runs)");
+
+// Daily recurring task (max 3 runs)
+await dispatcher.Dispatch(
+    new SampleTaskRequest("Daily task - Hello every day"),
+    taskBuilder => taskBuilder.Schedule().EveryDay().MaxRuns(3)
+);
+Console.WriteLine("✓ Dispatched daily recurring task (max 3 runs)");
+
+Console.WriteLine();
+Console.WriteLine("All example tasks dispatched!");
+Console.WriteLine();
+Console.WriteLine("Visit the dashboard to monitor task execution:");
+Console.WriteLine("→ http://localhost:5000/monitoring");
+Console.WriteLine();
+Console.WriteLine("Press any key to stop the application...");
+Console.WriteLine();
 
 Console.ReadKey();
-await host.StopAsync();
+await app.StopAsync();
