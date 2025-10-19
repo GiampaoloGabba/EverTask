@@ -24,11 +24,12 @@ public static class DateTimeOffsetExtensions
     {
         if (!onTimes.Any()) return nextDay;
 
-        var orderedOnTimes  = onTimes.OrderBy(t => t).ToArray();
+        // onTimes is guaranteed to be sorted by the OnTimes property setter in DayInterval/MonthInterval
+        // This eliminates repeated sorting on every call
         var currentTimeOnly = TimeOnly.FromDateTime(current.DateTime);
 
         // The default for TimeOnly is midnight, so we need to check the array index to know if there is a date specified by a user
-        var nextTimeIndex = Array.FindIndex(orderedOnTimes, t => t > currentTimeOnly);
+        var nextTimeIndex = Array.FindIndex(onTimes, t => t > currentTimeOnly);
 
         if (nextTimeIndex == -1)
         {
@@ -37,60 +38,111 @@ public static class DateTimeOffsetExtensions
             nextTimeIndex = 0;
         }
 
-        var nextTime = orderedOnTimes[nextTimeIndex];
+        var nextTime = onTimes[nextTimeIndex];
         return nextDay.Adjust(hour: nextTime.Hour, minute: nextTime.Minute, second: nextTime.Second);
 
     }
 
     public static DateTimeOffset NextValidDayOfWeek(this DateTimeOffset dateTime, DayOfWeek[] validDays)
     {
-        while (!validDays.Contains(dateTime.DayOfWeek))
+        if (validDays.Length == 0)
+            throw new ArgumentException("validDays cannot be empty", nameof(validDays));
+
+        const int maxIterations = 7; // Only 7 days in a week
+        for (int i = 0; i < maxIterations; i++)
         {
+            if (validDays.Contains(dateTime.DayOfWeek))
+                return dateTime;
             dateTime = dateTime.AddDays(1);
         }
-        return dateTime;
+
+        throw new InvalidOperationException($"Could not find valid day of week in {maxIterations} iterations");
     }
 
     public static DateTimeOffset NextValidDay(this DateTimeOffset dateTime, int[] validDays)
     {
-        while (!validDays.Contains(dateTime.Day))
+        if (validDays.Length == 0)
+            throw new ArgumentException("validDays cannot be empty", nameof(validDays));
+
+        // Validate all days are 1-31
+        if (validDays.Any(d => d < 1 || d > 31))
+            throw new ArgumentException("validDays must contain values between 1 and 31", nameof(validDays));
+
+        var startMonth = dateTime.Month;
+        var startYear = dateTime.Year;
+        var daysInMonth = DateTime.DaysInMonth(startYear, startMonth);
+
+        // Try to find a valid day in the current month
+        for (int i = 0; i < daysInMonth; i++)
         {
+            if (validDays.Contains(dateTime.Day))
+                return dateTime;
+
             dateTime = dateTime.AddDays(1);
+
+            // If we've moved to next month, break and handle below
+            if (dateTime.Month != startMonth)
+                break;
         }
-        return dateTime;
+
+        // If no valid day found in current month, move to first day of next month and recurse
+        dateTime = new DateTimeOffset(dateTime.Year, dateTime.Month, 1,
+            dateTime.Hour, dateTime.Minute, dateTime.Second, dateTime.Offset);
+        return NextValidDay(dateTime, validDays);
     }
 
     public static DateTimeOffset NextValidHour(this DateTimeOffset dateTime, int[] validHour)
     {
-        while (!validHour.Contains(dateTime.Hour))
+        if (validHour.Length == 0)
+            throw new ArgumentException("validHour cannot be empty", nameof(validHour));
+
+        if (validHour.Any(h => h < 0 || h > 23))
+            throw new ArgumentException("validHour must contain values between 0 and 23", nameof(validHour));
+
+        const int maxIterations = 24;
+        for (int i = 0; i < maxIterations; i++)
         {
+            if (validHour.Contains(dateTime.Hour))
+                return dateTime;
             dateTime = dateTime.AddHours(1);
         }
-        return dateTime;
+
+        throw new InvalidOperationException($"Could not find valid hour in {maxIterations} iterations");
     }
 
     public static DateTimeOffset NextValidMonth(this DateTimeOffset dateTime, int[] validMonths)
     {
-        while (!validMonths.Contains(dateTime.Month))
+        if (validMonths.Length == 0)
+            throw new ArgumentException("validMonths cannot be empty", nameof(validMonths));
+
+        if (validMonths.Any(m => m < 1 || m > 12))
+            throw new ArgumentException("validMonths must contain values between 1 and 12", nameof(validMonths));
+
+        const int maxIterations = 12;
+        for (int i = 0; i < maxIterations; i++)
         {
+            if (validMonths.Contains(dateTime.Month))
+                return dateTime;
             dateTime = dateTime.AddMonths(1);
         }
-        return dateTime;
+
+        throw new InvalidOperationException($"Could not find valid month in {maxIterations} iterations");
     }
 
     public static DateTimeOffset FindFirstOccurrenceOfDayOfWeekInMonth(this DateTimeOffset dateTime, DayOfWeek dayOfWeek)
     {
-        while (dateTime.DayOfWeek != dayOfWeek)
-        {
-            dateTime = dateTime.AddDays(1);
+        // Start from first day of current month
+        var firstOfMonth = dateTime.Adjust(day: 1);
 
-            // If you moved into the next month, reset to the first day of that month
-            if (dateTime.Day == DateTime.DaysInMonth(dateTime.Year, dateTime.Month))
-            {
-                dateTime = dateTime.Adjust(day: 1);
-            }
+        const int maxIterations = 7; // First occurrence must be within first 7 days
+        for (int i = 0; i < maxIterations; i++)
+        {
+            if (firstOfMonth.DayOfWeek == dayOfWeek)
+                return firstOfMonth;
+            firstOfMonth = firstOfMonth.AddDays(1);
         }
-        return dateTime;
+
+        throw new InvalidOperationException($"Could not find {dayOfWeek} in first week of month");
     }
 
     public static TimeOnly ToUniversalTime(this TimeOnly time)

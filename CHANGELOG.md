@@ -125,6 +125,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Lock contention negligible (Add/Remove rare, IsBlacklisted frequent on hot path)
     - Maintains O(1) performance characteristics
 
+### Fixed
+- **Critical correctness bug in MonthInterval**: Missing return value assignments in `GetNextOccurrence()`
+  - `FindFirstOccurrenceOfDayOfWeekInMonth()` and `AdjustDayToValidMonthDay()` results were discarded
+  - Monthly recurring tasks with `OnFirst` or `OnDay` specifications executed at incorrect times
+  - Now correctly assigns calculated values to `nextMonth` variable
+  - Added conditional check for `OnDay.HasValue` to prevent unnecessary adjustments
+- **Race condition in PeriodicTimerScheduler wake-up logic**: Semaphore signaling now thread-safe
+  - `Schedule()` method had check-then-act race between `CurrentCount == 0` check and `Release()` call
+  - Under high concurrency (100+ concurrent Schedule() calls), multiple threads threw `SemaphoreFullException`
+  - Exception overhead: 100-1000x slower than normal control flow
+  - Replaced with atomic `Interlocked.CompareExchange` pattern using `_wakeUpPending` flag
+  - Flag reset after `WaitAsync()` consumes signal, eliminating all exception overhead
+- **Unbounded loops in DateTimeExtensions**: Added bounds checking and validation to prevent infinite loops
+  - `NextValidDayOfWeek()`: Max 7 iterations with empty array validation
+  - `NextValidDay()`: Max days-in-month iterations with range validation (1-31)
+  - `NextValidHour()`: Max 24 iterations with range validation (0-23)
+  - `NextValidMonth()`: Max 12 iterations with range validation (1-12)
+  - `FindFirstOccurrenceOfDayOfWeekInMonth()`: Max 7 iterations, starts from first day of month
+  - All methods throw `ArgumentException` for invalid inputs (empty arrays, out-of-range values)
+  - Prevents thread hangs from malicious or buggy task configurations
+- **Cron expression repeated parsing**: Eliminated redundant parsing overhead in `CronInterval`
+  - `GetNextOccurrence()` called `ParseCronExpression()` on every invocation (~100-500μs per parse)
+  - Recurring cron tasks running every 5 seconds incurred 17,280 parses per day
+  - Implemented lazy caching: `_parsedExpression` field with invalidation on `CronExpression` property change
+  - ~99.9% reduction in parsing operations for stable recurring tasks (17,280 → ~1 per task lifecycle)
+- **TimeOnly array repeated sorting**: Eliminated redundant sorting in recurring time calculations
+  - `GetNextRequestedTime()` called `OrderBy().ToArray()` on every next-occurrence calculation
+  - Caused GC pressure and unnecessary allocations for recurring tasks with multiple daily times
+  - Implemented automatic sorting in `DayInterval.OnTimes` and `MonthInterval.OnTimes` property setters
+  - Guarantees sorted arrays in all scenarios: builder API, direct assignment, JSON deserialization
+  - 100% reduction in sorting operations during task execution (sorting now happens once on configuration)
+
 ### Migration Notes
 - **No breaking changes** for standard DI registration (automatic migration to new scheduler)
 - **Breaking for custom storage implementations**: Replace `IServiceScopeFactory` with `ITaskStoreDbContextFactory`

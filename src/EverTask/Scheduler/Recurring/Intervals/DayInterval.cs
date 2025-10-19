@@ -16,8 +16,14 @@ public class DayInterval : IInterval
         OnDays   = onDays.Distinct().ToArray();
     }
 
+    private TimeOnly[] _onTimes = [TimeOnly.Parse("00:00")];
+
     public int         Interval { get;  } = 1;
-    public TimeOnly[]  OnTimes  { get; set; } = [TimeOnly.Parse("00:00")];
+    public TimeOnly[]  OnTimes
+    {
+        get => _onTimes;
+        set => _onTimes = value.OrderBy(t => t).ToArray(); // Always keep sorted
+    }
     public DayOfWeek[] OnDays   { get; } = Array.Empty<DayOfWeek>();
 
     public void Validate()

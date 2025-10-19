@@ -23,6 +23,7 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
     private readonly TimeSpan _checkInterval;
     private readonly CancellationTokenSource _cts;
     private readonly SemaphoreSlim _wakeUpSignal;
+    private int _wakeUpPending;
 
 #if DEBUG
     // For tests purpose
@@ -65,19 +66,12 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
         }
 
         // Sveglia il timer se è dormiente (coda era vuota)
-        // Se già sveglio, WaitAsync ritorna immediatamente senza bloccare
-        // Thread-safe: Se multiple thread chiamano Release() concorrentemente,
-        // solo il primo avrà successo, gli altri ignoreranno SemaphoreFullException
-        try
+        // Thread-safe: usa Interlocked.CompareExchange per garantire che solo un thread
+        // possa segnalare il semaforo, eliminando la race condition check-then-act.
+        // Il flag _wakeUpPending viene resettato dopo che WaitAsync consuma il segnale.
+        if (Interlocked.CompareExchange(ref _wakeUpPending, 1, 0) == 0)
         {
-            if (_wakeUpSignal.CurrentCount == 0)
-            {
-                _wakeUpSignal.Release();
-            }
-        }
-        catch (SemaphoreFullException)
-        {
-            // Semaforo già segnalato da un altro thread - ignora
+            _wakeUpSignal.Release();
         }
     }
 
@@ -95,6 +89,9 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
                     // Coda vuota: dormi fino a quando Schedule() chiama Release()
                     _logger.LogDebug("Queue empty, sleeping until next task scheduled");
                     await _wakeUpSignal.WaitAsync(cancellationToken);
+
+                    // Resetta il flag di wake-up dopo aver consumato il segnale
+                    Interlocked.Exchange(ref _wakeUpPending, 0);
                 }
                 else
                 {
@@ -102,7 +99,13 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
                     var waitTime = delay < _checkInterval ? delay : _checkInterval;
 
                     // Usa WaitAsync con timeout invece di Task.Delay per permettere wake-up anticipato
-                    await _wakeUpSignal.WaitAsync(waitTime, cancellationToken);
+                    var signaled = await _wakeUpSignal.WaitAsync(waitTime, cancellationToken);
+
+                    // Resetta il flag solo se il semaforo è stato effettivamente segnalato
+                    if (signaled)
+                    {
+                        Interlocked.Exchange(ref _wakeUpPending, 0);
+                    }
                 }
 
                 // Processa task pronti
@@ -185,7 +188,7 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Unable to dispatch task with id {taskId} to queue.", item.PersistenceId);
+            _logger.LogError(ex, "Unable to dispatch task with id {TaskId} to queue", item.PersistenceId);
             if (_taskStorage != null)
             {
                 await _taskStorage

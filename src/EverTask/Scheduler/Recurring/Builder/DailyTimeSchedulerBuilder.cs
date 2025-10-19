@@ -20,6 +20,7 @@ public class DailyTimeSchedulerBuilder(RecurringTask task) : IDailyTimeScheduler
         if (task.DayInterval == null && task.MonthInterval == null)
             throw new InvalidOperationException("DayInterval or MonthInterval must be set");
 
+        // Note: OnTimes property setter will sort the array automatically
         var utcTimes = times.Select(time => time.ToUniversalTime()).Distinct().ToArray();
 
         if (task.DayInterval != null)

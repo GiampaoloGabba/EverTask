@@ -134,4 +134,99 @@ public class DateTimeOffsetExtensionsTests
         Assert.Equal(14, adjustedDateTime.Hour);
         Assert.Equal(45, adjustedDateTime.Minute);
     }
+
+    // Validation Tests - Priority 1: Verify bounds checking prevents infinite loops
+
+    [Fact]
+    public void NextValidDayOfWeek_ThrowsOnEmptyArray()
+    {
+        var dateTime = DateTimeOffset.UtcNow;
+
+        var exception = Assert.Throws<ArgumentException>(() =>
+            dateTime.NextValidDayOfWeek(Array.Empty<DayOfWeek>()));
+
+        Assert.Contains("validDays cannot be empty", exception.Message);
+    }
+
+    [Fact]
+    public void NextValidDay_ThrowsOnEmptyArray()
+    {
+        var dateTime = DateTimeOffset.UtcNow;
+
+        var exception = Assert.Throws<ArgumentException>(() =>
+            dateTime.NextValidDay(Array.Empty<int>()));
+
+        Assert.Contains("validDays cannot be empty", exception.Message);
+    }
+
+    [Fact]
+    public void NextValidDay_ThrowsOnInvalidRange()
+    {
+        var dateTime = DateTimeOffset.UtcNow;
+
+        var exception = Assert.Throws<ArgumentException>(() =>
+            dateTime.NextValidDay(new[] { 0, 32, -5 })); // Out of 1-31 range
+
+        Assert.Contains("validDays must contain values between 1 and 31", exception.Message);
+    }
+
+    [Fact]
+    public void NextValidHour_ThrowsOnEmptyArray()
+    {
+        var dateTime = DateTimeOffset.UtcNow;
+
+        var exception = Assert.Throws<ArgumentException>(() =>
+            dateTime.NextValidHour(Array.Empty<int>()));
+
+        Assert.Contains("validHour cannot be empty", exception.Message);
+    }
+
+    [Fact]
+    public void NextValidHour_ThrowsOnInvalidRange()
+    {
+        var dateTime = DateTimeOffset.UtcNow;
+
+        var exception = Assert.Throws<ArgumentException>(() =>
+            dateTime.NextValidHour(new[] { -1, 24, 50 })); // Out of 0-23 range
+
+        Assert.Contains("validHour must contain values between 0 and 23", exception.Message);
+    }
+
+    [Fact]
+    public void NextValidMonth_ThrowsOnEmptyArray()
+    {
+        var dateTime = DateTimeOffset.UtcNow;
+
+        var exception = Assert.Throws<ArgumentException>(() =>
+            dateTime.NextValidMonth(Array.Empty<int>()));
+
+        Assert.Contains("validMonths cannot be empty", exception.Message);
+    }
+
+    [Fact]
+    public void NextValidMonth_ThrowsOnInvalidRange()
+    {
+        var dateTime = DateTimeOffset.UtcNow;
+
+        var exception = Assert.Throws<ArgumentException>(() =>
+            dateTime.NextValidMonth(new[] { 0, 13 })); // Out of 1-12 range
+
+        Assert.Contains("validMonths must contain values between 1 and 12", exception.Message);
+    }
+
+    [Fact]
+    public void FindFirstOccurrenceOfDayOfWeekInMonth_AlwaysSucceeds()
+    {
+        // Verify it finds within 7 days for any day of week
+        var dateTime = new DateTimeOffset(2023, 11, 15, 0, 0, 0, TimeSpan.Zero);
+
+        foreach (DayOfWeek day in Enum.GetValues(typeof(DayOfWeek)))
+        {
+            var result = dateTime.FindFirstOccurrenceOfDayOfWeekInMonth(day);
+
+            Assert.Equal(day, result.DayOfWeek);
+            Assert.True(result.Day <= 7, $"First {day} should be within first 7 days");
+            Assert.Equal(11, result.Month); // Should remain in November
+        }
+    }
 }

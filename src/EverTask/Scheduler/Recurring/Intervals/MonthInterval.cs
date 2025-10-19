@@ -16,11 +16,17 @@ public class MonthInterval : IInterval
         OnMonths = onMonths.Distinct().ToArray();
     }
 
+    private TimeOnly[] _onTimes = [TimeOnly.Parse("00:00")];
+
     public int        Interval { get; }
     public int?       OnDay    { get; set; }
     public int[]      OnDays   { get; set; } = [];
     public DayOfWeek? OnFirst  { get; set; }
-    public TimeOnly[] OnTimes  { get; set; } = [TimeOnly.Parse("00:00")];
+    public TimeOnly[] OnTimes
+    {
+        get => _onTimes;
+        set => _onTimes = value.OrderBy(t => t).ToArray(); // Always keep sorted
+    }
     public int[]      OnMonths { get; } = [];
 
     public void Validate()
@@ -41,16 +47,17 @@ public class MonthInterval : IInterval
         //If not, we find the next valid month maintaining the day.
         if (OnFirst != null)
         {
-            nextMonth.FindFirstOccurrenceOfDayOfWeekInMonth(OnFirst.Value);
+            nextMonth = nextMonth.FindFirstOccurrenceOfDayOfWeekInMonth(OnFirst.Value);
         }
         else if (OnDays.Any())
         {
             nextMonth = nextMonth.NextValidDay(OnDays);
         }
-        else
+        else if (OnDay.HasValue)
         {
-            nextMonth.AdjustDayToValidMonthDay(OnDay ?? 1);
+            nextMonth = nextMonth.AdjustDayToValidMonthDay(OnDay.Value);
         }
+        // If no day specification (OnFirst, OnDays, OnDay), keep the day from AddMonths()
 
         if (OnMonths.Any())
             nextMonth = nextMonth.NextValidMonth(OnMonths);

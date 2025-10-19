@@ -58,4 +58,85 @@ public class DayIntervalTests
 
         Assert.IsType<ArgumentException>(exception);
     }
+
+    // Priority 2: OnTimes auto-sorting verification
+
+    [Fact]
+    public void OnTimes_AutomaticallySortsUnsortedArray()
+    {
+        var interval = new DayInterval(1);
+        var unsortedTimes = new[]
+        {
+            TimeOnly.Parse("17:00"),
+            TimeOnly.Parse("09:00"),
+            TimeOnly.Parse("12:00")
+        };
+
+        interval.OnTimes = unsortedTimes;
+
+        // Verify sorted
+        Assert.Equal(TimeOnly.Parse("09:00"), interval.OnTimes[0]);
+        Assert.Equal(TimeOnly.Parse("12:00"), interval.OnTimes[1]);
+        Assert.Equal(TimeOnly.Parse("17:00"), interval.OnTimes[2]);
+    }
+
+    [Fact]
+    public void OnTimes_HandlesAlreadySortedArray()
+    {
+        var interval = new DayInterval(1);
+        var sortedTimes = new[]
+        {
+            TimeOnly.Parse("08:00"),
+            TimeOnly.Parse("12:00"),
+            TimeOnly.Parse("18:00")
+        };
+
+        interval.OnTimes = sortedTimes;
+
+        // Should remain sorted
+        Assert.Equal(TimeOnly.Parse("08:00"), interval.OnTimes[0]);
+        Assert.Equal(TimeOnly.Parse("12:00"), interval.OnTimes[1]);
+        Assert.Equal(TimeOnly.Parse("18:00"), interval.OnTimes[2]);
+    }
+
+    [Fact]
+    public void OnTimes_SortingWorksWithDirectAssignment()
+    {
+        // Simulate direct property assignment (not via builder)
+        var interval = new DayInterval(1)
+        {
+            OnTimes = new[]
+            {
+                TimeOnly.Parse("23:59"),
+                TimeOnly.Parse("00:01"),
+                TimeOnly.Parse("12:00")
+            }
+        };
+
+        // Should be auto-sorted
+        Assert.Equal(TimeOnly.Parse("00:01"), interval.OnTimes[0]);
+        Assert.Equal(TimeOnly.Parse("12:00"), interval.OnTimes[1]);
+        Assert.Equal(TimeOnly.Parse("23:59"), interval.OnTimes[2]);
+    }
+
+    [Fact]
+    public void OnTimes_GetNextOccurrence_UsesPreSortedArray()
+    {
+        var interval = new DayInterval(1);
+        var unsortedTimes = new[]
+        {
+            TimeOnly.Parse("17:00"),
+            TimeOnly.Parse("09:00"),
+            TimeOnly.Parse("14:00")
+        };
+
+        interval.OnTimes = unsortedTimes; // Will be auto-sorted to 09:00, 14:00, 17:00
+
+        var current = new DateTimeOffset(2023, 11, 22, 10, 0, 0, TimeSpan.Zero);
+        var next = interval.GetNextOccurrence(current);
+
+        // Should find 14:00 (next time after 10:00), not 17:00
+        Assert.Equal(14, next!.Value.Hour);
+        Assert.Equal(0, next.Value.Minute);
+    }
 }
