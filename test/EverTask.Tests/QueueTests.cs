@@ -1,4 +1,5 @@
-﻿using EverTask.Handler;
+﻿using EverTask.Configuration;
+using EverTask.Handler;
 using EverTask.Logger;
 using EverTask.Scheduler;
 using EverTask.Storage;
@@ -15,22 +16,29 @@ public class QueueTests
     {
         var loggerMock        = new Mock<IEverTaskLogger<WorkerQueue>>();
         var loggerMock2       = new Mock<IEverTaskLogger<MemoryTaskStorage>>();
-        var configurationMock = new Mock<EverTaskServiceConfiguration>();
         var mockBlacklist     = new Mock<IWorkerBlacklist>();
 
+        // Create a QueueConfiguration instead of EverTaskServiceConfiguration
+        var queueConfig = new QueueConfiguration
+        {
+            Name = "default",
+            MaxDegreeOfParallelism = 5,
+            ChannelOptions = new System.Threading.Channels.BoundedChannelOptions(100)
+        };
 
         _memoryStorage = new MemoryTaskStorage(loggerMock2.Object);
-        _workerQueue   = new WorkerQueue(configurationMock.Object, loggerMock.Object, mockBlacklist.Object, _memoryStorage);
+        _workerQueue   = new WorkerQueue(queueConfig, loggerMock.Object, mockBlacklist.Object, _memoryStorage);
         _executor = new TaskHandlerExecutor(
             new TestTaskRequest2(),
             new TestTaskHanlder2(),
             null,
+            null,
             null!,
-            null!,
             null,
             null,
             null,
-            Guid.NewGuid());
+            Guid.NewGuid(),
+            null);
     }
 
     [Fact]

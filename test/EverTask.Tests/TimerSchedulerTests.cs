@@ -12,14 +12,28 @@ namespace EverTask.Tests;
 public class TimerSchedulerTests
 {
     private readonly Mock<IWorkerQueue> _mockWorkerQueue;
+    private readonly Mock<IWorkerQueueManager> _mockWorkerQueueManager;
     private readonly Mock<IEverTaskLogger<TimerScheduler>> _mockLogger;
     private readonly TimerScheduler _timerScheduler;
 
     public TimerSchedulerTests()
     {
         _mockWorkerQueue = new Mock<IWorkerQueue>();
+        _mockWorkerQueueManager = new Mock<IWorkerQueueManager>();
         _mockLogger      = new Mock<IEverTaskLogger<TimerScheduler>>();
-        _timerScheduler  = new TimerScheduler(_mockWorkerQueue.Object, _mockLogger.Object);
+
+        // Setup the queue manager to return the default queue
+        _mockWorkerQueueManager.Setup(x => x.GetQueue("default")).Returns(_mockWorkerQueue.Object);
+
+        // Setup TryEnqueue to delegate to the worker queue
+        _mockWorkerQueueManager.Setup(x => x.TryEnqueue(It.IsAny<string?>(), It.IsAny<TaskHandlerExecutor>()))
+            .Returns<string?, TaskHandlerExecutor>(async (queueName, executor) =>
+            {
+                await _mockWorkerQueue.Object.Queue(executor);
+                return true;
+            });
+
+        _timerScheduler  = new TimerScheduler(_mockWorkerQueueManager.Object, _mockLogger.Object);
     }
 
     [Fact]
@@ -226,5 +240,6 @@ public class TimerSchedulerTests
             null,
             null,
             null,
-            Guid.NewGuid());
+            Guid.NewGuid(),
+            null);
 }

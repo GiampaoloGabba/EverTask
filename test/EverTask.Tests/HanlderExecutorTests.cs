@@ -98,7 +98,7 @@ public class HanlderExecutorTests
     public void Should_throw_for_null_Request()
     {
         var executor =
-            new TaskHandlerExecutor(null!, new TestTaskHanlder(), null, null, null!, null, null, null, Guid.NewGuid());
+            new TaskHandlerExecutor(null!, new TestTaskHanlder(), null, null, null!, null, null, null, Guid.NewGuid(), null);
         Should.Throw<ArgumentNullException>(() => executor.ToQueuedTask());
     }
 
@@ -106,7 +106,7 @@ public class HanlderExecutorTests
     public void Should_throw_for_null_Handler_Handle()
     {
         var executor = new TaskHandlerExecutor(new TestTaskRequest("Test"), null!, null, null, null!, null, null, null,
-            Guid.NewGuid());
+            Guid.NewGuid(), null);
         Should.Throw<ArgumentNullException>(() => executor.ToQueuedTask());
     }
 
@@ -124,12 +124,13 @@ public class HanlderExecutorTests
             Task: task,
             Handler: handler,
             ExecutionTime: executionTime,
+            RecurringTask: recurringTask,
             HandlerCallback: (everTask, token) => Task.CompletedTask,
             HandlerErrorCallback: null,
             HandlerStartedCallback: null,
             HandlerCompletedCallback: null,
             PersistenceId: persistenceId,
-            RecurringTask: recurringTask);
+            QueueName: null);
 
         var queuedTask = executor.ToQueuedTask();
 
@@ -154,12 +155,13 @@ public class HanlderExecutorTests
             Task: null!,
             Handler: new object(),
             ExecutionTime: DateTimeOffset.UtcNow,
+            RecurringTask: null,
             HandlerCallback: (everTask, token) => Task.CompletedTask,
             HandlerErrorCallback: null,
             HandlerStartedCallback: null,
             HandlerCompletedCallback: null,
             PersistenceId: Guid.NewGuid(),
-            RecurringTask: null);
+            QueueName: null);
 
         Should.Throw<ArgumentNullException>(() => executor.ToQueuedTask());
     }
@@ -171,12 +173,13 @@ public class HanlderExecutorTests
             Task: new TestTaskRequest("test"),
             Handler: null!,
             ExecutionTime: null!,
+            RecurringTask: null,
             HandlerCallback: (everTask, token) => Task.CompletedTask,
             HandlerErrorCallback: null,
             HandlerStartedCallback: null,
             HandlerCompletedCallback: null,
             PersistenceId: Guid.NewGuid(),
-            RecurringTask: null);
+            QueueName: null);
 
         Should.Throw<ArgumentNullException>(() => executor.ToQueuedTask());
     }
@@ -193,12 +196,13 @@ public class HanlderExecutorTests
             Task: task,
             Handler: handler,
             ExecutionTime: executionTime,
+            RecurringTask: null,
             HandlerCallback: (everTask, token) => Task.CompletedTask,
             HandlerErrorCallback: null,
             HandlerStartedCallback: null,
             HandlerCompletedCallback: null,
             PersistenceId: persistenceId,
-            RecurringTask: null);
+            QueueName: null);
 
         var eventData = EverTaskEventData.FromExecutor(executor, SeverityLevel.Information, "test", null);
 

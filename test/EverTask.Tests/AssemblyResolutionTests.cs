@@ -11,6 +11,7 @@ public class AssemblyResolutionTests
     public AssemblyResolutionTests()
     {
         IServiceCollection services = new ServiceCollection();
+        services.AddLogging(); // Required for WorkerQueueManager
         services.AddEverTask(cfg => cfg.RegisterTasksFromAssembly(typeof(TestTaskRequest).Assembly));
         _provider = services.BuildServiceProvider();
     }

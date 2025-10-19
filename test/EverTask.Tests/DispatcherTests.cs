@@ -11,6 +11,7 @@ public class DispatcherTests
 {
     private readonly Dispatcher.Dispatcher _dispatcher;
 
+    private readonly Mock<IWorkerQueueManager> _workerQueueManagerMock;
     private readonly Mock<IWorkerQueue> _workerQueueMock;
     private readonly Mock<IWorkerBlacklist> _blackListMock;
     private readonly Mock<IScheduler> _delayedQueue;
@@ -19,6 +20,7 @@ public class DispatcherTests
     public DispatcherTests()
     {
         _workerQueueMock        = new Mock<IWorkerQueue>();
+        _workerQueueManagerMock = new Mock<IWorkerQueueManager>();
         _blackListMock          = new Mock<IWorkerBlacklist>();
         _delayedQueue           = new Mock<IScheduler>();
         _cancSourceProviderMock = new Mock<ICancellationSourceProvider>();
@@ -37,9 +39,20 @@ public class DispatcherTests
         serviceProviderMock.Setup(s => s.GetService(typeof(IWorkerBlacklist)))
                            .Returns(new WorkerBlacklist());
 
+        // Setup the queue manager to return the default queue
+        _workerQueueManagerMock.Setup(x => x.GetQueue("default")).Returns(_workerQueueMock.Object);
+
+        // Setup TryEnqueue to delegate to the worker queue
+        _workerQueueManagerMock.Setup(x => x.TryEnqueue(It.IsAny<string?>(), It.IsAny<TaskHandlerExecutor>()))
+            .Returns<string?, TaskHandlerExecutor>(async (queueName, executor) =>
+            {
+                await _workerQueueMock.Object.Queue(executor);
+                return true;
+            });
+
         _dispatcher = new Dispatcher.Dispatcher(
             serviceProviderMock.Object,
-            _workerQueueMock.Object,
+            _workerQueueManagerMock.Object,
             _delayedQueue.Object,
             serviceConfigurationMock.Object,
             loggerMock.Object,

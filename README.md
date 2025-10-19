@@ -18,8 +18,9 @@ on task persistence, monitoring and resilience. Advanced scenarios like custom r
 
 - **Background execution**:<br>
   Easily run background tasks with parameters in .NET
+- **Multi-Queue Support**<br>Configure multiple execution queues with independent parallelism, capacity, and behavior settings for workload isolation and prioritization.
 - **Persistence**<br>Resumes pending tasks after application restarts.
-- **Managed Parallelism**<br>Efficiently handles concurrent task execution with configurable parallelism.
+- **Managed Parallelism**<br>Efficiently handles concurrent task execution with configurable parallelism per queue.
 - **Scheduled, Delayed and recurring tasks**<br>Schedule tasks for future execution or delay them using a TimeSpan. You can also create recurring tasks, with cron or with a powerful fluent builder!
 - **Resilient execution**<br>A powerful resilience feature to ensure your tasks are robust against transient failures. Fully customizable even with your custom retry policies, easily integrable with [Polly](https://github.com/App-vNext/Polly)
 - **Optional specialized CPU-bound execution**<br>Optimized handling for CPU-intensive tasks with an option to execute in a separate thread, ensuring efficient processing without impacting I/O-bound operations. Use judiciously for tasks requiring significant computational resources.
@@ -77,6 +78,100 @@ builder.Services.AddEverTask(opt =>
 ```
 
 For setting up all configurations, refer to the [Fluent Service Configuration](#fluent-service-configuration) section.
+
+## Multi-Queue Configuration
+
+EverTask supports multiple execution queues for workload isolation, prioritization, and better resource management. This allows you to separate critical tasks from background processing and configure each queue with its own parallelism, capacity, and behavior settings.
+
+### Configuring Multiple Queues
+
+```csharp
+builder.Services.AddEverTask(opt =>
+{
+    opt.RegisterTasksFromAssembly(typeof(Program).Assembly);
+})
+// Configure the default queue
+.ConfigureDefaultQueue(q => q
+    .SetMaxDegreeOfParallelism(5)
+    .SetChannelCapacity(100)
+    .SetFullBehavior(QueueFullBehavior.FallbackToDefault))
+// Add a high-priority queue for critical tasks
+.AddQueue("high-priority", q => q
+    .SetMaxDegreeOfParallelism(10)
+    .SetChannelCapacity(200)
+    .SetFullBehavior(QueueFullBehavior.Wait)
+    .SetDefaultTimeout(TimeSpan.FromMinutes(5)))
+// Add a background queue for CPU-intensive tasks
+.AddQueue("background", q => q
+    .SetMaxDegreeOfParallelism(2)  // Limit parallelism for CPU-intensive work
+    .SetChannelCapacity(50)
+    .SetFullBehavior(QueueFullBehavior.FallbackToDefault))
+// Configure the recurring queue (automatically created for recurring tasks)
+.ConfigureRecurringQueue(q => q
+    .SetMaxDegreeOfParallelism(3)
+    .SetChannelCapacity(75))
+.AddSqlServerStorage(connectionString);
+```
+
+### Queue Configuration Options
+
+Each queue can be configured with:
+- **MaxDegreeOfParallelism**: Number of concurrent tasks executed in this queue
+- **ChannelCapacity**: Maximum number of tasks that can be queued
+- **QueueFullBehavior**: Behavior when the queue reaches capacity
+  - `Wait`: Block until space is available (default)
+  - `FallbackToDefault`: Try the default queue if the target queue is full
+  - `ThrowException`: Throw an exception immediately
+- **DefaultRetryPolicy**: Default retry policy for tasks in this queue
+- **DefaultTimeout**: Default timeout for tasks in this queue
+
+### Routing Tasks to Specific Queues
+
+You can route tasks to specific queues by overriding the `QueueName` property in your handler:
+
+```csharp
+public class PaymentProcessingHandler : EverTaskHandler<ProcessPaymentTask>
+{
+    // Route this handler to the high-priority queue
+    public override string? QueueName => "high-priority";
+
+    public override async Task Handle(ProcessPaymentTask task, CancellationToken cancellationToken)
+    {
+        // Critical payment processing logic
+    }
+}
+
+public class ReportGenerationHandler : EverTaskHandler<GenerateReportTask>
+{
+    // Route CPU-intensive tasks to the background queue
+    public override string? QueueName => "background";
+
+    public override async Task Handle(GenerateReportTask task, CancellationToken cancellationToken)
+    {
+        // CPU-intensive report generation
+    }
+}
+```
+
+### Automatic Queue Routing
+
+- **Default Queue**: Tasks without a specified `QueueName` are routed to the "default" queue
+- **Recurring Queue**: Recurring tasks are automatically routed to the "recurring" queue unless explicitly overridden
+- **Fallback Behavior**: When a queue doesn't exist or is full (with `FallbackToDefault` behavior), tasks fall back to the "default" queue
+
+### Performance Considerations
+
+- **Workload Isolation**: Separate high-priority tasks from background processing to prevent interference
+- **Resource Management**: Configure parallelism based on task characteristics (I/O-bound vs CPU-bound)
+- **Queue Capacity**: Set appropriate capacities to handle burst traffic without memory issues
+- **Monitoring**: Each queue operates independently, making it easier to identify bottlenecks
+
+### Best Practices
+
+1. **Keep Queue Count Reasonable**: 3-5 queues are typically sufficient for most applications
+2. **Configure Based on Workload**: I/O-bound tasks can have higher parallelism than CPU-bound tasks
+3. **Use Fallback Wisely**: `FallbackToDefault` provides graceful degradation for non-critical queues
+4. **Monitor Queue Metrics**: Track queue depths and processing rates to optimize configuration
 
 ## Creating Requests and Handlers
 
@@ -833,7 +928,6 @@ emphasizes reliability in task persistence, ensuring that only serializable task
 | **WebApi**                  | Webapi endpoints to list and manage tasks execution in EverTask remotely                                                                                                                                |
 | **Support for new monitoring Options** | Sentry Crons, Email alerts, application insights, open telemetry, ecc..                                                                                                           |
 | **Support for new Storage Options**   | Considering the inclusion of additional storage options like Sqlite, Redis, MySql, Postgres, and various DocumentDBs initially supported by EfCore, with the possibility of expanding to other databases. |
-| **Queue customization**               | Create custom queues (each with his own, custom, degree of parallelism) to split task execution (for example by priority)                                                                               |
 | **Clustering tasks**                  | I'm toying with the idea to allow multiple server running evertask to create a simple cluster for tasks execution, with rules like loading balance, fail-over                                           |
 | **Improving documentation**           | docs needs more love...                                                                                                                                                                                 |
 
