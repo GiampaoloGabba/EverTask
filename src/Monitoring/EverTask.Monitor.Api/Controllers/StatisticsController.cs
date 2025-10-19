@@ -10,7 +10,7 @@ namespace EverTask.Monitor.Api.Controllers;
 /// Controller for statistics and analytics operations.
 /// </summary>
 [ApiController]
-[Route("statistics")]
+[Route("api/statistics")]
 public class StatisticsController : ControllerBase
 {
     private readonly IStatisticsService _statisticsService;

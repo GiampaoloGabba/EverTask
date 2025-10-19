@@ -9,7 +9,7 @@ namespace EverTask.Monitor.Api.Controllers;
 /// Controller for task query operations.
 /// </summary>
 [ApiController]
-[Route("tasks")]
+[Route("api/tasks")]
 public class TasksController : ControllerBase
 {
     private readonly ITaskQueryService _taskQueryService;

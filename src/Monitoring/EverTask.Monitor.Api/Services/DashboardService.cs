@@ -49,10 +49,31 @@ public class DashboardService : IDashboardService
         var totalFinished = completedCount + failedCount;
         var successRate = totalFinished > 0 ? (decimal)completedCount / totalFinished * 100 : 0m;
 
-        // Average execution time (for completed tasks)
-        var completedTasks = filteredTasks.Where(t => t.Status == QueuedTaskStatus.Completed && t.LastExecutionUtc.HasValue).ToList();
-        var avgExecutionTimeMs = completedTasks.Any()
-            ? completedTasks.Average(t => (t.LastExecutionUtc!.Value - t.CreatedAtUtc).TotalMilliseconds)
+        // Average execution time (actual execution duration, not including queue time)
+        // Calculate from StatusAudits: time from InProgress to Completed/Failed
+        var executionTimes = filteredTasks
+            .Where(t => (t.Status == QueuedTaskStatus.Completed || t.Status == QueuedTaskStatus.Failed)
+                        && t.StatusAudits != null
+                        && t.StatusAudits.Any())
+            .Select(t =>
+            {
+                var audits = t.StatusAudits.OrderBy(a => a.UpdatedAtUtc).ToList();
+                var inProgressAudit = audits.FirstOrDefault(a => a.NewStatus == QueuedTaskStatus.InProgress);
+                var finalAudit = audits.FirstOrDefault(a =>
+                    a.NewStatus == QueuedTaskStatus.Completed || a.NewStatus == QueuedTaskStatus.Failed);
+
+                if (inProgressAudit != null && finalAudit != null && finalAudit.UpdatedAtUtc > inProgressAudit.UpdatedAtUtc)
+                {
+                    return (finalAudit.UpdatedAtUtc - inProgressAudit.UpdatedAtUtc).TotalMilliseconds;
+                }
+                return (double?)null;
+            })
+            .Where(duration => duration.HasValue)
+            .Select(duration => duration!.Value)
+            .ToList();
+
+        var avgExecutionTimeMs = executionTimes.Any()
+            ? executionTimes.Average()
             : 0.0;
 
         // Status distribution

@@ -10,7 +10,7 @@ namespace EverTask.Monitor.Api.Controllers;
 /// Controller for queue metrics operations.
 /// </summary>
 [ApiController]
-[Route("queues")]
+[Route("api/queues")]
 public class QueuesController : ControllerBase
 {
     private readonly IStatisticsService _statisticsService;

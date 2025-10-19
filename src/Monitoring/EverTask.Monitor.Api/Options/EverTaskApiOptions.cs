@@ -7,14 +7,14 @@ namespace EverTask.Monitor.Api.Options;
 public class EverTaskApiOptions
 {
     /// <summary>
-    /// Base path for API and UI (default: "/evertask")
+    /// Base path for API and UI (fixed: "/monitoring")
     /// When EnableUI is true:
-    ///   - UI accessible at: {BasePath}/
-    ///   - API accessible at: {BasePath}/api/*
+    ///   - UI accessible at: /monitoring/
+    ///   - API accessible at: /monitoring/api/*
     /// When EnableUI is false:
-    ///   - API accessible at: {BasePath}/*
+    ///   - API accessible at: /monitoring/*
     /// </summary>
-    public string BasePath { get; set; } = "/evertask";
+    public string BasePath { get; set; } = "/monitoring";
 
     /// <summary>
     /// Enable embedded dashboard UI (default: true)
@@ -44,10 +44,10 @@ public class EverTaskApiOptions
     public string Password { get; set; } = "admin";
 
     /// <summary>
-    /// SignalR hub path for real-time monitoring (default: "/evertask/monitor")
+    /// SignalR hub path for real-time monitoring (fixed: "/monitoring/monitor")
     /// Must match the path configured when calling MapEverTaskMonitorHub()
     /// </summary>
-    public string SignalRHubPath { get; set; } = "/evertask/monitor";
+    public string SignalRHubPath { get; set; } = "/monitoring/monitor";
 
     /// <summary>
     /// Enable Basic Authentication (default: true)
