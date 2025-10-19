@@ -40,8 +40,12 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDashboardService, DashboardService>();
         services.AddScoped<IStatisticsService, StatisticsService>();
 
-        // Add controllers with this assembly
-        services.AddControllers()
+        // Add controllers with this assembly and route prefix convention
+        services.AddControllers(mvcOptions =>
+            {
+                // Add route prefix convention to prepend BasePath to all controller routes
+                mvcOptions.Conventions.Add(new Conventions.RoutePrefixConvention(options.BasePath));
+            })
             .AddApplicationPart(typeof(ServiceCollectionExtensions).Assembly)
             .AddJsonOptions(jsonOptions =>
             {
@@ -98,8 +102,12 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDashboardService, DashboardService>();
         services.AddScoped<IStatisticsService, StatisticsService>();
 
-        // Add controllers with this assembly
-        services.AddControllers()
+        // Add controllers with this assembly and route prefix convention
+        services.AddControllers(mvcOptions =>
+            {
+                // Add route prefix convention to prepend BasePath to all controller routes
+                mvcOptions.Conventions.Add(new Conventions.RoutePrefixConvention(options.BasePath));
+            })
             .AddApplicationPart(typeof(ServiceCollectionExtensions).Assembly)
             .AddJsonOptions(jsonOptions =>
             {

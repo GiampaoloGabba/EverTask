@@ -9,7 +9,7 @@ namespace EverTask.Monitor.Api.Controllers;
 /// Controller for dashboard overview operations.
 /// </summary>
 [ApiController]
-[Route("dashboard")]
+[Route("api/dashboard")]
 public class DashboardController : ControllerBase
 {
     private readonly IDashboardService _dashboardService;

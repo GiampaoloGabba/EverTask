@@ -9,7 +9,7 @@ namespace EverTask.Monitor.Api.Controllers;
 /// Provides runtime configuration for frontend clients.
 /// </summary>
 [ApiController]
-[Route("config")]
+[Route("api/config")]
 public class ConfigController : ControllerBase
 {
     private readonly EverTaskApiOptions _options;
