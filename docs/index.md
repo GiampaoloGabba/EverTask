@@ -18,7 +18,8 @@ EverTask is a .NET background task execution library built for persistence and r
 ### Core Concepts
 - [Architecture](architecture.md) - How EverTask works under the hood
 - [Storage](storage.md) - Choose your persistence layer (SQL Server, SQLite, or in-memory)
-- [Configuration Reference](configuration-reference.md) - All available configuration options
+- [Configuration Reference](configuration-reference.md) - Complete configuration documentation
+- [Configuration Cheatsheet](configuration-cheatsheet.md) - Quick reference for all config options
 
 ### Advanced Topics
 - [Recurring Tasks](recurring-tasks.md) - Schedule jobs with the fluent API or cron expressions

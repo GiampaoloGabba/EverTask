@@ -136,7 +136,8 @@ public class UserController : ControllerBase
 - **[Resilience & Error Handling](https://GiampaoloGabba.github.io/EverTask/resilience.html)** - Retry policies, timeouts, CancellationToken usage
 - **[Monitoring](https://GiampaoloGabba.github.io/EverTask/monitoring.html)** - Events, SignalR integration, custom monitoring
 - **[Storage Configuration](https://GiampaoloGabba.github.io/EverTask/storage.html)** - SQL Server, SQLite, In-Memory, custom implementations
-- **[Configuration Reference](https://GiampaoloGabba.github.io/EverTask/configuration-reference.html)** - Complete API reference
+- **[Configuration Reference](https://GiampaoloGabba.github.io/EverTask/configuration-reference.html)** - Complete configuration documentation
+- **[Configuration Cheatsheet](https://GiampaoloGabba.github.io/EverTask/configuration-cheatsheet.html)** - Quick reference for all config options
 - **[Architecture & Internals](https://GiampaoloGabba.github.io/EverTask/architecture.html)** - How EverTask works under the hood
 
 ## Showcase: Powerful Features

@@ -14,6 +14,8 @@ This is a complete reference for all EverTask configuration options.
 - [Queue Configuration](#queue-configuration)
 - [Storage Configuration](#storage-configuration)
 - [Logging Configuration](#logging-configuration)
+- [Monitoring Configuration](#monitoring-configuration)
+- [Storage Provider Details](#storage-provider-details)
 - [Handler Configuration](#handler-configuration)
 - [Complete Examples](#complete-examples)
 
@@ -435,6 +437,8 @@ AddSqliteStorage(string connectionString, Action<StorageOptions> configure)
 
 Integrates Serilog for structured logging throughout EverTask.
 
+**Package:** `EverTask.Logging.Serilog`
+
 **Signature:**
 ```csharp
 AddSerilog(Action<LoggerConfiguration> configure)
@@ -482,6 +486,184 @@ AddSerilog(Action<LoggerConfiguration> configure)
   }
 }
 ```
+
+## Monitoring Configuration
+
+### AddSignalRMonitoring
+
+Enables real-time task monitoring via SignalR.
+
+**Package:** `EverTask.Monitor.AspnetCore.SignalR`
+
+**Signature:**
+```csharp
+AddSignalRMonitoring()
+AddSignalRMonitoring(Action<SignalRMonitorOptions> configure)
+```
+
+**Parameters:**
+- `configure` (Action): Monitoring configuration options
+
+**Examples:**
+```csharp
+// Basic
+.AddSignalRMonitoring()
+
+// With options
+.AddSignalRMonitoring(opt =>
+{
+    opt.HubRoute = "/evertask-hub";
+    opt.EnableDetailedErrors = true;
+})
+```
+
+**SignalRMonitorOptions Properties:**
+- `HubRoute` (string): SignalR hub endpoint (default: "/evertask-hub")
+- `EnableDetailedErrors` (bool): Include detailed error messages (default: false)
+
+**Client-Side Setup:**
+
+```html
+<!-- Add SignalR client library -->
+<script src="https://cdn.jsdelivr.net/npm/@microsoft/signalr@latest/dist/browser/signalr.min.js"></script>
+
+<script>
+const connection = new signalR.HubConnectionBuilder()
+    .withUrl("/evertask-hub")
+    .build();
+
+connection.on("TaskEvent", (event) => {
+    console.log("Task event:", event);
+    // event.TaskId, event.EventType, event.Timestamp, etc.
+});
+
+connection.start().catch(err => console.error(err));
+</script>
+```
+
+**Event Types:**
+- `TaskDispatched`: Task was dispatched
+- `TaskStarted`: Task execution started
+- `TaskCompleted`: Task completed successfully
+- `TaskFailed`: Task failed after all retries
+- `TaskCancelled`: Task was cancelled
+
+## Storage Provider Details
+
+### SQL Server Storage Options
+
+**Package:** `EverTask.Storage.SqlServer`
+
+**Advanced Configuration:**
+
+```csharp
+.AddSqlServerStorage(connectionString, opt =>
+{
+    // Schema name (default: "EverTask", null = main schema)
+    opt.SchemaName = "EverTask";
+
+    // Auto-apply migrations (default: false)
+    opt.AutoApplyMigrations = true;
+
+    // Connection pooling (enabled by default in v2.0+)
+    // Uses DbContextFactory for 30-50% performance improvement
+
+    // Stored procedures (enabled by default in v2.0+)
+    // Reduces roundtrips for status updates
+})
+```
+
+**Manual Migrations:**
+
+For production environments, apply migrations manually:
+
+```bash
+# Generate migration script
+dotnet ef migrations script --context TaskStoreDbContext --output migration.sql
+
+# Apply via your deployment pipeline
+sqlcmd -S localhost -d EverTaskDb -i migration.sql
+```
+
+**Stored Procedures:**
+
+EverTask v2.0+ uses stored procedures for critical operations:
+
+- `[EverTask].[SetTaskStatus]`: Atomic status update + audit insert
+- Performance: 50% fewer roundtrips for status changes
+
+**Connection String Options:**
+
+```csharp
+// Basic
+"Server=localhost;Database=EverTaskDb;Trusted_Connection=True;"
+
+// With pooling (recommended)
+"Server=localhost;Database=EverTaskDb;Trusted_Connection=True;Min Pool Size=5;Max Pool Size=100;"
+
+// Azure SQL
+"Server=tcp:yourserver.database.windows.net,1433;Database=EverTaskDb;User ID=user;Password=pass;Encrypt=True;"
+```
+
+**Schema Customization:**
+
+```sql
+-- Custom schema
+CREATE SCHEMA [CustomSchema]
+GO
+
+-- Configure in code
+opt.SchemaName = "CustomSchema";
+```
+
+### SQLite Storage Options
+
+**Package:** `EverTask.Storage.Sqlite`
+
+**Advanced Configuration:**
+
+```csharp
+.AddSqliteStorage(connectionString, opt =>
+{
+    // Auto-apply migrations (default: false)
+    opt.AutoApplyMigrations = true;
+
+    // Note: SchemaName is not supported in SQLite (always null)
+})
+```
+
+**Connection String Options:**
+
+```csharp
+// Basic
+"Data Source=evertask.db"
+
+// In-memory (for testing)
+"Data Source=:memory:"
+
+// Shared cache
+"Data Source=evertask.db;Cache=Shared;"
+
+// Full options
+"Data Source=evertask.db;Mode=ReadWriteCreate;Cache=Shared;Foreign Keys=True;"
+```
+
+**Performance Tuning:**
+
+```sql
+-- WAL mode for better concurrency
+PRAGMA journal_mode=WAL;
+
+-- Optimize for performance
+PRAGMA synchronous=NORMAL;
+PRAGMA cache_size=10000;
+PRAGMA temp_store=MEMORY;
+```
+
+**Limitations:**
+- No schema support (unlike SQL Server)
+- Not recommended for high-concurrency scenarios (>100 tasks/sec)
+- Best for: Single-server deployments, development, small workloads
 
 ## Handler Configuration
 
