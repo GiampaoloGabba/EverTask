@@ -22,7 +22,7 @@ public static class ServiceCollectionExtensions
         // Register WorkerQueueManager instead of single WorkerQueue
         RegisterQueueManager(services, options);
 
-        services.TryAddSingleton<IScheduler, TimerScheduler>();
+        services.TryAddSingleton<IScheduler, PeriodicTimerScheduler>();
         services.TryAddSingleton<ITaskDispatcherInternal, Dispatcher>();
         services.TryAddSingleton<ITaskDispatcher>(provider => provider.GetRequiredService<ITaskDispatcherInternal>());
         services.TryAddSingleton<ICancellationSourceProvider, CancellationSourceProvider>();

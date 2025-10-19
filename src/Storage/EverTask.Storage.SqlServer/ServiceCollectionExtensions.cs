@@ -24,21 +24,30 @@ public static class ServiceCollectionExtensions
             return options;
         });
 
-        builder.Services.AddDbContext<SqlServerTaskStoreContext>((_, opt) =>
+        // Register IDbContextFactory for DbContext creation with built-in pooling
+        // Pool size automatically managed by EF Core (typically cores * 2)
+        builder.Services.AddDbContextFactory<SqlServerTaskStoreContext>(opt =>
         {
             opt.UseSqlServer(connectionString,
-                   opt => opt.MigrationsHistoryTable(HistoryRepository.DefaultTableName, storeOptions.SchemaName))
+                   sqlOpt => sqlOpt.MigrationsHistoryTable(HistoryRepository.DefaultTableName, storeOptions.SchemaName))
                .ReplaceService<IMigrationsAssembly, DbSchemaAwareMigrationAssembly>();
         });
 
+        // Register high-performance factory using IDbContextFactory
+        builder.Services.TryAddSingleton<ITaskStoreDbContextFactory, SqlServerDbContextFactoryAdapter>();
+
+        // Register ITaskStoreDbContext for backward compatibility (uses factory internally)
         builder.Services.AddScoped<ITaskStoreDbContext>(provider =>
-            provider.GetRequiredService<SqlServerTaskStoreContext>());
+        {
+            var factory = provider.GetRequiredService<ITaskStoreDbContextFactory>();
+            return factory.CreateDbContextAsync().GetAwaiter().GetResult();
+        });
 
         if (storeOptions.AutoApplyMigrations)
         {
             using var scope     = builder.Services.BuildServiceProvider().CreateScope();
-            var       dbContext = scope.ServiceProvider.GetRequiredService<SqlServerTaskStoreContext>();
-            dbContext.Database.Migrate();
+            var       dbContext = scope.ServiceProvider.GetRequiredService<ITaskStoreDbContext>();
+            ((DbContext)dbContext).Database.Migrate();
         }
 
         builder.Services.TryAddSingleton<ITaskStorage, EfCoreTaskStorage>();

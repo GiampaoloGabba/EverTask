@@ -5,13 +5,12 @@ using Microsoft.Extensions.Logging;
 
 namespace EverTask.Storage.EfCore;
 
-public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTaskLogger<EfCoreTaskStorage> logger)
+public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTaskLogger<EfCoreTaskStorage> logger)
     : ITaskStorage
 {
     public virtual async Task<QueuedTask[]> Get(Expression<Func<QueuedTask, bool>> where, CancellationToken ct = default)
     {
-        using var       scope     = serviceScopeFactory.CreateScope();
-        await using var dbContext = scope.ServiceProvider.GetRequiredService<ITaskStoreDbContext>();
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
 
         return await dbContext.QueuedTasks
                               .AsNoTracking()
@@ -22,8 +21,7 @@ public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTa
 
     public virtual async Task<QueuedTask[]> GetAll(CancellationToken ct = default)
     {
-        using var       scope     = serviceScopeFactory.CreateScope();
-        await using var dbContext = scope.ServiceProvider.GetRequiredService<ITaskStoreDbContext>();
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
 
         return await dbContext.QueuedTasks
                               .AsNoTracking()
@@ -33,8 +31,7 @@ public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTa
 
     public async Task Persist(QueuedTask taskEntity, CancellationToken ct = default)
     {
-        using var       scope     = serviceScopeFactory.CreateScope();
-        await using var dbContext = scope.ServiceProvider.GetRequiredService<ITaskStoreDbContext>();
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
 
         dbContext.QueuedTasks.Add(taskEntity);
 
@@ -45,8 +42,7 @@ public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTa
 
     public virtual async Task<QueuedTask[]> RetrievePending(CancellationToken ct = default)
     {
-        using var       scope     = serviceScopeFactory.CreateScope();
-        await using var dbContext = scope.ServiceProvider.GetRequiredService<ITaskStoreDbContext>();
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
 
         logger.LogInformation("Retrieving Pending Tasks");
 
@@ -84,8 +80,7 @@ public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTa
     {
         logger.LogInformation("Set Task {taskId} with Status {status}", taskId, status);
 
-        using var       scope     = serviceScopeFactory.CreateScope();
-        await using var dbContext = scope.ServiceProvider.GetRequiredService<ITaskStoreDbContext>();
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
 
         var ex = exception.ToDetailedString();
         var lastExecutionUtc = status != QueuedTaskStatus.Queued
@@ -146,8 +141,7 @@ public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTa
     public virtual async Task<int> GetCurrentRunCount(Guid taskId)
     {
         logger.LogInformation("Get the current run counter for Task {taskId}", taskId);
-        using var       scope     = serviceScopeFactory.CreateScope();
-        await using var dbContext = scope.ServiceProvider.GetRequiredService<ITaskStoreDbContext>();
+        await using var dbContext = await contextFactory.CreateDbContextAsync();
 
         var task = await dbContext.QueuedTasks
                                   .Where(x => x.Id == taskId)
@@ -161,8 +155,7 @@ public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTa
     {
         logger.LogInformation("Update the current run counter for Task {taskId}", taskId);
 
-        using var       scope     = serviceScopeFactory.CreateScope();
-        await using var dbContext = scope.ServiceProvider.GetRequiredService<ITaskStoreDbContext>();
+        await using var dbContext = await contextFactory.CreateDbContextAsync();
 
         var task = await dbContext.QueuedTasks
                                   .Where(x => x.Id == taskId)
@@ -197,8 +190,7 @@ public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTa
 
     public virtual async Task<QueuedTask?> GetByTaskKey(string taskKey, CancellationToken ct = default)
     {
-        using var       scope     = serviceScopeFactory.CreateScope();
-        await using var dbContext = scope.ServiceProvider.GetRequiredService<ITaskStoreDbContext>();
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
 
         return await dbContext.QueuedTasks
                               .AsNoTracking()
@@ -211,8 +203,7 @@ public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTa
     {
         logger.LogInformation("Updating task {taskId} with key {taskKey}", task.Id, task.TaskKey);
 
-        using var       scope     = serviceScopeFactory.CreateScope();
-        await using var dbContext = scope.ServiceProvider.GetRequiredService<ITaskStoreDbContext>();
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
 
         var existingTask = await dbContext.QueuedTasks
                                           .Where(t => t.Id == task.Id)
@@ -255,8 +246,7 @@ public class EfCoreTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTa
     {
         logger.LogInformation("Removing task {taskId}", taskId);
 
-        using var       scope     = serviceScopeFactory.CreateScope();
-        await using var dbContext = scope.ServiceProvider.GetRequiredService<ITaskStoreDbContext>();
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
 
         var task = await dbContext.QueuedTasks
                                   .Where(t => t.Id == taskId)

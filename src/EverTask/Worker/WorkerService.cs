@@ -14,6 +14,17 @@ public class WorkerService(
     {
         logger.LogTrace("EverTask BackgroundService is running");
 
+        // Warn if using suboptimal MaxDegreeOfParallelism configuration
+        if (configuration.MaxDegreeOfParallelism == 1)
+        {
+            var recommendedParallelism = Math.Max(4, Environment.ProcessorCount * 2);
+            logger.LogWarning(
+                "MaxDegreeOfParallelism is set to 1, which severely limits throughput. " +
+                "For production workloads, consider increasing to {RecommendedParallelism} (ProcessorCount * 2) or higher. " +
+                "Use SetMaxDegreeOfParallelism() in AddEverTask configuration.",
+                recommendedParallelism);
+        }
+
         // Process pending tasks from storage
         await ProcessPendingAsync(ct).ConfigureAwait(false);
 

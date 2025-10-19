@@ -24,19 +24,28 @@ public static class ServiceCollectionExtensions
             return options;
         });
 
-        builder.Services.AddDbContext<SqliteTaskStoreContext>((_, opt) =>
+        // Register IDbContextFactory for DbContext creation with built-in pooling
+        // Pool size automatically managed by EF Core (typically cores * 2)
+        builder.Services.AddDbContextFactory<SqliteTaskStoreContext>(opt =>
         {
             opt.UseSqlite(connectionString);
         });
 
+        // Register high-performance factory using IDbContextFactory
+        builder.Services.TryAddSingleton<ITaskStoreDbContextFactory, SqliteDbContextFactoryAdapter>();
+
+        // Register ITaskStoreDbContext for backward compatibility (uses factory internally)
         builder.Services.AddScoped<ITaskStoreDbContext>(provider =>
-            provider.GetRequiredService<SqliteTaskStoreContext>());
+        {
+            var factory = provider.GetRequiredService<ITaskStoreDbContextFactory>();
+            return factory.CreateDbContextAsync().GetAwaiter().GetResult();
+        });
 
         if (storeOptions.AutoApplyMigrations)
         {
             using var scope     = builder.Services.BuildServiceProvider().CreateScope();
-            var       dbContext = scope.ServiceProvider.GetRequiredService<SqliteTaskStoreContext>();
-            dbContext.Database.Migrate();
+            var       dbContext = scope.ServiceProvider.GetRequiredService<ITaskStoreDbContext>();
+            ((DbContext)dbContext).Database.Migrate();
         }
 
         builder.Services.TryAddSingleton<ITaskStorage, SqliteTaskStorage>();

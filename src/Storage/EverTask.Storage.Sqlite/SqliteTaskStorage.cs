@@ -11,13 +11,13 @@ namespace EverTask.Storage.Sqlite;
 /// </summary>
 public class SqliteTaskStorage : EfCoreTaskStorage
 {
-    private readonly IServiceScopeFactory _serviceScopeFactory;
+    private readonly ITaskStoreDbContextFactory _contextFactory;
     private readonly IEverTaskLogger<SqliteTaskStorage> _logger;
 
-    public SqliteTaskStorage(IServiceScopeFactory serviceScopeFactory, IEverTaskLogger<SqliteTaskStorage> logger)
-        : base(serviceScopeFactory, logger)
+    public SqliteTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTaskLogger<SqliteTaskStorage> logger)
+        : base(contextFactory, logger)
     {
-        _serviceScopeFactory = serviceScopeFactory;
+        _contextFactory = contextFactory;
         _logger = logger;
     }
 
@@ -28,8 +28,7 @@ public class SqliteTaskStorage : EfCoreTaskStorage
     /// </summary>
     public override async Task<QueuedTask[]> RetrievePending(CancellationToken ct = default)
     {
-        using var scope = _serviceScopeFactory.CreateScope();
-        await using var dbContext = scope.ServiceProvider.GetRequiredService<ITaskStoreDbContext>();
+        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct);
 
         _logger.LogInformation("Retrieving Pending Tasks (SQLite)");
 

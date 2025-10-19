@@ -4,12 +4,12 @@ namespace Microsoft.Extensions.DependencyInjection;
 
 public class EverTaskServiceConfiguration
 {
-    internal BoundedChannelOptions ChannelOptions = new(500)
+    internal BoundedChannelOptions ChannelOptions = new(GetDefaultChannelCapacity())
     {
         FullMode = BoundedChannelFullMode.Wait
     };
 
-    internal int MaxDegreeOfParallelism = 1;
+    internal int MaxDegreeOfParallelism = GetDefaultParallelism();
 
     internal bool ThrowIfUnableToPersist = true;
     internal List<Assembly> AssembliesToRegister { get; } = new();
@@ -81,5 +81,29 @@ public class EverTaskServiceConfiguration
     {
         AssembliesToRegister.AddRange(assemblies);
         return this;
+    }
+
+    /// <summary>
+    /// Calculate default channel capacity based on CPU cores.
+    /// Scales with available processors for optimal throughput.
+    /// </summary>
+    /// <returns>Default channel capacity (minimum 1000)</returns>
+    private static int GetDefaultChannelCapacity()
+    {
+        // Scale con CPU cores
+        int cores = Environment.ProcessorCount;
+        return Math.Max(1000, cores * 200); // Min 1000, ~1600 su 8-core
+    }
+
+    /// <summary>
+    /// Calculate default max degree of parallelism based on CPU cores.
+    /// Conservative default optimized for I/O-bound tasks.
+    /// </summary>
+    /// <returns>Default max degree of parallelism (minimum 4)</returns>
+    private static int GetDefaultParallelism()
+    {
+        // Conservative: cores * 2 (buono per I/O-bound tasks)
+        int cores = Environment.ProcessorCount;
+        return Math.Max(4, cores * 2); // Min 4, ~16 su 8-core
     }
 }
