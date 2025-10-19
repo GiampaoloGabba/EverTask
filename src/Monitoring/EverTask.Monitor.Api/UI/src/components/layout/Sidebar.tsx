@@ -79,8 +79,8 @@ export function Sidebar() {
         </>
       )}
 
-      {/* Desktop sidebar */}
-      <aside className="hidden lg:block w-64 border-r bg-white">
+      {/* Desktop sidebar - fixed position with full height */}
+      <aside className="hidden lg:block fixed left-0 top-16 w-64 h-[calc(100vh-4rem)] border-r bg-white overflow-y-auto">
         <div className="py-4">
           <NavContent />
         </div>

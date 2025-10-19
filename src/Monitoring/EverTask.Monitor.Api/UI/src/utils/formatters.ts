@@ -29,3 +29,17 @@ export const formatJSONString = (jsonString: string): string => {
     return jsonString;
   }
 };
+
+export const formatTime = (ms: number): string => {
+  if (ms === 0) return '0 ms';
+  if (ms < 1000) {
+    return `${ms.toFixed(0)} ms`;
+  }
+  const seconds = ms / 1000;
+  if (seconds < 60) {
+    return `${seconds.toFixed(2)} s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return `${minutes}m ${remainingSeconds.toFixed(0)}s`;
+};

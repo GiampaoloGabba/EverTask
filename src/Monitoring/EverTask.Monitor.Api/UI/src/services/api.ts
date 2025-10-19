@@ -1,4 +1,4 @@
-import axios, { AxiosInstance, AxiosError } from 'axios';
+import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios';
 import { useAuthStore } from '@/stores/authStore';
 import { configService } from './config';
 import type {
@@ -40,7 +40,7 @@ class ApiService {
 
   private setupInterceptors() {
     // Add Basic Auth header
-    this.client.interceptors.request.use((config) => {
+    this.client.interceptors.request.use((config: InternalAxiosRequestConfig) => {
       const { username, password } = useAuthStore.getState();
       if (username && password) {
         const encoded = btoa(`${username}:${password}`);
@@ -49,9 +49,15 @@ class ApiService {
       return config;
     });
 
-    // Handle 401 errors
+    // Convert status strings to numbers in responses
     this.client.interceptors.response.use(
-      (response) => response,
+      (response) => {
+        // Convert status strings to enum numbers
+        if (response.data) {
+          this.convertStatusStringsToNumbers(response.data);
+        }
+        return response;
+      },
       (error: AxiosError) => {
         if (error.response?.status === 401) {
           useAuthStore.getState().logout();
@@ -61,6 +67,54 @@ class ApiService {
         return Promise.reject(error);
       }
     );
+  }
+
+  private convertStatusStringsToNumbers(obj: any): void {
+    if (!obj || typeof obj !== 'object') return;
+
+    const statusMap: Record<string, number> = {
+      'WaitingQueue': 0,
+      'Queued': 1,
+      'InProgress': 2,
+      'Pending': 3,
+      'Cancelled': 4,
+      'Completed': 5,
+      'Failed': 6,
+      'ServiceStopped': 7,
+    };
+
+    // Handle arrays
+    if (Array.isArray(obj)) {
+      obj.forEach(item => this.convertStatusStringsToNumbers(item));
+      return;
+    }
+
+    // Convert statusDistribution object (keys are status strings)
+    if ('statusDistribution' in obj && typeof obj.statusDistribution === 'object') {
+      const converted: Record<number, number> = {};
+      Object.entries(obj.statusDistribution).forEach(([key, value]) => {
+        const numKey = statusMap[key] ?? parseInt(key);
+        converted[numKey] = value as number;
+      });
+      obj.statusDistribution = converted;
+    }
+
+    // Convert status field if it's a string
+    if ('status' in obj && typeof obj.status === 'string') {
+      obj.status = statusMap[obj.status] ?? obj.status;
+    }
+
+    // Convert newStatus field if it's a string (for status audits)
+    if ('newStatus' in obj && typeof obj.newStatus === 'string') {
+      obj.newStatus = statusMap[obj.newStatus] ?? obj.newStatus;
+    }
+
+    // Recursively convert nested objects
+    Object.keys(obj).forEach(key => {
+      if (obj[key] && typeof obj[key] === 'object') {
+        this.convertStatusStringsToNumbers(obj[key]);
+      }
+    });
   }
 
   // Tasks API

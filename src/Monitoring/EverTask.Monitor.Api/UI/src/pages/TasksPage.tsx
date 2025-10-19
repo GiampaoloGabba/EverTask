@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useTasks } from '@/hooks/useTasks';
 import { TasksTable } from '@/components/tasks/TasksTable';
 import { TaskFilters } from '@/components/tasks/TaskFilters';
@@ -9,9 +9,29 @@ import { AlertCircle } from 'lucide-react';
 
 type TaskTab = 'all' | 'standard' | 'delayed' | 'recurring' | 'failed';
 
+const STORAGE_KEY_TAB = 'tasks-page-active-tab';
+const STORAGE_KEY_FILTERS = 'tasks-page-filters';
+
 export function TasksPage() {
-  const [activeTab, setActiveTab] = useState<TaskTab>('all');
-  const [filters, setFilters] = useState<TaskFilter>({});
+  // Load from sessionStorage on mount
+  const [activeTab, setActiveTab] = useState<TaskTab>(() => {
+    const saved = sessionStorage.getItem(STORAGE_KEY_TAB);
+    return (saved as TaskTab) || 'all';
+  });
+
+  const [filters, setFilters] = useState<TaskFilter>(() => {
+    const saved = sessionStorage.getItem(STORAGE_KEY_FILTERS);
+    return saved ? JSON.parse(saved) : {};
+  });
+
+  // Save to sessionStorage when changed
+  useEffect(() => {
+    sessionStorage.setItem(STORAGE_KEY_TAB, activeTab);
+  }, [activeTab]);
+
+  useEffect(() => {
+    sessionStorage.setItem(STORAGE_KEY_FILTERS, JSON.stringify(filters));
+  }, [filters]);
   const [pagination, setPagination] = useState<PaginationParams>({
     page: 1,
     pageSize: 20,
@@ -61,7 +81,8 @@ export function TasksPage() {
   };
 
   const handleTabChange = (tab: string) => {
-    setActiveTab(tab as TaskTab);
+    const newTab = tab as TaskTab;
+    setActiveTab(newTab);
     setPagination((prev) => ({ ...prev, page: 1 })); // Reset to first page
   };
 
