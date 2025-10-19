@@ -398,7 +398,7 @@ AddSqlServerStorage(string connectionString, Action<StorageOptions> configure)
 
 **StorageOptions Properties:**
 - `SchemaName` (string?): Database schema name (default: "EverTask", null = main schema)
-- `AutoApplyMigrations` (bool): Auto-apply EF Core migrations (default: false)
+- `AutoApplyMigrations` (bool): Auto-apply EF Core migrations (default: true)
 
 ### AddSqliteStorage
 
@@ -562,7 +562,7 @@ connection.start().catch(err => console.error(err));
     // Schema name (default: "EverTask", null = main schema)
     opt.SchemaName = "EverTask";
 
-    // Auto-apply migrations (default: false)
+    // Auto-apply migrations (default: true)
     opt.AutoApplyMigrations = true;
 
     // Connection pooling (enabled by default in v2.0+)
@@ -625,7 +625,7 @@ opt.SchemaName = "CustomSchema";
 ```csharp
 .AddSqliteStorage(connectionString, opt =>
 {
-    // Auto-apply migrations (default: false)
+    // Auto-apply migrations (default: true)
     opt.AutoApplyMigrations = true;
 
     // Note: SchemaName is not supported in SQLite (always null)

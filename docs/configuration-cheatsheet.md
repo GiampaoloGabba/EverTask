@@ -48,7 +48,7 @@ Quick reference for all EverTask configuration options.
 ```csharp
 .AddSqlServerStorage(connectionString, opt => {
     opt.SchemaName = "EverTask";         // Default: "EverTask"
-    opt.AutoApplyMigrations = false;      // Default: false
+    opt.AutoApplyMigrations = true;       // Default: true
 })
 ```
 - **Package:** `EverTask.Storage.SqlServer`
@@ -57,7 +57,7 @@ Quick reference for all EverTask configuration options.
 ### SQLite Storage
 ```csharp
 .AddSqliteStorage(connectionString, opt => {
-    opt.AutoApplyMigrations = false;      // Default: false
+    opt.AutoApplyMigrations = true;       // Default: true
 })
 ```
 - **Package:** `EverTask.Storage.Sqlite`
