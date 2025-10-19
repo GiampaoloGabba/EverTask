@@ -131,7 +131,7 @@ public class TaskDispatcherIntegrationTests
         var futureDate = DateTimeOffset.UtcNow.AddMinutes(1);
         await _dispatcher.Dispatch(task, TimeSpan.FromMinutes(1));
 
-        var dequeued = ((TimerScheduler)_scheduler).GetQueue().Peek();
+        var dequeued = ((PeriodicTimerScheduler)_scheduler).GetQueue().Peek();
         dequeued.Task.ShouldBe(task);
 
         Assert.NotNull(dequeued.ExecutionTime);
@@ -146,7 +146,7 @@ public class TaskDispatcherIntegrationTests
         var futureDate = DateTimeOffset.UtcNow.AddMinutes(1);
         await _dispatcher.Dispatch(task, futureDate);
 
-        var dequeued = ((TimerScheduler)_scheduler).GetQueue().Peek();
+        var dequeued = ((PeriodicTimerScheduler)_scheduler).GetQueue().Peek();
         dequeued.Task.ShouldBe(task);
 
         Assert.NotNull(dequeued.ExecutionTime);
@@ -160,7 +160,7 @@ public class TaskDispatcherIntegrationTests
         var task       = new TestTaskRequest("Test");
         await _dispatcher.Dispatch(task, recurring=>recurring.Schedule().UseCron("5 * * * *"));
 
-        var dequeued = ((TimerScheduler)_scheduler).GetQueue().Peek();
+        var dequeued = ((PeriodicTimerScheduler)_scheduler).GetQueue().Peek();
         dequeued.Task.ShouldBe(task);
 
         Assert.NotNull(dequeued.ExecutionTime);

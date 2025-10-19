@@ -13,14 +13,14 @@ public class TimerSchedulerTests
 {
     private readonly Mock<IWorkerQueue> _mockWorkerQueue;
     private readonly Mock<IWorkerQueueManager> _mockWorkerQueueManager;
-    private readonly Mock<IEverTaskLogger<TimerScheduler>> _mockLogger;
-    private readonly TimerScheduler _timerScheduler;
+    private readonly Mock<IEverTaskLogger<PeriodicTimerScheduler>> _mockLogger;
+    private readonly PeriodicTimerScheduler _timerScheduler;
 
     public TimerSchedulerTests()
     {
         _mockWorkerQueue = new Mock<IWorkerQueue>();
         _mockWorkerQueueManager = new Mock<IWorkerQueueManager>();
-        _mockLogger      = new Mock<IEverTaskLogger<TimerScheduler>>();
+        _mockLogger      = new Mock<IEverTaskLogger<PeriodicTimerScheduler>>();
 
         // Setup the queue manager to return the default queue
         _mockWorkerQueueManager.Setup(x => x.GetQueue("default")).Returns(_mockWorkerQueue.Object);
@@ -33,7 +33,7 @@ public class TimerSchedulerTests
                 return true;
             });
 
-        _timerScheduler  = new TimerScheduler(_mockWorkerQueueManager.Object, _mockLogger.Object);
+        _timerScheduler  = new PeriodicTimerScheduler(_mockWorkerQueueManager.Object, _mockLogger.Object);
     }
 
     [Fact]
@@ -87,26 +87,28 @@ public class TimerSchedulerTests
     }
 
     [Fact]
-    public void TimerCallback_should_process_and_remove_items_correctly()
+    public async Task TimerCallback_should_process_and_remove_items_correctly()
     {
         var pastTime            = DateTimeOffset.UtcNow.AddMinutes(-1);
         var taskHandlerExecutor = CreateTaskHandlerExecutor(pastTime);
         _timerScheduler.Schedule(taskHandlerExecutor);
 
-        _timerScheduler.TimerCallback(null);
+        // PeriodicTimerScheduler processes tasks asynchronously, wait for processing
+        await Task.Delay(200);
 
         var itemInQueue = _timerScheduler.GetQueue().Count;
         itemInQueue.ShouldBe(0);
     }
 
     [Fact]
-    public void UpdateTimer_should_set_timer_for_next_event_correctly()
+    public async Task UpdateTimer_should_set_timer_for_next_event_correctly()
     {
         var futureTime          = DateTimeOffset.UtcNow.AddMinutes(10);
         var taskHandlerExecutor = CreateTaskHandlerExecutor(futureTime);
         _timerScheduler.Schedule(taskHandlerExecutor);
 
-        _timerScheduler.TimerCallback(null);
+        // PeriodicTimerScheduler processes tasks asynchronously
+        await Task.Delay(100);
 
         var itemInQueue = _timerScheduler.GetQueue().TryPeek(out _, out var deliveryTime);
         Assert.Equal(futureTime, deliveryTime);
@@ -156,25 +158,27 @@ public class TimerSchedulerTests
     }
 
     [Fact]
-    public void TimerCallback_Should_Process_MultipleOverlappingTasks_Correctly()
+    public async Task TimerCallback_Should_Process_MultipleOverlappingTasks_Correctly()
     {
         var task1 = CreateTaskHandlerExecutor(DateTimeOffset.UtcNow.AddSeconds(-1));
         var task2 = CreateTaskHandlerExecutor(DateTimeOffset.UtcNow.AddSeconds(-1));
         _timerScheduler.Schedule(task1);
         _timerScheduler.Schedule(task2);
 
-        _timerScheduler.TimerCallback(null);
+        // PeriodicTimerScheduler processes tasks asynchronously
+        await Task.Delay(200);
 
         _timerScheduler.GetQueue().Count.ShouldBe(0);
     }
 
     [Fact]
-    public void TimerCallback_Should_RemoveExecutedTask_FromQueue()
+    public async Task TimerCallback_Should_RemoveExecutedTask_FromQueue()
     {
         var task = CreateTaskHandlerExecutor(DateTimeOffset.UtcNow.AddSeconds(-1));
         _timerScheduler.Schedule(task);
 
-        _timerScheduler.TimerCallback(null);
+        // PeriodicTimerScheduler processes tasks asynchronously
+        await Task.Delay(200);
 
         _timerScheduler.GetQueue().Count.ShouldBe(0);
     }
@@ -218,15 +222,18 @@ public class TimerSchedulerTests
     }
 
     [Fact]
-    public void UpdateTimer_Should_SetDelayToOneAndHalfHour_ForDelaysOverTwoHours()
+    public async Task UpdateTimer_Should_SetDelayToOneAndHalfHour_ForDelaysOverTwoHours()
     {
         var longFutureTime = DateTimeOffset.UtcNow.AddHours(3);
         var task           = CreateTaskHandlerExecutor(longFutureTime);
         _timerScheduler.Schedule(task);
 
+        // Wait for PeriodicTimerScheduler to calculate delay
+        await Task.Delay(100);
+
 #if DEBUG
-        // Verifica che il ritardo impostato sia di 1 ora e mezza solo in modalità debug
-        Assert.Equal(TimeSpan.FromHours(1.5), _timerScheduler.LastSetDelay);
+        // Verifica che il ritardo calcolato sia di 1 ora e mezza solo in modalità debug
+        Assert.Equal(TimeSpan.FromHours(1.5), _timerScheduler.LastCalculatedDelay);
 #endif
     }
 

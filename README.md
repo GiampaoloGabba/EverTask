@@ -890,10 +890,9 @@ the available configuration methods, along with their default values and types:
 ### `SetChannelOptions (Overloaded Methods)`
 
 - **Type:** `Action<BoundedChannelOptions>` or `int`
-- **Default:** Capacity set to 500, `FullMode` set to `BoundedChannelFullMode.Wait`
+- **Default:** Capacity set to `Environment.ProcessorCount * 200` (minimum 1000), `FullMode` set to `BoundedChannelFullMode.Wait`
 - **Functionality:** Configures the behavior of the task queue. You can directly specify the queue capacity or provide
-  a `BoundedChannelOptions` object. This defines the maximum number of tasks that can be queued and the behavior when
-  the queue is full.
+  a `BoundedChannelOptions` object. The capacity automatically scales with your CPU cores (e.g., 8-core system = ~1600), defining the maximum number of tasks that can be queued and the behavior when the queue is full.
 
 ### `SetThrowIfUnableToPersist`
 
@@ -905,9 +904,8 @@ the available configuration methods, along with their default values and types:
 ### `SetMaxDegreeOfParallelism`
 
 - **Type:** `int`
-- **Default:** `1`
-- **Functionality:** Sets the maximum number of tasks that can be executed concurrently. The default sequential
-  execution can be adjusted to enable parallel processing, optimizing task throughput in multi-core systems.
+- **Default:** `Environment.ProcessorCount * 2` (minimum 4)
+- **Functionality:** Sets the maximum number of tasks that can be executed concurrently. The default automatically scales with your CPU cores (e.g., 8-core system = 16 parallel workers), optimizing task throughput in multi-core systems. Setting this to `1` will trigger a warning log as it's considered a production anti-pattern.
 
 ### `SetDefaultRetryPolicy`
 

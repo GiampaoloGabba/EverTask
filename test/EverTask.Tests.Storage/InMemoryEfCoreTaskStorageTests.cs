@@ -23,12 +23,16 @@ public class InMemoryEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase
         services.AddLogging();
 
         services.AddScoped<ITaskStoreDbContext>(provider => provider.GetRequiredService<TestDbContext>());
+
+        // Register factory using ServiceScopeDbContextFactory for backward compatibility
+        services.AddSingleton<ITaskStoreDbContextFactory, ServiceScopeDbContextFactory>();
         services.AddSingleton<ITaskStorage, EfCoreTaskStorage>();
 
         services.AddEverTask(opt => opt.RegisterTasksFromAssembly(typeof(InMemoryEfCoreTaskStorageTests).Assembly));
 
-        _dbContext = services.BuildServiceProvider().GetRequiredService<TestDbContext>();
-        _taskStorage = services.BuildServiceProvider().GetRequiredService<ITaskStorage>();
+        var provider = services.BuildServiceProvider();
+        _dbContext = provider.GetRequiredService<TestDbContext>();
+        _taskStorage = provider.GetRequiredService<ITaskStorage>();
     }
 
     protected override async Task CleanUpDatabase()
