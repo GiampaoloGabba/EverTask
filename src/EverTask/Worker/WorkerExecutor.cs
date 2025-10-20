@@ -270,7 +270,34 @@ public class WorkerExecutor(
         if (taskStorage != null)
         {
             var currentRun = await taskStorage.GetCurrentRunCount(task.PersistenceId);
-            var nextRun    = task.RecurringTask.CalculateNextRun(DateTimeOffset.UtcNow, currentRun + 1);
+
+            // Fix for schedule drift: Use the scheduled execution time as base for next calculation,
+            // not the current time. This ensures recurring tasks maintain their intended schedule
+            // even when execution is delayed due to system load or downtime.
+            // See: docs/recurring-task-schedule-drift-fix.md
+            var scheduledTime = task.ExecutionTime ?? DateTimeOffset.UtcNow;
+            var nextRun = task.RecurringTask.CalculateNextRun(scheduledTime, currentRun + 1);
+
+            // If the calculated next run is in the past (e.g., after system downtime),
+            // skip forward to the next valid future occurrence instead of trying to catch up.
+            // This prevents execution of missed runs while maintaining the schedule rhythm.
+            int maxSkips = 1000; // Safety limit to prevent infinite loops
+            while (nextRun.HasValue && nextRun.Value < DateTimeOffset.UtcNow && maxSkips-- > 0)
+            {
+                logger.LogInformation(
+                    "Task {TaskId} next occurrence {NextRun} is in the past, calculating next occurrence",
+                    task.PersistenceId, nextRun.Value);
+                nextRun = task.RecurringTask.CalculateNextRun(nextRun.Value, currentRun + 1);
+            }
+
+            if (maxSkips <= 0)
+            {
+                logger.LogWarning(
+                    "Task {TaskId} exceeded maximum skip iterations, stopping recurrence calculation",
+                    task.PersistenceId);
+                nextRun = null;
+            }
+
             await taskStorage.UpdateCurrentRun(task.PersistenceId, nextRun)
                              .ConfigureAwait(false);
 
