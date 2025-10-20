@@ -260,4 +260,62 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             throw;
         }
     }
+
+    /// <summary>
+    /// Records information about skipped recurring task occurrences in the audit trail.
+    /// This creates a RunsAudit entry with details about which scheduled runs were skipped.
+    /// </summary>
+    /// <param name="taskId">The ID of the recurring task</param>
+    /// <param name="skippedOccurrences">List of DateTimeOffset values representing skipped execution times</param>
+    /// <param name="ct">Optional cancellation token</param>
+    /// <returns>A task representing the asynchronous operation</returns>
+    /// <remarks>
+    /// This method is called when a recurring task resumes after downtime and needs to skip
+    /// past occurrences to maintain its schedule. The audit entry uses QueuedTaskStatus.Completed
+    /// with exception details containing the skip information for tracking purposes.
+    /// </remarks>
+    public virtual async Task RecordSkippedOccurrences(Guid taskId, List<DateTimeOffset> skippedOccurrences, CancellationToken ct = default)
+    {
+        if (skippedOccurrences.Count == 0)
+            return;
+
+        logger.LogInformation("Recording {count} skipped occurrences for task {taskId}", skippedOccurrences.Count, taskId);
+
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+
+        try
+        {
+            var task = await dbContext.QueuedTasks
+                                      .Where(x => x.Id == taskId)
+                                      .FirstOrDefaultAsync(ct)
+                                      .ConfigureAwait(false);
+
+            if (task != null)
+            {
+                // Create a summary of skipped times
+                var skippedTimes = string.Join(", ", skippedOccurrences.Select(d => d.ToString("yyyy-MM-dd HH:mm:ss")));
+                var skipMessage = $"Skipped {skippedOccurrences.Count} missed occurrence(s) to maintain schedule: {skippedTimes}";
+
+                // Add a RunsAudit entry documenting the skips
+                var runsAudit = new RunsAudit
+                {
+                    QueuedTaskId = taskId,
+                    ExecutedAt   = DateTimeOffset.UtcNow,
+                    Status       = QueuedTaskStatus.Completed, // Using Completed as the base status
+                    Exception    = skipMessage // Store skip info in Exception field for audit trail
+                };
+
+                dbContext.RunsAudit.Add(runsAudit);
+                await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
+            }
+            else
+            {
+                logger.LogWarning("Task {taskId} not found when trying to record skipped occurrences", taskId);
+            }
+        }
+        catch (Exception e)
+        {
+            logger.LogWarning(e, "Unable to record skipped occurrences for task {taskId}", taskId);
+        }
+    }
 }

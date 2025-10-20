@@ -99,12 +99,21 @@ Actual Execution:   1:00  2:45  3:00  4:00  5:00  6:00  ← Maintains schedule
 
 ### Algorithm
 
+The fix introduces a new extension method `CalculateNextValidRun` that encapsulates the skip logic:
+
 1. Retrieve the task's original scheduled execution time (`task.ExecutionTime`)
-2. Calculate next occurrence based on **scheduled time**, not current time
-3. Check if calculated next run is in the past
-4. If in the past, iteratively calculate forward until finding a future time
-5. Include safety limit to prevent infinite loops (max 1000 iterations)
-6. Log when skipping missed occurrences for visibility
+2. Call `CalculateNextValidRun` extension method which:
+   - Calculates next occurrence based on **scheduled time**, not current time
+   - Checks if calculated next run is in the past
+   - If in the past, iteratively calculates forward until finding a future time
+   - Collects all skipped occurrences in a list
+   - Includes safety limit to prevent infinite loops (max 1000 iterations)
+   - Returns `NextRunResult` containing next run time, skip count, and skipped times
+3. If occurrences were skipped:
+   - Log detailed information about skipped times
+   - Persist skip information to `RunsAudit` table (if using EfCore storage)
+4. Update the task's next run time
+5. Schedule the next occurrence
 
 ### Edge Cases Handled
 
@@ -120,6 +129,36 @@ Actual Execution:   1:00  2:45  3:00  4:00  5:00  6:00  ← Maintains schedule
 - Only executes multiple iterations after significant downtime
 - Maximum 1000 iterations provides safety without performance impact
 - Logging provides visibility without affecting hot path
+
+### Audit Trail for Skipped Occurrences
+
+When using EfCore-based storage (SqlServer, Sqlite), skipped occurrences are automatically persisted to the `RunsAudit` table:
+
+**How It Works:**
+- When a recurring task skips missed occurrences, a special `RunsAudit` entry is created
+- The entry uses `QueuedTaskStatus.Completed` as the status
+- The `Exception` field contains skip details: `"Skipped N missed occurrence(s) to maintain schedule: [times]"`
+- This provides a permanent audit trail of skipped executions
+
+**Querying Skipped Occurrences:**
+```csharp
+// Find all skip audit entries for a task
+var skipAudits = task.RunsAudits
+    .Where(a => a.Exception != null && a.Exception.Contains("Skipped"))
+    .ToList();
+
+// Count total skipped occurrences
+var totalSkipped = skipAudits
+    .Sum(a => ExtractSkipCount(a.Exception));
+```
+
+**Benefits:**
+- Permanent record of system downtime impact
+- Distinguish between "never ran" and "intentionally skipped"
+- Debugging and monitoring visibility
+- Audit compliance for scheduled jobs
+
+**Note:** This persistence is automatic for EfCore storage implementations. Other storage implementations (MemoryStorage) will only log the skips without persistence.
 
 ## Migration Notes
 
@@ -147,19 +186,40 @@ This is a **behavioral change** but maintains API compatibility:
 
 ## Testing
 
-The fix includes comprehensive unit tests covering:
+The fix includes comprehensive test coverage:
 
-1. Normal execution without delays
-2. Delayed execution maintaining schedule
-3. Multiple missed occurrences (skip-ahead behavior)
-4. Infinite loop protection
-5. MaxRuns and RunUntil boundary conditions
-6. Different interval types (seconds, minutes, hours, cron)
+### Unit Tests (`RecurringTaskScheduleDriftTests.cs`)
 
-See `RecurringTaskScheduleDriftTests.cs` for complete test coverage.
+1. **Schedule Maintenance**: Verifies tasks maintain schedule across different interval types
+2. **No Drift Behavior**: Tests that delayed execution doesn't cause drift
+3. **Extension Method**: Tests for `CalculateNextValidRun` extension method
+4. **Skip Detection**: Verifies skip count and skipped occurrence tracking
+5. **Infinite Loop Protection**: Tests max iteration safety limit
+6. **Edge Cases**: MaxRuns, RunUntil, null handling, chronological ordering
+
+### Integration Tests (`RecurringTaskSkipPersistenceTests.cs`)
+
+1. **Persistence Verification**: Confirms skipped occurrences are saved to `RunsAudit`
+2. **Audit Entry Format**: Validates skip message format and status
+3. **No-Skip Scenarios**: Ensures no audit when nothing is skipped
+4. **Error Handling**: Tests graceful handling of nonexistent tasks
+5. **Storage Compatibility**: Verifies EfCore vs MemoryStorage behavior
+
+**Running Tests:**
+```bash
+# Run all schedule drift tests
+dotnet test --filter "FullyQualifiedName~RecurringTaskScheduleDrift"
+
+# Run persistence tests
+dotnet test --filter "FullyQualifiedName~RecurringTaskSkipPersistence"
+```
 
 ## References
 
-- Issue: Schedule drift in recurring tasks after delays
-- Fix Location: `src/EverTask/Worker/WorkerExecutor.cs` - `QueueNextOccourrence` method
-- Test Location: `test/EverTask.Tests/RecurringTests/RecurringTaskScheduleDriftTests.cs`
+- **Issue**: Schedule drift in recurring tasks after delays
+- **Core Fix**: `src/EverTask/Worker/WorkerExecutor.cs` - `QueueNextOccourrence` method
+- **Extension Method**: `src/EverTask/Scheduler/Recurring/RecurringTaskExtensions.cs`
+- **Result Record**: `src/EverTask/Scheduler/Recurring/NextRunResult.cs`
+- **Persistence**: `src/Storage/EverTask.Storage.EfCore/EfCoreTaskStorage.cs` - `RecordSkippedOccurrences` method
+- **Unit Tests**: `test/EverTask.Tests/RecurringTests/RecurringTaskScheduleDriftTests.cs`
+- **Integration Tests**: `test/EverTask.Tests/IntegrationTests/RecurringTaskSkipPersistenceTests.cs`

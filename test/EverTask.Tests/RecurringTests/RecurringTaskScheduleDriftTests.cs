@@ -189,11 +189,8 @@ public class RecurringTaskScheduleDriftTests
     }
 
     [Fact]
-    public void CalculateNextRun_SkipMultiplePastOccurrences_Simulation()
+    public void CalculateNextValidRun_SkipMultiplePastOccurrences()
     {
-        // This test simulates what the WorkerExecutor loop would do
-        // when it encounters a next run in the past
-
         // Arrange: Task runs every hour
         var task = new RecurringTask
         {
@@ -202,55 +199,105 @@ public class RecurringTaskScheduleDriftTests
 
         // Simulate: System was down from 10:00 AM to 2:00 PM (missed 4 runs)
         var lastScheduledTime = new DateTimeOffset(2024, 1, 1, 10, 0, 0, TimeSpan.Zero);
-        var currentTime = new DateTimeOffset(2024, 1, 1, 14, 30, 0, TimeSpan.Zero);
 
-        // Act: Simulate the WorkerExecutor skip loop
-        var nextRun = task.CalculateNextRun(lastScheduledTime, 1);
-        int skipCount = 0;
-        int maxSkips = 1000;
+        // Mock current time to be 2:30 PM
+        // Note: The extension method uses DateTimeOffset.UtcNow internally,
+        // so we test with a time that would be in the past
+        var scheduledInPast = DateTimeOffset.UtcNow.AddHours(-5);
 
-        while (nextRun.HasValue && nextRun.Value < currentTime && maxSkips-- > 0)
-        {
-            skipCount++;
-            nextRun = task.CalculateNextRun(nextRun.Value, 1);
-        }
+        // Act: Use the new extension method
+        var result = task.CalculateNextValidRun(scheduledInPast, 1);
 
         // Assert: Should skip past occurrences and land on next valid time
-        Assert.NotNull(nextRun);
-        Assert.True(nextRun.Value >= currentTime, "Next run should be in the future");
-        Assert.Equal(new DateTimeOffset(2024, 1, 1, 15, 0, 0, TimeSpan.Zero), nextRun);
-        Assert.True(skipCount > 0, "Should have skipped some occurrences");
-        Assert.True(skipCount < 10, "Should not have skipped too many (sanity check)");
+        Assert.NotNull(result.NextRun);
+        Assert.True(result.NextRun.Value >= DateTimeOffset.UtcNow, "Next run should be in the future");
+        Assert.True(result.SkippedCount > 0, "Should have skipped some occurrences");
+        Assert.True(result.SkippedCount < 10, "Should not have skipped too many (sanity check)");
+        Assert.Equal(result.SkippedCount, result.SkippedOccurrences.Count);
     }
 
     [Fact]
-    public void CalculateNextRun_InfiniteLoopProtection_Simulation()
+    public void CalculateNextValidRun_NoSkipsWhenNextInFuture()
     {
-        // This tests the safety limit in WorkerExecutor
-
         // Arrange: Task runs every hour
         var task = new RecurringTask
         {
             HourInterval = new HourInterval(1)
         };
 
-        // Simulate: Very old scheduled time
+        // Scheduled for near future
+        var scheduledTime = DateTimeOffset.UtcNow.AddMinutes(30);
+
+        // Act
+        var result = task.CalculateNextValidRun(scheduledTime, 1);
+
+        // Assert: Should not skip anything
+        Assert.NotNull(result.NextRun);
+        Assert.Equal(0, result.SkippedCount);
+        Assert.Empty(result.SkippedOccurrences);
+    }
+
+    [Fact]
+    public void CalculateNextValidRun_InfiniteLoopProtection()
+    {
+        // Arrange: Task runs every hour
+        var task = new RecurringTask
+        {
+            HourInterval = new HourInterval(1)
+        };
+
+        // Simulate: Very old scheduled time (10 years ago)
         var veryOldScheduledTime = DateTimeOffset.UtcNow.AddYears(-10);
 
-        // Act: Simulate the WorkerExecutor skip loop with safety limit
-        var nextRun = task.CalculateNextRun(veryOldScheduledTime, 1);
-        int iterations = 0;
-        int maxSkips = 1000; // Same as WorkerExecutor
+        // Act: Should hit the safety limit
+        var result = task.CalculateNextValidRun(veryOldScheduledTime, 1, maxIterations: 1000);
 
-        while (nextRun.HasValue && nextRun.Value < DateTimeOffset.UtcNow && maxSkips-- > 0)
+        // Assert: Should have stopped at max iterations
+        Assert.Equal(1000, result.SkippedCount);
+        Assert.Null(result.NextRun); // Should return null when limit exceeded
+    }
+
+    [Fact]
+    public void CalculateNextValidRun_WithCustomMaxIterations()
+    {
+        // Arrange: Task runs every second
+        var task = new RecurringTask
         {
-            iterations++;
-            nextRun = task.CalculateNextRun(nextRun.Value, 1);
-        }
+            SecondInterval = new SecondInterval(1)
+        };
 
-        // Assert: Should hit the safety limit
-        Assert.Equal(1000, iterations);
-        Assert.Equal(0, maxSkips);
+        var scheduledInPast = DateTimeOffset.UtcNow.AddMinutes(-2);
+
+        // Act: Use custom max iterations
+        var result = task.CalculateNextValidRun(scheduledInPast, 1, maxIterations: 50);
+
+        // Assert: Should stop at 50 iterations
+        Assert.True(result.SkippedCount <= 50);
+    }
+
+    [Fact]
+    public void CalculateNextValidRun_SkippedOccurrencesAreInOrder()
+    {
+        // Arrange: Task runs every 10 minutes
+        var task = new RecurringTask
+        {
+            MinuteInterval = new MinuteInterval(10)
+        };
+
+        var scheduledInPast = DateTimeOffset.UtcNow.AddHours(-1);
+
+        // Act
+        var result = task.CalculateNextValidRun(scheduledInPast, 1);
+
+        // Assert: Skipped times should be in chronological order
+        if (result.SkippedCount > 1)
+        {
+            for (int i = 1; i < result.SkippedOccurrences.Count; i++)
+            {
+                Assert.True(result.SkippedOccurrences[i] > result.SkippedOccurrences[i - 1],
+                    "Skipped occurrences should be in chronological order");
+            }
+        }
     }
 
     [Fact]

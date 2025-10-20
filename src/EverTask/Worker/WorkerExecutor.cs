@@ -276,33 +276,35 @@ public class WorkerExecutor(
             // even when execution is delayed due to system load or downtime.
             // See: docs/recurring-task-schedule-drift-fix.md
             var scheduledTime = task.ExecutionTime ?? DateTimeOffset.UtcNow;
-            var nextRun = task.RecurringTask.CalculateNextRun(scheduledTime, currentRun + 1);
 
-            // If the calculated next run is in the past (e.g., after system downtime),
-            // skip forward to the next valid future occurrence instead of trying to catch up.
-            // This prevents execution of missed runs while maintaining the schedule rhythm.
-            int maxSkips = 1000; // Safety limit to prevent infinite loops
-            while (nextRun.HasValue && nextRun.Value < DateTimeOffset.UtcNow && maxSkips-- > 0)
+            // Use extension method to calculate next valid run and get skip information
+            var result = task.RecurringTask.CalculateNextValidRun(scheduledTime, currentRun + 1);
+
+            // Log and persist skipped occurrences if any
+            if (result.SkippedCount > 0)
             {
+                var skippedTimes = string.Join(", ",
+                    result.SkippedOccurrences.Select(d => d.ToString("yyyy-MM-dd HH:mm:ss")));
+
                 logger.LogInformation(
-                    "Task {TaskId} next occurrence {NextRun} is in the past, calculating next occurrence",
-                    task.PersistenceId, nextRun.Value);
-                nextRun = task.RecurringTask.CalculateNextRun(nextRun.Value, currentRun + 1);
+                    "Task {TaskId} skipped {SkippedCount} missed occurrence(s) to maintain schedule: {SkippedTimes}",
+                    task.PersistenceId, result.SkippedCount, skippedTimes);
+
+                // Persist skip information if storage supports it (EfCore implementation)
+                if (taskStorage is EverTask.Storage.EfCore.EfCoreTaskStorage efCoreStorage)
+                {
+                    await efCoreStorage.RecordSkippedOccurrences(
+                        task.PersistenceId,
+                        result.SkippedOccurrences,
+                        CancellationToken.None).ConfigureAwait(false);
+                }
             }
 
-            if (maxSkips <= 0)
-            {
-                logger.LogWarning(
-                    "Task {TaskId} exceeded maximum skip iterations, stopping recurrence calculation",
-                    task.PersistenceId);
-                nextRun = null;
-            }
-
-            await taskStorage.UpdateCurrentRun(task.PersistenceId, nextRun)
+            await taskStorage.UpdateCurrentRun(task.PersistenceId, result.NextRun)
                              .ConfigureAwait(false);
 
-            if (nextRun.HasValue)
-                scheduler.Schedule(task, nextRun);
+            if (result.NextRun.HasValue)
+                scheduler.Schedule(task, result.NextRun);
         }
     }
 
