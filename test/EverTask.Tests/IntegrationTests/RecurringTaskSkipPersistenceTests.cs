@@ -2,7 +2,6 @@ using EverTask.Dispatcher;
 using EverTask.Logger;
 using EverTask.Scheduler.Recurring;
 using EverTask.Storage;
-using EverTask.Storage.EfCore;
 using EverTask.Tests.TestHelpers;
 using EverTask.Tests.TestTasks;
 using Microsoft.Extensions.DependencyInjection;
@@ -53,32 +52,29 @@ public class RecurringTaskSkipPersistenceTests : IntegrationTestBase
         await _storage.UpdateTask(queuedTask);
 
         // Manually call the RecordSkippedOccurrences method (simulating what WorkerExecutor does)
-        if (_storage is EfCoreTaskStorage efCoreStorage)
+        var skippedOccurrences = new List<DateTimeOffset>
         {
-            var skippedOccurrences = new List<DateTimeOffset>
-            {
-                pastTime,
-                pastTime.AddSeconds(30),
-                pastTime.AddSeconds(60)
-            };
+            pastTime,
+            pastTime.AddSeconds(30),
+            pastTime.AddSeconds(60)
+        };
 
-            await efCoreStorage.RecordSkippedOccurrences(taskId, skippedOccurrences);
+        await _storage.RecordSkippedOccurrences(taskId, skippedOccurrences);
 
-            // Verify the skip was recorded
-            var updatedTask = await _storage.Get(t => t.Id == taskId);
-            updatedTask.Length.ShouldBe(1);
+        // Verify the skip was recorded
+        var updatedTask = await _storage.Get(t => t.Id == taskId);
+        updatedTask.Length.ShouldBe(1);
 
-            var runsAudits = updatedTask[0].RunsAudits.ToList();
+        var runsAudits = updatedTask[0].RunsAudits.ToList();
 
-            // Should have at least one audit entry for the skips
-            runsAudits.ShouldNotBeEmpty();
+        // Should have at least one audit entry for the skips
+        runsAudits.ShouldNotBeEmpty();
 
-            // Find the skip audit entry
-            var skipAudit = runsAudits.FirstOrDefault(a => a.Exception != null && a.Exception.Contains("Skipped"));
-            skipAudit.ShouldNotBeNull();
-            skipAudit.Exception.ShouldContain("Skipped 3 missed occurrence(s)");
-            skipAudit.Status.ShouldBe(QueuedTaskStatus.Completed);
-        }
+        // Find the skip audit entry
+        var skipAudit = runsAudits.FirstOrDefault(a => a.Exception != null && a.Exception.Contains("Skipped"));
+        skipAudit.ShouldNotBeNull();
+        skipAudit.Exception.ShouldContain("Skipped 3 missed occurrence(s)");
+        skipAudit.Status.ShouldBe(QueuedTaskStatus.Completed);
 
         var cts = new CancellationTokenSource();
         cts.CancelAfter(2000);
@@ -94,17 +90,14 @@ public class RecurringTaskSkipPersistenceTests : IntegrationTestBase
         var taskId = await _dispatcher.Dispatch(task);
 
         // Call RecordSkippedOccurrences with empty list
-        if (_storage is EfCoreTaskStorage efCoreStorage)
-        {
-            var initialTask = await _storage.Get(t => t.Id == taskId);
-            var initialAuditCount = initialTask[0].RunsAudits.Count;
+        var initialTask = await _storage.Get(t => t.Id == taskId);
+        var initialAuditCount = initialTask[0].RunsAudits.Count;
 
-            await efCoreStorage.RecordSkippedOccurrences(taskId, new List<DateTimeOffset>());
+        await _storage.RecordSkippedOccurrences(taskId, new List<DateTimeOffset>());
 
-            // Verify no new audit was added
-            var updatedTask = await _storage.Get(t => t.Id == taskId);
-            updatedTask[0].RunsAudits.Count.ShouldBe(initialAuditCount);
-        }
+        // Verify no new audit was added
+        var updatedTask = await _storage.Get(t => t.Id == taskId);
+        updatedTask[0].RunsAudits.Count.ShouldBe(initialAuditCount);
 
         var cts = new CancellationTokenSource();
         cts.CancelAfter(2000);
@@ -154,21 +147,18 @@ public class RecurringTaskSkipPersistenceTests : IntegrationTestBase
         await _host.StartAsync();
 
         // Try to record skips for a task that doesn't exist
-        if (_storage is EfCoreTaskStorage efCoreStorage)
+        var nonExistentTaskId = Guid.NewGuid();
+        var skippedOccurrences = new List<DateTimeOffset>
         {
-            var nonExistentTaskId = Guid.NewGuid();
-            var skippedOccurrences = new List<DateTimeOffset>
-            {
-                DateTimeOffset.UtcNow.AddMinutes(-5)
-            };
+            DateTimeOffset.UtcNow.AddMinutes(-5)
+        };
 
-            // Should not throw, just log a warning
-            await efCoreStorage.RecordSkippedOccurrences(nonExistentTaskId, skippedOccurrences);
+        // Should not throw, just log a warning
+        await _storage.RecordSkippedOccurrences(nonExistentTaskId, skippedOccurrences);
 
-            // Verify no crash occurred
-            var tasks = await _storage.Get(t => t.Id == nonExistentTaskId);
-            tasks.Length.ShouldBe(0);
-        }
+        // Verify no crash occurred
+        var tasks = await _storage.Get(t => t.Id == nonExistentTaskId);
+        tasks.Length.ShouldBe(0);
 
         var cts = new CancellationTokenSource();
         cts.CancelAfter(2000);

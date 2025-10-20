@@ -290,14 +290,11 @@ public class WorkerExecutor(
                     "Task {TaskId} skipped {SkippedCount} missed occurrence(s) to maintain schedule: {SkippedTimes}",
                     task.PersistenceId, result.SkippedCount, skippedTimes);
 
-                // Persist skip information if storage supports it (EfCore implementation)
-                if (taskStorage is EverTask.Storage.EfCore.EfCoreTaskStorage efCoreStorage)
-                {
-                    await efCoreStorage.RecordSkippedOccurrences(
-                        task.PersistenceId,
-                        result.SkippedOccurrences,
-                        CancellationToken.None).ConfigureAwait(false);
-                }
+                // Persist skip information to storage (all implementations support this)
+                await taskStorage.RecordSkippedOccurrences(
+                    task.PersistenceId,
+                    result.SkippedOccurrences,
+                    CancellationToken.None).ConfigureAwait(false);
             }
 
             await taskStorage.UpdateCurrentRun(task.PersistenceId, result.NextRun)

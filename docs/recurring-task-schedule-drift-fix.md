@@ -132,13 +132,14 @@ The fix introduces a new extension method `CalculateNextValidRun` that encapsula
 
 ### Audit Trail for Skipped Occurrences
 
-When using EfCore-based storage (SqlServer, Sqlite), skipped occurrences are automatically persisted to the `RunsAudit` table:
+All storage implementations (EfCore, Memory) persist skipped occurrences to the `RunsAudit` collection:
 
 **How It Works:**
 - When a recurring task skips missed occurrences, a special `RunsAudit` entry is created
 - The entry uses `QueuedTaskStatus.Completed` as the status
 - The `Exception` field contains skip details: `"Skipped N missed occurrence(s) to maintain schedule: [times]"`
 - This provides a permanent audit trail of skipped executions
+- **All implementations** of `ITaskStorage` support this via the `RecordSkippedOccurrences` method
 
 **Querying Skipped Occurrences:**
 ```csharp
@@ -158,7 +159,10 @@ var totalSkipped = skipAudits
 - Debugging and monitoring visibility
 - Audit compliance for scheduled jobs
 
-**Note:** This persistence is automatic for EfCore storage implementations. Other storage implementations (MemoryStorage) will only log the skips without persistence.
+**Implementation:**
+- `EfCoreTaskStorage`: Persists to database `RunsAudit` table
+- `MemoryTaskStorage`: Stores in in-memory `RunsAudit` collection
+- Custom implementations: Must implement `RecordSkippedOccurrences` from `ITaskStorage`
 
 ## Migration Notes
 
