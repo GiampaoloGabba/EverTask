@@ -43,7 +43,7 @@ public class BasicAuthenticationMiddleware
         }
 
         // Allow anonymous access to config endpoint
-        if (path.Equals($"{_options.BasePath}/config", StringComparison.OrdinalIgnoreCase))
+        if (path.Equals($"{_options.ApiBasePath}/config", StringComparison.OrdinalIgnoreCase))
         {
             await _next(context);
             return;

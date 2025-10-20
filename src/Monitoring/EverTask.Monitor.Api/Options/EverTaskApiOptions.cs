@@ -7,12 +7,12 @@ namespace EverTask.Monitor.Api.Options;
 public class EverTaskApiOptions
 {
     /// <summary>
-    /// Base path for API and UI (fixed: "/monitoring")
+    /// Base path for API and UI (default: "/monitoring")
+    /// API is always accessible at: {BasePath}/api/*
     /// When EnableUI is true:
-    ///   - UI accessible at: /monitoring/
-    ///   - API accessible at: /monitoring/api/*
+    ///   - UI is accessible at: {BasePath}/*
     /// When EnableUI is false:
-    ///   - API accessible at: /monitoring/*
+    ///   - UI is disabled, only API is available
     /// </summary>
     public string BasePath { get; set; } = "/monitoring";
 
@@ -23,9 +23,10 @@ public class EverTaskApiOptions
     public bool EnableUI { get; set; } = true;
 
     /// <summary>
-    /// API base path (derived from BasePath and EnableUI)
+    /// API base path (derived from BasePath)
+    /// API is always accessible at {BasePath}/api regardless of EnableUI setting
     /// </summary>
-    public string ApiBasePath => EnableUI ? $"{BasePath}/api" : BasePath;
+    public string ApiBasePath => $"{BasePath}/api";
 
     /// <summary>
     /// UI base path (only used when EnableUI is true)

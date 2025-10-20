@@ -50,6 +50,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EverTask.Storage.Sqlite", "
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EverTask.Monitor.Api", "src\Monitoring\EverTask.Monitor.Api\EverTask.Monitor.Api.csproj", "{331CF25F-CE5E-4FB1-82EA-FE7A956BC06F}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EverTask.Tests.Monitoring", "test\EverTask.Tests.Monitoring\EverTask.Tests.Monitoring.csproj", "{F62954BC-5817-4BA6-9422-BFD1DE77A330}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -216,6 +218,18 @@ Global
 		{331CF25F-CE5E-4FB1-82EA-FE7A956BC06F}.Release|x64.Build.0 = Release|Any CPU
 		{331CF25F-CE5E-4FB1-82EA-FE7A956BC06F}.Release|x86.ActiveCfg = Release|Any CPU
 		{331CF25F-CE5E-4FB1-82EA-FE7A956BC06F}.Release|x86.Build.0 = Release|Any CPU
+		{F62954BC-5817-4BA6-9422-BFD1DE77A330}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F62954BC-5817-4BA6-9422-BFD1DE77A330}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F62954BC-5817-4BA6-9422-BFD1DE77A330}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{F62954BC-5817-4BA6-9422-BFD1DE77A330}.Debug|x64.Build.0 = Debug|Any CPU
+		{F62954BC-5817-4BA6-9422-BFD1DE77A330}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{F62954BC-5817-4BA6-9422-BFD1DE77A330}.Debug|x86.Build.0 = Debug|Any CPU
+		{F62954BC-5817-4BA6-9422-BFD1DE77A330}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F62954BC-5817-4BA6-9422-BFD1DE77A330}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F62954BC-5817-4BA6-9422-BFD1DE77A330}.Release|x64.ActiveCfg = Release|Any CPU
+		{F62954BC-5817-4BA6-9422-BFD1DE77A330}.Release|x64.Build.0 = Release|Any CPU
+		{F62954BC-5817-4BA6-9422-BFD1DE77A330}.Release|x86.ActiveCfg = Release|Any CPU
+		{F62954BC-5817-4BA6-9422-BFD1DE77A330}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -237,5 +251,6 @@ Global
 		{D68A8148-9FC3-4982-BA6E-7821B098D8B1} = {9267E2ED-942C-497D-BFC9-B3CE0AFC276F}
 		{639C703E-88C5-4850-B97F-03AAB9BBDAE9} = {8267E2ED-942C-497D-BFC9-B3CE0AFC276F}
 		{331CF25F-CE5E-4FB1-82EA-FE7A956BC06F} = {9267E2ED-942C-497D-BFC9-B3CE0AFC276F}
+		{F62954BC-5817-4BA6-9422-BFD1DE77A330} = {5267E2ED-942C-497D-BFC9-B3CE0AFC276F}
 	EndGlobalSection
 EndGlobal

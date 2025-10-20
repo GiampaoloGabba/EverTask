@@ -2,13 +2,20 @@
 
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <IsPackable>false</IsPackable>
+    <OutputType>Library</OutputType>
+    <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
+    <GenerateProgramFile>false</GenerateProgramFile>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
+    <PackageReference Include="Microsoft.AspNetCore.TestHost" />
     <PackageReference Include="Microsoft.Extensions.Hosting" />
 
     <PackageReference Include="Moq" />
+
     <PackageReference Include="xunit" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="Shouldly" />
@@ -19,7 +26,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Monitoring\EverTask.Monitor.Api\EverTask.Monitor.Api.csproj" />
     <ProjectReference Include="..\..\src\Monitoring\EverTask.Monitor.AspnetCore.SignalR\EverTask.Monitor.AspnetCore.SignalR.csproj" />
     <ProjectReference Include="..\..\src\EverTask\EverTask.csproj" />
   </ItemGroup>
+
 </Project>
