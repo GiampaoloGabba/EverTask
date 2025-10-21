@@ -267,43 +267,31 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         if (skippedOccurrences.Count == 0)
             return;
 
-        logger.LogInformation("Recording {count} skipped occurrences for task {taskId}", skippedOccurrences.Count, taskId);
+        logger.LogInformation("Recording {Count} skipped occurrences for task {TaskId}", skippedOccurrences.Count, taskId);
 
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
 
         try
         {
-            var task = await dbContext.QueuedTasks
-                                      .Where(x => x.Id == taskId)
-                                      .FirstOrDefaultAsync(ct)
-                                      .ConfigureAwait(false);
+            // Crea messaggio e inserisci direttamente: la FK garantisce l'esistenza
+            var skippedTimes = string.Join(", ", skippedOccurrences.Select(d => d.ToString("yyyy-MM-dd HH:mm:ss")));
+            var skipMessage = $"Skipped {skippedOccurrences.Count} missed occurrence(s) to maintain schedule: {skippedTimes}";
 
-            if (task != null)
+            var runsAudit = new RunsAudit
             {
-                // Create a summary of skipped times
-                var skippedTimes = string.Join(", ", skippedOccurrences.Select(d => d.ToString("yyyy-MM-dd HH:mm:ss")));
-                var skipMessage = $"Skipped {skippedOccurrences.Count} missed occurrence(s) to maintain schedule: {skippedTimes}";
+                QueuedTaskId = taskId,
+                ExecutedAt   = DateTimeOffset.UtcNow,
+                Status       = QueuedTaskStatus.Cancelled,
+                Exception    = skipMessage
+            };
 
-                // Add a RunsAudit entry documenting the skips
-                var runsAudit = new RunsAudit
-                {
-                    QueuedTaskId = taskId,
-                    ExecutedAt   = DateTimeOffset.UtcNow,
-                    Status       = QueuedTaskStatus.Completed, // Using Completed as the base status
-                    Exception    = skipMessage // Store skip info in Exception field for audit trail
-                };
-
-                dbContext.RunsAudit.Add(runsAudit);
-                await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
-            }
-            else
-            {
-                logger.LogWarning("Task {taskId} not found when trying to record skipped occurrences", taskId);
-            }
+            dbContext.RunsAudit.Add(runsAudit);
+            await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
         }
         catch (Exception e)
         {
-            logger.LogWarning(e, "Unable to record skipped occurrences for task {taskId}", taskId);
+            // Se è violazione FK => task inesistente, altrimenti log generico
+            logger.LogWarning(e, "Unable to record skipped occurrences for task {TaskId}", taskId);
         }
     }
 }

@@ -14,6 +14,7 @@ public static class RecurringTaskExtensions
     /// <param name="scheduledTime">The scheduled time to calculate from (usually the last scheduled execution time)</param>
     /// <param name="currentRun">The current run count</param>
     /// <param name="maxIterations">Maximum number of iterations to prevent infinite loops (default: 1000)</param>
+    /// <param name="referenceTime">Optional reference time for "now" comparison. If null, uses DateTimeOffset.UtcNow</param>
     /// <returns>A NextRunResult containing the next valid run time and information about skipped occurrences</returns>
     /// <remarks>
     /// This method maintains schedule consistency by calculating from the scheduled time rather than
@@ -26,18 +27,20 @@ public static class RecurringTaskExtensions
         this RecurringTask recurringTask,
         DateTimeOffset scheduledTime,
         int currentRun,
-        int maxIterations = 1000)
+        int maxIterations = 1000,
+        DateTimeOffset? referenceTime = null)
     {
         ArgumentNullException.ThrowIfNull(recurringTask);
 
         var nextRun = recurringTask.CalculateNextRun(scheduledTime, currentRun);
         var skippedOccurrences = new List<DateTimeOffset>();
-        var now = DateTimeOffset.UtcNow;
+        var now = referenceTime ?? DateTimeOffset.UtcNow;
 
         // Skip forward through any missed occurrences
         while (nextRun.HasValue && nextRun.Value < now && maxIterations-- > 0)
         {
             skippedOccurrences.Add(nextRun.Value);
+            currentRun++; // Increment run count for each skipped occurrence to respect MaxRuns
             nextRun = recurringTask.CalculateNextRun(nextRun.Value, currentRun);
         }
 

@@ -119,12 +119,21 @@ public class Dispatcher(
 
         if (recurring != null)
         {
-            nextRun = recurring.CalculateNextRun(DateTimeOffset.UtcNow, currentRun ?? 0);
+            // Use CalculateNextValidRun to properly handle past RunAt times and skip past occurrences
+            // This ensures tasks with past SpecificRunTime are scheduled for the next future occurrence
+            // Use the same reference time for both scheduledTime and referenceTime to avoid timing issues
+            // where RunNow gets incorrectly skipped due to millisecond differences
+            var referenceTime = DateTimeOffset.UtcNow;
+            var result = recurring.CalculateNextValidRun(referenceTime, currentRun ?? 0, referenceTime: referenceTime);
 
-            if (nextRun == null)
+            if (result.NextRun == null)
                 throw new ArgumentException("Invalid scheduler recurring expression", nameof(recurring));
 
+            nextRun = result.NextRun;
             executionTime = nextRun;
+
+            // DEBUG
+            Console.WriteLine($"[Dispatcher] Scheduled recurring task for {executionTime:O}, skipped {result.SkippedCount} occurrences");
         }
 
         var taskType = task.GetType();

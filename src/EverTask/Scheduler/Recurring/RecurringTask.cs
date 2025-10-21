@@ -24,35 +24,61 @@ public class RecurringTask
 
         current = current.ToUniversalTime();
 
-        if (RunUntil < current) return null;
-
-        var next = GetNextOccurrence(current);
+        if (RunUntil <= current) return null;
 
         DateTimeOffset? runtime = null;
 
-        if (currentRun > 0) return next;
+        // For first run (currentRun == 0), check if we have initial run configuration
+        if (currentRun == 0)
+        {
+            if (RunNow)
+            {
+                runtime = DateTimeOffset.UtcNow;
+            }
+            else if (SpecificRunTime.HasValue)
+            {
+                runtime = SpecificRunTime.Value.ToUniversalTime();
+            }
+            else if (InitialDelay.HasValue)
+            {
+                // InitialDelay always takes precedence - it defines the absolute first run time
+                return current.Add(InitialDelay.Value);
+            }
+        }
 
-        if (RunNow)
-        {
-            runtime = DateTimeOffset.UtcNow;
-        }
-        else if (SpecificRunTime.HasValue)
-        {
-            runtime = SpecificRunTime.Value.ToUniversalTime();
-        }
-        else if (InitialDelay.HasValue)
-        {
-            runtime = current.Add(InitialDelay.Value);
-        }
+        // Calculate next occurrence from the appropriate base time:
+        // - If SpecificRunTime is set and in the past, calculate from SpecificRunTime to properly skip past occurrences
+        // - Otherwise, calculate from current time
+        var baseTime = (currentRun == 0 && runtime.HasValue && runtime.Value < current)
+            ? runtime.Value
+            : current;
+        var next = GetNextOccurrence(baseTime);
+
+        if (currentRun > 0) return next;
 
         if (next == null) return runtime;
 
-        // Return runtime only if it's before next and also before the current time, but not too much before...
-        // and there is at least a 30 seconds gap between runtime and next.
-        // This prevents closely spaced executions in case of delays or missed runs.
-        if (runtime < next && runtime < current.AddSeconds(1) && runtime > current.AddSeconds(-20) &&
-            (next.Value - runtime.Value).TotalSeconds >= 30)
-            return runtime;
+        // For RunNow or SpecificRunTime, use runtime if:
+        // 1. It's in the future (always use future SpecificRunTime)
+        // 2. It's in the recent past (within 20 seconds) AND before next interval
+        // No arbitrary gap required - the user explicitly requested this runtime
+        if (runtime.HasValue)
+        {
+            // If runtime is in the future, always use it
+            if (runtime.Value > current)
+            {
+                return runtime;
+            }
+
+            // If runtime is in the recent past, use it only if it's before next interval
+            bool runtimeIsBeforeNext = runtime < next;
+            bool notTooFarInPast = runtime.Value > current.AddSeconds(-20);
+
+            if (runtimeIsBeforeNext && notTooFarInPast)
+            {
+                return runtime;
+            }
+        }
 
         return next;
     }
@@ -62,7 +88,7 @@ public class RecurringTask
         if (!string.IsNullOrEmpty(CronInterval?.CronExpression))
         {
             var nextCron = CronInterval.GetNextOccurrence(current);
-            if (nextCron == null || RunUntil < nextCron)
+            if (nextCron == null || RunUntil <= nextCron)
                 return null;
 
             return nextCron;
@@ -74,7 +100,7 @@ public class RecurringTask
         nextRun = MinuteInterval?.GetNextOccurrence(nextRun) ?? nextRun;
         nextRun = SecondInterval?.GetNextOccurrence(nextRun) ?? nextRun;
 
-        if (nextRun < current.AddSeconds(1) || nextRun > RunUntil)
+        if (nextRun < current.AddSeconds(1) || nextRun >= RunUntil)
             return null;
 
         return nextRun;

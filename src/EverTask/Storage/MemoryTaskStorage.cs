@@ -89,7 +89,9 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         logger.LogInformation("Get the current run counter for Task {taskId}", taskId);
         var task = _pendingTasks.FirstOrDefault(x => x.Id == taskId);
 
-        return Task.FromResult(task?.CurrentRunCount ?? 1);
+        // Return 0 if task not found or CurrentRunCount is null (before first run)
+        // The count represents completed runs, so 0 = no runs completed yet
+        return Task.FromResult(task?.CurrentRunCount ?? 0);
     }
 
     public Task UpdateCurrentRun(Guid taskId, DateTimeOffset? nextRun)
@@ -170,7 +172,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         if (skippedOccurrences.Count == 0)
             return Task.CompletedTask;
 
-        logger.LogInformation("Recording {count} skipped occurrences for task {taskId}", skippedOccurrences.Count, taskId);
+        logger.LogInformation("Recording {Count} skipped occurrences for task {TaskId}", skippedOccurrences.Count, taskId);
 
         var task = _pendingTasks.FirstOrDefault(x => x.Id == taskId);
 
@@ -191,7 +193,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         }
         else
         {
-            logger.LogWarning("Task {taskId} not found when trying to record skipped occurrences", taskId);
+            logger.LogWarning("Task {TaskId} not found when trying to record skipped occurrences", taskId);
         }
 
         return Task.CompletedTask;
