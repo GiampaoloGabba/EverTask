@@ -28,8 +28,12 @@ public static class DateTimeOffsetExtensions
         // This eliminates repeated sorting on every call
         var currentTimeOnly = TimeOnly.FromDateTime(current.DateTime);
 
+        // If nextDay is on a different day than current, we can use >= comparison
+        // Otherwise, use > to ensure we get a time after the current time
+        bool isDifferentDay = nextDay.Date != current.Date;
+
         // The default for TimeOnly is midnight, so we need to check the array index to know if there is a date specified by a user
-        var nextTimeIndex = Array.FindIndex(onTimes, t => t > currentTimeOnly);
+        var nextTimeIndex = Array.FindIndex(onTimes, t => isDifferentDay ? t >= currentTimeOnly : t > currentTimeOnly);
 
         if (nextTimeIndex == -1)
         {
@@ -147,7 +151,10 @@ public static class DateTimeOffsetExtensions
 
     public static TimeOnly ToUniversalTime(this TimeOnly time)
     {
-        var datetime    = DateTimeOffset.Now.Adjust(hour: time.Hour, minute: time.Minute, second: time.Second);
+        // Since EverTask works internally in UTC, we interpret TimeOnly as UTC time.
+        // This makes the API consistent and timezone-independent.
+        // If users want to specify local time, they should convert it themselves before passing it.
+        var datetime    = DateTimeOffset.UtcNow.Adjust(hour: time.Hour, minute: time.Minute, second: time.Second);
         var utcDateTime = datetime.ToUniversalTime().DateTime;
         return TimeOnly.FromDateTime(utcDateTime);
     }

@@ -26,10 +26,10 @@ public class EverySchedulerBuilder : IEverySchedulerBuilder
         return new MinuteSchedulerBuilder(_task);
     }
 
-    public IBuildableSchedulerBuilder Hours()
+    public IHourSchedulerBuilder Hours()
     {
         _task.HourInterval = new HourInterval(_interval);
-        return new BuildableSchedulerBuilder(_task);
+        return new HourSchedulerBuilder(_task);
     }
 
     public IDailyTimeSchedulerBuilder Days()

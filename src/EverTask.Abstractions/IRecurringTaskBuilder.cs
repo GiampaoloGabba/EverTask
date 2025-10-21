@@ -29,7 +29,7 @@ public interface IEverySchedulerBuilder
 {
     IBuildableSchedulerBuilder Seconds();
     IMinuteSchedulerBuilder Minutes();
-    IBuildableSchedulerBuilder Hours();
+    IHourSchedulerBuilder Hours();
     IDailyTimeSchedulerBuilder Days();
     IMonthlySchedulerBuilder Months();
 }

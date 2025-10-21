@@ -82,4 +82,9 @@ public class TestTaskStorage : ITaskStorage
     {
         return Task.CompletedTask;
     }
+
+    public Task RecordSkippedOccurrences(Guid taskId, List<DateTimeOffset> skippedOccurrences, CancellationToken ct = default)
+    {
+        return Task.CompletedTask;
+    }
 }

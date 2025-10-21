@@ -1,8 +1,11 @@
-﻿namespace EverTask.Scheduler.Recurring.Intervals;
+﻿using Newtonsoft.Json;
+
+namespace EverTask.Scheduler.Recurring.Intervals;
 
 public class HourInterval : IInterval
 {
     //used for serialization/deserialization
+    [JsonConstructor]
     public HourInterval() { }
 
     public HourInterval(int interval)
@@ -16,7 +19,7 @@ public class HourInterval : IInterval
         OnHours = onHours.Distinct().ToArray();
     }
 
-    public int Interval { get; }
+    public int Interval { get; init; }
     public int? OnMinute { get; set; }
     public int? OnSecond { get; set; }
     public int[] OnHours { get; set; } = Array.Empty<int>();

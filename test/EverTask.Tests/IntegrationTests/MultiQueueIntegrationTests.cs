@@ -376,7 +376,7 @@ public class MultiQueueIntegrationTests : IntegrationTestBase
         await TaskWaitHelper.WaitUntilAsync(
             async () => await Storage!.GetAll(),
             tasks => tasks.Count(t => allTaskIds.Contains(t.Id) && t.Status == QueuedTaskStatus.Completed) >= 6,
-            timeoutMs: 8000 // Increased timeout for .NET 6 compatibility
+            timeoutMs: 15000 // Increased timeout for .NET 6 reliability (3 sequential tasks @ 200ms each + scheduling overhead)
         );
 
         var tasks = await Storage!.GetAll();

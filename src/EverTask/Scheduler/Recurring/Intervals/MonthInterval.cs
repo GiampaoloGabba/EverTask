@@ -1,8 +1,11 @@
-﻿namespace EverTask.Scheduler.Recurring.Intervals;
+﻿using Newtonsoft.Json;
+
+namespace EverTask.Scheduler.Recurring.Intervals;
 
 public class MonthInterval : IInterval
 {
     //used for serialization/deserialization
+    [JsonConstructor]
     public MonthInterval() { }
 
     public MonthInterval(int interval)
@@ -18,7 +21,7 @@ public class MonthInterval : IInterval
 
     private TimeOnly[] _onTimes = [TimeOnly.Parse("00:00")];
 
-    public int        Interval { get; }
+    public int        Interval { get; init; }
     public int?       OnDay    { get; set; }
     public int[]      OnDays   { get; set; } = [];
     public DayOfWeek? OnFirst  { get; set; }
@@ -55,7 +58,10 @@ public class MonthInterval : IInterval
         }
         else if (OnDay.HasValue)
         {
-            nextMonth = nextMonth.AdjustDayToValidMonthDay(OnDay.Value);
+            // Adjust day directly - we've already added Interval months, so don't add more
+            var daysInMonth = DateTime.DaysInMonth(nextMonth.Year, nextMonth.Month);
+            var validDay = Math.Min(OnDay.Value, daysInMonth);
+            nextMonth = nextMonth.Adjust(day: validDay);
         }
         // If no day specification (OnFirst, OnDays, OnDay), keep the day from AddMonths()
 
