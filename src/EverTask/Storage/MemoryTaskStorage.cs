@@ -89,7 +89,9 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         logger.LogInformation("Get the current run counter for Task {taskId}", taskId);
         var task = _pendingTasks.FirstOrDefault(x => x.Id == taskId);
 
-        return Task.FromResult(task?.CurrentRunCount ?? 1);
+        // Return 0 if task not found or CurrentRunCount is null (before first run)
+        // The count represents completed runs, so 0 = no runs completed yet
+        return Task.FromResult(task?.CurrentRunCount ?? 0);
     }
 
     public Task UpdateCurrentRun(Guid taskId, DateTimeOffset? nextRun)
@@ -159,6 +161,39 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         if (task != null)
         {
             _pendingTasks.Remove(task);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task RecordSkippedOccurrences(Guid taskId, List<DateTimeOffset> skippedOccurrences, CancellationToken ct = default)
+    {
+        if (skippedOccurrences.Count == 0)
+            return Task.CompletedTask;
+
+        logger.LogInformation("Recording {Count} skipped occurrences for task {TaskId}", skippedOccurrences.Count, taskId);
+
+        var task = _pendingTasks.FirstOrDefault(x => x.Id == taskId);
+
+        if (task != null)
+        {
+            // Create a summary of skipped times
+            var skippedTimes = string.Join(", ", skippedOccurrences.Select(d => d.ToString("yyyy-MM-dd HH:mm:ss")));
+            var skipMessage = $"Skipped {skippedOccurrences.Count} missed occurrence(s) to maintain schedule: {skippedTimes}";
+
+            // Add a RunsAudit entry documenting the skips
+            task.RunsAudits.Add(new RunsAudit
+            {
+                QueuedTaskId = taskId,
+                ExecutedAt   = DateTimeOffset.UtcNow,
+                Status       = QueuedTaskStatus.Completed, // Using Completed as the base status
+                Exception    = skipMessage // Store skip info in Exception field for audit trail
+            });
+        }
+        else
+        {
+            logger.LogWarning("Task {TaskId} not found when trying to record skipped occurrences", taskId);
         }
 
         return Task.CompletedTask;

@@ -267,15 +267,64 @@ public class WorkerExecutor(
     {
         if (task.RecurringTask == null) return;
 
+        // If we reach here for a recurring task, it means an error occurred
+        // In that case, we still need to schedule the next run
         if (taskStorage != null)
         {
             var currentRun = await taskStorage.GetCurrentRunCount(task.PersistenceId);
-            var nextRun    = task.RecurringTask.CalculateNextRun(DateTimeOffset.UtcNow, currentRun + 1);
-            await taskStorage.UpdateCurrentRun(task.PersistenceId, nextRun)
+
+            // Fix for schedule drift: Use the scheduled execution time as base for next calculation,
+            // not the current time. This ensures recurring tasks maintain their intended schedule
+            // even when execution is delayed due to system load or downtime.
+            // See: docs/recurring-task-schedule-drift-fix.md
+
+            // Use the scheduled execution time for THIS run as the base for calculating the next run.
+            // For the first run, task.ExecutionTime contains the correct scheduled time.
+            // For subsequent runs, task.ExecutionTime still contains the original time from first dispatch
+            // because TaskHandlerExecutor is reused. We need to reconstruct the scheduled time from
+            // the interval and the number of completed runs.
+            var scheduledTime = task.ExecutionTime ?? DateTimeOffset.UtcNow;
+
+            // For subsequent runs (currentRun > 0), calculate the scheduled time for THIS run
+            // by adding the interval * currentRun to the original execution time
+            if (currentRun > 0)
+            {
+                // Recalculate the scheduled time for THIS run from the original execution time
+                var firstRunTime = task.ExecutionTime ?? DateTimeOffset.UtcNow;
+                for (int i = 0; i < currentRun; i++)
+                {
+                    var nextRun = task.RecurringTask.CalculateNextRun(firstRunTime, i + 1);
+                    if (nextRun.HasValue)
+                        firstRunTime = nextRun.Value;
+                }
+                scheduledTime = firstRunTime;
+            }
+
+            // Use extension method to calculate next valid run and get skip information
+            var result = task.RecurringTask.CalculateNextValidRun(scheduledTime, currentRun + 1);
+
+            // Log and persist skipped occurrences if any
+            if (result.SkippedCount > 0)
+            {
+                var skippedTimes = string.Join(", ",
+                    result.SkippedOccurrences.Select(d => d.ToString("yyyy-MM-dd HH:mm:ss")));
+
+                logger.LogInformation(
+                    "Task {TaskId} skipped {SkippedCount} missed occurrence(s) to maintain schedule: {SkippedTimes}",
+                    task.PersistenceId, result.SkippedCount, skippedTimes);
+
+                // Persist skip information to storage
+                await taskStorage.RecordSkippedOccurrences(
+                    task.PersistenceId,
+                    result.SkippedOccurrences,
+                    CancellationToken.None).ConfigureAwait(false);
+            }
+
+            await taskStorage.UpdateCurrentRun(task.PersistenceId, result.NextRun)
                              .ConfigureAwait(false);
 
-            if (nextRun.HasValue)
-                scheduler.Schedule(task, nextRun);
+            if (result.NextRun.HasValue)
+                scheduler.Schedule(task, result.NextRun);
         }
     }
 

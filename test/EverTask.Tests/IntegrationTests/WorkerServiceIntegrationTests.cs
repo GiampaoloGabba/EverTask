@@ -345,7 +345,7 @@ public class WorkerServiceIntegrationTests
 
         tasks.Length.ShouldBe(1);
         tasks[0].Status.ShouldBe(QueuedTaskStatus.Completed);
-        tasks[0].RunsAudits.Count(x=>x.Status == QueuedTaskStatus.Completed).ShouldBe(3);
+        tasks[0].RunsAudits.Count(x=>x.Status == QueuedTaskStatus.Completed).ShouldBe(4);
         tasks[0].LastExecutionUtc.ShouldNotBeNull();
         tasks[0].Exception.ShouldBeNull();
 

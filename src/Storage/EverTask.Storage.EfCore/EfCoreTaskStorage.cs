@@ -260,4 +260,38 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             throw;
         }
     }
+
+    /// <inheritdoc />
+    public async Task RecordSkippedOccurrences(Guid taskId, List<DateTimeOffset> skippedOccurrences, CancellationToken ct = default)
+    {
+        if (skippedOccurrences.Count == 0)
+            return;
+
+        logger.LogInformation("Recording {Count} skipped occurrences for task {TaskId}", skippedOccurrences.Count, taskId);
+
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+
+        try
+        {
+            // Crea messaggio e inserisci direttamente: la FK garantisce l'esistenza
+            var skippedTimes = string.Join(", ", skippedOccurrences.Select(d => d.ToString("yyyy-MM-dd HH:mm:ss")));
+            var skipMessage = $"Skipped {skippedOccurrences.Count} missed occurrence(s) to maintain schedule: {skippedTimes}";
+
+            var runsAudit = new RunsAudit
+            {
+                QueuedTaskId = taskId,
+                ExecutedAt   = DateTimeOffset.UtcNow,
+                Status       = QueuedTaskStatus.Cancelled,
+                Exception    = skipMessage
+            };
+
+            dbContext.RunsAudit.Add(runsAudit);
+            await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception e)
+        {
+            // Se è violazione FK => task inesistente, altrimenti log generico
+            logger.LogWarning(e, "Unable to record skipped occurrences for task {TaskId}", taskId);
+        }
+    }
 }

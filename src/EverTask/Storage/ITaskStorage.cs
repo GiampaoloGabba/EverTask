@@ -124,4 +124,19 @@ public interface ITaskStorage
     /// <param name="ct">Optional cancellation token.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
     Task Remove(Guid taskId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Records information about skipped recurring task occurrences in the audit trail.
+    /// This creates a RunsAudit entry with details about which scheduled runs were skipped.
+    /// </summary>
+    /// <param name="taskId">The ID of the recurring task.</param>
+    /// <param name="skippedOccurrences">List of DateTimeOffset values representing skipped execution times.</param>
+    /// <param name="ct">Optional cancellation token.</param>
+    /// <returns>A task representing the asynchronous operation.</returns>
+    /// <remarks>
+    /// This method is called when a recurring task resumes after downtime and needs to skip
+    /// past occurrences to maintain its schedule. The audit entry provides a permanent record
+    /// of which scheduled executions were skipped.
+    /// </remarks>
+    Task RecordSkippedOccurrences(Guid taskId, List<DateTimeOffset> skippedOccurrences, CancellationToken ct = default);
 }

@@ -52,7 +52,21 @@ public static class TaskHandlerExecutorExtensions
         {
             scheduleTask = JsonConvert.SerializeObject(executor.RecurringTask);
             isRecurring = true;
-            nextRun = executor.RecurringTask.CalculateNextRun(DateTimeOffset.UtcNow, 0);
+
+            // For a newly dispatched recurring task, NextRunUtc should be the time of the first execution
+            // (same as ScheduledExecutionUtc). If ExecutionTime is null (e.g., immediate execution),
+            // calculate the first occurrence from UtcNow.
+            if (executor.ExecutionTime.HasValue)
+            {
+                nextRun = executor.ExecutionTime;
+            }
+            else
+            {
+                // Calculate first occurrence for immediate execution
+                var referenceTime = DateTimeOffset.UtcNow;
+                var result = executor.RecurringTask.CalculateNextValidRun(referenceTime, 0, referenceTime: referenceTime);
+                nextRun = result.NextRun;
+            }
 
             // Cache RecurringTask.ToString() result to avoid repeated string generation
             scheduleTaskInfo = RecurringTaskToStringCache.GetOrAdd(
