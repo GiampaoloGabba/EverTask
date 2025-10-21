@@ -122,7 +122,14 @@ public class WorkerServiceScheduledIntegrationTests
         pt[0].Status.ShouldBe(QueuedTaskStatus.WaitingQueue);
 
         // Wait for recurring task to complete 3 runs
-        await TaskWaitHelper.WaitForRecurringRunsAsync(_storage, taskId, 3, timeoutMs: 10000);
+        // Increased timeout for parallel test execution on .NET 8/9
+        var completedTask = await TaskWaitHelper.WaitForRecurringRunsAsync(_storage, taskId, 3, timeoutMs: 15000);
+
+        // Use the returned task from WaitForRecurringRunsAsync to avoid race conditions
+        completedTask.CurrentRunCount.ShouldBe(3);
+        completedTask.RunsAudits.Count.ShouldBe(3);
+
+        // Verify in storage as well
         pt = await _storage.GetAll();
         pt.Length.ShouldBe(1);
         pt[0].CurrentRunCount.ShouldBe(3);

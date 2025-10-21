@@ -24,6 +24,8 @@ public class TestTaskRecurringWithFailure() : IEverTask
     public static int FailUntilCount { get; set; } = 2; // Fail first N attempts
 }
 
+public record TestTaskDelayedRecurring(int delayMs) : IEverTask;
+
 public class TestTaskRecurringSecondsHandler : EverTaskHandler<TestTaskRecurringSeconds>
 {
     private readonly TestTaskStateManager? _stateManager;
@@ -89,5 +91,76 @@ public class TestTaskRecurringWithFailureHandler : EverTaskHandler<TestTaskRecur
         }
 
         // After threshold, succeed
+    }
+}
+
+public class TestTaskDelayedRecurringHandler : EverTaskHandler<TestTaskDelayedRecurring>
+{
+    private readonly TestTaskStateManager? _stateManager;
+
+    public TestTaskDelayedRecurringHandler(TestTaskStateManager? stateManager = null)
+    {
+        _stateManager = stateManager;
+    }
+
+    public override async Task Handle(TestTaskDelayedRecurring backgroundTask, CancellationToken cancellationToken)
+    {
+        // Simulate task execution time (delay)
+        await Task.Delay(backgroundTask.delayMs, cancellationToken);
+        _stateManager?.IncrementCounter(nameof(TestTaskDelayedRecurring));
+    }
+}
+
+
+// Test tasks for queue sharding - each task has its handler with specific QueueName
+public class TestTaskRecurringQueueShard1() : IEverTask
+{
+    public static int Counter { get; set; } = 0;
+}
+
+public class TestTaskRecurringQueueShard2() : IEverTask
+{
+    public static int Counter { get; set; } = 0;
+}
+
+public class TestTaskRecurringQueueShard1Handler : EverTaskHandler<TestTaskRecurringQueueShard1>
+{
+    private readonly TestTaskStateManager? _stateManager;
+
+    // Set QueueName to route this task to "shard1" queue
+    public override string? QueueName => "shard1";
+
+    public TestTaskRecurringQueueShard1Handler(TestTaskStateManager? stateManager = null)
+    {
+        _stateManager = stateManager;
+    }
+
+    public override async Task Handle(TestTaskRecurringQueueShard1 backgroundTask, CancellationToken
+                                          cancellationToken)
+    {
+        await Task.Delay(100, cancellationToken);
+        TestTaskRecurringQueueShard1.Counter++;
+        _stateManager?.IncrementCounter(nameof(TestTaskRecurringQueueShard1));
+    }
+}
+
+public class TestTaskRecurringQueueShard2Handler : EverTaskHandler<TestTaskRecurringQueueShard2>
+{
+    private readonly TestTaskStateManager? _stateManager;
+
+    // Set QueueName to route this task to "shard2" queue
+    public override string? QueueName => "shard2";
+
+    public TestTaskRecurringQueueShard2Handler(TestTaskStateManager? stateManager = null)
+    {
+        _stateManager = stateManager;
+    }
+
+    public override async Task Handle(TestTaskRecurringQueueShard2 backgroundTask, CancellationToken
+                                          cancellationToken)
+    {
+        await Task.Delay(100, cancellationToken);
+        TestTaskRecurringQueueShard2.Counter++;
+        _stateManager?.IncrementCounter(nameof(TestTaskRecurringQueueShard2));
     }
 }

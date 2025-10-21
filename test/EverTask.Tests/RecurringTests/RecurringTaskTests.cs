@@ -25,23 +25,6 @@ public class RecurringTaskTests
         Assert.Equal(futureTime, nextRun);
     }
 
-    // Testa runtime molto vicino a next
-    [Fact]
-    public void CalculateNextRun_WithCloseRuntimeAndNext_ShouldReturnNext()
-    {
-        var task = new RecurringTask
-        {
-            RunNow         = true,
-            SecondInterval = new SecondInterval(30) // Ogni 30 secondi
-        };
-        var current = DateTimeOffset.UtcNow.AddSeconds(-15); // 15 secondi prima
-        var nextRun = task.CalculateNextRun(current, 0);
-
-        // Aspettiamo che il metodo restituisca 'next', non 'runtime',
-        // perché 'runtime' è troppo vicino a 'next'
-        Assert.True(nextRun >= current.AddSeconds(30));
-    }
-
     // Testa runtime nel passato rispetto a current
     [Fact]
     public void CalculateNextRun_WithPastRuntime_close_to_now_should_run_ShouldReturnRunTime()

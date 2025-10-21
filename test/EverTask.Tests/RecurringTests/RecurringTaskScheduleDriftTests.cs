@@ -135,7 +135,7 @@ public class RecurringTaskScheduleDriftTests
         // Arrange: Task runs daily at 9:00 AM
         var task = new RecurringTask
         {
-            DayInterval = new DayInterval(1) { OnTimes = new[] { new TimeSpan(9, 0, 0) } }
+            DayInterval = new DayInterval(1) { OnTimes = new[] { new TimeOnly(9, 0, 0) } }
         };
 
         // Simulate: Task scheduled for Jan 1 at 9:00 AM

@@ -170,8 +170,14 @@ public static class TaskWaitHelper
                 var tasks = await storage.GetAll();
                 return tasks.FirstOrDefault(t => t.Id == taskId);
             },
-            task => task != null &&
-                    task.RunsAudits.Count(x => x.Status == QueuedTaskStatus.Completed) >= expectedRuns,
+            task =>
+            {
+                if (task == null) return false;
+                // Create a snapshot to avoid "Collection was modified" exception
+                // when RunsAudits is being modified by background threads
+                var audits = task.RunsAudits.ToArray();
+                return audits.Count(x => x.Status == QueuedTaskStatus.Completed) >= expectedRuns;
+            },
             timeoutMs
         ) ?? throw new InvalidOperationException($"Task {taskId} not found in storage");
     }
