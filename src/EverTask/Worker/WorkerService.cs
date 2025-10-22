@@ -33,16 +33,27 @@ public class WorkerService(
         logger.LogInformation("Starting consumption of {QueueCount} queue(s): {QueueNames}",
             queues.Count, string.Join(", ", queues.Select(q => q.Name)));
 
-        // Create consumption tasks for each queue with its own parallelism
+        // Create N dedicated consumers for each queue using the official Microsoft pattern
+        // This is the recommended approach for channel-based background workers
         var queueConsumptionTasks = queues
-            .Select(q => ConsumeQueue(q.Name, q.Queue, ct))
+            .SelectMany(q => StartConsumers(q.Name, q.Queue, ct))
             .ToList();
 
-        // Run all queue consumers concurrently
+        // Wait for all consumers to complete
         await Task.WhenAll(queueConsumptionTasks).ConfigureAwait(false);
     }
 
-    private async Task ConsumeQueue(string queueName, IWorkerQueue queue, CancellationToken ct)
+    /// <summary>
+    /// Starts N dedicated long-lived consumers for a queue.
+    /// This is the official Microsoft-recommended pattern for channel consumption.
+    /// Benefits over semaphore+list approach:
+    /// - Zero per-item allocation (no Task.Run per task)
+    /// - Stable memory footprint (N fixed workers)
+    /// - No manual task list management
+    /// - Natural backpressure with bounded channels
+    /// - Graceful shutdown via cancellation token
+    /// </summary>
+    private IEnumerable<Task> StartConsumers(string queueName, IWorkerQueue queue, CancellationToken ct)
     {
         // Get the configuration for this specific queue
         var queueConfig = queue switch
@@ -55,28 +66,79 @@ public class WorkerService(
             }
         };
 
-        logger.LogTrace("Starting consumption of queue '{QueueName}' with MaxDegreeOfParallelism: {MaxDegreeOfParallelism}",
-            queueName, queueConfig.MaxDegreeOfParallelism);
+        var consumerCount = queueConfig.MaxDegreeOfParallelism;
 
-        var options = new ParallelOptions
-        {
-            MaxDegreeOfParallelism = queueConfig.MaxDegreeOfParallelism,
-            CancellationToken = ct
-        };
+        logger.LogTrace("Starting {ConsumerCount} dedicated consumer(s) for queue '{QueueName}'",
+            consumerCount, queueName);
 
-        try
+        // Spawn N long-lived consumers that compete for items from the channel
+        for (int i = 0; i < consumerCount; i++)
         {
-            await Parallel.ForEachAsync(queue.DequeueAll(ct), options, workerExecutor.DoWork).ConfigureAwait(false);
+            var consumerId = i; // Capture for logging
+            yield return Task.Run(async () =>
+            {
+                logger.LogTrace("Consumer #{ConsumerId} for queue '{QueueName}' started",
+                    consumerId, queueName);
+
+                try
+                {
+                    await ConsumeAsync(queue, queueName, consumerId, ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    logger.LogInformation("Consumer #{ConsumerId} for queue '{QueueName}' cancelled",
+                        consumerId, queueName);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Consumer #{ConsumerId} for queue '{QueueName}' faulted",
+                        consumerId, queueName);
+                    throw;
+                }
+                finally
+                {
+                    logger.LogTrace("Consumer #{ConsumerId} for queue '{QueueName}' stopped",
+                        consumerId, queueName);
+                }
+            }, ct);
         }
-        catch (OperationCanceledException)
+    }
+
+    /// <summary>
+    /// Long-lived consumer loop that processes items from the queue.
+    /// Each consumer competes with others for items from the same channel.
+    /// </summary>
+    private async Task ConsumeAsync(IWorkerQueue queue, string queueName, int consumerId, CancellationToken ct)
+    {
+        // Multiple consumers will compete for items from DequeueAll
+        // Channel guarantees each item is delivered to exactly one consumer
+        await foreach (var task in queue.DequeueAll(ct).ConfigureAwait(false))
         {
-            logger.LogInformation("Queue '{QueueName}' consumption cancelled", queueName);
+            try
+            {
+                // Direct execution - no Task.Run overhead, no semaphore, no list management
+                // Worker is already running in its own Task from StartConsumers
+                await workerExecutor.DoWork(task, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // Graceful shutdown - service is stopping
+                logger.LogTrace("Consumer #{ConsumerId} for queue '{QueueName}' received cancellation during task execution",
+                    consumerId, queueName);
+                return;
+            }
+            catch (Exception ex)
+            {
+                // DoWork should handle errors internally, but catch defensively
+                // Don't let one task failure kill the entire consumer
+                logger.LogError(ex, "Consumer #{ConsumerId} for queue '{QueueName}' error processing task {TaskId}",
+                    consumerId, queueName, task.PersistenceId);
+                // Continue consuming next item
+            }
         }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Error in queue '{QueueName}' consumption", queueName);
-            throw;
-        }
+
+        logger.LogTrace("Consumer #{ConsumerId} for queue '{QueueName}' exited (channel completed)",
+            consumerId, queueName);
     }
 
     private async Task ProcessPendingAsync(CancellationToken ct = default)

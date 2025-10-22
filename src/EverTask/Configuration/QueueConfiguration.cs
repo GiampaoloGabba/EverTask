@@ -22,11 +22,32 @@ public class QueueConfiguration
 
     /// <summary>
     /// Gets or sets the channel options for the bounded queue.
-    /// Default capacity is 500 with Wait behavior when full.
+    ///
+    /// Default capacity: 2000 items with Wait behavior when full.
+    /// This provides a balance between memory usage and spike handling capability.
+    ///
+    /// Configuration guidelines:
+    /// - Small projects / low throughput: 500-1000
+    /// - Medium projects / moderate spikes: 2000-5000 (default)
+    /// - High-throughput / large spikes: 10000+
+    ///
+    /// Backpressure behavior:
+    /// When the channel is full, the dispatcher will block until space becomes available.
+    /// This is intentional backpressure to protect against memory exhaustion during traffic spikes.
+    /// Tasks are persisted to storage before entering the channel, ensuring no data loss.
+    /// Any tasks not processed before shutdown are recovered via ProcessPendingAsync on restart.
+    ///
+    /// Channel configuration:
+    /// - SingleReader = false: N competing consumers (Microsoft-recommended pattern for parallel consumption)
+    /// - SingleWriter = true: Typically one dispatcher writes (can be false if multiple concurrent writers)
+    /// - AllowSynchronousContinuations = false: Safer default, prevents consumer work from blocking writer thread
     /// </summary>
-    public BoundedChannelOptions ChannelOptions { get; set; } = new(500)
+    public BoundedChannelOptions ChannelOptions { get; set; } = new(2000)
     {
-        FullMode = BoundedChannelFullMode.Wait
+        FullMode = BoundedChannelFullMode.Wait,
+        SingleReader = false,  // N consumers compete for items
+        SingleWriter = true,   // Typically one dispatcher writes
+        AllowSynchronousContinuations = false  // Safer default
     };
 
     /// <summary>
