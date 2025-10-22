@@ -118,7 +118,87 @@ public class MyTaskHandler : EverTaskHandler<MyTaskRequest>
 }
 ```
 
-Handlers support optional overrides: `OnStarted`, `OnCompleted`, `OnError`, `DisposeAsyncCore`
+Handlers support optional overrides: `OnStarted`, `OnCompleted`, `OnError`, `OnRetry`, `DisposeAsyncCore`
+
+### Retry Policy Architecture (v1.6.0+)
+
+**Overview**: EverTask's retry system supports exception filtering and lifecycle callbacks to fail-fast on permanent errors while providing visibility into retry attempts.
+
+**Key Files**:
+- `src/EverTask.Abstractions/IRetryPolicy.cs` - Interface with default `ShouldRetry(Exception)` method
+- `src/EverTask.Abstractions/LinearRetryPolicy.cs` - Built-in retry policy with fluent exception filtering API
+- `src/EverTask.Abstractions/RetryPolicyExtensions.cs` - Predefined exception sets (database, network, all transient errors)
+- `src/EverTask.Abstractions/EverTaskHandler.cs` - `OnRetry` virtual method (line ~94)
+- `src/EverTask/Worker/WorkerExecutor.cs` - Integrates retry policy with `OnRetry` callbacks
+
+**Exception Filtering Flow**:
+
+1. Handler execution throws exception in `WorkerExecutor.ExecuteTask()`
+2. `IRetryPolicy.Execute()` catches exception and calls `ShouldRetry(exception)`
+3. `LinearRetryPolicy.ShouldRetry()` evaluates filters in priority order:
+   - **Predicate** (`HandleWhen`): If configured, uses custom `Func<Exception, bool>` (highest priority)
+   - **Whitelist** (`Handle<T>`): If configured, only retry if exception type matches whitelist
+   - **Blacklist** (`DoNotHandle<T>`): If configured, retry all except blacklisted types
+   - **Default**: Retry all except `OperationCanceledException` and `TimeoutException`
+4. If `ShouldRetry()` returns `false`: Throw immediately (fail-fast)
+5. If `ShouldRetry()` returns `true`: Wait for delay, invoke `onRetryCallback`, then retry
+
+**OnRetry Callback Flow**:
+
+1. `WorkerExecutor.ExecuteTask()` passes `onRetryCallback` lambda to `IRetryPolicy.Execute()`
+2. Lambda invokes handler's `OnRetry()` virtual method with task ID, attempt number, exception, and delay
+3. `LinearRetryPolicy.Execute()` calls `onRetryCallback` after delay, before retry attempt
+4. Callback exceptions are logged but don't prevent retry (reliability over observability)
+5. `OnRetry` is NOT called for initial execution, only retries (attempt numbers are 1-based)
+
+**Implementation Details**:
+
+- `IRetryPolicy.Execute()` signature includes optional `Func<int, Exception, TimeSpan, ValueTask>? onRetryCallback` parameter (backward compatible, defaults to null)
+- `LinearRetryPolicy` uses `HashSet<Type>` for whitelist/blacklist with `Type.IsAssignableFrom()` for derived type matching (e.g., `Handle<IOException>()` also catches `FileNotFoundException`)
+- Exception filter validation prevents mixing `Handle<T>()` and `DoNotHandle<T>()` (throws `InvalidOperationException` on first conflicting call)
+- `OnRetry` attempt number is 1-based (first retry = 1, not 0) for user-friendly logging
+- `WorkerExecutor` wraps `OnRetry` in try-catch to prevent callback failures from impacting retry execution
+
+**Predefined Exception Sets** (extension methods):
+
+```csharp
+// Database transient errors
+.HandleTransientDatabaseErrors()  // DbException, TimeoutException
+
+// Network transient errors
+.HandleTransientNetworkErrors()   // HttpRequestException, SocketException, WebException, TaskCanceledException
+
+// All transient errors (combines above)
+.HandleAllTransientErrors()
+```
+
+**Fluent API Examples**:
+
+```csharp
+// Whitelist (type-safe generics)
+RetryPolicy = new LinearRetryPolicy(5, TimeSpan.FromSeconds(2))
+    .Handle<DbException>()
+    .Handle<HttpRequestException>();
+
+// Whitelist (params Type[] for many types)
+RetryPolicy = new LinearRetryPolicy(5, TimeSpan.FromSeconds(2))
+    .Handle(typeof(DbException), typeof(SqlException), typeof(HttpRequestException));
+
+// Blacklist
+RetryPolicy = new LinearRetryPolicy(3, TimeSpan.FromSeconds(1))
+    .DoNotHandle<ArgumentException>()
+    .DoNotHandle<ValidationException>();
+
+// Predicate (custom logic)
+RetryPolicy = new LinearRetryPolicy(3, TimeSpan.FromSeconds(1))
+    .HandleWhen(ex => ex is HttpRequestException httpEx && httpEx.StatusCode >= 500);
+```
+
+**Integration Points**:
+
+- `IRetryPolicy.ShouldRetry(Exception)`: Default interface method (C# 8+) with backward-compatible default implementation
+- `IRetryPolicy.Execute(...)`: Signature updated with optional `onRetryCallback` parameter (existing implementations remain compatible)
+- `WorkerExecutor.ExecuteTask()`: Passes handler instance to callback lambda for `OnRetry()` invocation
 
 ### Dependency Injection
 

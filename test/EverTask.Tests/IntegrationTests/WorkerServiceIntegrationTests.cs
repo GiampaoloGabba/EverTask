@@ -566,11 +566,14 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         // Give OnError callback a moment to complete (it may be called asynchronously)
         await Task.Delay(200);
 
-        // Verify callback order: OnStarted -> Handle -> OnError
-        TestTaskLifecycleWithError.CallbackOrder.Count.ShouldBe(3);
+        // Verify callback order: OnStarted -> Handle -> OnRetry -> Handle (retry) -> OnError
+        // With 1 retry configured, we get: OnStarted, Handle (fail), OnRetry, Handle (fail again), OnError
+        TestTaskLifecycleWithError.CallbackOrder.Count.ShouldBe(5);
         TestTaskLifecycleWithError.CallbackOrder[0].ShouldBe("OnStarted");
         TestTaskLifecycleWithError.CallbackOrder[1].ShouldBe("Handle");
-        TestTaskLifecycleWithError.CallbackOrder[2].ShouldBe("OnError");
+        TestTaskLifecycleWithError.CallbackOrder[2].ShouldBe("OnRetry");
+        TestTaskLifecycleWithError.CallbackOrder[3].ShouldBe("Handle");
+        TestTaskLifecycleWithError.CallbackOrder[4].ShouldBe("OnError");
 
         // Verify OnCompleted was NOT called (only OnError for failures)
         TestTaskLifecycleWithError.CallbackOrder.ShouldNotContain("OnCompleted");

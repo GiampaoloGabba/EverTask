@@ -220,6 +220,58 @@ public class PaymentProcessingHandler : EverTaskHandler<ProcessPaymentTask>
 }
 ```
 
+### Smart Retry Policies with Exception Filtering
+
+Control which exceptions trigger retries to fail-fast on permanent errors:
+
+```csharp
+public class DatabaseTaskHandler : EverTaskHandler<DatabaseTask>
+{
+    private readonly ILogger<DatabaseTaskHandler> _logger;
+
+    // Only retry transient database errors
+    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(5, TimeSpan.FromSeconds(2))
+        .HandleTransientDatabaseErrors();
+
+    // Track retry attempts for monitoring
+    public override ValueTask OnRetry(Guid taskId, int attemptNumber, Exception exception, TimeSpan delay)
+    {
+        _logger.LogWarning(exception,
+            "Database task {TaskId} retry {Attempt} after {DelayMs}ms",
+            taskId, attemptNumber, delay.TotalMilliseconds);
+
+        return ValueTask.CompletedTask;
+    }
+
+    public override async Task Handle(DatabaseTask task, CancellationToken ct)
+    {
+        await _dbContext.ProcessAsync(task.Data, ct);
+    }
+}
+```
+
+**Exception Filtering Options**:
+
+```csharp
+// Whitelist: Only retry specific exceptions
+RetryPolicy = new LinearRetryPolicy(3, TimeSpan.FromSeconds(1))
+    .Handle<DbException>()
+    .Handle<HttpRequestException>();
+
+// Blacklist: Retry all except permanent errors
+RetryPolicy = new LinearRetryPolicy(3, TimeSpan.FromSeconds(1))
+    .DoNotHandle<ArgumentException>()
+    .DoNotHandle<ValidationException>();
+
+// Predicate: Custom logic (e.g., HTTP 5xx only)
+RetryPolicy = new LinearRetryPolicy(3, TimeSpan.FromSeconds(1))
+    .HandleWhen(ex => ex is HttpRequestException httpEx && httpEx.StatusCode >= 500);
+
+// Predefined sets for common scenarios
+RetryPolicy = new LinearRetryPolicy(5, TimeSpan.FromSeconds(2))
+    .HandleAllTransientErrors(); // Database + Network errors
+```
+
 ### Idempotent Task Registration
 
 Use unique keys to safely register recurring tasks at startup without creating duplicates:

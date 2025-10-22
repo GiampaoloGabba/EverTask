@@ -98,6 +98,12 @@ public class TestTaskLifecycleWithErrorHandler : EverTaskHandler<TestTaskLifecyc
         throw new InvalidOperationException("Test error for lifecycle callback");
     }
 
+    public override ValueTask OnRetry(Guid taskId, int attemptNumber, Exception exception, TimeSpan delay)
+    {
+        TestTaskLifecycleWithError.CallbackOrder.Add("OnRetry");
+        return ValueTask.CompletedTask;
+    }
+
     public override ValueTask OnError(Guid taskId, Exception? exception, string? message)
     {
         TestTaskLifecycleWithError.CallbackOrder.Add("OnError");
