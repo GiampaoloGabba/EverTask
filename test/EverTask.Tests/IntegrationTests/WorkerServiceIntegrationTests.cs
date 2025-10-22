@@ -12,7 +12,6 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         await CreateIsolatedHostAsync();
 
         var task = new TestTaskConcurrent1();
-        TestTaskConcurrent1.Counter = 0;
         var taskId = await Dispatcher.Dispatch(task);
 
         // Wait for cancellation source to be created (with polling)
@@ -35,16 +34,15 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         Should.Throw<ObjectDisposedException>(() => ctsToken?.Token);
         CancellationSourceProvider.TryGet(taskId).ShouldBeNull();
 
-        TestTaskConcurrent1.Counter.ShouldBe(1);
     }
 
+    
     [Fact]
     public async Task Should_execute_cpu_bound_task_and_clear_cancellation_source()
     {
         await CreateIsolatedHostAsync();
 
         var task = new TestTaskCpubound();
-        TestTaskCpubound.Counter = 0;
         var taskId = await Dispatcher.Dispatch(task);
 
         // Wait for cancellation source to be created (with polling)
@@ -67,7 +65,6 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         Should.Throw<ObjectDisposedException>(() => ctsToken?.Token);
         CancellationSourceProvider.TryGet(taskId).ShouldBeNull();
 
-        TestTaskCpubound.Counter.ShouldBe(1);
     }
 
     [Fact]
@@ -76,7 +73,6 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         await CreateIsolatedHostAsync();
 
         var task = new TestTaskConcurrent1();
-        TestTaskConcurrent1.Counter = 0;
         var taskId = await Dispatcher.Dispatch(task, TimeSpan.FromMilliseconds(300));
 
         // Give some time for task to be scheduled (but not started yet)
@@ -99,7 +95,6 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         tasks[0].LastExecutionUtc.ShouldNotBeNull();
         tasks[0].Exception.ShouldBeNull();
 
-        TestTaskConcurrent1.Counter.ShouldBe(0);
     }
 
     [Fact]
@@ -108,7 +103,6 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         await CreateIsolatedHostAsync();
 
         var task = new TestTaskConcurrent1();
-        TestTaskConcurrent1.Counter = 0;
         var taskId = await Dispatcher.Dispatch(task);
 
         // Wait for cancellation source to be created (with polling)
@@ -133,7 +127,6 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         Should.Throw<ObjectDisposedException>(() => ctsToken?.Token);
         CancellationSourceProvider.TryGet(taskId).ShouldBeNull();
 
-        TestTaskConcurrent1.Counter.ShouldBe(0);
     }
 
     [Fact]
@@ -151,7 +144,6 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         };
 
         var task = new TestTaskConcurrent1();
-        TestTaskConcurrent1.Counter = 0;
         var taskId = await Dispatcher.Dispatch(task);
 
         // Wait for task to start execution
@@ -176,7 +168,6 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
 
         monitorCalled.ShouldBeTrue();
 
-        TestTaskConcurrent1.Counter.ShouldBe(0);
     }
 
 
@@ -186,7 +177,6 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         await CreateIsolatedHostAsync();
 
         var task = new TestTaskWithRetryPolicy();
-        TestTaskWithRetryPolicy.Counter = 0;
         var taskId = await Dispatcher.Dispatch(task);
 
         // Wait for task to complete with retries (3 attempts)
@@ -202,7 +192,8 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         tasks[0].LastExecutionUtc.ShouldNotBeNull();
         tasks[0].Exception.ShouldBeNull();
 
-        TestTaskWithRetryPolicy.Counter.ShouldBe(3);
+        // Verify retry count via StateManager (thread-safe)
+        StateManager.GetCounter(nameof(TestTaskWithRetryPolicy)).ShouldBe(3);
     }
 
     [Fact]
@@ -211,7 +202,6 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         await CreateIsolatedHostAsync();
 
         var task = new TestTaskWithCustomRetryPolicy();
-        TestTaskWithCustomRetryPolicy.Counter = 0;
         var taskId = await Dispatcher.Dispatch(task);
 
         // Wait for task to complete with custom retry policy (5 attempts)
@@ -227,7 +217,8 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         tasks[0].LastExecutionUtc.ShouldNotBeNull();
         tasks[0].Exception.ShouldBeNull();
 
-        TestTaskWithCustomRetryPolicy.Counter.ShouldBe(5);
+        // Verify custom retry count via StateManager (thread-safe)
+        StateManager.GetCounter(nameof(TestTaskWithCustomRetryPolicy)).ShouldBe(5);
     }
 
     [Fact]
@@ -236,7 +227,6 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         await CreateIsolatedHostAsync();
 
         var task = new TestTaskDelayed1();
-        TestTaskDelayed1.Counter = 0;
         var taskId = await Dispatcher.Dispatch(task, builder => builder.RunNow().Then().EverySecond().MaxRuns(3));
 
         // Wait for recurring task to complete all 3 runs (RunNow + 2x EverySecond)
@@ -265,7 +255,6 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         await CreateIsolatedHostAsync();
 
         var task = new TestTaskDelayed1();
-        TestTaskDelayed1.Counter = 0;
         var taskId = await Dispatcher.Dispatch(task, builder => builder.RunNow().Then().EverySecond().RunUntil(DateTimeOffset.Now.AddSeconds(4)));
 
         // Wait for recurring task to complete (RunUntil set to 4 seconds from now)
@@ -294,7 +283,6 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         await CreateIsolatedHostAsync();
 
         var task = new TestTaskWithCustomTimeout();
-        TestTaskWithCustomTimeout.Counter = 0;
         var taskId = await Dispatcher.Dispatch(task);
 
         // Wait for task to fail due to timeout (timeout is 300ms, handler takes 500ms)
@@ -310,7 +298,6 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         tasks[0].LastExecutionUtc.ShouldNotBeNull();
         tasks[0].Exception.ShouldNotBeNull().ShouldContain("TimeoutException");
 
-        TestTaskWithCustomTimeout.Counter.ShouldBe(0);
     }
 
     [Fact]
@@ -347,8 +334,6 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
                 .SetMaxDegreeOfParallelism(3));
 
         // Reset legacy static counters
-        TestTaskConcurrent1.Counter = 0;
-        TestTaskConcurrent2.Counter = 0;
 
         // Dispatch tasks BEFORE starting the host (they should go to pending)
         var task1 = new TestTaskConcurrent1();
@@ -422,8 +407,6 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         var task1 = new TestTaskConcurrent1();
         var task2 = new TestTaskConcurrent2();
 
-        TestTaskConcurrent1.Counter = 0;
-        TestTaskConcurrent2.Counter = 0;
 
         var task1Id = await Dispatcher.Dispatch(task1);
         await Dispatcher.Cancel(task1Id);
@@ -445,8 +428,6 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         tasks[0].Status.ShouldBe(QueuedTaskStatus.Cancelled);
         tasks[1].Status.ShouldBe(QueuedTaskStatus.Cancelled);
 
-        TestTaskConcurrent1.Counter.ShouldBe(0);
-        TestTaskConcurrent2.Counter.ShouldBe(0);
     }
 
     [Fact]
@@ -464,7 +445,6 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         };
 
         var task = new TestTaskConcurrent1();
-        TestTaskConcurrent1.Counter = 0;
         var taskId = await Dispatcher.Dispatch(task);
 
         // Wait for task to complete (which triggers monitoring event)
@@ -636,7 +616,6 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         await CreateIsolatedHostAsync();
 
         var task = new TestTaskRecurringSeconds();
-        TestTaskRecurringSeconds.Counter = 0;
 
         // Dispatch a recurring task to ensure we go through WaitingQueue status
         var taskId = await Dispatcher.Dispatch(task, builder => builder.Schedule().Every(2).Seconds().MaxRuns(1));

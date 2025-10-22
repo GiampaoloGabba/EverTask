@@ -27,7 +27,6 @@ public class RecurringTaskSkipPersistenceTests : IsolatedIntegrationTestBase
 
         // Create a recurring task that runs every 5 seconds
         var task = new TestTaskDelayed1();
-        TestTaskDelayed1.Counter = 0;
 
         // Dispatch a task scheduled to start in the past (simulating downtime)
         var pastTime = DateTimeOffset.UtcNow.AddMinutes(-2); // 2 minutes ago

@@ -36,7 +36,6 @@ public class TaskKeyIntegrationTests : IsolatedIntegrationTestBase
         // Arrange
         await CreateIsolatedHostAsync();
 
-        TestTaskConcurrent1.Counter = 0;
 
         // Act - Dispatch long-running task
         var task1 = new TestTaskConcurrent1();
@@ -200,7 +199,6 @@ public class TaskKeyIntegrationTests : IsolatedIntegrationTestBase
         // Arrange
         await CreateIsolatedHostAsync();
 
-        TestTaskRecurringSeconds.Counter = 0;
 
         // Act - Dispatch recurring task (every 5 seconds)
         var taskId1 = await Dispatcher.Dispatch(
@@ -503,7 +501,6 @@ public class TaskKeyIntegrationTests : IsolatedIntegrationTestBase
         // Arrange
         await CreateIsolatedHostAsync();
 
-        TestTaskRecurringSeconds.Counter = 0;
 
         // Act - Dispatch recurring task
         var taskId1 = await Dispatcher.Dispatch(

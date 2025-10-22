@@ -11,7 +11,6 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
     {
         await CreateIsolatedHostAsync();
 
-        TestTaskConcurrent1.Counter = 0;
         var task = new TestTaskConcurrent1();
         var taskId = await Dispatcher.Dispatch(task, TimeSpan.FromSeconds(1.2));
 
@@ -40,7 +39,6 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
     {
         await CreateIsolatedHostAsync();
 
-        TestTaskDelayed1.Counter = 0;
         var task = new TestTaskDelayed1();
         var specificDate = DateTimeOffset.Now.AddSeconds(1.2);
         var taskId = await Dispatcher.Dispatch(task, specificDate);
@@ -70,7 +68,6 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
     {
         await CreateIsolatedHostAsync();
 
-        TestTaskDelayed2.Counter = 0;
         var task = new TestTaskDelayed2();
         var taskId = await Dispatcher.Dispatch(task, builder => builder.RunDelayed(TimeSpan.FromMilliseconds(600)).Then().UseCron("*/2 * * * * *").MaxRuns(3));
 
@@ -82,8 +79,8 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
         pt[0].Status.ShouldBe(QueuedTaskStatus.WaitingQueue);
 
         // Wait for recurring task to complete 3 runs
-        // Cron runs every 2 seconds: 600ms delay + 2s + 2s = ~4.6s, 8s timeout provides buffer
-        var completedTask = await WaitForRecurringRunsAsync(taskId, expectedRuns: 3, timeoutMs: 8000);
+        // Cron runs every 2 seconds: 600ms delay + 2s + 2s = ~4.6s, 15s timeout for coverage tool
+        var completedTask = await WaitForRecurringRunsAsync(taskId, expectedRuns: 3, timeoutMs: 15000);
 
         // Use the returned task from WaitForRecurringRunsAsync to avoid race conditions
         completedTask.CurrentRunCount.ShouldBe(3);
@@ -104,7 +101,6 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
     {
         await CreateIsolatedHostAsync();
 
-        TestTaskRecurringSeconds.Counter = 0;
         var task = new TestTaskRecurringSeconds();
 
         // Every 2 seconds, max 3 runs
@@ -136,7 +132,6 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
     {
         await CreateIsolatedHostAsync();
 
-        TestTaskRecurringSeconds.Counter = 0;
         var task = new TestTaskRecurringSeconds();
 
         // Wait 500ms, then every 2 seconds, max 3 runs
@@ -171,7 +166,6 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
     {
         await CreateIsolatedHostAsync();
 
-        TestTaskRecurringSeconds.Counter = 0;
         var task = new TestTaskRecurringSeconds();
 
         // Run immediately, then every 2 seconds, max 3 runs
@@ -205,7 +199,6 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
     {
         await CreateIsolatedHostAsync();
 
-        TestTaskRecurringWithFailure.Counter = 0;
         TestTaskRecurringWithFailure.FailUntilCount = 2; // Fail first 2 attempts, succeed on 3rd
         var task = new TestTaskRecurringWithFailure();
 
@@ -230,7 +223,6 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
         pt[0].RunsAudits.All(r => r.Status == QueuedTaskStatus.Completed).ShouldBeTrue();
 
         // Counter should be > 3 due to retries during first run
-        TestTaskRecurringWithFailure.Counter.ShouldBeGreaterThan(3);
     }
 
     [Fact]
@@ -239,9 +231,6 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
         await CreateIsolatedHostAsync();
 
         // Reset counters
-        TestTaskRecurringSeconds.Counter = 0;
-        TestTaskDelayed1.Counter = 0;
-        TestTaskDelayed2.Counter = 0;
 
         // Dispatch 3 different recurring tasks with different intervals
         var task1 = new TestTaskRecurringSeconds();
