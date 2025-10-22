@@ -242,6 +242,7 @@ public class TimerSchedulerTests
         new(
             new TestTaskRequest2(),
             new TestTaskHanlder2(),
+            null,  // HandlerTypeName - null for eager mode
             executionTime,
             recurringTask,
             null!,

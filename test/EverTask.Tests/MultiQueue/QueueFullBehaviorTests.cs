@@ -164,6 +164,7 @@ public class QueueFullBehaviorTests
         return new TaskHandlerExecutor(
             new TestTask { Id = id },
             new object(),
+            null,  // HandlerTypeName - null for eager mode
             null,
             null,
             (t, ct) => Task.CompletedTask,

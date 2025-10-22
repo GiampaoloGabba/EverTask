@@ -77,7 +77,7 @@ public class HanlderExecutorTests
         queuedTask.Id.ShouldBeOfType<Guid>();
         queuedTask.Type.ShouldBe(executor.Task.GetType().AssemblyQualifiedName);
         queuedTask.Request.ShouldBe(JsonConvert.SerializeObject(executor.Task));
-        queuedTask.Handler.ShouldBe(executor.Handler.GetType().AssemblyQualifiedName);
+        queuedTask.Handler.ShouldBe(executor.Handler!.GetType().AssemblyQualifiedName);  // Handler is guaranteed to be present from TaskHandlerWrapper
         queuedTask.Status.ShouldBe(QueuedTaskStatus.WaitingQueue);
     }
 
@@ -98,16 +98,16 @@ public class HanlderExecutorTests
     public void Should_throw_for_null_Request()
     {
         var executor =
-            new TaskHandlerExecutor(null!, new TestTaskHanlder(), null, null, null!, null, null, null, Guid.NewGuid(), null, null);
+            new TaskHandlerExecutor(null!, new TestTaskHanlder(), null, null, null, null!, null, null, null, Guid.NewGuid(), null, null);
         Should.Throw<ArgumentNullException>(() => executor.ToQueuedTask());
     }
 
     [Fact]
     public void Should_throw_for_null_Handler_Handle()
     {
-        var executor = new TaskHandlerExecutor(new TestTaskRequest("Test"), null!, null, null, null!, null, null, null,
+        var executor = new TaskHandlerExecutor(new TestTaskRequest("Test"), null!, null, null, null, null!, null, null, null,
             Guid.NewGuid(), null, null);
-        Should.Throw<ArgumentNullException>(() => executor.ToQueuedTask());
+        Should.Throw<InvalidOperationException>(() => executor.ToQueuedTask());
     }
 
     [Fact]
@@ -123,6 +123,7 @@ public class HanlderExecutorTests
         var executor = new TaskHandlerExecutor(
             Task: task,
             Handler: handler,
+            HandlerTypeName: null,  // null for eager mode
             ExecutionTime: executionTime,
             RecurringTask: recurringTask,
             HandlerCallback: (everTask, token) => Task.CompletedTask,
@@ -155,6 +156,7 @@ public class HanlderExecutorTests
         var executor = new TaskHandlerExecutor(
             Task: null!,
             Handler: new object(),
+            HandlerTypeName: null,  // null for eager mode
             ExecutionTime: DateTimeOffset.UtcNow,
             RecurringTask: null,
             HandlerCallback: (everTask, token) => Task.CompletedTask,
@@ -169,11 +171,12 @@ public class HanlderExecutorTests
     }
 
     [Fact]
-    public void ToQueuedTask_Should_throw_ArgumentNullException_when_Handler_is_null()
+    public void ToQueuedTask_Should_throw_InvalidOperationException_when_Handler_is_null()
     {
         var executor = new TaskHandlerExecutor(
             Task: new TestTaskRequest("test"),
             Handler: null!,
+            HandlerTypeName: null,
             ExecutionTime: null!,
             RecurringTask: null,
             HandlerCallback: (everTask, token) => Task.CompletedTask,
@@ -184,7 +187,7 @@ public class HanlderExecutorTests
             QueueName: null,
             TaskKey: null);
 
-        Should.Throw<ArgumentNullException>(() => executor.ToQueuedTask());
+        Should.Throw<InvalidOperationException>(() => executor.ToQueuedTask());
     }
 
     [Fact]
@@ -198,6 +201,7 @@ public class HanlderExecutorTests
         var executor = new TaskHandlerExecutor(
             Task: task,
             Handler: handler,
+            HandlerTypeName: null,  // null for eager mode
             ExecutionTime: executionTime,
             RecurringTask: null,
             HandlerCallback: (everTask, token) => Task.CompletedTask,

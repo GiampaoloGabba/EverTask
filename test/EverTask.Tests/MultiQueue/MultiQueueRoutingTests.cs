@@ -31,6 +31,7 @@ public class MultiQueueRoutingTests
         var executor = new TaskHandlerExecutor(
             task,
             new TestHandler(),
+            null,  // HandlerTypeName - null for eager mode
             null,
             null,
             (t, ct) => Task.CompletedTask,
@@ -64,6 +65,7 @@ public class MultiQueueRoutingTests
         var executor = new TaskHandlerExecutor(
             task,
             new TestHandler(),
+            null,  // HandlerTypeName - null for eager mode
             null,
             null,
             (t, ct) => Task.CompletedTask,
@@ -98,6 +100,7 @@ public class MultiQueueRoutingTests
         var executor = new TaskHandlerExecutor(
             task,
             new TestHandler(),
+            null,  // HandlerTypeName - null for eager mode
             DateTimeOffset.UtcNow.AddMinutes(1),
             recurringTask,
             (t, ct) => Task.CompletedTask,
@@ -133,6 +136,7 @@ public class MultiQueueRoutingTests
         var executor = new TaskHandlerExecutor(
             task,
             new TestHandlerWithQueue(),
+            null,  // HandlerTypeName - null for eager mode
             DateTimeOffset.UtcNow.AddMinutes(1),
             recurringTask,
             (t, ct) => Task.CompletedTask,
@@ -164,6 +168,7 @@ public class MultiQueueRoutingTests
         var executor = new TaskHandlerExecutor(
             task,
             handler,
+            null,  // HandlerTypeName - null for eager mode
             null,
             null,
             (t, ct) => Task.CompletedTask,
@@ -189,6 +194,7 @@ public class MultiQueueRoutingTests
         var executor = new TaskHandlerExecutor(
             task,
             handler,
+            null,  // HandlerTypeName - null for eager mode
             null,
             null,
             (t, ct) => Task.CompletedTask,

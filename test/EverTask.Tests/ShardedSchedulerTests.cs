@@ -430,6 +430,7 @@ public class ShardedSchedulerTests : IDisposable
         new(
             new TestTaskRequest2(),
             new TestTaskHanlder2(),
+            null,  // HandlerTypeName - null for eager mode
             executionTime,
             null,
             null!,

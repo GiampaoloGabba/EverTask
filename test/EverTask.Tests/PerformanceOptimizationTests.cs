@@ -211,6 +211,7 @@ public class PerformanceOptimizationTests
         return new TaskHandlerExecutor(
             task,
             handler,
+            null,  // HandlerTypeName - null for eager mode
             executionTime,
             recurring,
             (t, ct) => Task.CompletedTask,

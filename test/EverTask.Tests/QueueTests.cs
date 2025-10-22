@@ -31,6 +31,7 @@ public class QueueTests
         _executor = new TaskHandlerExecutor(
             new TestTaskRequest2(),
             new TestTaskHanlder2(),
+            null,  // HandlerTypeName - null for eager mode
             null,
             null,
             null!,
