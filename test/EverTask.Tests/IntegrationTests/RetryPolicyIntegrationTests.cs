@@ -2,6 +2,7 @@ using EverTask.Abstractions;
 using EverTask.Resilience;
 using EverTask.Storage;
 using EverTask.Monitoring;
+using EverTask.Tests.TestHelpers;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -14,44 +15,9 @@ namespace EverTask.Tests.IntegrationTests;
 /// Integration tests for retry policy enhancements covering real-world scenarios.
 /// These tests verify the end-to-end behavior of OnRetry callbacks and exception filtering.
 /// </summary>
-public class RetryPolicyIntegrationTests : IAsyncLifetime
+public class RetryPolicyIntegrationTests : IsolatedIntegrationTestBase
 {
-    private IHost? _host;
-    private IServiceProvider? _serviceProvider;
-
-    public async Task InitializeAsync()
-    {
-        await Task.CompletedTask;
-    }
-
-    public async Task DisposeAsync()
-    {
-        if (_host != null)
-        {
-            await _host.StopAsync();
-            _host.Dispose();
-        }
-    }
-
-    private IServiceProvider BuildServiceProvider(Action<IServiceCollection>? configureServices = null)
-    {
-        var hostBuilder = Host.CreateDefaultBuilder()
-            .ConfigureServices((context, services) =>
-            {
-                services.AddLogging(builder => builder.SetMinimumLevel(LogLevel.Debug));
-                services.AddEverTask(opt => opt
-                    .RegisterTasksFromAssembly(typeof(RetryPolicyIntegrationTests).Assembly)
-                    .SetMaxDegreeOfParallelism(1) // Sequential for deterministic testing
-                    .SetDefaultRetryPolicy(new LinearRetryPolicy(3, TimeSpan.FromMilliseconds(10))))
-                    .AddMemoryStorage();
-
-                configureServices?.Invoke(services);
-            });
-
-        _host = hostBuilder.Build();
-        _serviceProvider = _host.Services;
-        return _serviceProvider;
-    }
+    // No constructor or instance fields needed - IsolatedIntegrationTestBase provides everything
 
     #region Scenario 1: OnRetry Callback Invocation
 
@@ -110,18 +76,14 @@ public class RetryPolicyIntegrationTests : IAsyncLifetime
     {
         // Arrange
         OnRetryCallbackHandler.Reset();
-        var provider = BuildServiceProvider();
-        await _host!.StartAsync();
-
-        var dispatcher = provider.GetRequiredService<ITaskDispatcher>();
-        var storage = provider.GetRequiredService<ITaskStorage>();
+        await CreateIsolatedHostAsync();
 
         // Act - Task fails 2 times, succeeds on 3rd attempt
-        var taskId = await dispatcher.Dispatch(new OnRetryCallbackTask(FailTimes: 2));
-        await Task.Delay(600); // Wait for execution
+        var taskId = await Dispatcher.Dispatch(new OnRetryCallbackTask(FailTimes: 2));
+        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed);
 
         // Assert
-        var tasks = await storage.Get(t => t.Id == taskId);
+        var tasks = await Storage.Get(t => t.Id == taskId);
         var task = tasks.Single();
 
         Assert.Equal(QueuedTaskStatus.Completed, task.Status);
@@ -185,18 +147,14 @@ public class RetryPolicyIntegrationTests : IAsyncLifetime
     {
         // Arrange - Test non-retryable exception
         FilteredExceptionHandler.Reset();
-        var provider = BuildServiceProvider();
-        await _host!.StartAsync();
-
-        var dispatcher = provider.GetRequiredService<ITaskDispatcher>();
-        var storage = provider.GetRequiredService<ITaskStorage>();
+        await CreateIsolatedHostAsync();
 
         // Act - Throw non-retryable exception (ArgumentException)
-        var taskId = await dispatcher.Dispatch(new FilteredExceptionTask(ThrowHandled: false));
-        await Task.Delay(300);
+        var taskId = await Dispatcher.Dispatch(new FilteredExceptionTask(ThrowHandled: false));
+        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Failed);
 
         // Assert
-        var tasks = await storage.Get(t => t.Id == taskId);
+        var tasks = await Storage.Get(t => t.Id == taskId);
         var task = tasks.Single();
 
         Assert.Equal(QueuedTaskStatus.Failed, task.Status);
@@ -212,14 +170,11 @@ public class RetryPolicyIntegrationTests : IAsyncLifetime
     {
         // Arrange - Test retryable exception
         FilteredExceptionHandler.Reset();
-        var provider2 = BuildServiceProvider();
-        await _host!.StartAsync();
-
-        var dispatcher2 = provider2.GetRequiredService<ITaskDispatcher>();
+        await CreateIsolatedHostAsync();
 
         // Act - Throw retryable exception (InvalidOperationException)
-        await dispatcher2.Dispatch(new FilteredExceptionTask(ThrowHandled: true));
-        await Task.Delay(500);
+        var taskId = await Dispatcher.Dispatch(new FilteredExceptionTask(ThrowHandled: true));
+        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Failed);
 
         // Assert
         var (attempts2, retries2) = FilteredExceptionHandler.GetCounts();
@@ -284,22 +239,19 @@ public class RetryPolicyIntegrationTests : IAsyncLifetime
     {
         // Arrange
         PredicateFilterHandler.Reset();
-        var provider = BuildServiceProvider();
-        await _host!.StartAsync();
-
-        var dispatcher = provider.GetRequiredService<ITaskDispatcher>();
+        await CreateIsolatedHostAsync();
 
         // Act - 404 (client error) - should NOT retry
-        await dispatcher.Dispatch(new PredicateFilterTask(StatusCode: 404));
-        await Task.Delay(200);
+        var taskId404 = await Dispatcher.Dispatch(new PredicateFilterTask(StatusCode: 404));
+        await WaitForTaskStatusAsync(taskId404, QueuedTaskStatus.Failed);
 
         var (attempts404, retries404) = PredicateFilterHandler.GetCounts();
 
         PredicateFilterHandler.Reset();
 
         // Act - 503 (server error) - should retry
-        await dispatcher.Dispatch(new PredicateFilterTask(StatusCode: 503));
-        await Task.Delay(300);
+        var taskId503 = await Dispatcher.Dispatch(new PredicateFilterTask(StatusCode: 503));
+        await WaitForTaskStatusAsync(taskId503, QueuedTaskStatus.Failed);
 
         var (attempts503, retries503) = PredicateFilterHandler.GetCounts();
 
@@ -353,14 +305,11 @@ public class RetryPolicyIntegrationTests : IAsyncLifetime
     {
         // Arrange
         DerivedExceptionHandler.Reset();
-        var provider = BuildServiceProvider();
-        await _host!.StartAsync();
-
-        var dispatcher = provider.GetRequiredService<ITaskDispatcher>();
+        await CreateIsolatedHostAsync();
 
         // Act - Throw FileNotFoundException (derives from IOException)
-        await dispatcher.Dispatch(new DerivedExceptionTask());
-        await Task.Delay(300);
+        var taskId = await Dispatcher.Dispatch(new DerivedExceptionTask());
+        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Failed);
 
         // Assert
         var (attempts, retries) = DerivedExceptionHandler.GetCounts();
@@ -405,23 +354,18 @@ public class RetryPolicyIntegrationTests : IAsyncLifetime
         MonitoringEventHandler.Reset();
         var events = new ConcurrentBag<EverTaskEventData>();
 
-        var provider = BuildServiceProvider();
+        await CreateIsolatedHostAsync();
 
         // Subscribe to monitoring events
-        var executor = provider.GetRequiredService<IEverTaskWorkerExecutor>();
-        executor.TaskEventOccurredAsync += async (data) =>
+        WorkerExecutor.TaskEventOccurredAsync += async (data) =>
         {
             events.Add(data);
             await Task.CompletedTask;
         };
 
-        await _host!.StartAsync();
-
-        var dispatcher = provider.GetRequiredService<ITaskDispatcher>();
-
         // Act
-        await dispatcher.Dispatch(new MonitoringEventTask());
-        await Task.Delay(300);
+        var taskId = await Dispatcher.Dispatch(new MonitoringEventTask());
+        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed);
 
         // Assert
         var retryEvents = events.Where(e => e.Message.Contains("retry attempt")).ToList();
