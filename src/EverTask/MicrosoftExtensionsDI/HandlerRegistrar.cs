@@ -39,7 +39,15 @@ internal static class HandlerRegistrar
 
             foreach (var type in exactMatches)
             {
+                // Register handler by interface (IEverTaskHandler<TTask> → ConcreteHandler)
+                // This is used by eager mode handler resolution in TaskHandlerWrapper
                 services.TryAddTransient(@interface, type);
+
+                // Register handler by concrete type (ConcreteHandler → ConcreteHandler)
+                // This is used by lazy mode handler resolution in TaskHandlerExecutor.GetOrResolveHandler()
+                // when resolving handlers from their AssemblyQualifiedName stored in HandlerTypeName.
+                // Memory overhead: ~36 bytes per handler registration (negligible).
+                services.TryAddTransient(type, type);
             }
 
             if (!@interface.IsOpenGeneric())
@@ -78,7 +86,14 @@ internal static class HandlerRegistrar
         {
             try
             {
-                services.TryAddTransient(@interface, type.MakeGenericType(@interface.GenericTypeArguments));
+                var closedType = type.MakeGenericType(@interface.GenericTypeArguments);
+
+                // Register handler by interface (IEverTaskHandler<TTask> → ClosedGenericHandler)
+                services.TryAddTransient(@interface, closedType);
+
+                // Register handler by concrete type (ClosedGenericHandler → ClosedGenericHandler)
+                // This is used by lazy mode handler resolution in TaskHandlerExecutor.GetOrResolveHandler()
+                services.TryAddTransient(closedType, closedType);
             }
             catch (Exception)
             {

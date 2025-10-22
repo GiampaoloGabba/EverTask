@@ -138,10 +138,6 @@ public class Dispatcher(
 
             nextRun       = result.NextRun;
             executionTime = nextRun;
-
-            // DEBUG
-            Console.WriteLine(
-                $"[Dispatcher] Scheduled recurring task for {executionTime:O}, skipped {result.SkippedCount} occurrences");
         }
 
         var taskType = task.GetType();
