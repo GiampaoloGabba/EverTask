@@ -11,65 +11,27 @@ namespace EverTask.Tests.IntegrationTests;
 /// This prevents schedule drift when tasks execute with delays.
 /// Related to schedule drift fix - see docs/test-plan-schedule-drift-fix.md
 /// </summary>
-public class WorkerExecutorNextRunCalculationTests
+public class WorkerExecutorNextRunCalculationTests : IsolatedIntegrationTestBase
 {
-    private IHost _host = null!;
-    private ITaskDispatcher _dispatcher = null!;
-    private ITaskStorage _storage = null!;
-    private TestTaskStateManager _stateManager = null!;
-
-    private void InitializeHost(bool reuseStorage = false)
-    {
-        // Preserve storage and state manager across host rebuilds for downtime recovery tests
-        var existingStorage = reuseStorage ? _storage : null;
-        var existingStateManager = reuseStorage ? _stateManager : null;
-
-        _host = new HostBuilder()
-            .ConfigureServices((hostContext, services) =>
-            {
-                services.AddLogging();
-                services.AddEverTask(cfg => cfg
-                        .RegisterTasksFromAssembly(typeof(TestTaskRecurringSeconds).Assembly)
-                        .SetChannelOptions(10)
-                        .SetMaxDegreeOfParallelism(5))
-                    .AddMemoryStorage();
-
-                // Reuse existing storage if provided (for restart scenarios)
-                if (existingStorage != null)
-                    services.AddSingleton(existingStorage);
-
-                // Reuse existing state manager if provided (for restart scenarios)
-                if (existingStateManager != null)
-                    services.AddSingleton(existingStateManager);
-                else
-                    services.AddSingleton<TestTaskStateManager>();
-            })
-            .Build();
-
-        _dispatcher = _host.Services.GetRequiredService<ITaskDispatcher>();
-        _storage = _host.Services.GetRequiredService<ITaskStorage>();
-        _stateManager = _host.Services.GetRequiredService<TestTaskStateManager>();
-    }
 
     [Fact]
     public async Task WorkerExecutor_Should_Calculate_NextRun_From_ExecutionTime_Not_UtcNow()
     {
         // Arrange
-        InitializeHost();
-        await _host.StartAsync();
+        await CreateIsolatedHostAsync();
 
         // Dispatch recurring task every 5 seconds
-        var taskId = await _dispatcher.Dispatch(
+        var taskId = await Dispatcher.Dispatch(
             new TestTaskRecurringSeconds(),
             recurring => recurring.Schedule().Every(5).Seconds());
 
         // Wait for first execution
         await TaskWaitHelper.WaitForConditionAsync(
-            () => _stateManager.GetCounter(nameof(TestTaskRecurringSeconds)) >= 1,
+            () => StateManager.GetCounter(nameof(TestTaskRecurringSeconds)) >= 1,
             timeoutMs: 7000);
 
         // Get task state after first run
-        var tasks = await _storage.GetAll();
+        var tasks = await Storage.GetAll();
         var task = tasks.FirstOrDefault(t => t.Id == taskId);
 
         task.ShouldNotBeNull();
@@ -92,27 +54,24 @@ public class WorkerExecutorNextRunCalculationTests
 
         // Allow 1 second tolerance for processing delays
         timeDiff.ShouldBeLessThan(1);
-
-        await _host.StopAsync(CancellationToken.None);
     }
 
     [Fact]
     public async Task WorkerExecutor_Should_Calculate_NextRun_From_ScheduledTime_When_Delayed()
     {
         // Arrange: Create a task that delays execution to simulate late execution
-        InitializeHost();
-        await _host.StartAsync();
+        await CreateIsolatedHostAsync();
 
         // Dispatch recurring task every 3 seconds that takes 1 second to execute
-        var taskId = await _dispatcher.Dispatch(
+        var taskId = await Dispatcher.Dispatch(
             new TestTaskDelayedRecurring(delayMs: 1000),
             recurring => recurring.Schedule().Every(3).Seconds());
 
         // Wait for 2 executions to verify consistent scheduling
-        await TaskWaitHelper.WaitForRecurringRunsAsync(_storage, taskId, expectedRuns: 2, timeoutMs: 10000);
+        await TaskWaitHelper.WaitForRecurringRunsAsync(Storage, taskId, expectedRuns: 2, timeoutMs: 10000);
 
         // Get task state
-        var tasks = await _storage.GetAll();
+        var tasks = await Storage.GetAll();
         var task = tasks.FirstOrDefault(t => t.Id == taskId);
 
         task.ShouldNotBeNull();
@@ -135,43 +94,48 @@ public class WorkerExecutorNextRunCalculationTests
         // (3 seconds interval, even though task takes 1 second to run)
         timeBetweenRuns.ShouldBeGreaterThan(2.5);
         timeBetweenRuns.ShouldBeLessThan(4.5);
-
-        await _host.StopAsync(CancellationToken.None);
     }
 
     [Fact]
     public async Task WorkerExecutor_Should_Skip_Past_Occurrences_After_Downtime()
     {
-        // Arrange
-        InitializeHost();
+        // Arrange - Create first host and preserve storage reference
+        await CreateIsolatedHostAsync();
+        var preservedStorage = Storage; // Keep reference to storage before stopping host
 
-        // Start host and dispatch a fast recurring task (every 1 second)
-        await _host.StartAsync();
-
-        var taskId = await _dispatcher.Dispatch(
+        var taskId = await Dispatcher.Dispatch(
             new TestTaskRecurringSeconds(),
             recurring => recurring.Schedule().Every(1).Seconds());
 
         // Wait for first execution
         await TaskWaitHelper.WaitForConditionAsync(
-            () => _stateManager.GetCounter(nameof(TestTaskRecurringSeconds)) >= 1,
+            () => StateManager.GetCounter(nameof(TestTaskRecurringSeconds)) >= 1,
             timeoutMs: 3000);
 
         // Simulate downtime by stopping the host
-        await _host.StopAsync(CancellationToken.None);
+        await StopHostAsync();
 
         // Wait 5 seconds (simulating system downtime - should miss ~5 occurrences)
         await Task.Delay(5000);
 
-        // Restart host (simulating system recovery - rebuild host as IHost cannot be restarted)
-        InitializeHost(reuseStorage: true);
-        await _host.StartAsync();
+        // Restart host with same storage instance (simulating system recovery)
+        await CreateIsolatedHostAsync(
+            channelCapacity: 10,
+            maxDegreeOfParallelism: 5,
+            configureServices: services =>
+            {
+                // Remove the memory storage and use the preserved storage instance
+                var descriptor = services.FirstOrDefault(d => d.ServiceType == typeof(ITaskStorage));
+                if (descriptor != null)
+                    services.Remove(descriptor);
+                services.AddSingleton(preservedStorage);
+            });
 
         // Wait for task to be rescheduled and executed
         await Task.Delay(3000);
 
         // Assert: Task should have skipped past occurrences
-        var tasks = await _storage.GetAll();
+        var tasks = await preservedStorage.GetAll();
         var task = tasks.FirstOrDefault(t => t.Id == taskId);
 
         task.ShouldNotBeNull();
@@ -184,21 +148,18 @@ public class WorkerExecutorNextRunCalculationTests
         // Next run should be in the future, not in the past
         task.NextRunUtc.ShouldNotBeNull();
         task.NextRunUtc.Value.ShouldBeGreaterThanOrEqualTo(DateTimeOffset.UtcNow.AddSeconds(-1));
-
-        await _host.StopAsync(CancellationToken.None);
     }
 
     [Fact]
     public async Task WorkerExecutor_Should_Record_Skipped_Occurrences_In_Storage()
     {
         // Arrange
-        InitializeHost();
-        await _host.StartAsync();
+        await CreateIsolatedHostAsync();
 
         // Dispatch recurring task that starts in the past (2 minutes ago, every 30 seconds)
         var pastTime = DateTimeOffset.UtcNow.AddMinutes(-2);
 
-        var taskId = await _dispatcher.Dispatch(
+        var taskId = await Dispatcher.Dispatch(
             new TestTaskRecurringSeconds(),
             recurring => recurring.RunAt(pastTime).Then().Every(30).Seconds());
 
@@ -206,7 +167,7 @@ public class WorkerExecutorNextRunCalculationTests
         await Task.Delay(500);
 
         // Assert: Storage should have skipped occurrences recorded
-        var tasks = await _storage.GetAll();
+        var tasks = await Storage.GetAll();
         var task = tasks.FirstOrDefault(t => t.Id == taskId);
 
         task.ShouldNotBeNull();
@@ -215,27 +176,24 @@ public class WorkerExecutorNextRunCalculationTests
         // Note: Skipped occurrences are recorded via ITaskStorage.RecordSkippedOccurrences()
         // but are not exposed as a direct property on QueuedTask. The task should be scheduled
         // for the next valid future run.
-
-        await _host.StopAsync(CancellationToken.None);
     }
 
     [Fact]
     public async Task WorkerExecutor_Should_Maintain_Schedule_Across_Multiple_Runs()
     {
         // Arrange
-        InitializeHost();
-        await _host.StartAsync();
+        await CreateIsolatedHostAsync();
 
         // Dispatch recurring task every 2 seconds
-        var taskId = await _dispatcher.Dispatch(
+        var taskId = await Dispatcher.Dispatch(
             new TestTaskRecurringSeconds(),
             recurring => recurring.Schedule().Every(2).Seconds());
 
         // Wait for 3 executions
-        await TaskWaitHelper.WaitForRecurringRunsAsync(_storage, taskId, expectedRuns: 3, timeoutMs: 10000);
+        await TaskWaitHelper.WaitForRecurringRunsAsync(Storage, taskId, expectedRuns: 3, timeoutMs: 10000);
 
         // Get task state
-        var tasks = await _storage.GetAll();
+        var tasks = await Storage.GetAll();
         var task = tasks.FirstOrDefault(t => t.Id == taskId);
 
         task.ShouldNotBeNull();
@@ -265,20 +223,17 @@ public class WorkerExecutorNextRunCalculationTests
         var totalTime = (completedRuns[2].ExecutedAt - completedRuns[0].ExecutedAt).TotalSeconds;
         totalTime.ShouldBeGreaterThan(3.5);
         totalTime.ShouldBeLessThan(5);
-
-        await _host.StopAsync(CancellationToken.None);
     }
 
     [Fact]
     public async Task WorkerExecutor_Should_Use_ExecutionTime_For_HourInterval()
     {
         // Arrange
-        InitializeHost();
-        await _host.StartAsync();
+        await CreateIsolatedHostAsync();
 
         // Dispatch recurring task every 1 hour
         // Note: OnMinute() is not available on Hours() builder. The hour interval will use current minute.
-        var taskId = await _dispatcher.Dispatch(
+        var taskId = await Dispatcher.Dispatch(
             new TestTaskRecurringSeconds(),
             recurring => recurring.Schedule().Every(1).Hours());
 
@@ -286,7 +241,7 @@ public class WorkerExecutorNextRunCalculationTests
         await Task.Delay(500);
 
         // Get task state
-        var tasks = await _storage.GetAll();
+        var tasks = await Storage.GetAll();
         var task = tasks.FirstOrDefault(t => t.Id == taskId);
 
         task.ShouldNotBeNull();
@@ -296,7 +251,5 @@ public class WorkerExecutorNextRunCalculationTests
         var expectedNextRun = DateTimeOffset.UtcNow.AddHours(1);
         var timeDiff = Math.Abs((task.NextRunUtc.Value - expectedNextRun).TotalMinutes);
         timeDiff.ShouldBeLessThan(2); // Within 2 minutes tolerance
-
-        await _host.StopAsync(CancellationToken.None);
     }
 }
