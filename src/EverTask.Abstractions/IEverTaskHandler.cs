@@ -36,4 +36,15 @@ public interface IEverTaskHandler<in TTask> : IEverTaskHandlerOptions, IAsyncDis
     /// <param name="persistenceId">The persistence identifier of the EverTask.</param>
     /// <returns>A <see cref="ValueTask"/> representing the completion of the task handling operation.</returns>
     ValueTask OnCompleted(Guid persistenceId);
+
+    /// <summary>
+    /// Called before each retry attempt after the initial execution failed.
+    /// This callback is invoked AFTER the retry delay, immediately before retrying Handle().
+    /// </summary>
+    /// <param name="taskId">Task persistence identifier for tracking</param>
+    /// <param name="attemptNumber">Current retry attempt number (1-based, so first retry = 1)</param>
+    /// <param name="exception">Exception that triggered this retry attempt</param>
+    /// <param name="delay">Delay that was applied before this retry attempt</param>
+    /// <returns>ValueTask for async operations (logging, metrics, alerting)</returns>
+    ValueTask OnRetry(Guid taskId, int attemptNumber, Exception exception, TimeSpan delay);
 }

@@ -25,7 +25,7 @@ public class WorkerExecutor(
     // Performance optimization: Cache handler options to avoid runtime casts per execution
     private static readonly ConcurrentDictionary<Type, HandlerOptionsCache> HandlerOptionsInternalCache = new();
 
-    private record HandlerOptionsCache(IRetryPolicy RetryPolicy, TimeSpan? Timeout);
+    private record HandlerOptionsCache(IRetryPolicy RetryPolicy, TimeSpan? Timeout, System.Reflection.MethodInfo? OnRetryMethod);
 
     public event Func<EverTaskEventData, Task>? TaskEventOccurredAsync;
 
@@ -98,24 +98,35 @@ public class WorkerExecutor(
             static (_, state) =>
             {
                 var (handler, config) = state;
+
+                // Resolve OnRetry method once and cache it
+                var onRetryMethod = handler.GetType().GetMethod(
+                    nameof(IEverTaskHandler<IEverTask>.OnRetry),
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+
                 // Cast only once per handler type (first time)
                 if (handler is IEverTaskHandlerOptions handlerOptions)
                 {
                     return new HandlerOptionsCache(
                         handlerOptions.RetryPolicy ?? config.DefaultRetryPolicy,
-                        handlerOptions.Timeout ?? config.DefaultTimeout
+                        handlerOptions.Timeout ?? config.DefaultTimeout,
+                        onRetryMethod
                     );
                 }
 
                 return new HandlerOptionsCache(
                     config.DefaultRetryPolicy,
-                    config.DefaultTimeout
+                    config.DefaultTimeout,
+                    onRetryMethod
                 );
             },
             (task.Handler, configuration));
 
         var retryPolicy = options.RetryPolicy;
         var timeout = options.Timeout;
+
+        // Get handler instance for OnRetry callback
+        var handler = task.Handler;
 
         // Use GetTimestamp/GetElapsedTime for .NET 7+ to avoid Stopwatch allocation
 #if NET7_0_OR_GREATER
@@ -134,12 +145,13 @@ public class WorkerExecutor(
         {
             //Use WaitAsync for cancelling:
             //https://github.com/davidfowl/AspNetCoreDiagnosticScenarios/blob/master/AsyncGuidance.md#cancelling-uncancellable-operations
-            await retryPolicy.Execute(async retryToken =>
+            await retryPolicy.Execute(
+                action: async retryToken =>
                 {
                     if (timeout.HasValue && timeout.Value > TimeSpan.Zero)
                     {
                         await ExecuteWithTimeout(
-                            innerToken => task.HandlerCallback.Invoke(task.Task, innerToken).WaitAsync(retryToken),
+                            innerToken => task.HandlerCallback.Invoke(task.Task, innerToken).WaitAsync(innerToken),
                             timeout.Value,
                             retryToken).ConfigureAwait(false);
                     }
@@ -148,9 +160,16 @@ public class WorkerExecutor(
                         await task.HandlerCallback.Invoke(task.Task, retryToken).WaitAsync(retryToken)
                                   .ConfigureAwait(false);
                     }
+                },
+                attemptLogger: logger,
+                token: taskToken,
+                onRetryCallback: async (attemptNumber, exception, delay) =>
+                {
+                    // Invoke handler's OnRetry method using cached MethodInfo
+                    await InvokeOnRetryCallback(task, handler, options.OnRetryMethod, attemptNumber, exception, delay)
+                        .ConfigureAwait(false);
                 }
-                , logger
-                , taskToken).ConfigureAwait(false);
+            ).ConfigureAwait(false);
         }
     }
 
@@ -211,6 +230,60 @@ public class WorkerExecutor(
                 "Error occurred executing while executing the callback override {0} task with id {1}.", callbackName,
                 task.PersistenceId);
         }
+    }
+
+    /// <summary>
+    /// Invokes the OnRetry callback on the handler.
+    /// Called by retry policy before each retry attempt.
+    /// </summary>
+    private async ValueTask InvokeOnRetryCallback(
+        TaskHandlerExecutor task,
+        object handler,
+        MethodInfo? cachedOnRetryMethod,
+        int attemptNumber,
+        Exception exception,
+        TimeSpan delay)
+    {
+        try
+        {
+            // Use cached MethodInfo instead of reflection lookup
+            if (cachedOnRetryMethod != null)
+            {
+                var result = cachedOnRetryMethod.Invoke(handler, [task.PersistenceId, attemptNumber, exception, delay]);
+                if (result is ValueTask valueTask)
+                {
+                    await valueTask.ConfigureAwait(false);
+                }
+            }
+
+            // Publish retry event for monitoring
+            RegisterRetryEvent(task, attemptNumber, exception, delay);
+        }
+        catch (Exception ex)
+        {
+            // OnRetry exceptions are logged but don't prevent retry
+            logger.LogError(ex,
+                "Error occurred while executing OnRetry callback for task {TaskId} attempt {Attempt}",
+                task.PersistenceId, attemptNumber);
+        }
+    }
+
+    /// <summary>
+    /// Publishes retry event for monitoring integrations (SignalR, etc.)
+    /// </summary>
+    private void RegisterRetryEvent(
+        TaskHandlerExecutor task,
+        int attemptNumber,
+        Exception exception,
+        TimeSpan delay)
+    {
+        var message = $"Task {task.PersistenceId} retry attempt {attemptNumber} after {delay.TotalMilliseconds}ms";
+
+        RegisterEvent(
+            SeverityLevel.Warning,
+            task,
+            message,
+            exception);
     }
 
     private async ValueTask ExecuteCallback(Func<Guid, Exception?, string, ValueTask>? handler,
