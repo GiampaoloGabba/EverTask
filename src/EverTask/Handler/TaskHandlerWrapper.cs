@@ -37,9 +37,14 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
             queueName = recurring != null ? QueueNames.Recurring : QueueNames.Default;
         }
 
+        // Extract handler type name for lazy resolution support
+        var handlerTypeName = handlerService.GetType().AssemblyQualifiedName
+            ?? throw new InvalidOperationException($"Handler type {handlerService.GetType().Name} has no AssemblyQualifiedName");
+
         return new TaskHandlerExecutor(
             task,
             handlerService,
+            handlerTypeName,
             executionTime,
             recurring,
             (theTask, theToken) => handlerService.Handle((TTask)theTask, theToken),

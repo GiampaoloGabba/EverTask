@@ -21,27 +21,31 @@ public class Dispatcher(
     ITaskStorage? taskStorage = null) : ITaskDispatcherInternal
 {
     // Cache for compiled TaskHandlerWrapper constructors to avoid reflection overhead
-    private static readonly ConcurrentDictionary<Type, Func<TaskHandlerWrapper>> _wrapperFactoryCache = new();
+    private static readonly ConcurrentDictionary<Type, Func<TaskHandlerWrapper>> WrapperFactoryCache = new();
 
     /// <inheritdoc />
     public Task<Guid> Dispatch(IEverTask task, string? taskKey = null, CancellationToken cancellationToken = default) =>
         ExecuteDispatch(task, null, null, null, cancellationToken, null, taskKey);
 
     /// <inheritdoc />
-    public Task<Guid> Dispatch(IEverTask task, TimeSpan executionDelay, string? taskKey = null, CancellationToken cancellationToken = default) =>
+    public Task<Guid> Dispatch(IEverTask task, TimeSpan executionDelay, string? taskKey = null,
+                               CancellationToken cancellationToken = default) =>
         ExecuteDispatch(task, executionDelay, cancellationToken, null, taskKey);
 
     /// <inheritdoc />
-    public Task<Guid> Dispatch(IEverTask task, DateTimeOffset executionTime, string? taskKey = null, CancellationToken cancellationToken = default) =>
+    public Task<Guid> Dispatch(IEverTask task, DateTimeOffset executionTime, string? taskKey = null,
+                               CancellationToken cancellationToken = default) =>
         ExecuteDispatch(task, executionTime, null, null, cancellationToken, null, taskKey);
 
     /// <inheritdoc />
-    public async Task<Guid> Dispatch(IEverTask task, Action<IRecurringTaskBuilder> recurring, string? taskKey = null, CancellationToken cancellationToken = default)
+    public async Task<Guid> Dispatch(IEverTask task, Action<IRecurringTaskBuilder> recurring, string? taskKey = null,
+                                     CancellationToken cancellationToken = default)
     {
         var builder = new RecurringTaskBuilder();
         recurring(builder);
 
-        return await ExecuteDispatch(task, null, builder.RecurringTask, null, cancellationToken, null, taskKey).ConfigureAwait(false);
+        return await ExecuteDispatch(task, null, builder.RecurringTask, null, cancellationToken, null, taskKey)
+                   .ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -56,7 +60,8 @@ public class Dispatcher(
     }
 
     /// <inheritdoc />
-    public async Task<Guid> ExecuteDispatch(IEverTask task, CancellationToken ct = default, Guid? existingTaskId = null, string? taskKey = null) =>
+    public async Task<Guid> ExecuteDispatch(IEverTask task, CancellationToken ct = default, Guid? existingTaskId = null,
+                                            string? taskKey = null) =>
         await ExecuteDispatch(task, null, null, null, ct, existingTaskId, taskKey).ConfigureAwait(false);
 
     /// <inheritdoc />
@@ -71,12 +76,14 @@ public class Dispatcher(
                                 ? DateTimeOffset.UtcNow.Add(executionDelay.Value)
                                 : (DateTimeOffset?)null;
 
-        return await ExecuteDispatch(task, executionTime, null, null, ct, existingTaskId, taskKey).ConfigureAwait(false);
+        return await ExecuteDispatch(task, executionTime, null, null, ct, existingTaskId, taskKey)
+                   .ConfigureAwait(false);
     }
 
     public async Task<Guid> ExecuteDispatch(IEverTask task, DateTimeOffset? executionTime = null,
                                             RecurringTask? recurring = null, int? currentRun = null,
-                                            CancellationToken ct = default, Guid? existingTaskId = null, string? taskKey = null)
+                                            CancellationToken ct = default, Guid? existingTaskId = null,
+                                            string? taskKey = null)
     {
         ArgumentNullException.ThrowIfNull(task);
 
@@ -87,28 +94,28 @@ public class Dispatcher(
 
             if (existingTask != null)
             {
-                logger.LogInformation("Found existing task with key {taskKey}, ID {taskId}, Status {status}",
+                logger.LogInformation("Found existing task with key {TaskKey}, ID {TaskId}, Status {Status}",
                     taskKey, existingTask.Id, existingTask.Status);
 
                 // If task is terminated (Completed/Failed/Cancelled), remove it and create new
                 if (existingTask.Status is QueuedTaskStatus.Completed
-                                        or QueuedTaskStatus.Failed
-                                        or QueuedTaskStatus.Cancelled
-                                        or QueuedTaskStatus.ServiceStopped)
+                    or QueuedTaskStatus.Failed
+                    or QueuedTaskStatus.Cancelled
+                    or QueuedTaskStatus.ServiceStopped)
                 {
-                    logger.LogInformation("Removing terminated task {taskId} to create new one", existingTask.Id);
+                    logger.LogInformation("Removing terminated task {TaskId} to create new one", existingTask.Id);
                     await taskStorage.Remove(existingTask.Id, ct).ConfigureAwait(false);
                 }
                 // If task is in progress, return existing ID (cannot modify running task)
                 else if (existingTask.Status is QueuedTaskStatus.InProgress)
                 {
-                    logger.LogInformation("Task {taskId} is in progress, returning existing ID", existingTask.Id);
+                    logger.LogInformation("Task {TaskId} is in progress, returning existing ID", existingTask.Id);
                     return existingTask.Id;
                 }
                 // If task is pending (Queued/WaitingQueue/Pending), update it
                 else
                 {
-                    logger.LogInformation("Updating pending task {taskId}", existingTask.Id);
+                    logger.LogInformation("Updating pending task {TaskId}", existingTask.Id);
                     existingTaskId = existingTask.Id;
                     // Will continue with update logic below
                 }
@@ -129,11 +136,12 @@ public class Dispatcher(
             if (result.NextRun == null)
                 throw new ArgumentException("Invalid scheduler recurring expression", nameof(recurring));
 
-            nextRun = result.NextRun;
+            nextRun       = result.NextRun;
             executionTime = nextRun;
 
             // DEBUG
-            Console.WriteLine($"[Dispatcher] Scheduled recurring task for {executionTime:O}, skipped {result.SkippedCount} occurrences");
+            Console.WriteLine(
+                $"[Dispatcher] Scheduled recurring task for {executionTime:O}, skipped {result.SkippedCount} occurrences");
         }
 
         var taskType = task.GetType();
@@ -152,37 +160,80 @@ public class Dispatcher(
                 if (existingTaskId == null)
                 {
                     // New task - persist it
-                    logger.LogInformation("Persisting Task: {type}", taskEntity.Type);
+                    logger.LogInformation("Persisting Task: {Type}", taskEntity.Type);
                     await taskStorage.Persist(taskEntity, ct).ConfigureAwait(false);
                 }
                 else
                 {
                     // Existing task - update it
-                    logger.LogInformation("Updating Task: {type}", taskEntity.Type);
+                    logger.LogInformation("Updating Task: {Type}", taskEntity.Type);
                     await taskStorage.UpdateTask(taskEntity, ct).ConfigureAwait(false);
                 }
             }
             catch (Exception e)
             {
-                logger.LogError(e, "Unable to {action} the task {fullType}",
+                logger.LogError(e, "Unable to {Action} the task {FullType}",
                     existingTaskId == null ? "persist" : "update", task);
                 if (serviceConfiguration.ThrowIfUnableToPersist)
                     throw;
             }
         }
 
-        if (executor.ExecutionTime > DateTimeOffset.UtcNow || recurring != null)
+        // Determine if task should use lazy handler resolution
+        TaskHandlerExecutor executorToSchedule = executor;
+        if (ShouldUseLazyResolution(executionTime, recurring))
         {
-            scheduler.Schedule(executor, nextRun);
+            // ⚠️ DO NOT DISPOSE HANDLER HERE!
+            // Handler has not executed yet, user's DisposeAsyncCore() expects execution first.
+            // GC will collect the unused handler instance naturally (lightweight, only DI references).
+            // See implementation plan section 2.2 for detailed rationale.
+
+            // Convert to lazy mode (handler → null, only metadata kept)
+            executorToSchedule = executor.ToLazy();
+
+            logger.LogDebug("Task {TaskId} converted to lazy handler resolution mode", executor.PersistenceId);
+        }
+
+        if (executorToSchedule.ExecutionTime > DateTimeOffset.UtcNow || recurring != null)
+        {
+            scheduler.Schedule(executorToSchedule, nextRun);
         }
         else
         {
             // Determine queue name with automatic routing for recurring tasks
-            string? queueName = executor.QueueName ?? (executor.RecurringTask != null ? QueueNames.Recurring : QueueNames.Default);
-            await queueManager.TryEnqueue(queueName, executor).ConfigureAwait(false);
+            var queueName = executorToSchedule.QueueName ??
+                            (executorToSchedule.RecurringTask != null ? QueueNames.Recurring : QueueNames.Default);
+            await queueManager.TryEnqueue(queueName, executorToSchedule).ConfigureAwait(false);
         }
 
         return executor.PersistenceId;
+    }
+
+    /// <summary>
+    /// Determines if a task should use lazy handler resolution based on configuration and scheduling.
+    /// </summary>
+    /// <param name="executionTime">Scheduled execution time (null for immediate)</param>
+    /// <param name="recurring">Recurring task configuration (null for one-time)</param>
+    /// <returns>True if task should use lazy mode, false for eager mode</returns>
+    private bool ShouldUseLazyResolution(DateTimeOffset? executionTime, RecurringTask? recurring)
+    {
+        // Feature disabled globally
+        if (!serviceConfiguration.UseLazyHandlerResolution)
+            return false;
+
+        // Recurring tasks: use AlwaysLazyForRecurring setting
+        if (recurring != null)
+            return serviceConfiguration.AlwaysLazyForRecurring;
+
+        // Delayed tasks: check if delay exceeds threshold
+        if (executionTime.HasValue)
+        {
+            var delay = executionTime.Value - DateTimeOffset.UtcNow;
+            return delay > serviceConfiguration.LazyHandlerResolutionThreshold;
+        }
+
+        // Immediate tasks: always eager
+        return false;
     }
 
     /// <summary>
@@ -191,18 +242,19 @@ public class Dispatcher(
     /// </summary>
     private static TaskHandlerWrapper CreateCachedWrapper(Type taskType)
     {
-        var factory = _wrapperFactoryCache.GetOrAdd(taskType, type =>
+        var factory = WrapperFactoryCache.GetOrAdd(taskType, type =>
         {
             // Create wrapper type: TaskHandlerWrapperImp<TTask>
             var wrapperType = typeof(TaskHandlerWrapperImp<>).MakeGenericType(type);
 
             // Get parameterless constructor
             var constructor = wrapperType.GetConstructor(Type.EmptyTypes)
-                ?? throw new InvalidOperationException($"Could not find parameterless constructor for {wrapperType}");
+                              ?? throw new InvalidOperationException(
+                                  $"Could not find parameterless constructor for {wrapperType}");
 
             // Compile constructor call into a fast delegate: () => new TaskHandlerWrapperImp<TTask>()
             var newExpression = Expression.New(constructor);
-            var lambda = Expression.Lambda<Func<TaskHandlerWrapper>>(newExpression);
+            var lambda        = Expression.Lambda<Func<TaskHandlerWrapper>>(newExpression);
             return lambda.Compile();
         });
 

@@ -36,6 +36,10 @@ public class WorkerExecutor(
         using var     scope       = serviceScopeFactory.CreateScope();
         ITaskStorage? taskStorage = scope.ServiceProvider.GetService<ITaskStorage>();
 
+        // Resolve handler (lazy or eager mode)
+        object handler = null!;  // Will be assigned in both if and else branches
+        bool shouldDisposeHandler = false;
+
         try
         {
             serviceToken.ThrowIfCancellationRequested();
@@ -43,30 +47,70 @@ public class WorkerExecutor(
             if (IsTaskBlacklisted(task))
                 return;
 
+            // Resolve handler instance
+            if (task.IsLazy)
+            {
+                // Lazy mode: resolve fresh handler from DI
+                try
+                {
+                    handler = task.GetOrResolveHandler(scope.ServiceProvider);
+                    shouldDisposeHandler = true;  // Must dispose after execution
+
+                    logger.LogDebug("Resolved handler {handlerType} for lazy task {taskId}",
+                        handler.GetType().Name, task.PersistenceId);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Failed to resolve handler for task {taskId}", task.PersistenceId);
+
+                    if (taskStorage != null)
+                    {
+                        await taskStorage.SetStatus(
+                            task.PersistenceId,
+                            QueuedTaskStatus.Failed,
+                            ex,
+                            serviceToken
+                        ).ConfigureAwait(false);
+                    }
+
+                    return;  // Cannot proceed without handler
+                }
+            }
+            else
+            {
+                // Eager mode: use existing handler instance
+                handler = task.Handler!;  // Non-null assertion safe (validated at dispatch)
+                shouldDisposeHandler = false;  // Don't dispose (may be shared or managed elsewhere)
+            }
+
             RegisterInfo(task, "Starting task with id {0}.", task.PersistenceId);
 
             if (taskStorage != null)
                 await taskStorage.SetInProgress(task.PersistenceId, serviceToken).ConfigureAwait(false);
 
-            await ExecuteCallback(task.HandlerStartedCallback, task, "Started").ConfigureAwait(false);
+            await ExecuteCallback(GetStartedCallback(task, handler), task, "Started").ConfigureAwait(false);
 
-            var executionTime = await ExecuteTask(task, serviceToken);
-
-            await ExecuteDispose(task);
+            var executionTime = await ExecuteTask(task, handler, scope.ServiceProvider, serviceToken);
 
             if (taskStorage != null)
                 await taskStorage.SetCompleted(task.PersistenceId).ConfigureAwait(false);
 
-            await ExecuteCallback(task.HandlerCompletedCallback, task, "Completed").ConfigureAwait(false);
+            await ExecuteCallback(GetCompletedCallback(task, handler), task, "Completed").ConfigureAwait(false);
 
             RegisterInfo(task, "Task with id {0} was completed in {1} ms.", task.PersistenceId, executionTime);
         }
         catch (Exception ex)
         {
-            await HandleExceptionAsync(ex, task, serviceToken, taskStorage);
+            await HandleExceptionAsync(ex, task, handler, serviceToken, taskStorage);
         }
         finally
         {
+            // Dispose handler if lazy mode (BEFORE recurring scheduling)
+            if (shouldDisposeHandler && handler != null)
+            {
+                await ExecuteDisposeHandler(handler);
+            }
+
             cancellationSourceProvider.Delete(task.PersistenceId);
             await QueueNextOccourrence(task, taskStorage);
         }
@@ -85,7 +129,7 @@ public class WorkerExecutor(
         return false;
     }
 
-    private async Task<double> ExecuteTask(TaskHandlerExecutor task, CancellationToken serviceToken)
+    private async Task<double> ExecuteTask(TaskHandlerExecutor task, object handler, IServiceProvider serviceProvider, CancellationToken serviceToken)
     {
         serviceToken.ThrowIfCancellationRequested();
 
@@ -94,12 +138,12 @@ public class WorkerExecutor(
         // Performance optimization: Cache handler options to avoid repeated casts
         // Use GetOrAdd overload with factoryArgument to avoid closure allocation
         var options = HandlerOptionsInternalCache.GetOrAdd(
-            task.Handler.GetType(),
+            handler.GetType(),  // Use resolved handler
             static (_, state) =>
             {
-                var (handler, config) = state;
+                var (handlerInstance, config) = state;
                 // Cast only once per handler type (first time)
-                if (handler is IEverTaskHandlerOptions handlerOptions)
+                if (handlerInstance is IEverTaskHandlerOptions handlerOptions)
                 {
                     return new HandlerOptionsCache(
                         handlerOptions.RetryPolicy ?? config.DefaultRetryPolicy,
@@ -112,7 +156,7 @@ public class WorkerExecutor(
                     config.DefaultTimeout
                 );
             },
-            (task.Handler, configuration));
+            (handler, configuration));
 
         var retryPolicy = options.RetryPolicy;
         var timeout = options.Timeout;
@@ -132,6 +176,20 @@ public class WorkerExecutor(
 
         async Task DoExecute()
         {
+            // Get or create handler callback
+            Func<IEverTask, CancellationToken, Task> handlerCallback;
+            if (task.HandlerCallback != null)
+            {
+                // Eager mode: use existing callback
+                handlerCallback = task.HandlerCallback;
+            }
+            else
+            {
+                // Lazy mode: resolve handler and create callback
+                var (_, callback) = task.GetOrResolveHandlerWithCallback(serviceProvider);
+                handlerCallback = callback;
+            }
+
             //Use WaitAsync for cancelling:
             //https://github.com/davidfowl/AspNetCoreDiagnosticScenarios/blob/master/AsyncGuidance.md#cancelling-uncancellable-operations
             await retryPolicy.Execute(async retryToken =>
@@ -139,13 +197,13 @@ public class WorkerExecutor(
                     if (timeout.HasValue && timeout.Value > TimeSpan.Zero)
                     {
                         await ExecuteWithTimeout(
-                            innerToken => task.HandlerCallback.Invoke(task.Task, innerToken).WaitAsync(retryToken),
+                            innerToken => handlerCallback.Invoke(task.Task, innerToken).WaitAsync(innerToken),
                             timeout.Value,
                             retryToken).ConfigureAwait(false);
                     }
                     else
                     {
-                        await task.HandlerCallback.Invoke(task.Task, retryToken).WaitAsync(retryToken)
+                        await handlerCallback.Invoke(task.Task, retryToken).WaitAsync(retryToken)
                                   .ConfigureAwait(false);
                     }
                 }
@@ -181,19 +239,73 @@ public class WorkerExecutor(
         }
     }
 
-    private async Task ExecuteDispose(TaskHandlerExecutor task)
+    private async Task ExecuteDisposeHandler(object handler)
     {
-        if (task.Handler is IAsyncDisposable asyncDisposable)
+        if (handler is IAsyncDisposable asyncDisposable)
         {
             try
             {
                 await asyncDisposable.DisposeAsync();
+                logger.LogDebug("Disposed handler {HandlerType}", handler.GetType().Name);
             }
             catch (Exception e)
             {
-                RegisterError(e, task, "Unable to dispose Task with id {0}.", task.PersistenceId);
+                logger.LogError(e, "Error disposing handler {HandlerType}", handler.GetType().Name);
             }
         }
+    }
+
+    /// <summary>
+    /// Gets the OnStarted callback from executor (eager mode) or extracts from handler (lazy mode)
+    /// </summary>
+    private Func<Guid, ValueTask>? GetStartedCallback(TaskHandlerExecutor task, object handler)
+    {
+        // If executor has callback (eager mode), use it
+        if (task.HandlerStartedCallback != null)
+            return task.HandlerStartedCallback;
+
+        // Lazy mode: extract from handler using reflection
+        // All handlers implement IEverTaskHandler<T> which has OnStarted method
+        var onStartedMethod = handler.GetType().GetMethod("OnStarted");
+
+        return onStartedMethod != null
+                   ? persistenceId => (ValueTask)onStartedMethod.Invoke(handler, [persistenceId])!
+                   : null;
+    }
+
+    /// <summary>
+    /// Gets the OnCompleted callback from executor (eager mode) or extracts from handler (lazy mode)
+    /// </summary>
+    private Func<Guid, ValueTask>? GetCompletedCallback(TaskHandlerExecutor task, object handler)
+    {
+        // If executor has callback (eager mode), use it
+        if (task.HandlerCompletedCallback != null)
+            return task.HandlerCompletedCallback;
+
+        // Lazy mode: extract from handler using reflection
+        var onCompletedMethod = handler.GetType().GetMethod("OnCompleted");
+
+        return onCompletedMethod != null
+                   ? persistenceId => (ValueTask)onCompletedMethod.Invoke(handler, [persistenceId])!
+                   : null;
+    }
+
+    /// <summary>
+    /// Gets the OnError callback from executor (eager mode) or extracts from handler (lazy mode)
+    /// </summary>
+    private Func<Guid, Exception?, string, ValueTask>? GetErrorCallback(TaskHandlerExecutor task, object handler)
+    {
+        // If executor has callback (eager mode), use it
+        if (task.HandlerErrorCallback != null)
+            return task.HandlerErrorCallback;
+
+        // Lazy mode: extract from handler using reflection
+        var onErrorMethod = handler.GetType().GetMethod("OnError");
+
+        return onErrorMethod != null
+                   ? (persistenceId, exception, message) =>
+                       (ValueTask)onErrorMethod.Invoke(handler, [persistenceId, exception, message])!
+                   : null;
     }
 
     private async ValueTask ExecuteCallback(Func<Guid, ValueTask>? handler, TaskHandlerExecutor task,
@@ -231,7 +343,7 @@ public class WorkerExecutor(
         }
     }
 
-    private async Task HandleExceptionAsync(Exception ex, TaskHandlerExecutor task, CancellationToken serviceToken,
+    private async Task HandleExceptionAsync(Exception ex, TaskHandlerExecutor task, object handler, CancellationToken serviceToken,
                                             ITaskStorage? taskStorage)
     {
         if (ex is OperationCanceledException oce)
@@ -244,7 +356,7 @@ public class WorkerExecutor(
                     await taskStorage.SetCancelledByUser(task.PersistenceId).ConfigureAwait(false);
             }
 
-            await ExecuteCallback(task.HandlerErrorCallback, task, oce,
+            await ExecuteCallback(GetErrorCallback(task, handler), task, oce,
                 $"Task with id {task.PersistenceId} was cancelled").ConfigureAwait(false);
 
             RegisterWarning(oce, task, "Task with id {0} was cancelled by service while stopping.", task.PersistenceId);
@@ -256,7 +368,7 @@ public class WorkerExecutor(
                 await taskStorage.SetStatus(task.PersistenceId, QueuedTaskStatus.Failed, ex, serviceToken)
                                  .ConfigureAwait(false);
 
-            await ExecuteCallback(task.HandlerErrorCallback, task, ex,
+            await ExecuteCallback(GetErrorCallback(task, handler), task, ex,
                 $"Error occurred executing the task with id {task.PersistenceId}").ConfigureAwait(false);
 
             RegisterError(ex, task, "Error occurred executing task with id {0}.", task.PersistenceId);
@@ -411,7 +523,22 @@ public class WorkerExecutor(
 
         // Cache type strings (permanent cache - types never unload)
         var taskType = TypeStringCache.GetOrAdd(executor.Task.GetType(), type => type.ToString());
-        var handlerType = TypeStringCache.GetOrAdd(executor.Handler.GetType(), type => type.ToString());
+
+        // Handler type: get from Handler instance (eager) or HandlerTypeName (lazy)
+        string handlerType;
+        if (executor.Handler != null)
+        {
+            handlerType = TypeStringCache.GetOrAdd(executor.Handler.GetType(), type => type.ToString());
+        }
+        else if (!string.IsNullOrEmpty(executor.HandlerTypeName))
+        {
+            // Lazy mode: extract simple type name from AssemblyQualifiedName
+            handlerType = executor.HandlerTypeName.Split(',')[0].Trim();
+        }
+        else
+        {
+            handlerType = "Unknown";
+        }
 
         return new EverTaskEventData(
             executor.PersistenceId,

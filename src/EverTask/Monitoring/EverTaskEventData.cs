@@ -10,16 +10,34 @@ public record EverTaskEventData(
     string Message,
     string? Exception = null)
 {
-    internal static EverTaskEventData FromExecutor(TaskHandlerExecutor executor, SeverityLevel severity, string message, Exception? exception) =>
-        new (
+    internal static EverTaskEventData FromExecutor(TaskHandlerExecutor executor, SeverityLevel severity, string message, Exception? exception)
+    {
+        // Handler type: get from Handler instance (eager) or HandlerTypeName (lazy)
+        string handlerType;
+        if (executor.Handler != null)
+        {
+            handlerType = executor.Handler.GetType().ToString();
+        }
+        else if (!string.IsNullOrEmpty(executor.HandlerTypeName))
+        {
+            // Lazy mode: extract simple type name from AssemblyQualifiedName
+            handlerType = executor.HandlerTypeName.Split(',')[0].Trim();
+        }
+        else
+        {
+            handlerType = "Unknown";
+        }
+
+        return new EverTaskEventData(
             executor.PersistenceId,
             DateTimeOffset.UtcNow,
             severity.ToString(),
             executor.Task.GetType().ToString(),
-            executor.Handler.GetType().ToString(),
+            handlerType,
             JsonConvert.SerializeObject(executor.Task),
             message,
-            exception.ToDetailedString());
+            exception?.ToDetailedString());
+    }
 };
 
 public enum SeverityLevel

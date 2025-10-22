@@ -26,6 +26,30 @@ public class EverTaskServiceConfiguration
 
     internal int? ShardedSchedulerShardCount { get; private set; }
 
+    /// <summary>
+    /// Enable lazy handler resolution for scheduled and recurring tasks.
+    /// When enabled, handler instances are disposed after dispatch validation
+    /// and recreated at execution time, reducing memory footprint.
+    /// Default: true
+    /// </summary>
+    public bool UseLazyHandlerResolution { get; set; } = true;
+
+    /// <summary>
+    /// Time threshold for lazy handler resolution.
+    /// Tasks delayed longer than this threshold will use lazy mode.
+    /// Tasks delayed less than this will use eager mode (execute soon anyway).
+    /// Default: 1 hour
+    /// Minimum: 1 minute
+    /// </summary>
+    public TimeSpan LazyHandlerResolutionThreshold { get; set; } = TimeSpan.FromHours(1);
+
+    /// <summary>
+    /// Always use lazy handler resolution for recurring tasks.
+    /// Recommended to keep true to avoid long-lived handler instances.
+    /// Default: true
+    /// </summary>
+    public bool AlwaysLazyForRecurring { get; set; } = true;
+
     public EverTaskServiceConfiguration SetChannelOptions(int capacity)
     {
         ChannelOptions.Capacity = capacity;
@@ -82,6 +106,45 @@ public class EverTaskServiceConfiguration
         params Assembly[] assemblies)
     {
         AssembliesToRegister.AddRange(assemblies);
+        return this;
+    }
+
+    /// <summary>
+    /// Sets whether to use lazy handler resolution for scheduled and recurring tasks.
+    /// When enabled, handler instances are disposed after dispatch and recreated at execution.
+    /// </summary>
+    /// <param name="enabled">True to enable lazy resolution (default), false to disable</param>
+    /// <returns>The configuration instance for method chaining</returns>
+    public EverTaskServiceConfiguration SetUseLazyHandlerResolution(bool enabled)
+    {
+        UseLazyHandlerResolution = enabled;
+        return this;
+    }
+
+    /// <summary>
+    /// Sets the time threshold for lazy handler resolution.
+    /// Tasks delayed longer than this will use lazy mode.
+    /// </summary>
+    /// <param name="threshold">Time threshold (minimum: 1 minute)</param>
+    /// <returns>The configuration instance for method chaining</returns>
+    /// <exception cref="ArgumentException">Thrown if threshold is less than 1 minute</exception>
+    public EverTaskServiceConfiguration SetLazyHandlerResolutionThreshold(TimeSpan threshold)
+    {
+        if (threshold < TimeSpan.FromMinutes(1))
+            throw new ArgumentException("Lazy handler resolution threshold must be at least 1 minute", nameof(threshold));
+
+        LazyHandlerResolutionThreshold = threshold;
+        return this;
+    }
+
+    /// <summary>
+    /// Sets whether recurring tasks always use lazy handler resolution.
+    /// </summary>
+    /// <param name="enabled">True to always use lazy for recurring (default), false to use threshold</param>
+    /// <returns>The configuration instance for method chaining</returns>
+    public EverTaskServiceConfiguration SetAlwaysLazyForRecurring(bool enabled)
+    {
+        AlwaysLazyForRecurring = enabled;
         return this;
     }
 
