@@ -11,6 +11,23 @@ EverTask helps you build fault-tolerant background tasks that can recover from t
 ## Table of Contents
 
 - [Retry Policies](#retry-policies)
+  - [Default Linear Retry Policy](#default-linear-retry-policy)
+  - [LinearRetryPolicy Options](#linearretrypolicy-options)
+  - [Per-Handler Retry Policy](#per-handler-retry-policy)
+  - [Custom Retry Policies](#custom-retry-policies)
+  - [Polly Integration](#polly-integration)
+  - [Exception Filtering](#exception-filtering)
+    - [Whitelist Approach (Handle)](#whitelist-approach-handle)
+    - [Blacklist Approach (DoNotHandle)](#blacklist-approach-donothandle)
+    - [Predicate-Based Filtering (HandleWhen)](#predicate-based-filtering-handlewhen)
+    - [Predefined Exception Sets](#predefined-exception-sets)
+    - [Exception Filter Priority](#exception-filter-priority)
+  - [OnRetry Lifecycle Callback](#onretry-lifecycle-callback)
+    - [Basic Usage](#basic-usage)
+    - [Tracking Metrics](#tracking-metrics)
+    - [Circuit Breaker Pattern](#circuit-breaker-pattern)
+    - [Debugging Intermittent Failures](#debugging-intermittent-failures)
+  - [Combining Exception Filtering and OnRetry](#combining-exception-filtering-and-onretry)
 - [Timeout Management](#timeout-management)
 - [CancellationToken Usage](#cancellationtoken-usage)
 - [Handling WorkerService Stops](#handling-workerservice-stops)
@@ -20,6 +37,8 @@ EverTask helps you build fault-tolerant background tasks that can recover from t
 ## Retry Policies
 
 Retry policies let you automatically retry failed tasks without writing custom error-handling code. When a task fails, the retry policy kicks in and tries again based on the rules you've defined.
+
+EverTask supports both simple retry configurations and advanced exception filtering to fail-fast on permanent errors while retrying transient failures.
 
 ### Default Linear Retry Policy
 
@@ -195,6 +214,435 @@ builder.Services.AddEverTask(opt =>
     opt.SetDefaultRetryPolicy(new PollyRetryPolicy());
 });
 ```
+
+### Exception Filtering
+
+Exception filtering allows you to configure retry policies to only retry transient errors while failing fast on permanent errors. This prevents wasting retry attempts and resources on failures that won't fix themselves.
+
+#### Why Exception Filtering?
+
+Without filtering, all exceptions trigger retries:
+
+```csharp
+public override async Task Handle(MyTask task, CancellationToken ct)
+{
+    // Bug: task.Data is null
+    var length = task.Data.Length; // NullReferenceException
+}
+```
+
+With default retry policy:
+- Attempt 1: `NullReferenceException` → Retry (wasteful)
+- Attempt 2: `NullReferenceException` → Retry (wasteful)
+- Attempt 3: `NullReferenceException` → Retry (wasteful)
+- Attempt 4: `NullReferenceException` → Retry (wasteful)
+- Attempt 5: `NullReferenceException` → Final failure
+
+**Total wasted time**: 5 attempts × retry delay
+
+With exception filtering, you can fail immediately on permanent errors like `NullReferenceException`, `ArgumentException`, or validation failures.
+
+#### Whitelist Approach (Handle)
+
+Use `Handle<TException>()` to specify which exceptions should be retried. All other exceptions fail immediately.
+
+```csharp
+public class DatabaseTaskHandler : EverTaskHandler<DatabaseTask>
+{
+    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(5, TimeSpan.FromSeconds(2))
+        .Handle<DbException>()
+        .Handle<SqlException>()
+        .Handle<TimeoutException>();
+
+    public override async Task Handle(DatabaseTask task, CancellationToken ct)
+    {
+        await _dbContext.SaveChangesAsync(ct);
+    }
+}
+```
+
+**Result**: Only database-related exceptions trigger retries. Application logic errors (ArgumentException, NullReferenceException) fail immediately.
+
+#### Blacklist Approach (DoNotHandle)
+
+Use `DoNotHandle<TException>()` to specify which exceptions should NOT be retried. All other exceptions trigger retries.
+
+```csharp
+public class ApiTaskHandler : EverTaskHandler<ApiTask>
+{
+    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(5, TimeSpan.FromSeconds(1))
+        .DoNotHandle<ArgumentException>()
+        .DoNotHandle<ArgumentNullException>()
+        .DoNotHandle<InvalidOperationException>();
+
+    public override async Task Handle(ApiTask task, CancellationToken ct)
+    {
+        await _apiClient.CallAsync(task.Endpoint, ct);
+    }
+}
+```
+
+**Result**: Permanent errors (argument validation, logic errors) fail immediately. Network errors, timeouts, and other transient issues trigger retries.
+
+#### Multiple Exception Types (Params Overload)
+
+For whitelisting or blacklisting many exception types, use the `params Type[]` overload:
+
+```csharp
+public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(5, TimeSpan.FromSeconds(2))
+    .Handle(
+        typeof(DbException),
+        typeof(SqlException),
+        typeof(HttpRequestException),
+        typeof(IOException),
+        typeof(SocketException),
+        typeof(TimeoutException)
+    );
+```
+
+This is more concise than chaining multiple `Handle<T>()` calls.
+
+#### Predicate-Based Filtering (HandleWhen)
+
+For complex scenarios, use `HandleWhen(Func<Exception, bool>)` with custom logic:
+
+```csharp
+public class HttpApiHandler : EverTaskHandler<HttpApiTask>
+{
+    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(3, TimeSpan.FromSeconds(1))
+        .HandleWhen(ex =>
+        {
+            // Only retry 5xx server errors
+            if (ex is HttpRequestException httpEx)
+            {
+                var statusCode = httpEx.StatusCode;
+                return statusCode >= 500 && statusCode < 600;
+            }
+
+            // Retry timeout and network errors
+            return ex is TimeoutException or SocketException;
+        });
+
+    public override async Task Handle(HttpApiTask task, CancellationToken ct)
+    {
+        var response = await _httpClient.GetAsync(task.Url, ct);
+        response.EnsureSuccessStatusCode();
+    }
+}
+```
+
+**Use Cases for Predicates**:
+- HTTP status code-based retry (5xx yes, 4xx no)
+- Exception message pattern matching
+- Combining multiple conditions
+- Dynamic retry logic based on task context
+
+#### Predefined Exception Sets
+
+EverTask provides extension methods for common transient error patterns:
+
+```csharp
+// Database errors only
+public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(5, TimeSpan.FromSeconds(2))
+    .HandleTransientDatabaseErrors();
+
+// Network errors only
+public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(3, TimeSpan.FromSeconds(1))
+    .HandleTransientNetworkErrors();
+
+// All transient errors (database + network)
+public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(5, TimeSpan.FromSeconds(2))
+    .HandleAllTransientErrors();
+```
+
+**Included Exception Types**:
+
+`HandleTransientDatabaseErrors()`:
+- `DbException`
+- `TimeoutException` (database-related)
+
+`HandleTransientNetworkErrors()`:
+- `HttpRequestException`
+- `SocketException`
+- `WebException`
+- `TaskCanceledException`
+
+`HandleAllTransientErrors()`:
+- All of the above combined
+
+You can combine predefined sets with custom exceptions:
+
+```csharp
+public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(5, TimeSpan.FromSeconds(2))
+    .HandleAllTransientErrors()
+    .Handle<MyCustomTransientException>();
+```
+
+#### Exception Filter Priority
+
+When multiple filtering strategies are configured, they're evaluated in this order:
+
+1. **Predicate** (`HandleWhen`): Takes precedence over all other filters
+2. **Whitelist** (`Handle<T>`): Only retry whitelisted exceptions
+3. **Blacklist** (`DoNotHandle<T>`): Retry all except blacklisted exceptions
+4. **Default**: Retry all exceptions except `OperationCanceledException` and `TimeoutException`
+
+**Important**: You cannot mix `Handle<T>()` and `DoNotHandle<T>()` - choose either whitelist or blacklist approach, not both.
+
+```csharp
+// Invalid - throws InvalidOperationException
+var policy = new LinearRetryPolicy(3, TimeSpan.FromSeconds(1))
+    .Handle<DbException>()
+    .DoNotHandle<ArgumentException>(); // ERROR: Cannot mix approaches
+```
+
+#### Derived Exception Types
+
+Exception filtering supports derived types using `Type.IsAssignableFrom()`:
+
+```csharp
+public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(3, TimeSpan.FromSeconds(1))
+    .Handle<IOException>();
+```
+
+**This will also retry**:
+- `FileNotFoundException` (derives from `IOException`)
+- `DirectoryNotFoundException` (derives from `IOException`)
+- `PathTooLongException` (derives from `IOException`)
+
+You don't need to explicitly whitelist every derived type.
+
+### OnRetry Lifecycle Callback
+
+The `OnRetry` callback gives you visibility into individual retry attempts, enabling logging, metrics, alerting, and debugging of intermittent failures.
+
+#### Basic Usage
+
+Override `OnRetry` in your handler to track retry attempts:
+
+```csharp
+public class SendEmailHandler : EverTaskHandler<SendEmailTask>
+{
+    private readonly ILogger<SendEmailHandler> _logger;
+
+    public SendEmailHandler(ILogger<SendEmailHandler> logger)
+    {
+        _logger = logger;
+    }
+
+    public override ValueTask OnRetry(Guid taskId, int attemptNumber, Exception exception, TimeSpan delay)
+    {
+        _logger.LogWarning(exception,
+            "Email task {TaskId} retry attempt {Attempt} after {DelayMs}ms: {ErrorMessage}",
+            taskId, attemptNumber, delay.TotalMilliseconds, exception.Message);
+
+        return ValueTask.CompletedTask;
+    }
+
+    public override async Task Handle(SendEmailTask task, CancellationToken ct)
+    {
+        await _emailService.SendAsync(task.To, task.Subject, task.Body, ct);
+    }
+}
+```
+
+**When `OnRetry` is Called**:
+
+1. `Handle()` executes and throws exception
+2. Retry policy determines if exception should be retried (`ShouldRetry()`)
+3. If yes: Retry policy waits for delay period
+4. **`OnRetry()` called** with attempt details
+5. `Handle()` retried
+
+**Important**: `OnRetry` is only called for retry attempts, not the initial execution. If a task succeeds on the first attempt, `OnRetry` is never called.
+
+#### Tracking Metrics
+
+Use `OnRetry` to track retry metrics for monitoring and alerting:
+
+```csharp
+public class MetricsTrackingHandler : EverTaskHandler<MyTask>
+{
+    private readonly IMetrics _metrics;
+
+    public override ValueTask OnRetry(Guid taskId, int attemptNumber, Exception exception, TimeSpan delay)
+    {
+        _metrics.IncrementCounter("task_retries", new
+        {
+            handler = GetType().Name,
+            attempt = attemptNumber,
+            exception_type = exception.GetType().Name
+        });
+
+        _metrics.RecordHistogram("retry_delay_ms", delay.TotalMilliseconds);
+
+        return ValueTask.CompletedTask;
+    }
+}
+```
+
+#### Circuit Breaker Pattern
+
+Implement basic circuit breaker logic using `OnRetry`:
+
+```csharp
+public class CircuitBreakerHandler : EverTaskHandler<ExternalApiTask>
+{
+    private static int _consecutiveFailures = 0;
+    private static DateTimeOffset? _circuitOpenedAt = null;
+    private readonly ILogger<CircuitBreakerHandler> _logger;
+
+    public override ValueTask OnRetry(Guid taskId, int attemptNumber, Exception exception, TimeSpan delay)
+    {
+        Interlocked.Increment(ref _consecutiveFailures);
+
+        if (_consecutiveFailures >= 10 && _circuitOpenedAt == null)
+        {
+            _circuitOpenedAt = DateTimeOffset.UtcNow;
+            _logger.LogError(
+                "Circuit breaker opened due to {Failures} consecutive failures",
+                _consecutiveFailures);
+
+            // Send alerts, disable service, etc.
+        }
+
+        return ValueTask.CompletedTask;
+    }
+
+    public override async Task Handle(ExternalApiTask task, CancellationToken ct)
+    {
+        // Check circuit breaker
+        if (_circuitOpenedAt.HasValue &&
+            DateTimeOffset.UtcNow - _circuitOpenedAt.Value < TimeSpan.FromMinutes(5))
+        {
+            throw new InvalidOperationException("Circuit breaker is open");
+        }
+
+        await _apiClient.CallAsync(task.Endpoint, ct);
+
+        // Success - reset circuit breaker
+        Interlocked.Exchange(ref _consecutiveFailures, 0);
+        _circuitOpenedAt = null;
+    }
+}
+```
+
+**Note**: For production circuit breaker implementations, consider using Polly's circuit breaker policy instead of manual tracking.
+
+#### Debugging Intermittent Failures
+
+Use `OnRetry` to capture diagnostic information for failures that only occur occasionally:
+
+```csharp
+public class DiagnosticHandler : EverTaskHandler<DataProcessingTask>
+{
+    private readonly IDiagnosticService _diagnostics;
+
+    public override ValueTask OnRetry(Guid taskId, int attemptNumber, Exception exception, TimeSpan delay)
+    {
+        _diagnostics.CaptureSnapshot(new
+        {
+            TaskId = taskId,
+            Attempt = attemptNumber,
+            Exception = exception.ToString(),
+            StackTrace = exception.StackTrace,
+            Timestamp = DateTimeOffset.UtcNow,
+            Environment = new
+            {
+                MachineName = Environment.MachineName,
+                ThreadId = Environment.CurrentManagedThreadId,
+                WorkingSet = Environment.WorkingSet
+            }
+        });
+
+        return ValueTask.CompletedTask;
+    }
+}
+```
+
+#### Error Handling in OnRetry
+
+If `OnRetry` throws an exception, it's logged but **does not prevent the retry attempt**. The retry proceeds regardless of callback success or failure:
+
+```csharp
+public override ValueTask OnRetry(Guid taskId, int attemptNumber, Exception exception, TimeSpan delay)
+{
+    // If this throws, it's logged but retry still happens
+    _externalMetricsService.TrackRetry(taskId, attemptNumber);
+
+    return ValueTask.CompletedTask;
+}
+```
+
+This ensures that monitoring/logging failures don't impact task execution reliability.
+
+#### Async Operations in OnRetry
+
+`OnRetry` returns `ValueTask`, allowing async operations like database logging:
+
+```csharp
+public override async ValueTask OnRetry(Guid taskId, int attemptNumber, Exception exception, TimeSpan delay)
+{
+    // Log retry to database for audit trail
+    await _auditDb.LogRetryAttempt(new RetryAuditEntry
+    {
+        TaskId = taskId,
+        AttemptNumber = attemptNumber,
+        ExceptionType = exception.GetType().Name,
+        ExceptionMessage = exception.Message,
+        Delay = delay,
+        Timestamp = DateTimeOffset.UtcNow
+    });
+}
+```
+
+### Combining Exception Filtering and OnRetry
+
+You can use both features together for comprehensive retry handling:
+
+```csharp
+public class RobustDatabaseHandler : EverTaskHandler<DatabaseTask>
+{
+    private readonly ILogger<RobustDatabaseHandler> _logger;
+    private readonly IMetrics _metrics;
+
+    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(
+        new[]
+        {
+            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(2),
+            TimeSpan.FromSeconds(5),
+            TimeSpan.FromSeconds(10)
+        })
+        .HandleTransientDatabaseErrors();
+
+    public override ValueTask OnRetry(Guid taskId, int attemptNumber, Exception exception, TimeSpan delay)
+    {
+        _logger.LogWarning(exception,
+            "Database task {TaskId} retry {Attempt}/{MaxAttempts} after {DelayMs}ms",
+            taskId, attemptNumber, 4, delay.TotalMilliseconds);
+
+        _metrics.IncrementCounter("db_task_retries", new
+        {
+            attempt = attemptNumber,
+            exception = exception.GetType().Name
+        });
+
+        return ValueTask.CompletedTask;
+    }
+
+    public override async Task Handle(DatabaseTask task, CancellationToken ct)
+    {
+        await _dbContext.ProcessAsync(task.Data, ct);
+    }
+}
+```
+
+**Result**:
+- Only database exceptions trigger retries (fail-fast on logic errors)
+- Each retry attempt is logged with context
+- Metrics track retry patterns for monitoring
+- Exponential backoff gives database time to recover
 
 ### Circuit Breaker with Polly
 
@@ -564,17 +1012,19 @@ public override ValueTask OnError(Guid taskId, Exception? exception, string? mes
 
 ### Retry Policies
 
-1. **Use retries for transient failures** - Things like network errors, timeouts, or temporary service unavailability are good candidates for retry logic
+1. **Use retries for transient failures** - Things like network errors, database timeouts, or temporary service unavailability are good candidates for retry logic
 2. **Don't retry permanent failures** - Validation errors, 404s, or authentication failures won't fix themselves on retry
-3. **Implement exponential backoff** - Give failing services breathing room instead of hammering them with requests
-4. **Set reasonable retry limits** - Usually 3-5 attempts is enough; more than that and you're probably dealing with a non-transient issue
-5. **Log retry attempts** - Patterns in retry behavior can reveal systemic problems worth investigating
+3. **Use exception filtering to fail-fast** - Configure `Handle<T>()` to only retry transient errors, saving resources and improving error visibility
+4. **Implement exponential backoff** - Give failing services breathing room instead of hammering them with requests
+5. **Set reasonable retry limits** - Usually 3-5 attempts is enough; more than that and you're probably dealing with a non-transient issue
+6. **Log retry attempts** - Use `OnRetry` callback to track patterns in retry behavior that reveal systemic problems
 
 ```csharp
-// ✅ Good: Retry transient HTTP errors
+// ✅ Good: Exception filtering with transient errors only
 public class ApiTaskHandler : EverTaskHandler<ApiTask>
 {
-    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(3, TimeSpan.FromSeconds(2));
+    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(3, TimeSpan.FromSeconds(2))
+        .HandleTransientNetworkErrors(); // Only retry network issues
 
     public override async Task Handle(ApiTask task, CancellationToken cancellationToken)
     {
@@ -583,15 +1033,107 @@ public class ApiTaskHandler : EverTaskHandler<ApiTask>
     }
 }
 
-// ❌ Bad: Retrying validation errors
+// ❌ Bad: No exception filtering - retries validation errors
 public class ValidationTaskHandler : EverTaskHandler<ValidationTask>
 {
+    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(3, TimeSpan.FromSeconds(1));
+
     public override async Task Handle(ValidationTask task, CancellationToken cancellationToken)
     {
         if (!task.IsValid)
         {
-            throw new ValidationException(); // Will retry unnecessarily
+            throw new ValidationException(); // Will retry unnecessarily!
         }
+    }
+}
+
+// ✅ Better: Fail-fast on validation errors
+public class BetterValidationHandler : EverTaskHandler<ValidationTask>
+{
+    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(3, TimeSpan.FromSeconds(1))
+        .DoNotHandle<ValidationException>(); // Fail immediately on validation errors
+
+    public override async Task Handle(ValidationTask task, CancellationToken cancellationToken)
+    {
+        if (!task.IsValid)
+        {
+            throw new ValidationException(); // No retry, immediate failure
+        }
+    }
+}
+```
+
+### Exception Filtering Best Practices
+
+1. **Whitelist approach for specific integrations** - Use `Handle<T>()` when you know exactly which errors are transient (database, HTTP API)
+2. **Blacklist approach for general handlers** - Use `DoNotHandle<T>()` when most errors are retriable except specific permanent ones
+3. **Use predefined sets** - `HandleTransientDatabaseErrors()` and `HandleTransientNetworkErrors()` cover common scenarios
+4. **Consider derived types** - Exception filtering matches derived types automatically (e.g., `Handle<IOException>()` catches `FileNotFoundException`)
+5. **Don't over-filter** - Only filter when you're confident an error is truly permanent vs. transient
+
+```csharp
+// ✅ Good: Whitelist for database operations
+public class DatabaseTaskHandler : EverTaskHandler<DatabaseTask>
+{
+    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(5, TimeSpan.FromSeconds(2))
+        .HandleTransientDatabaseErrors(); // Retry DB timeouts, deadlocks, etc.
+}
+
+// ✅ Good: Predicate for HTTP status codes
+public class HttpApiHandler : EverTaskHandler<HttpApiTask>
+{
+    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(3, TimeSpan.FromSeconds(1))
+        .HandleWhen(ex => ex is HttpRequestException httpEx && httpEx.StatusCode >= 500);
+    // Only retry 5xx server errors, fail fast on 4xx client errors
+}
+
+// ❌ Bad: Mixing whitelist and blacklist
+public class BadHandler : EverTaskHandler<BadTask>
+{
+    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(3, TimeSpan.FromSeconds(1))
+        .Handle<HttpRequestException>()
+        .DoNotHandle<ArgumentException>(); // ERROR: Cannot mix approaches!
+}
+```
+
+### OnRetry Callback Best Practices
+
+1. **Keep callbacks fast** - `OnRetry` is invoked synchronously during retry flow; avoid expensive operations
+2. **Use for observability** - Log retry attempts, track metrics, send alerts on excessive retries
+3. **Don't throw exceptions** - Exceptions in `OnRetry` are logged but don't prevent retry (by design)
+4. **Use structured logging** - Include task ID, attempt number, and exception type for easy filtering
+5. **Track retry metrics** - Monitor retry rates to detect systemic issues early
+
+```csharp
+// ✅ Good: Fast, informative OnRetry callback
+public class EmailHandler : EverTaskHandler<SendEmailTask>
+{
+    private readonly ILogger<EmailHandler> _logger;
+    private readonly IMetrics _metrics;
+
+    public override ValueTask OnRetry(Guid taskId, int attemptNumber, Exception exception, TimeSpan delay)
+    {
+        _logger.LogWarning(exception,
+            "Email task {TaskId} retry {Attempt} after {DelayMs}ms",
+            taskId, attemptNumber, delay.TotalMilliseconds);
+
+        _metrics.Increment("email_retries", new { attempt = attemptNumber });
+
+        return ValueTask.CompletedTask;
+    }
+}
+
+// ❌ Bad: Expensive operations in OnRetry
+public class SlowHandler : EverTaskHandler<SlowTask>
+{
+    public override async ValueTask OnRetry(Guid taskId, int attemptNumber, Exception exception, TimeSpan delay)
+    {
+        // BAD: Expensive HTTP call blocks retry
+        await _httpClient.PostAsync("https://metrics-api.com/track", ...);
+
+        // BAD: Database query on hot path
+        await _dbContext.RetryLogs.AddAsync(new RetryLog { ... });
+        await _dbContext.SaveChangesAsync();
     }
 }
 ```

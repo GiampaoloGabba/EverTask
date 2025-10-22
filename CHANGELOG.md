@@ -5,6 +5,85 @@ All notable changes to EverTask will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+#### Retry Policy Enhancements
+
+- **OnRetry Lifecycle Callback**: Handlers can now override `OnRetry(Guid taskId, int attemptNumber, Exception exception, TimeSpan delay)` to receive notifications before each retry attempt. This callback provides visibility into retry behavior for:
+  - Logging retry attempts with full context (task ID, attempt number, exception details)
+  - Tracking retry metrics and histograms for monitoring dashboards
+  - Alerting on excessive retry patterns indicating systemic issues
+  - Debugging intermittent failures with diagnostic snapshots
+  - Implementing custom circuit breaker patterns
+
+- **Exception Filtering for IRetryPolicy**: Retry policies can now implement `ShouldRetry(Exception exception)` to determine if specific exceptions should trigger retries. Default implementation retries all exceptions except `OperationCanceledException` and `TimeoutException`.
+
+- **LinearRetryPolicy Fluent API for Exception Filtering**:
+  - `Handle<TException>()` - Whitelist specific exception type to retry (type-safe generic method)
+  - `Handle(params Type[])` - Whitelist multiple exception types at once (convenient for many types)
+  - `DoNotHandle<TException>()` - Blacklist specific exception type to NOT retry
+  - `DoNotHandle(params Type[])` - Blacklist multiple exception types at once
+  - `HandleWhen(Func<Exception, bool>)` - Custom predicate-based filtering for complex retry logic
+
+- **Predefined Exception Sets**: New extension methods for common retry scenarios:
+  - `HandleTransientDatabaseErrors()` - Retries `DbException`, `TimeoutException` (database-related)
+  - `HandleTransientNetworkErrors()` - Retries `HttpRequestException`, `SocketException`, `WebException`, `TaskCanceledException`
+  - `HandleAllTransientErrors()` - Combines database and network transient errors
+
+**Examples**:
+
+```csharp
+// Exception filtering with OnRetry callback
+public class DatabaseTaskHandler : EverTaskHandler<DatabaseTask>
+{
+    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(5, TimeSpan.FromSeconds(2))
+        .HandleTransientDatabaseErrors(); // Only retry DB transient errors
+
+    public override ValueTask OnRetry(Guid taskId, int attemptNumber, Exception exception, TimeSpan delay)
+    {
+        _logger.LogWarning(exception,
+            "Database task {TaskId} retry {Attempt} after {DelayMs}ms",
+            taskId, attemptNumber, delay.TotalMilliseconds);
+
+        _metrics.IncrementCounter("db_task_retries", new { attempt = attemptNumber });
+
+        return ValueTask.CompletedTask;
+    }
+}
+
+// HTTP status code filtering with predicate
+public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(3, TimeSpan.FromSeconds(1))
+    .HandleWhen(ex => ex is HttpRequestException httpEx && httpEx.StatusCode >= 500);
+```
+
+### Changed
+
+- **IRetryPolicy.Execute Signature**: Added optional `Func<int, Exception, TimeSpan, ValueTask>? onRetryCallback` parameter for retry notifications. Existing implementations remain compatible (parameter defaults to null).
+
+### Improved
+
+- **Fail-Fast on Permanent Errors**: Retry policies configured with exception filters now immediately fail for non-transient errors (e.g., `ArgumentException`, `ValidationException`, `NullReferenceException`), reducing wasted retry attempts and improving error visibility
+- **Better Retry Visibility**: `OnRetry` callback provides granular insight into retry behavior, enabling proactive monitoring and alerting
+- **Derived Exception Type Support**: Exception filtering uses `Type.IsAssignableFrom()` to automatically match derived exception types (e.g., `Handle<IOException>()` also catches `FileNotFoundException`)
+- **Priority-Based Filter Evaluation**: Clear precedence order (Predicate > Whitelist > Blacklist > Default) prevents ambiguity
+- **Validation Against Mixed Approaches**: `LinearRetryPolicy` throws `InvalidOperationException` if `Handle<T>()` and `DoNotHandle<T>()` are mixed, preventing configuration errors
+
+### Backward Compatibility
+
+- All changes are backward compatible
+- Existing handlers work without `OnRetry` override (default no-op implementation)
+- Existing retry policies work without `ShouldRetry` override (default interface method implementation)
+- Default retry behavior unchanged (retry all exceptions except `OperationCanceledException` and `TimeoutException`)
+- `onRetryCallback` parameter is optional with default `null`
+
+### Documentation
+
+- Comprehensive exception filtering and OnRetry documentation added to `docs/resilience.md`
+- README updated with retry policy enhancement examples
+- CLAUDE.md updated with implementation architecture details
+
 ## [3.0.0] - 2025-10-20
 
 ### Added
