@@ -148,10 +148,11 @@ public class EndToEndScheduleDriftTests : IsolatedIntegrationTestBase
             recurring => recurring.Schedule().Every(3).Seconds());
 
         // Wait for all tasks to complete at least 2 runs
+        // Adaptive: Local 8s/12s, CI 20s/30s (coverage overhead)
         await Task.WhenAll(
-            WaitForRecurringRunsAsync(task1Id, expectedRuns: 2, timeoutMs: 8000),
-            WaitForRecurringRunsAsync(task2Id, expectedRuns: 2, timeoutMs: 8000),
-            WaitForRecurringRunsAsync(task3Id, expectedRuns: 2, timeoutMs: 12000)
+            WaitForRecurringRunsAsync(task1Id, expectedRuns: 2, timeoutMs: TestEnvironment.GetTimeout(8000, 20000)),
+            WaitForRecurringRunsAsync(task2Id, expectedRuns: 2, timeoutMs: TestEnvironment.GetTimeout(8000, 20000)),
+            WaitForRecurringRunsAsync(task3Id, expectedRuns: 2, timeoutMs: TestEnvironment.GetTimeout(12000, 30000))
         );
 
         // Assert: Each task should maintain its own schedule
@@ -217,9 +218,10 @@ public class EndToEndScheduleDriftTests : IsolatedIntegrationTestBase
             recurring => recurring.Schedule().Every(1).Seconds());
 
         // Wait for both tasks to complete runs
+        // Adaptive: Local 8s, CI 20s (coverage overhead)
         await Task.WhenAll(
-            WaitForRecurringRunsAsync(task1Id, expectedRuns: 2, timeoutMs: 8000),
-            WaitForRecurringRunsAsync(task2Id, expectedRuns: 2, timeoutMs: 8000)
+            WaitForRecurringRunsAsync(task1Id, expectedRuns: 2, timeoutMs: TestEnvironment.GetTimeout(8000, 20000)),
+            WaitForRecurringRunsAsync(task2Id, expectedRuns: 2, timeoutMs: TestEnvironment.GetTimeout(8000, 20000))
         );
 
         // Assert

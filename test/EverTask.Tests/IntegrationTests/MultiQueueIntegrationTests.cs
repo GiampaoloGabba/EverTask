@@ -114,6 +114,9 @@ public class MultiQueueIntegrationTests : IsolatedIntegrationTestBase
 
         StateManager.ResetAll();
 
+        // Adaptive timeout: tighter locally, more generous on CI with coverage
+        var timeout = TestEnvironment.GetTimeout(localMs: 5000, ciMs: 20000);
+
         // Act - Dispatch 5 tasks that take 200ms each
         var taskIds = new List<Guid>();
         for (int i = 0; i < 5; i++)
@@ -123,10 +126,11 @@ public class MultiQueueIntegrationTests : IsolatedIntegrationTestBase
         }
 
         // Assert - Wait for all tasks to complete
-        // Increased timeout for coverage tool (runs much slower)
+        // Local: 5s (5 tasks * 200ms = ~1s, plenty of margin)
+        // CI: 20s (coverage tool can be 5-10x slower)
         foreach (var taskId in taskIds)
         {
-            await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed, timeoutMs: 10000);
+            await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed, timeoutMs: timeout);
         }
 
         var tasks = await Storage.GetAll();
@@ -200,7 +204,8 @@ public class MultiQueueIntegrationTests : IsolatedIntegrationTestBase
         );
 
         // Assert - Wait for 2 runs to complete
-        await WaitForRecurringRunsAsync(taskId, expectedRuns: 2, timeoutMs: 5000);
+        // Adaptive: Local 5s (2 runs * 1s = ~2s), CI 12s (coverage overhead)
+        await WaitForRecurringRunsAsync(taskId, expectedRuns: 2, timeoutMs: TestEnvironment.GetTimeout(5000, 12000));
 
         var tasks = await Storage.GetAll();
         tasks.Length.ShouldBe(1);
@@ -229,7 +234,8 @@ public class MultiQueueIntegrationTests : IsolatedIntegrationTestBase
         );
 
         // Assert - Wait for 2 runs to complete
-        await WaitForRecurringRunsAsync(taskId, expectedRuns: 2, timeoutMs: 5000);
+        // Adaptive: Local 5s (2 runs * 1s = ~2s), CI 12s (coverage overhead)
+        await WaitForRecurringRunsAsync(taskId, expectedRuns: 2, timeoutMs: TestEnvironment.GetTimeout(5000, 12000));
 
         var tasks = await Storage.GetAll();
         tasks.Length.ShouldBe(1);

@@ -232,7 +232,8 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         // Wait for recurring task to complete all 3 runs (RunNow + 2x EverySecond)
         // RunNow executes immediately, then waits 1 second for each recurring run
         // Each handler takes ~300ms, so total time: 300ms + 1000ms + 300ms + 1000ms + 300ms = ~3s
-        await WaitForRecurringRunsAsync(taskId, expectedRuns: 3, timeoutMs: 5000);
+        // Adaptive: Local 5s, CI 15s (coverage tool overhead)
+        await WaitForRecurringRunsAsync(taskId, expectedRuns: 3, timeoutMs: TestEnvironment.GetTimeout(5000, 15000));
 
         var pt = await Storage.RetrievePending();
         pt.Length.ShouldBe(0);
@@ -246,7 +247,7 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         tasks[0].Exception.ShouldBeNull();
 
         // Verify exactly 3 runs completed (using storage instead of static counter to avoid race conditions)
-        tasks[0].RunsAudits.Count(x => x.Status == QueuedTaskStatus.Completed).ShouldBe(3);
+        tasks[0].RunsAudits.Count(x => x != null && x.Status == QueuedTaskStatus.Completed).ShouldBe(3);
     }
 
     [Fact]
@@ -260,7 +261,8 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         // Wait for recurring task to complete (RunUntil set to 4 seconds from now)
         // RunNow executes immediately, then waits 1 second for each recurring run until 4s expires
         // Expected ~4 runs total
-        await WaitForRecurringRunsAsync(taskId, expectedRuns: 4, timeoutMs: 6000);
+        // Adaptive: Local 6s, CI 18s (coverage tool overhead)
+        await WaitForRecurringRunsAsync(taskId, expectedRuns: 4, timeoutMs: TestEnvironment.GetTimeout(6000, 18000));
 
         var pt = await Storage.RetrievePending();
         pt.Length.ShouldBe(0);

@@ -176,7 +176,7 @@ public static class TaskWaitHelper
                 // Create a snapshot to avoid "Collection was modified" exception
                 // when RunsAudits is being modified by background threads
                 var audits = task.RunsAudits.ToArray();
-                return audits.Count(x => x.Status == QueuedTaskStatus.Completed) >= expectedRuns;
+                return audits.Count(x => x != null && x.Status == QueuedTaskStatus.Completed) >= expectedRuns;
             },
             timeoutMs
         ) ?? throw new InvalidOperationException($"Task {taskId} not found in storage");

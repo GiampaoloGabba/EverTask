@@ -35,7 +35,8 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
             .MaxRuns(3));
 
         // Wait for all 3 runs to complete using intelligent polling
-        await WaitForRecurringRunsAsync(taskId, expectedRuns: 3, timeoutMs: 5000);
+        // Adaptive: Local 5s (3 runs with RunNow + 1s intervals), CI 15s (coverage overhead)
+        await WaitForRecurringRunsAsync(taskId, expectedRuns: 3, timeoutMs: TestEnvironment.GetTimeout(5000, 15000));
 
         // Give disposal a moment to complete after final run
         await Task.Delay(300);
@@ -58,7 +59,7 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
         var tasks = await Storage.GetAll();
         tasks.Length.ShouldBe(1);
         tasks[0].Status.ShouldBe(QueuedTaskStatus.Completed);
-        tasks[0].RunsAudits.Count(x => x.Status == QueuedTaskStatus.Completed).ShouldBe(3);
+        tasks[0].RunsAudits.Count(x => x != null && x.Status == QueuedTaskStatus.Completed).ShouldBe(3);
     }
 
     [Fact]

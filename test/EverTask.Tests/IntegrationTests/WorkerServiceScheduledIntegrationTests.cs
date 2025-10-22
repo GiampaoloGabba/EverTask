@@ -70,9 +70,19 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
 
         var task = new TestTaskDelayed2();
 
-        // Test RunDelayed + Cron combination with longer intervals for stability
-        // Cron "*/3 * * * * *" runs every 3 seconds (at 0, 3, 6, 9, ...)
-        var taskId = await Dispatcher.Dispatch(task, builder => builder.RunDelayed(TimeSpan.FromMilliseconds(1500)).Then().UseCron("*/3 * * * * *").MaxRuns(3));
+        // Adaptive parameters: tighter constraints locally, more generous on CI
+        var cronInterval = TestEnvironment.GetCronInterval(localSeconds: 3, ciSeconds: 10);
+        var maxRuns = TestEnvironment.GetIterations(local: 3, ci: 2);
+        var timeout = TestEnvironment.GetTimeout(localMs: 15000, ciMs: 35000);
+
+        // Test RunDelayed + Cron combination
+        // Local: */3 (every 3s), 3 runs, 15s timeout
+        // CI: */10 (every 10s), 2 runs, 35s timeout (more forgiving for slow CI with coverage)
+        var taskId = await Dispatcher.Dispatch(task, builder => builder
+            .RunDelayed(TimeSpan.FromMilliseconds(1500))
+            .Then()
+            .UseCron($"*/{cronInterval} * * * * *")
+            .MaxRuns(maxRuns));
 
         // Wait for task to be scheduled
         await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.WaitingQueue, timeoutMs: 2000);
@@ -81,20 +91,18 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
         pt.Length.ShouldBe(1);
         pt[0].Status.ShouldBe(QueuedTaskStatus.WaitingQueue);
 
-        // Wait for recurring task to complete 3 runs
-        // Delay: 1500ms, then cron at next 3-second boundary
-        // Total: ~1.5s + up to 3s + 3s + 3s = ~10.5s max, 15s timeout for coverage tool
-        var completedTask = await WaitForRecurringRunsAsync(taskId, expectedRuns: 3, timeoutMs: 15000);
+        // Wait for recurring task to complete all runs
+        var completedTask = await WaitForRecurringRunsAsync(taskId, expectedRuns: maxRuns, timeoutMs: timeout);
 
         // Use the returned task from WaitForRecurringRunsAsync to avoid race conditions
-        completedTask.CurrentRunCount.ShouldBe(3);
-        completedTask.RunsAudits.Count.ShouldBe(3);
+        completedTask.CurrentRunCount.ShouldBe(maxRuns);
+        completedTask.RunsAudits.Count.ShouldBe(maxRuns);
 
         // Verify in storage as well
         pt = await Storage.GetAll();
         pt.Length.ShouldBe(1);
-        pt[0].CurrentRunCount.ShouldBe(3);
-        pt[0].RunsAudits.Count.ShouldBe(3);
+        pt[0].CurrentRunCount.ShouldBe(maxRuns);
+        pt[0].RunsAudits.Count.ShouldBe(maxRuns);
 
         // Counter already verified via RunsAudits above - no need for static counter check
     }
@@ -126,8 +134,8 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
         pt[0].RunsAudits.Count.ShouldBe(3);
 
         // Verify all runs completed successfully
-        pt[0].RunsAudits.All(r => r.Status == QueuedTaskStatus.Completed).ShouldBeTrue();
-        pt[0].RunsAudits.All(r => r.Exception == null).ShouldBeTrue();
+        pt[0].RunsAudits.All(r => r != null && r.Status == QueuedTaskStatus.Completed).ShouldBeTrue();
+        pt[0].RunsAudits.All(r => r != null && r.Exception == null).ShouldBeTrue();
     }
 
     [Fact]
@@ -161,7 +169,7 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
         pt[0].RunsAudits.Count.ShouldBe(3);
 
         // Verify all runs completed successfully
-        pt[0].RunsAudits.All(r => r.Status == QueuedTaskStatus.Completed).ShouldBeTrue();
+        pt[0].RunsAudits.All(r => r != null && r.Status == QueuedTaskStatus.Completed).ShouldBeTrue();
     }
 
     [Fact]
@@ -194,7 +202,7 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
         pt[0].RunsAudits.Count.ShouldBe(3);
 
         // Verify all runs completed successfully
-        pt[0].RunsAudits.All(r => r.Status == QueuedTaskStatus.Completed).ShouldBeTrue();
+        pt[0].RunsAudits.All(r => r != null && r.Status == QueuedTaskStatus.Completed).ShouldBeTrue();
     }
 
     [Fact]
@@ -223,7 +231,7 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
         pt[0].RunsAudits.Count.ShouldBe(3);
 
         // Verify all 3 recurring runs completed successfully (retries are internal to each run)
-        pt[0].RunsAudits.All(r => r.Status == QueuedTaskStatus.Completed).ShouldBeTrue();
+        pt[0].RunsAudits.All(r => r != null && r.Status == QueuedTaskStatus.Completed).ShouldBeTrue();
 
         // Counter should be > 3 due to retries during first run
     }
@@ -271,17 +279,17 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
         completedTask1.ShouldNotBeNull();
         completedTask1.CurrentRunCount.ShouldBe(3);
         completedTask1.RunsAudits.Count.ShouldBe(3);
-        completedTask1.RunsAudits.All(r => r.Status == QueuedTaskStatus.Completed).ShouldBeTrue();
+        completedTask1.RunsAudits.All(r => r != null && r.Status == QueuedTaskStatus.Completed).ShouldBeTrue();
 
         completedTask2.ShouldNotBeNull();
         completedTask2.CurrentRunCount.ShouldBe(2);
         completedTask2.RunsAudits.Count.ShouldBe(2);
-        completedTask2.RunsAudits.All(r => r.Status == QueuedTaskStatus.Completed).ShouldBeTrue();
+        completedTask2.RunsAudits.All(r => r != null && r.Status == QueuedTaskStatus.Completed).ShouldBeTrue();
 
         completedTask3.ShouldNotBeNull();
         completedTask3.CurrentRunCount.ShouldBe(2);
         completedTask3.RunsAudits.Count.ShouldBe(2);
-        completedTask3.RunsAudits.All(r => r.Status == QueuedTaskStatus.Completed).ShouldBeTrue();
+        completedTask3.RunsAudits.All(r => r != null && r.Status == QueuedTaskStatus.Completed).ShouldBeTrue();
 
         // Verify no interference - total completed runs should match expected
         var totalCompletedRuns = allTasks.Sum(t => t.CurrentRunCount ?? 0);
