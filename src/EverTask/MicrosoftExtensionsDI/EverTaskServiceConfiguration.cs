@@ -50,6 +50,29 @@ public class EverTaskServiceConfiguration
     /// </summary>
     public bool AlwaysLazyForRecurring { get; set; } = true;
 
+    /// <summary>
+    /// Gets or sets whether task execution logs should be captured and stored in the database.
+    /// When disabled, there is zero performance overhead (no allocations, no database writes).
+    /// Default: false (opt-in feature).
+    /// </summary>
+    public bool EnableLogCapture { get; set; } = false;
+
+    /// <summary>
+    /// Gets or sets the minimum log level to capture.
+    /// Logs below this level will be ignored.
+    /// Only applicable when <see cref="EnableLogCapture"/> is true.
+    /// Default: LogLevel.Information.
+    /// </summary>
+    public LogLevel MinimumLogLevel { get; set; } = LogLevel.Information;
+
+    /// <summary>
+    /// Gets or sets the maximum number of logs to capture per task execution.
+    /// If a task exceeds this limit, older logs will be truncated.
+    /// Set to null for unlimited (not recommended for production).
+    /// Default: 1000.
+    /// </summary>
+    public int? MaxLogsPerTask { get; set; } = 1000;
+
     public EverTaskServiceConfiguration SetChannelOptions(int capacity)
     {
         ChannelOptions.Capacity = capacity;

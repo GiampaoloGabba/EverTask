@@ -4,9 +4,10 @@ public interface ITaskStoreDbContext : IDisposable, IAsyncDisposable
 {
     public string? Schema { get; }
 
-    public DbSet<QueuedTask>  QueuedTasks { get; }
-    public DbSet<StatusAudit> StatusAudit { get; }
-    public DbSet<RunsAudit>   RunsAudit   { get; }
+    public DbSet<QueuedTask>       QueuedTasks       { get; }
+    public DbSet<StatusAudit>      StatusAudit       { get; }
+    public DbSet<RunsAudit>        RunsAudit         { get; }
+    public DbSet<TaskExecutionLog> TaskExecutionLogs { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

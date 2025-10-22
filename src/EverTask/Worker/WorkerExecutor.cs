@@ -1,6 +1,7 @@
 ﻿using System.Diagnostics;
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
+using EverTask.Logging;
 
 namespace EverTask.Worker;
 
@@ -12,7 +13,7 @@ public interface IEverTaskWorkerExecutor
 
 public class WorkerExecutor(
     IWorkerBlacklist workerBlacklist,
-    EverTaskServiceConfiguration configuration,
+    EverTaskServiceConfiguration options,
     IServiceScopeFactory serviceScopeFactory,
     IScheduler scheduler,
     ICancellationSourceProvider cancellationSourceProvider,
@@ -35,6 +36,9 @@ public class WorkerExecutor(
         //So its safer to just use a new scope for each task
         using var     scope       = serviceScopeFactory.CreateScope();
         ITaskStorage? taskStorage = scope.ServiceProvider.GetService<ITaskStorage>();
+
+        // Create log capture instance (zero overhead if disabled)
+        var logCapture = CreateLogCapture(task.PersistenceId);
 
         // Resolve handler (lazy or eager mode)
         object? handler = null!; // Will be assigned in both if and else branches
@@ -80,6 +84,12 @@ public class WorkerExecutor(
                 handler = task.Handler!;  // Non-null assertion safe (validated at dispatch)
             }
 
+            // Inject log capture into handler BEFORE OnStarted
+            if (handler is IEverTaskHandler<IEverTask> everTaskHandler)
+            {
+                everTaskHandler.SetLogCapture(logCapture);
+            }
+
             RegisterInfo(task, "Starting task with id {0}.", task.PersistenceId);
 
             if (taskStorage != null)
@@ -108,6 +118,27 @@ public class WorkerExecutor(
                 await ExecuteDisposeHandler(handler);
             }
 
+            // Save execution logs (AFTER handler disposal, BEFORE recurring scheduling)
+            // Log save errors must NOT fail task execution
+            if (options.EnableLogCapture && taskStorage != null)
+            {
+                try
+                {
+                    var logs = logCapture.GetCapturedLogs();
+                    if (logs.Count > 0)
+                    {
+                        // Use CancellationToken.None to ensure logs are saved even if task was cancelled
+                        await taskStorage.SaveExecutionLogsAsync(task.PersistenceId, logs, CancellationToken.None)
+                            .ConfigureAwait(false);
+                    }
+                }
+                catch (Exception logSaveEx)
+                {
+                    // Log the error but don't fail the task
+                    logger.LogError(logSaveEx, "Failed to save execution logs for task {TaskId}", task.PersistenceId);
+                }
+            }
+
             cancellationSourceProvider.Delete(task.PersistenceId);
             await QueueNextOccourrence(task, taskStorage);
         }
@@ -134,7 +165,7 @@ public class WorkerExecutor(
 
         // Performance optimization: Cache handler options to avoid repeated casts
         // Use GetOrAdd overload with factoryArgument to avoid closure allocation
-        var options = HandlerOptionsInternalCache.GetOrAdd(
+        var handlerOptions = HandlerOptionsInternalCache.GetOrAdd(
             handler.GetType(),  // Use resolved handler
             static (_, state) =>
             {
@@ -146,11 +177,11 @@ public class WorkerExecutor(
                     System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
 
                 // Cast only once per handler type (first time)
-                if (handlerInstance is IEverTaskHandlerOptions handlerOptions)
+                if (handlerInstance is IEverTaskHandlerOptions options)
                 {
                     return new HandlerOptionsCache(
-                        handlerOptions.RetryPolicy ?? config.DefaultRetryPolicy,
-                        handlerOptions.Timeout ?? config.DefaultTimeout,
+                        options.RetryPolicy ?? config.DefaultRetryPolicy,
+                        options.Timeout ?? config.DefaultTimeout,
                         onRetryMethod
                     );
                 }
@@ -161,10 +192,10 @@ public class WorkerExecutor(
                     onRetryMethod
                 );
             },
-            (handler, configuration));
+            (handler, options));
 
-        var retryPolicy = options.RetryPolicy;
-        var timeout = options.Timeout;
+        var retryPolicy = handlerOptions.RetryPolicy;
+        var timeout = handlerOptions.Timeout;
 
         // Use GetTimestamp/GetElapsedTime for .NET 7+ to avoid Stopwatch allocation
 #if NET7_0_OR_GREATER
@@ -218,7 +249,7 @@ public class WorkerExecutor(
                 onRetryCallback: async (attemptNumber, exception, delay) =>
                 {
                     // Invoke handler's OnRetry method using cached MethodInfo
-                    await InvokeOnRetryCallback(task, handler, options.OnRetryMethod, attemptNumber, exception, delay)
+                    await InvokeOnRetryCallback(task, handler, handlerOptions.OnRetryMethod, attemptNumber, exception, delay)
                         .ConfigureAwait(false);
                 }
             ).ConfigureAwait(false);
@@ -554,14 +585,14 @@ public class WorkerExecutor(
     }
 
     private void PublishEvent(TaskHandlerExecutor task, SeverityLevel severity, string formattedMessage,
-                              Exception? exception = null)
+                              Exception? exception = null, IReadOnlyList<TaskExecutionLog>? executionLogs = null)
     {
         var eventHandlers = TaskEventOccurredAsync?.GetInvocationList();
         if (eventHandlers == null || eventHandlers.Length == 0)
             return;
 
         // Create event data ONCE outside loop, reuse for all subscribers
-        var data = CreateEventDataCached(task, severity, formattedMessage, exception);
+        var data = CreateEventDataCached(task, severity, formattedMessage, exception, executionLogs);
 
         foreach (var eventHandler in eventHandlers)
         {
@@ -583,7 +614,7 @@ public class WorkerExecutor(
     }
 
     private EverTaskEventData CreateEventDataCached(TaskHandlerExecutor executor, SeverityLevel severity,
-                                                     string message, Exception? exception)
+                                                     string message, Exception? exception, IReadOnlyList<TaskExecutionLog>? executionLogs = null)
     {
         // Cache task JSON (weak reference - GC'd when task is collected)
         var taskJson = TaskJsonCache.GetValue(executor.Task, JsonConvert.SerializeObject);
@@ -615,9 +646,22 @@ public class WorkerExecutor(
             handlerType,
             taskJson,
             message,
-            exception?.ToDetailedString()
+            exception?.ToDetailedString(),
+            executionLogs
         );
     }
 
     #endregion
+
+    /// <summary>
+    /// Creates a log capture instance for the task execution.
+    /// Returns NullTaskLogCapture (zero overhead) when log capture is disabled.
+    /// </summary>
+    private ITaskLogCaptureInternal CreateLogCapture(Guid taskId)
+    {
+        if (!options.EnableLogCapture)
+            return NullTaskLogCapture.Instance;
+
+        return new TaskLogCapture(taskId, options.MinimumLogLevel, options.MaxLogsPerTask);
+    }
 }

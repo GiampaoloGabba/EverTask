@@ -294,4 +294,46 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             logger.LogWarning(e, "Unable to record skipped occurrences for task {TaskId}", taskId);
         }
     }
+
+    /// <inheritdoc />
+    public async Task SaveExecutionLogsAsync(Guid taskId, IReadOnlyList<TaskExecutionLog> logs, CancellationToken cancellationToken)
+    {
+        // Performance optimization: skip if no logs
+        if (logs.Count == 0)
+            return;
+
+        await using var dbContext = await contextFactory.CreateDbContextAsync(cancellationToken);
+
+        // Bulk insert all logs in a single operation
+        await dbContext.TaskExecutionLogs.AddRangeAsync(logs, cancellationToken);
+        await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<TaskExecutionLog>> GetExecutionLogsAsync(Guid taskId, CancellationToken cancellationToken)
+    {
+        await using var dbContext = await contextFactory.CreateDbContextAsync(cancellationToken);
+
+        var query = GetExecutionLogsQuery(dbContext, taskId);
+        return await query.ToListAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<TaskExecutionLog>> GetExecutionLogsAsync(Guid taskId, int skip, int take, CancellationToken cancellationToken)
+    {
+        await using var dbContext = await contextFactory.CreateDbContextAsync(cancellationToken);
+
+        var query = GetExecutionLogsQuery(dbContext, taskId);
+        return await query
+            .Skip(skip)
+            .Take(take)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static IQueryable<TaskExecutionLog> GetExecutionLogsQuery(ITaskStoreDbContext dbContext, Guid taskId) =>
+        dbContext.TaskExecutionLogs
+                 .AsNoTracking()
+                 .Where(log => log.TaskId == taskId)
+                 .OrderBy(log => log.SequenceNumber);
 }

@@ -23,6 +23,12 @@ public class QueuedTask
     public QueuedTaskStatus         Status       { get; set; }
     public ICollection<StatusAudit> StatusAudits { get; set; } = new List<StatusAudit>();
     public ICollection<RunsAudit>   RunsAudits   { get; set; } = new List<RunsAudit>();
+
+    /// <summary>
+    /// Collection of execution logs captured during task execution.
+    /// Only populated if log capture is enabled in configuration.
+    /// </summary>
+    public ICollection<TaskExecutionLog> ExecutionLogs { get; set; } = new List<TaskExecutionLog>();
 }
 
 public class StatusAudit

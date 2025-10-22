@@ -139,4 +139,31 @@ public interface ITaskStorage
     /// of which scheduled executions were skipped.
     /// </remarks>
     Task RecordSkippedOccurrences(Guid taskId, List<DateTimeOffset> skippedOccurrences, CancellationToken ct = default);
+
+    /// <summary>
+    /// Saves execution logs for a task. Called by WorkerExecutor after task execution.
+    /// If <paramref name="logs"/> is empty, implementations should skip the database write.
+    /// </summary>
+    /// <param name="taskId">The task identifier.</param>
+    /// <param name="logs">The logs to save (ordered by SequenceNumber).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task SaveExecutionLogsAsync(Guid taskId, IReadOnlyList<TaskExecutionLog> logs, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Retrieves all execution logs for a task, ordered by SequenceNumber ascending.
+    /// </summary>
+    /// <param name="taskId">The task identifier.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Logs ordered by SequenceNumber (oldest first).</returns>
+    Task<IReadOnlyList<TaskExecutionLog>> GetExecutionLogsAsync(Guid taskId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Retrieves execution logs for a task with pagination, ordered by SequenceNumber ascending.
+    /// </summary>
+    /// <param name="taskId">The task identifier.</param>
+    /// <param name="skip">Number of logs to skip (for pagination).</param>
+    /// <param name="take">Number of logs to take (for pagination).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Logs ordered by SequenceNumber (oldest first).</returns>
+    Task<IReadOnlyList<TaskExecutionLog>> GetExecutionLogsAsync(Guid taskId, int skip, int take, CancellationToken cancellationToken);
 }

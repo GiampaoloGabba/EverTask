@@ -6,6 +6,13 @@ namespace EverTask.Abstractions;
 /// <typeparam name="TTask">The type of EverTask to handle.</typeparam>
 public abstract class EverTaskHandler<TTask> : IEverTaskHandler<TTask> where TTask : IEverTask
 {
+    /// <summary>
+    /// Logger for capturing logs during task execution.
+    /// Logs are stored in the database if log capture is enabled in configuration.
+    /// Use this instead of injecting <see cref="ILogger"/> for task-scoped logging.
+    /// </summary>
+    protected ITaskLogCapture Logger { get; private set; } = null!;
+
     /// <inheritdoc/>
     public virtual IRetryPolicy? RetryPolicy => null;
     /// <inheritdoc/>
@@ -105,5 +112,11 @@ public abstract class EverTaskHandler<TTask> : IEverTaskHandler<TTask> where TTa
     protected virtual ValueTask DisposeAsyncCore()
     {
         return ValueTask.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    void IEverTaskHandler<TTask>.SetLogCapture(ITaskLogCapture logCapture)
+    {
+        Logger = logCapture ?? throw new ArgumentNullException(nameof(logCapture));
     }
 }

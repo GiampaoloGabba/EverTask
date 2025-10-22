@@ -6,6 +6,7 @@ namespace EverTask.Storage;
 public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITaskStorage
 {
     private readonly List<QueuedTask> _pendingTasks = new();
+    private readonly List<TaskExecutionLog> _executionLogs = new();
 
     /// <inheritdoc />
     public Task<QueuedTask[]> Get(Expression<Func<QueuedTask, bool>> where, CancellationToken ct = default)
@@ -197,5 +198,43 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         }
 
         return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task SaveExecutionLogsAsync(Guid taskId, IReadOnlyList<TaskExecutionLog> logs, CancellationToken cancellationToken)
+    {
+        // Performance optimization: skip if no logs
+        if (logs.Count == 0)
+            return Task.CompletedTask;
+
+        logger.LogInformation("Saving {Count} execution logs for task {TaskId}", logs.Count, taskId);
+
+        _executionLogs.AddRange(logs);
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<TaskExecutionLog>> GetExecutionLogsAsync(Guid taskId, CancellationToken cancellationToken)
+    {
+        var logs = GetExecutionLogsQuery(taskId).ToList();
+        return Task.FromResult<IReadOnlyList<TaskExecutionLog>>(logs);
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<TaskExecutionLog>> GetExecutionLogsAsync(Guid taskId, int skip, int take, CancellationToken cancellationToken)
+    {
+        var logs = GetExecutionLogsQuery(taskId)
+            .Skip(skip)
+            .Take(take)
+            .ToList();
+
+        return Task.FromResult<IReadOnlyList<TaskExecutionLog>>(logs);
+    }
+
+    private IOrderedEnumerable<TaskExecutionLog> GetExecutionLogsQuery(Guid taskId)
+    {
+        return _executionLogs
+            .Where(log => log.TaskId == taskId)
+            .OrderBy(log => log.SequenceNumber);
     }
 }
