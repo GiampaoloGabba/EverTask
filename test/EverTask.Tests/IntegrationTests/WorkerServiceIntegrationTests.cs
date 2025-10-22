@@ -36,7 +36,7 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
 
     }
 
-    
+
     [Fact]
     public async Task Should_execute_cpu_bound_task_and_clear_cancellation_source()
     {
