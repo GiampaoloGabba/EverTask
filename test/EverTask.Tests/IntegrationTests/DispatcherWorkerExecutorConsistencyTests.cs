@@ -258,8 +258,8 @@ public class DispatcherWorkerExecutorConsistencyTests : IsolatedIntegrationTestB
             new TestTaskRecurringSeconds(),
             recurring => recurring.Schedule().UseCron("*/5 * * * * *"));
 
-        // Wait for 2 executions
-        await WaitForRecurringRunsAsync(taskId, expectedRuns: 2, timeoutMs: 15000);
+        // Wait for 2 executions (cron */5 * * * * * = every 5 seconds)
+        await WaitForRecurringRunsAsync(taskId, expectedRuns: 2, timeoutMs: 12000);
 
         // Get task state
         var tasks = await Storage.GetAll();

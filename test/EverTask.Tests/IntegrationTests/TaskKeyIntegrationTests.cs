@@ -301,17 +301,19 @@ public class TaskKeyIntegrationTests : IsolatedIntegrationTestBase
     [Fact]
     public async Task Dispatch_UpdateTaskType_ImmediateToDelayed()
     {
-        // Arrange
-        await CreateIsolatedHostAsync();
+        // Arrange - Create host but DON'T start it yet (to prevent task from executing)
+        await CreateIsolatedHostWithBuilderAsync(
+            builder => builder.AddMemoryStorage(),
+            startHost: false);
 
-        // Act - Create immediate task (pending, not started yet)
+        // Act - Create immediate task (queued but not executing since host not started)
         var taskId1 = await Dispatcher.Dispatch(new TestTaskRequest("immediate"), taskKey: "type-change-key");
 
         var tasks1 = await Storage.Get(t => t.Id == taskId1);
         var task1 = tasks1.FirstOrDefault();
         task1!.ScheduledExecutionUtc.ShouldBeNull();
 
-        // Update to delayed task
+        // Update to delayed task (should update the existing task since it hasn't started)
         var delayedTime = DateTimeOffset.UtcNow.AddMinutes(10);
         var taskId2 = await Dispatcher.Dispatch(
             new TestTaskRequest("delayed"),

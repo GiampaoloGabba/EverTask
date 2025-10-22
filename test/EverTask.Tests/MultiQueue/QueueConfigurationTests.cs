@@ -147,7 +147,7 @@ public class QueueConfigurationTests
         // Assert
         Assert.Equal("default", config.Name);
         Assert.Equal(1, config.MaxDegreeOfParallelism);
-        Assert.Equal(500, config.ChannelOptions.Capacity);
+        Assert.Equal(2000, config.ChannelOptions.Capacity);
         Assert.Equal(BoundedChannelFullMode.Wait, config.ChannelOptions.FullMode);
         Assert.Equal(QueueFullBehavior.FallbackToDefault, config.QueueFullBehavior);
         Assert.Null(config.DefaultRetryPolicy);

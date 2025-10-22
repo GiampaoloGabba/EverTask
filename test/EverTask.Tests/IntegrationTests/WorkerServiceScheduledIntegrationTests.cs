@@ -82,8 +82,8 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
         pt[0].Status.ShouldBe(QueuedTaskStatus.WaitingQueue);
 
         // Wait for recurring task to complete 3 runs
-        // Increased timeout to 20000ms per plan Phase 7.1
-        var completedTask = await WaitForRecurringRunsAsync(taskId, expectedRuns: 3, timeoutMs: 20000);
+        // Cron runs every 2 seconds: 600ms delay + 2s + 2s = ~4.6s, 8s timeout provides buffer
+        var completedTask = await WaitForRecurringRunsAsync(taskId, expectedRuns: 3, timeoutMs: 8000);
 
         // Use the returned task from WaitForRecurringRunsAsync to avoid race conditions
         completedTask.CurrentRunCount.ShouldBe(3);

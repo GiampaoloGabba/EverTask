@@ -136,7 +136,7 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         TestTaskConcurrent1.Counter.ShouldBe(0);
     }
 
-    [ConditionalFact("NET6_GITHUB")]
+    [Fact]
     public async Task Should_cancel_task_when_service_stopped()
     {
         await CreateIsolatedHostAsync();
@@ -242,8 +242,7 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         // Wait for recurring task to complete all 3 runs (RunNow + 2x EverySecond)
         // RunNow executes immediately, then waits 1 second for each recurring run
         // Each handler takes ~300ms, so total time: 300ms + 1000ms + 300ms + 1000ms + 300ms = ~3s
-        // Adding buffer for safety
-        await Task.Delay(4500);
+        await WaitForRecurringRunsAsync(taskId, expectedRuns: 3, timeoutMs: 5000);
 
         var pt = await Storage.RetrievePending();
         pt.Length.ShouldBe(0);
@@ -271,8 +270,8 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
 
         // Wait for recurring task to complete (RunUntil set to 4 seconds from now)
         // RunNow executes immediately, then waits 1 second for each recurring run until 4s expires
-        // Expected ~3 runs total, adding buffer for completion
-        await Task.Delay(5500);
+        // Expected ~4 runs total
+        await WaitForRecurringRunsAsync(taskId, expectedRuns: 4, timeoutMs: 6000);
 
         var pt = await Storage.RetrievePending();
         pt.Length.ShouldBe(0);

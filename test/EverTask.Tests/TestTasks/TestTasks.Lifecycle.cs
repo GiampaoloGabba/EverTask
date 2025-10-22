@@ -25,6 +25,20 @@ public class TestTaskLifecycleWithAsyncDispose() : IEverTask
     public static bool WasDisposed { get; set; }
 }
 
+public class TestTaskLazyModeRecurringWithAsyncDispose() : IEverTask
+{
+    public static int DisposeCount { get; set; }
+    public static int ExecutionCount { get; set; }
+    public static readonly object LockObject = new();
+}
+
+public class TestTaskLazyModeDelayedWithAsyncDispose() : IEverTask
+{
+    public static List<string> CallbackOrder { get; set; } = new();
+    public static bool WasDisposed { get; set; }
+    public static bool WasDisposedDuringDispatch { get; set; }
+}
+
 public class TestTaskLifecycleHandler : EverTaskHandler<TestTaskLifecycle>
 {
     private readonly TestTaskStateManager? _stateManager;
@@ -120,6 +134,70 @@ public class TestTaskLifecycleWithAsyncDisposeHandler : EverTaskHandler<TestTask
     {
         TestTaskLifecycleWithAsyncDispose.CallbackOrder.Add("DisposeAsyncCore");
         TestTaskLifecycleWithAsyncDispose.WasDisposed = true;
+        return ValueTask.CompletedTask;
+    }
+}
+
+public class TestTaskLazyModeRecurringWithAsyncDisposeHandler : EverTaskHandler<TestTaskLazyModeRecurringWithAsyncDispose>
+{
+    private readonly TestTaskStateManager? _stateManager;
+
+    public TestTaskLazyModeRecurringWithAsyncDisposeHandler(TestTaskStateManager? stateManager = null)
+    {
+        _stateManager = stateManager;
+    }
+
+    public override async Task Handle(TestTaskLazyModeRecurringWithAsyncDispose backgroundTask, CancellationToken cancellationToken)
+    {
+        await Task.Delay(100, cancellationToken);
+
+        lock (TestTaskLazyModeRecurringWithAsyncDispose.LockObject)
+        {
+            TestTaskLazyModeRecurringWithAsyncDispose.ExecutionCount++;
+        }
+
+        _stateManager?.IncrementCounter(nameof(TestTaskLazyModeRecurringWithAsyncDispose));
+    }
+
+    protected override ValueTask DisposeAsyncCore()
+    {
+        lock (TestTaskLazyModeRecurringWithAsyncDispose.LockObject)
+        {
+            TestTaskLazyModeRecurringWithAsyncDispose.DisposeCount++;
+        }
+
+        return ValueTask.CompletedTask;
+    }
+}
+
+public class TestTaskLazyModeDelayedWithAsyncDisposeHandler : EverTaskHandler<TestTaskLazyModeDelayedWithAsyncDispose>
+{
+    private readonly TestTaskStateManager? _stateManager;
+
+    public TestTaskLazyModeDelayedWithAsyncDisposeHandler(TestTaskStateManager? stateManager = null)
+    {
+        _stateManager = stateManager;
+    }
+
+    public override async Task Handle(TestTaskLazyModeDelayedWithAsyncDispose backgroundTask, CancellationToken cancellationToken)
+    {
+        await Task.Delay(100, cancellationToken);
+        TestTaskLazyModeDelayedWithAsyncDispose.CallbackOrder.Add("Handle");
+        _stateManager?.IncrementCounter(nameof(TestTaskLazyModeDelayedWithAsyncDispose));
+    }
+
+    protected override ValueTask DisposeAsyncCore()
+    {
+        TestTaskLazyModeDelayedWithAsyncDispose.CallbackOrder.Add("DisposeAsyncCore");
+
+        // This should only be called after execution, not during dispatch
+        // If called during dispatch, the task hasn't executed yet
+        if (TestTaskLazyModeDelayedWithAsyncDispose.CallbackOrder.Count == 0)
+        {
+            TestTaskLazyModeDelayedWithAsyncDispose.WasDisposedDuringDispatch = true;
+        }
+
+        TestTaskLazyModeDelayedWithAsyncDispose.WasDisposed = true;
         return ValueTask.CompletedTask;
     }
 }
