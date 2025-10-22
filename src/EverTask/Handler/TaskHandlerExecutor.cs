@@ -11,19 +11,19 @@ namespace EverTask.Handler;
 /// Supports both eager mode (handler instance present) and lazy mode (handler type stored for later resolution).
 /// </summary>
 public record TaskHandlerExecutor(
-    IEverTask Task,
-    object? Handler,
-    string? HandlerTypeName,
-    DateTimeOffset? ExecutionTime,
-    RecurringTask? RecurringTask,
-    Func<IEverTask, CancellationToken, Task>? HandlerCallback,
-    Func<Guid, Exception?, string, ValueTask>? HandlerErrorCallback,
-    Func<Guid, ValueTask>? HandlerStartedCallback,
-    Func<Guid, ValueTask>? HandlerCompletedCallback,
-    Guid PersistenceId,
-    string? QueueName,
-    string? TaskKey)
-{
+        IEverTask Task,
+        object? Handler,
+        string? HandlerTypeName,
+        DateTimeOffset? ExecutionTime,
+        RecurringTask? RecurringTask,
+        Func<IEverTask, CancellationToken, Task>? HandlerCallback,
+        Func<Guid, Exception?, string, ValueTask>? HandlerErrorCallback,
+        Func<Guid, ValueTask>? HandlerStartedCallback,
+        Func<Guid, ValueTask>? HandlerCompletedCallback,
+        Guid PersistenceId,
+        string? QueueName,
+        string? TaskKey)
+    {
     /// <summary>
     /// Indicates whether this executor is in lazy mode (handler not yet resolved).
     /// </summary>
@@ -112,9 +112,26 @@ public record TaskHandlerExecutor(
     /// </remarks>
     public TaskHandlerExecutor ToLazy()
     {
-        // Already lazy, return self
+        // ALWAYS create a new instance to ensure Parallel.ForEachAsync can process recurring tasks
+        // Even if already lazy, we need a NEW reference for the channel consumer to pick up
         if (IsLazy)
-            return this;
+        {
+            // Create a NEW instance with the same values
+            return new TaskHandlerExecutor(
+                Task,
+                Handler: null,
+                HandlerTypeName,
+                ExecutionTime,
+                RecurringTask,
+                HandlerCallback: null,
+                HandlerErrorCallback: null,
+                HandlerStartedCallback: null,
+                HandlerCompletedCallback: null,
+                PersistenceId,
+                QueueName,
+                TaskKey
+            );
+        }
 
         // Extract handler type name
         var handlerTypeName = Handler!.GetType().AssemblyQualifiedName

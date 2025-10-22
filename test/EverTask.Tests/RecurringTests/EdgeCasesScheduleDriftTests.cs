@@ -9,7 +9,7 @@ namespace EverTask.Tests.RecurringTests;
 /// Tests for edge cases in recurring task scheduling with schedule drift fix.
 /// Related to schedule drift fix - see docs/test-plan-schedule-drift-fix.md
 /// </summary>
-public class EdgeCasesScheduleDriftTests
+public class EdgeCasesScheduleDriftTests : IsolatedIntegrationTestBase
 {
     #region MaxRuns Tests
 
@@ -56,37 +56,21 @@ public class EdgeCasesScheduleDriftTests
     public async Task MaxRuns_Integration_Should_Stop_After_Limit()
     {
         // Arrange
-        var host = new HostBuilder()
-            .ConfigureServices((hostContext, services) =>
-            {
-                services.AddLogging();
-                services.AddEverTask(cfg => cfg
-                        .RegisterTasksFromAssembly(typeof(TestTaskRecurringSeconds).Assembly)
-                        .SetChannelOptions(10)
-                        .SetMaxDegreeOfParallelism(5))
-                    .AddMemoryStorage();
-                services.AddSingleton<TestTaskStateManager>();
-            })
-            .Build();
-
-        await host.StartAsync();
-
-        var dispatcher = host.Services.GetRequiredService<ITaskDispatcher>();
-        var storage = host.Services.GetRequiredService<ITaskStorage>();
+        await CreateIsolatedHostAsync(channelCapacity: 10, maxDegreeOfParallelism: 5);
 
         // Dispatch recurring task with MaxRuns = 2, every 1 second
-        var taskId = await dispatcher.Dispatch(
+        var taskId = await Dispatcher.Dispatch(
             new TestTaskRecurringSeconds(),
             recurring => recurring.Schedule().Every(1).Seconds().MaxRuns(2));
 
         // Wait for both runs to complete
-        await TaskWaitHelper.WaitForRecurringRunsAsync(storage, taskId, expectedRuns: 2, timeoutMs: 5000);
+        await TaskWaitHelper.WaitForRecurringRunsAsync(Storage, taskId, expectedRuns: 2, timeoutMs: 5000);
 
         // Wait a bit longer to ensure no more runs happen
         await Task.Delay(2000);
 
         // Assert: Should have exactly 2 runs, no more
-        var tasks = await storage.GetAll();
+        var tasks = await Storage.GetAll();
         var task = tasks.FirstOrDefault(t => t.Id == taskId);
 
         task.ShouldNotBeNull();
@@ -95,8 +79,6 @@ public class EdgeCasesScheduleDriftTests
         // Task should not be scheduled anymore (reached MaxRuns)
         task.Status.ShouldBe(QueuedTaskStatus.Completed);
         task.NextRunUtc.ShouldBeNull();
-
-        await host.StopAsync(CancellationToken.None);
     }
 
     #endregion
@@ -148,29 +130,12 @@ public class EdgeCasesScheduleDriftTests
     public async Task RunUntil_Integration_Should_Stop_After_Expiration()
     {
         // Arrange
-        var host = new HostBuilder()
-            .ConfigureServices((hostContext, services) =>
-            {
-                services.AddLogging();
-                services.AddEverTask(cfg => cfg
-                        .RegisterTasksFromAssembly(typeof(TestTaskRecurringSeconds).Assembly)
-                        .SetChannelOptions(10)
-                        .SetMaxDegreeOfParallelism(5))
-                    .AddMemoryStorage();
-                services.AddSingleton<TestTaskStateManager>();
-            })
-            .Build();
-
-        await host.StartAsync();
-
-        var dispatcher = host.Services.GetRequiredService<ITaskDispatcher>();
-        var storage = host.Services.GetRequiredService<ITaskStorage>();
-        var stateManager = host.Services.GetRequiredService<TestTaskStateManager>();
+        await CreateIsolatedHostAsync(channelCapacity: 10, maxDegreeOfParallelism: 5);
 
         // Dispatch recurring task with RunUntil in 3 seconds, every 1 second
         var runUntil = DateTimeOffset.UtcNow.AddSeconds(3);
 
-        var taskId = await dispatcher.Dispatch(
+        var taskId = await Dispatcher.Dispatch(
             new TestTaskRecurringSeconds(),
             recurring => recurring.Schedule().Every(1).Seconds().RunUntil(runUntil));
 
@@ -178,10 +143,10 @@ public class EdgeCasesScheduleDriftTests
         await Task.Delay(5000);
 
         // Assert: Should have approximately 3 runs (may vary slightly due to timing)
-        var counter = stateManager.GetCounter(nameof(TestTaskRecurringSeconds));
+        var counter = StateManager.GetCounter(nameof(TestTaskRecurringSeconds));
         counter.ShouldBeInRange(2, 4);
 
-        var tasks = await storage.GetAll();
+        var tasks = await Storage.GetAll();
         var task = tasks.FirstOrDefault(t => t.Id == taskId);
 
         task.ShouldNotBeNull();
@@ -189,8 +154,6 @@ public class EdgeCasesScheduleDriftTests
         // Task should be completed (reached RunUntil)
         task.Status.ShouldBe(QueuedTaskStatus.Completed);
         task.NextRunUtc.ShouldBeNull();
-
-        await host.StopAsync(CancellationToken.None);
     }
 
     #endregion

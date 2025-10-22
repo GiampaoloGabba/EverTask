@@ -11,48 +11,23 @@ namespace EverTask.Tests.IntegrationTests;
 /// after the schedule drift fix implementation.
 /// Related to schedule drift fix - see docs/test-plan-schedule-drift-fix.md
 /// </summary>
-public class BackwardCompatibilityScheduleDriftTests
+public class BackwardCompatibilityScheduleDriftTests : IsolatedIntegrationTestBase
 {
-    private IHost _host = null!;
-    private ITaskDispatcher _dispatcher = null!;
-    private ITaskStorage _storage = null!;
-    private TestTaskStateManager _stateManager = null!;
-
-    private void InitializeHost()
-    {
-        _host = new HostBuilder()
-            .ConfigureServices((hostContext, services) =>
-            {
-                services.AddLogging();
-                services.AddEverTask(cfg => cfg
-                        .RegisterTasksFromAssembly(typeof(TestTaskRecurringSeconds).Assembly)
-                        .SetChannelOptions(10)
-                        .SetMaxDegreeOfParallelism(5))
-                    .AddMemoryStorage();
-
-                services.AddSingleton<TestTaskStateManager>();
-            })
-            .Build();
-
-        _dispatcher = _host.Services.GetRequiredService<ITaskDispatcher>();
-        _storage = _host.Services.GetRequiredService<ITaskStorage>();
-        _stateManager = _host.Services.GetRequiredService<TestTaskStateManager>();
-    }
-
     [Fact]
     public async Task Old_Serialized_Recurring_Task_Should_Deserialize_And_Reschedule()
     {
         // Arrange
-        InitializeHost();
-        await _host.StartAsync();
+        await CreateIsolatedHostAsync(
+            channelCapacity: 10,
+            maxDegreeOfParallelism: 5);
 
         // ✅ Create recurring task from the start (using short interval for test speed)
-        var taskId = await _dispatcher.Dispatch(
+        var taskId = await Dispatcher.Dispatch(
             new TestTaskRecurringSeconds(),
             recurring => recurring.Schedule().Every(2).Seconds());
 
         // Simulate legacy task: old JSON format without new properties
-        var tasks = await _storage.Get(t => t.Id == taskId);
+        var tasks = await Storage.Get(t => t.Id == taskId);
         tasks.Length.ShouldBe(1);
 
         var queuedTask = tasks[0];
@@ -61,15 +36,15 @@ public class BackwardCompatibilityScheduleDriftTests
         queuedTask.NextRunUtc = DateTimeOffset.UtcNow.AddSeconds(2);
         queuedTask.ScheduledExecutionUtc = DateTimeOffset.UtcNow.AddSeconds(2);
 
-        await _storage.UpdateTask(queuedTask);
+        await Storage.UpdateTask(queuedTask);
 
         // Act: Wait for the task to be picked up and executed
         await TaskWaitHelper.WaitForConditionAsync(
-            () => _stateManager.GetCounter(nameof(TestTaskRecurringSeconds)) >= 1,
+            () => StateManager.GetCounter(nameof(TestTaskRecurringSeconds)) >= 1,
             timeoutMs: 5000); // 5 seconds should be enough for 2-second interval
 
         // Assert: Task should have been deserialized and rescheduled correctly
-        var updatedTasks = await _storage.GetAll();
+        var updatedTasks = await Storage.GetAll();
         var updatedTask = updatedTasks.FirstOrDefault(t => t.Id == taskId);
 
         updatedTask.ShouldNotBeNull();
@@ -78,76 +53,69 @@ public class BackwardCompatibilityScheduleDriftTests
 
         // Should have calculated next run using the new logic
         updatedTask.NextRunUtc.ShouldNotBeNull();
-
-        await _host.StopAsync(CancellationToken.None);
     }
 
     [Fact]
     public async Task Legacy_Task_Without_ScheduledExecutionUtc_Should_Still_Work()
     {
         // Arrange
-        InitializeHost();
-        await _host.StartAsync();
+        await CreateIsolatedHostAsync(
+            channelCapacity: 10,
+            maxDegreeOfParallelism: 5);
 
         // ✅ Create recurring task from the start
-        var taskId = await _dispatcher.Dispatch(
+        var taskId = await Dispatcher.Dispatch(
             new TestTaskRecurringSeconds(),
             recurring => recurring.Schedule().Every(2).Seconds());
 
         // Simulate legacy task: remove ScheduledExecutionUtc (wasn't tracked before)
-        var tasks = await _storage.Get(t => t.Id == taskId);
+        var tasks = await Storage.Get(t => t.Id == taskId);
         tasks.Length.ShouldBe(1);
 
         var queuedTask = tasks[0];
         queuedTask.ScheduledExecutionUtc = null; // ✅ Legacy: this field didn't exist
         queuedTask.NextRunUtc = DateTimeOffset.UtcNow.AddSeconds(1);
 
-        await _storage.UpdateTask(queuedTask);
+        await Storage.UpdateTask(queuedTask);
 
         // Act: Wait for execution
         await TaskWaitHelper.WaitForConditionAsync(
-            () => _stateManager.GetCounter(nameof(TestTaskRecurringSeconds)) >= 1,
+            () => StateManager.GetCounter(nameof(TestTaskRecurringSeconds)) >= 1,
             timeoutMs: 5000);
 
         // Assert: Task should still execute and reschedule
-        var updatedTasks = await _storage.GetAll();
+        var updatedTasks = await Storage.GetAll();
         var updatedTask = updatedTasks.FirstOrDefault(t => t.Id == taskId);
 
         updatedTask.ShouldNotBeNull();
         updatedTask.CurrentRunCount?.ShouldBeGreaterThanOrEqualTo(1);
         updatedTask.NextRunUtc.ShouldNotBeNull();
-
-        await _host.StopAsync(CancellationToken.None);
     }
 
     [Fact]
     public async Task Storage_Without_RecordSkippedOccurrences_Should_Degrade_Gracefully()
     {
         // Arrange: Use TestTaskStorage which doesn't implement RecordSkippedOccurrences properly
-        var host = new HostBuilder()
-            .ConfigureServices((hostContext, services) =>
+        // This test needs custom storage (TestTaskStorage instead of MemoryStorage)
+        // Use configureServices callback to register custom storage
+        await CreateIsolatedHostAsync(
+            channelCapacity: 10,
+            maxDegreeOfParallelism: 5,
+            configureServices: services =>
             {
-                services.AddLogging();
-                services.AddEverTask(cfg => cfg
-                                            .RegisterTasksFromAssembly(typeof(TestTaskRecurringSeconds).Assembly)
-                                            .SetChannelOptions(10)
-                                            .SetMaxDegreeOfParallelism(5));
-
-                services.AddSingleton<ITaskStorage, TestTaskStorage>(); // Legacy storage
-
-                services.AddSingleton<TestTaskStateManager>();
-            })
-            .Build();
-
-        await host.StartAsync();
-
-        var dispatcher = host.Services.GetRequiredService<ITaskDispatcher>();
-        var stateManager = host.Services.GetRequiredService<TestTaskStateManager>();
+                // Remove MemoryStorage and add TestTaskStorage
+                var storageDescriptor = services.FirstOrDefault(d => d.ServiceType == typeof(ITaskStorage));
+                if (storageDescriptor != null)
+                {
+                    services.Remove(storageDescriptor);
+                }
+                services.AddScoped<ITaskStorage, TestTaskStorage>(); // Legacy storage
+            });
 
         // Act: Dispatch recurring task that starts in the past (would normally skip occurrences)
         var pastTime = DateTimeOffset.UtcNow.AddMinutes(-2);
 
-        var taskId = await dispatcher.Dispatch(
+        var taskId = await Dispatcher.Dispatch(
             new TestTaskRecurringSeconds(),
             recurring => recurring.RunAt(pastTime).Then().Every(30).Seconds());
 
@@ -157,42 +125,41 @@ public class BackwardCompatibilityScheduleDriftTests
         // Assert: System should not crash, just log warnings
         // Since TestTaskStorage doesn't persist anything, we can't verify much,
         // but the system should remain stable
-        var counter = stateManager.GetCounter(nameof(TestTaskRecurringSeconds));
+        var counter = StateManager.GetCounter(nameof(TestTaskRecurringSeconds));
 
         // Task may or may not have executed (depending on timing), but should not crash
         counter.ShouldBeGreaterThanOrEqualTo(0);
-
-        await host.StopAsync(CancellationToken.None);
     }
 
     [Fact]
     public async Task Migrating_From_Old_To_New_Logic_Should_Work_Seamlessly()
     {
         // Arrange
-        InitializeHost();
-        await _host.StartAsync();
+        await CreateIsolatedHostAsync(
+            channelCapacity: 10,
+            maxDegreeOfParallelism: 5);
 
         // ✅ Create recurring task from the start
-        var taskId = await _dispatcher.Dispatch(
+        var taskId = await Dispatcher.Dispatch(
             new TestTaskRecurringSeconds(),
             recurring => recurring.Schedule().Every(2).Seconds());
 
         // Simulate old behavior: NextRunUtc was calculated from UtcNow (not ExecutionTime)
-        var tasks = await _storage.Get(t => t.Id == taskId);
+        var tasks = await Storage.Get(t => t.Id == taskId);
         var queuedTask = tasks[0];
 
         queuedTask.NextRunUtc = DateTimeOffset.UtcNow.AddSeconds(2); // Old logic: from UtcNow
         queuedTask.ScheduledExecutionUtc = DateTimeOffset.UtcNow.AddSeconds(2);
 
-        await _storage.UpdateTask(queuedTask);
+        await Storage.UpdateTask(queuedTask);
 
         // Act: Let the task execute with new logic
         await TaskWaitHelper.WaitForConditionAsync(
-            () => _stateManager.GetCounter(nameof(TestTaskRecurringSeconds)) >= 2,
+            () => StateManager.GetCounter(nameof(TestTaskRecurringSeconds)) >= 2,
             timeoutMs: 8000);
 
         // Assert: New logic should take over after first execution
-        var updatedTasks = await _storage.GetAll();
+        var updatedTasks = await Storage.GetAll();
         var updatedTask = updatedTasks.FirstOrDefault(t => t.Id == taskId);
 
         updatedTask.ShouldNotBeNull();
@@ -213,8 +180,6 @@ public class BackwardCompatibilityScheduleDriftTests
             interval.ShouldBeGreaterThan(1.5);
             interval.ShouldBeLessThan(3);
         }
-
-        await _host.StopAsync(CancellationToken.None);
     }
 
     [Fact]
@@ -268,42 +233,41 @@ public class BackwardCompatibilityScheduleDriftTests
     public async Task Tasks_With_Different_JSON_Formats_Should_Coexist()
     {
         // Arrange
-        InitializeHost();
-        await _host.StartAsync();
+        await CreateIsolatedHostAsync(
+            channelCapacity: 10,
+            maxDegreeOfParallelism: 5);
 
         // ✅ Create both tasks as recurring from the start
-        var legacyTaskId = await _dispatcher.Dispatch(
+        var legacyTaskId = await Dispatcher.Dispatch(
             new TestTaskRecurringSeconds(),
             recurring => recurring.Schedule().Every(2).Seconds());
 
-        var newTaskId = await _dispatcher.Dispatch(
+        var newTaskId = await Dispatcher.Dispatch(
             new TestTaskRecurringMinutes(),
             recurring => recurring.Schedule().Every(2).Seconds().MaxRuns(5));
 
         // Simulate legacy JSON format (without new properties)
-        var legacyTasks = await _storage.Get(t => t.Id == legacyTaskId);
+        var legacyTasks = await Storage.Get(t => t.Id == legacyTaskId);
         var legacyTask = legacyTasks[0];
 
         legacyTask.RecurringTask = @"{""SecondInterval"":{""Interval"":2}}"; // Old format (no MaxRuns, RunUntil, etc.)
         legacyTask.NextRunUtc = DateTimeOffset.UtcNow.AddSeconds(1);
         legacyTask.ScheduledExecutionUtc = DateTimeOffset.UtcNow.AddSeconds(1);
 
-        await _storage.UpdateTask(legacyTask);
+        await Storage.UpdateTask(legacyTask);
 
         // Act: Both should execute
         await Task.WhenAll(
             TaskWaitHelper.WaitForConditionAsync(
-                () => _stateManager.GetCounter(nameof(TestTaskRecurringSeconds)) >= 1,
+                () => StateManager.GetCounter(nameof(TestTaskRecurringSeconds)) >= 1,
                 timeoutMs: 5000),
             TaskWaitHelper.WaitForConditionAsync(
-                () => _stateManager.GetCounter(nameof(TestTaskRecurringMinutes)) >= 1,
+                () => StateManager.GetCounter(nameof(TestTaskRecurringMinutes)) >= 1,
                 timeoutMs: 5000)
         );
 
         // Assert: Both tasks should work
-        _stateManager.GetCounter(nameof(TestTaskRecurringSeconds)).ShouldBeGreaterThanOrEqualTo(1);
-        _stateManager.GetCounter(nameof(TestTaskRecurringMinutes)).ShouldBeGreaterThanOrEqualTo(1);
-
-        await _host.StopAsync(CancellationToken.None);
+        StateManager.GetCounter(nameof(TestTaskRecurringSeconds)).ShouldBeGreaterThanOrEqualTo(1);
+        StateManager.GetCounter(nameof(TestTaskRecurringMinutes)).ShouldBeGreaterThanOrEqualTo(1);
     }
 }

@@ -10,63 +10,27 @@ namespace EverTask.Tests.IntegrationTests;
 /// Tests complete scenarios with multiple components working together.
 /// Related to schedule drift fix - see docs/test-plan-schedule-drift-fix.md
 /// </summary>
-public class EndToEndScheduleDriftTests
+public class EndToEndScheduleDriftTests : IsolatedIntegrationTestBase
 {
-    private IHost _host = null!;
-    private ITaskDispatcher _dispatcher = null!;
-    private ITaskStorage _storage = null!;
-    private TestTaskStateManager _stateManager = null!;
-
-    private void InitializeHost(bool reuseStorage = false)
-    {
-        // Preserve storage and state manager across host rebuilds for downtime recovery tests
-        var existingStorage = reuseStorage ? _storage : null;
-        var existingStateManager = reuseStorage ? _stateManager : null;
-
-        _host = new HostBuilder()
-            .ConfigureServices((hostContext, services) =>
-            {
-                services.AddLogging();
-                services.AddEverTask(cfg => cfg
-                        .RegisterTasksFromAssembly(typeof(TestTaskRecurringSeconds).Assembly)
-                        .SetChannelOptions(10)
-                        .SetMaxDegreeOfParallelism(5))
-                    .AddMemoryStorage();
-
-                // Reuse existing storage if provided (for restart scenarios)
-                if (existingStorage != null)
-                    services.AddSingleton(existingStorage);
-
-                // Reuse existing state manager if provided (for restart scenarios)
-                if (existingStateManager != null)
-                    services.AddSingleton(existingStateManager);
-                else
-                    services.AddSingleton<TestTaskStateManager>();
-            })
-            .Build();
-
-        _dispatcher = _host.Services.GetRequiredService<ITaskDispatcher>();
-        _storage = _host.Services.GetRequiredService<ITaskStorage>();
-        _stateManager = _host.Services.GetRequiredService<TestTaskStateManager>();
-    }
 
     [Fact]
     public async Task EndToEnd_Recurring_Task_Should_Execute_3_Times_And_Track_CurrentRunCount()
     {
         // Arrange
-        InitializeHost();
-        await _host.StartAsync();
+        await CreateIsolatedHostAsync(
+            channelCapacity: 10,
+            maxDegreeOfParallelism: 5);
 
         // Act: Dispatch recurring task every 1 second
-        var taskId = await _dispatcher.Dispatch(
+        var taskId = await Dispatcher.Dispatch(
             new TestTaskRecurringSeconds(),
             recurring => recurring.Schedule().Every(1).Seconds());
 
         // Wait for 3 executions
-        await TaskWaitHelper.WaitForRecurringRunsAsync(_storage, taskId, expectedRuns: 3, timeoutMs: 10000);
+        await WaitForRecurringRunsAsync(taskId, expectedRuns: 3, timeoutMs: 10000);
 
         // Assert
-        var tasks = await _storage.GetAll();
+        var tasks = await Storage.GetAll();
         var task = tasks.FirstOrDefault(t => t.Id == taskId);
 
         task.ShouldNotBeNull();
@@ -81,30 +45,29 @@ public class EndToEndScheduleDriftTests
             .ToList();
 
         completedRuns.Count.ShouldBe(3);
-
-        await _host.StopAsync(CancellationToken.None);
     }
 
     [Fact]
     public async Task EndToEnd_Retry_Should_Not_Affect_Next_Run_Calculation()
     {
         // Arrange
-        InitializeHost();
-        await _host.StartAsync();
+        await CreateIsolatedHostAsync(
+            channelCapacity: 10,
+            maxDegreeOfParallelism: 5);
 
         TestTaskRecurringWithFailure.Counter = 0;
         TestTaskRecurringWithFailure.FailUntilCount = 2; // Fail twice, then succeed
 
         // Act: Dispatch recurring task with retry policy (every 2 seconds)
-        var taskId = await _dispatcher.Dispatch(
+        var taskId = await Dispatcher.Dispatch(
             new TestTaskRecurringWithFailure(),
             recurring => recurring.Schedule().Every(2).Seconds());
 
         // Wait for 2 successful executions (each might have retries)
-        await TaskWaitHelper.WaitForRecurringRunsAsync(_storage, taskId, expectedRuns: 2, timeoutMs: 15000);
+        await WaitForRecurringRunsAsync(taskId, expectedRuns: 2, timeoutMs: 15000);
 
         // Assert
-        var tasks = await _storage.GetAll();
+        var tasks = await Storage.GetAll();
         var task = tasks.FirstOrDefault(t => t.Id == taskId);
 
         task.ShouldNotBeNull();
@@ -125,27 +88,26 @@ public class EndToEndScheduleDriftTests
         // Allow wider tolerance due to retry delays
         interval.ShouldBeGreaterThan(1.5);
         interval.ShouldBeLessThan(5); // Should not drift significantly despite retries
-
-        await _host.StopAsync(CancellationToken.None);
     }
 
     [Fact]
     public async Task EndToEnd_Timeout_Should_Not_Affect_Next_Run_Calculation()
     {
         // Arrange
-        InitializeHost();
-        await _host.StartAsync();
+        await CreateIsolatedHostAsync(
+            channelCapacity: 10,
+            maxDegreeOfParallelism: 5);
 
         // Act: Dispatch recurring task with custom timeout (every 2 seconds)
-        var taskId = await _dispatcher.Dispatch(
+        var taskId = await Dispatcher.Dispatch(
             new TestTaskRecurringSeconds(),
             recurring => recurring.Schedule().Every(2).Seconds());
 
         // Wait for 2 executions
-        await TaskWaitHelper.WaitForRecurringRunsAsync(_storage, taskId, expectedRuns: 2, timeoutMs: 10000);
+        await WaitForRecurringRunsAsync(taskId, expectedRuns: 2, timeoutMs: 10000);
 
         // Assert
-        var tasks = await _storage.GetAll();
+        var tasks = await Storage.GetAll();
         var task = tasks.FirstOrDefault(t => t.Id == taskId);
 
         task.ShouldNotBeNull();
@@ -163,39 +125,38 @@ public class EndToEndScheduleDriftTests
         var interval = (completedRuns[1].ExecutedAt - completedRuns[0].ExecutedAt).TotalSeconds;
         interval.ShouldBeGreaterThan(1.5);
         interval.ShouldBeLessThan(3);
-
-        await _host.StopAsync(CancellationToken.None);
     }
 
     [Fact]
     public async Task EndToEnd_Multiple_Concurrent_Recurring_Tasks_Should_Maintain_Independent_Schedules()
     {
         // Arrange
-        InitializeHost();
-        await _host.StartAsync();
+        await CreateIsolatedHostAsync(
+            channelCapacity: 10,
+            maxDegreeOfParallelism: 5);
 
         // Act: Dispatch 3 different recurring tasks with different intervals
-        var task1Id = await _dispatcher.Dispatch(
+        var task1Id = await Dispatcher.Dispatch(
             new TestTaskRecurringSeconds(),
             recurring => recurring.Schedule().Every(1).Seconds());
 
-        var task2Id = await _dispatcher.Dispatch(
+        var task2Id = await Dispatcher.Dispatch(
             new TestTaskRecurringMinutes(),
             recurring => recurring.Schedule().Every(2).Seconds());
 
-        var task3Id = await _dispatcher.Dispatch(
+        var task3Id = await Dispatcher.Dispatch(
             new TestTaskDelayedRecurring(delayMs: 50),
             recurring => recurring.Schedule().Every(3).Seconds());
 
         // Wait for all tasks to complete at least 2 runs
         await Task.WhenAll(
-            TaskWaitHelper.WaitForRecurringRunsAsync(_storage, task1Id, expectedRuns: 2, timeoutMs: 8000),
-            TaskWaitHelper.WaitForRecurringRunsAsync(_storage, task2Id, expectedRuns: 2, timeoutMs: 8000),
-            TaskWaitHelper.WaitForRecurringRunsAsync(_storage, task3Id, expectedRuns: 2, timeoutMs: 12000)
+            WaitForRecurringRunsAsync(task1Id, expectedRuns: 2, timeoutMs: 8000),
+            WaitForRecurringRunsAsync(task2Id, expectedRuns: 2, timeoutMs: 8000),
+            WaitForRecurringRunsAsync(task3Id, expectedRuns: 2, timeoutMs: 12000)
         );
 
         // Assert: Each task should maintain its own schedule
-        var tasks = await _storage.GetAll();
+        var tasks = await Storage.GetAll();
 
         var task1 = tasks.FirstOrDefault(t => t.Id == task1Id);
         var task2 = tasks.FirstOrDefault(t => t.Id == task2Id);
@@ -234,51 +195,36 @@ public class EndToEndScheduleDriftTests
         var task3Interval = (task3Runs[1].ExecutedAt - task3Runs[0].ExecutedAt).TotalSeconds;
         task3Interval.ShouldBeGreaterThan(2.5);
         task3Interval.ShouldBeLessThan(4);
-
-        await _host.StopAsync(CancellationToken.None);
     }
 
     [Fact]
     public async Task EndToEnd_Recurring_Task_With_Queue_Sharding_Should_Work()
     {
         // Arrange: Create host with sharding enabled
-        var host = new HostBuilder()
-            .ConfigureServices((hostContext, services) =>
-            {
-                services.AddLogging();
-                services.AddEverTask(cfg => cfg
-                        .RegisterTasksFromAssembly(typeof(TestTaskRecurringSeconds).Assembly)
-                        .SetMaxDegreeOfParallelism(10))
-                        .AddQueue("shard1")
-                        .AddQueue("shard2")
-                    .AddMemoryStorage();
-
-                services.AddSingleton<TestTaskStateManager>();
-            })
-            .Build();
-
-        await host.StartAsync();
-
-        var dispatcher = host.Services.GetRequiredService<ITaskDispatcher>();
-        var storage = host.Services.GetRequiredService<ITaskStorage>();
+        await CreateIsolatedHostWithBuilderAsync(
+            builder => builder
+                .AddQueue("shard1")
+                .AddQueue("shard2")
+                .AddMemoryStorage(),
+            configureEverTask: cfg => cfg.SetMaxDegreeOfParallelism(10));
 
         // Act: Dispatch recurring tasks with unique task keys
-        var task1Id = await dispatcher.Dispatch(
+        var task1Id = await Dispatcher.Dispatch(
             new TestTaskRecurringQueueShard1(),
             recurring => recurring.Schedule().Every(1).Seconds());
 
-        var task2Id = await dispatcher.Dispatch(
+        var task2Id = await Dispatcher.Dispatch(
             new TestTaskRecurringQueueShard2(),
             recurring => recurring.Schedule().Every(1).Seconds());
 
         // Wait for both tasks to complete runs
         await Task.WhenAll(
-            TaskWaitHelper.WaitForRecurringRunsAsync(storage, task1Id, expectedRuns: 2, timeoutMs: 8000),
-            TaskWaitHelper.WaitForRecurringRunsAsync(storage, task2Id, expectedRuns: 2, timeoutMs: 8000)
+            WaitForRecurringRunsAsync(task1Id, expectedRuns: 2, timeoutMs: 8000),
+            WaitForRecurringRunsAsync(task2Id, expectedRuns: 2, timeoutMs: 8000)
         );
 
         // Assert
-        var tasks = await storage.GetAll();
+        var tasks = await Storage.GetAll();
 
         var task1 = tasks.FirstOrDefault(t => t.Id == task1Id);
         var task2 = tasks.FirstOrDefault(t => t.Id == task2Id);
@@ -293,40 +239,54 @@ public class EndToEndScheduleDriftTests
         task1.CurrentRunCount?.ShouldBeGreaterThanOrEqualTo(2);
         task2.CurrentRunCount.HasValue.ShouldBeTrue();
         task2.CurrentRunCount?.ShouldBeGreaterThanOrEqualTo(2);
-
-        await host.StopAsync(CancellationToken.None);
     }
 
     [Fact]
     public async Task EndToEnd_Complex_Scenario_With_Downtime_Recovery()
     {
-        // Arrange
-        InitializeHost();
-        await _host.StartAsync();
+        // Arrange: Create first host
+        await CreateIsolatedHostAsync(
+            channelCapacity: 10,
+            maxDegreeOfParallelism: 5);
+
+        // Preserve storage and state manager for reuse after restart
+        var storage = Storage;
+        var stateManager = StateManager;
 
         // Act: Dispatch recurring task
-        var taskId = await _dispatcher.Dispatch(
+        var taskId = await Dispatcher.Dispatch(
             new TestTaskRecurringSeconds(),
             recurring => recurring.Schedule().Every(1).Seconds());
 
         // Wait for first execution
         await TaskWaitHelper.WaitForConditionAsync(
-            () => _stateManager.GetCounter(nameof(TestTaskRecurringSeconds)) >= 1,
+            () => stateManager.GetCounter(nameof(TestTaskRecurringSeconds)) >= 1,
             timeoutMs: 3000);
 
         // Simulate downtime
-        await _host.StopAsync(CancellationToken.None);
+        await StopHostAsync();
         await Task.Delay(3000); // 3 seconds downtime
 
-        // Restart (rebuild host as IHost cannot be restarted)
-        InitializeHost(reuseStorage: true);
-        await _host.StartAsync();
+        // Restart: Create new host with same storage and state manager
+        // NOTE: configureServices adds ITaskStorage AFTER base class AddMemoryStorage().
+        // This intentionally overrides the default storage to reuse the preserved instance
+        // for downtime recovery testing. Last registration wins in .NET DI.
+        await CreateIsolatedHostAsync(
+            channelCapacity: 10,
+            maxDegreeOfParallelism: 5,
+            configureServices: svc =>
+            {
+                // Override default storage with preserved instance (last registration wins)
+                svc.AddSingleton<ITaskStorage>(storage);
+                // Override default state manager with preserved instance
+                svc.AddSingleton(stateManager);
+            });
 
         // Wait for recovery and additional executions
         await Task.Delay(3000);
 
         // Assert
-        var tasks = await _storage.GetAll();
+        var tasks = await Storage.GetAll();
         var task = tasks.FirstOrDefault(t => t.Id == taskId);
 
         task.ShouldNotBeNull();
@@ -345,27 +305,26 @@ public class EndToEndScheduleDriftTests
         {
             task.NextRunUtc.Value.ShouldBeGreaterThanOrEqualTo(DateTimeOffset.UtcNow.AddSeconds(-1));
         }
-
-        await _host.StopAsync(CancellationToken.None);
     }
 
     [Fact]
     public async Task EndToEnd_No_Drift_Over_Many_Executions()
     {
         // Arrange
-        InitializeHost();
-        await _host.StartAsync();
+        await CreateIsolatedHostAsync(
+            channelCapacity: 10,
+            maxDegreeOfParallelism: 5);
 
         // Act: Dispatch recurring task every 500ms (using 1 second for test speed)
-        var taskId = await _dispatcher.Dispatch(
+        var taskId = await Dispatcher.Dispatch(
             new TestTaskRecurringSeconds(),
             recurring => recurring.Schedule().Every(1).Seconds());
 
         // Wait for 10 executions
-        await TaskWaitHelper.WaitForRecurringRunsAsync(_storage, taskId, expectedRuns: 10, timeoutMs: 15000);
+        await WaitForRecurringRunsAsync(taskId, expectedRuns: 10, timeoutMs: 15000);
 
         // Assert
-        var tasks = await _storage.GetAll();
+        var tasks = await Storage.GetAll();
         var task = tasks.FirstOrDefault(t => t.Id == taskId);
 
         task.ShouldNotBeNull();
@@ -390,7 +349,5 @@ public class EndToEndScheduleDriftTests
         var averageInterval = totalTime / 9; // 9 intervals between 10 runs
         averageInterval.ShouldBeGreaterThan(0.8); // 800ms
         averageInterval.ShouldBeLessThan(1.3); // 1300ms
-
-        await _host.StopAsync(CancellationToken.None);
     }
 }

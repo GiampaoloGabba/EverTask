@@ -15,19 +15,15 @@ namespace EverTask.Tests.IntegrationTests;
 /// Integration tests for recurring task skip persistence functionality.
 /// Tests that skipped occurrences are properly recorded in the audit trail.
 /// </summary>
-public class RecurringTaskSkipPersistenceTests : IntegrationTestBase
+public class RecurringTaskSkipPersistenceTests : IsolatedIntegrationTestBase
 {
-    public RecurringTaskSkipPersistenceTests()
-    {
-        InitializeHost();
-    }
     [Fact]
     public async Task Should_persist_skipped_occurrences_in_RunsAudit()
     {
         // This test verifies that when a recurring task skips missed occurrences,
         // the skip information is persisted in the RunsAudit table
 
-        await StartHostAsync();
+        await CreateIsolatedHostAsync();
 
         // Create a recurring task that runs every 5 seconds
         var task = new TestTaskDelayed1();
@@ -35,7 +31,7 @@ public class RecurringTaskSkipPersistenceTests : IntegrationTestBase
 
         // Dispatch a task scheduled to start in the past (simulating downtime)
         var pastTime = DateTimeOffset.UtcNow.AddMinutes(-2); // 2 minutes ago
-        var taskId = await Dispatcher!.Dispatch(task, pastTime);
+        var taskId = await Dispatcher.Dispatch(task, pastTime);
 
         // Manually update the task to be recurring (simulating a task that was scheduled before downtime)
         var recurringTask = new RecurringTask
@@ -44,7 +40,7 @@ public class RecurringTaskSkipPersistenceTests : IntegrationTestBase
         };
 
         // Get the task from storage
-        var tasks = await Storage!.Get(t => t.Id == taskId);
+        var tasks = await Storage.Get(t => t.Id == taskId);
         tasks.Length.ShouldBe(1);
 
         var queuedTask = tasks[0];
@@ -81,19 +77,18 @@ public class RecurringTaskSkipPersistenceTests : IntegrationTestBase
         skipAudit.Exception.ShouldContain("Skipped 3 missed occurrence(s)");
         skipAudit.Status.ShouldBe(QueuedTaskStatus.Completed);
 
-        await StopHostAsync();
     }
 
     [Fact]
     public async Task Should_not_persist_when_no_skips_occurred()
     {
-        await StartHostAsync();
+        await CreateIsolatedHostAsync();
 
         var task = new TestTaskDelayed1();
-        var taskId = await Dispatcher!.Dispatch(task);
+        var taskId = await Dispatcher.Dispatch(task);
 
         // Call RecordSkippedOccurrences with empty list
-        var initialTask = await Storage!.Get(t => t.Id == taskId);
+        var initialTask = await Storage.Get(t => t.Id == taskId);
         var initialAuditCount = initialTask[0].RunsAudits.Count;
 
         await Storage.RecordSkippedOccurrences(taskId, new List<DateTimeOffset>());
@@ -102,7 +97,6 @@ public class RecurringTaskSkipPersistenceTests : IntegrationTestBase
         var updatedTask = await Storage.Get(t => t.Id == taskId);
         updatedTask[0].RunsAudits.Count.ShouldBe(initialAuditCount);
 
-        await StopHostAsync();
     }
 
     [Fact]
@@ -145,7 +139,7 @@ public class RecurringTaskSkipPersistenceTests : IntegrationTestBase
     [Fact]
     public async Task RecordSkippedOccurrences_should_handle_nonexistent_task()
     {
-        await StartHostAsync();
+        await CreateIsolatedHostAsync();
 
         // Try to record skips for a task that doesn't exist
         var nonExistentTaskId = Guid.NewGuid();
@@ -155,12 +149,11 @@ public class RecurringTaskSkipPersistenceTests : IntegrationTestBase
         };
 
         // Should not throw, just log a warning
-        await Storage!.RecordSkippedOccurrences(nonExistentTaskId, skippedOccurrences);
+        await Storage.RecordSkippedOccurrences(nonExistentTaskId, skippedOccurrences);
 
         // Verify no crash occurred
         var tasks = await Storage.Get(t => t.Id == nonExistentTaskId);
         tasks.Length.ShouldBe(0);
 
-        await StopHostAsync();
     }
 }
