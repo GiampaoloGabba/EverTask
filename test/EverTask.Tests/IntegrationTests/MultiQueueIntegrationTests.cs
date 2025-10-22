@@ -11,6 +11,8 @@ namespace EverTask.Tests.IntegrationTests;
 /// Comprehensive integration tests for multi-queue functionality.
 /// These tests verify the complete flow: Dispatcher -> Storage -> QueueManager -> WorkerExecutor
 /// </summary>
+// Share collection with ShardedSchedulerTests to prevent parallel execution and static counter contamination
+[Collection("ShardedSchedulerTests")]
 public class MultiQueueIntegrationTests : IntegrationTestBase
 {
     [Fact]
@@ -376,7 +378,7 @@ public class MultiQueueIntegrationTests : IntegrationTestBase
         await TaskWaitHelper.WaitUntilAsync(
             async () => await Storage!.GetAll(),
             tasks => tasks.Count(t => allTaskIds.Contains(t.Id) && t.Status == QueuedTaskStatus.Completed) >= 6,
-            timeoutMs: 15000 // Increased timeout for .NET 6 reliability (3 sequential tasks @ 200ms each + scheduling overhead)
+            timeoutMs: 20000 // Increased timeout for .NET 6 reliability (3 sequential tasks @ 200ms each + scheduling overhead)
         );
 
         var tasks = await Storage!.GetAll();

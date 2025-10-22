@@ -291,7 +291,6 @@ public class ShardedSchedulerIntegrationTests
                     .AddQueue("high-priority", q => q.SetMaxDegreeOfParallelism(4))
                     .AddMemoryStorage();
 
-                services.AddSingleton<ITaskStorage, MemoryTaskStorage>();
                 services.AddSingleton<TestTaskStateManager>();
             })
             .Build();
@@ -346,7 +345,6 @@ public class ShardedSchedulerIntegrationTests
                 });
 
                 config.AddMemoryStorage();
-                services.AddSingleton<ITaskStorage, MemoryTaskStorage>();
                 services.AddSingleton<TestTaskStateManager>();
             })
             .Build()

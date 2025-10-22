@@ -24,7 +24,6 @@ public class WorkerServiceIntegrationTests
                                                    .SetChannelOptions(3)
                                                    .SetMaxDegreeOfParallelism(3))
                             .AddMemoryStorage();
-                    services.AddSingleton<ITaskStorage, MemoryTaskStorage>();
                 }).Build();
 
         _dispatcher         = _host.Services.GetRequiredService<ITaskDispatcher>();

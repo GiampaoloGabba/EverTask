@@ -37,7 +37,6 @@ public abstract class IntegrationTestBase : IAsyncDisposable
                     .SetMaxDegreeOfParallelism(maxDegreeOfParallelism))
                     .AddMemoryStorage();
 
-                services.AddSingleton<ITaskStorage, MemoryTaskStorage>();
                 services.AddSingleton<TestTaskStateManager>();
 
                 configureServices?.Invoke(services);
