@@ -6,23 +6,6 @@ This document outlines planned features and improvements for EverTask.
 
 ## Version 3.1.0+
 
-### 🔄 Retry Policy Enhancements: OnRetry Callback and Exception Filters
-**Status:** Planned | **Priority:** High | **Effort:** 10-14 hours
-
-Enhance retry policy system with visibility into retry attempts and selective exception filtering.
-
-**Features:**
-- OnRetry lifecycle callback for logging, metrics, and debugging
-- Exception filtering with ShouldRetry(Exception) interface method
-- LinearRetryPolicy fluent API: Handle<T>() and DoNotHandle<T>()
-- Fail-fast for non-transient errors (ArgumentException, NullReferenceException)
-- Backward compatible (new features are opt-in with sensible defaults)
-- Integration-friendly (Polly policies can implement ShouldRetry easily)
-
-**Details:** See `.claude/tasks/retry-policy-enhancements.md`
-
----
-
 ### 📝 Task Execution Log Capture
 **Status:** Planned | **Priority:** High | **Effort:** 25-35 hours
 
@@ -156,3 +139,23 @@ Eliminated all test flakiness through comprehensive infrastructure refactoring.
 - 50% reduction in test timeouts without reliability loss
 
 **Related commits:** 07fafaf, 48e0fd7, e7aa388
+
+---
+
+### ✅ Retry Policy Enhancements: OnRetry Callback and Exception Filters
+**Completed:** v3.1.0 (2025-10-22) | **Effort:** 12 hours
+
+Enhanced retry policy system with visibility into retry attempts and selective exception filtering.
+
+**Delivered:**
+- `OnRetry(Guid taskId, int attemptNumber, Exception exception, TimeSpan delay)` lifecycle callback
+- Exception filtering via `IRetryPolicy.ShouldRetry(Exception exception)` interface method
+- LinearRetryPolicy fluent API: `Handle<T>()`, `DoNotHandle<T>()`, `HandleWhen(predicate)`
+- Predefined exception sets: `HandleTransientDatabaseErrors()`, `HandleAllTransientErrors()`
+- Fail-fast for non-retryable exceptions (OperationCanceledException, TimeoutException)
+- Performance optimization: OnRetry MethodInfo cached per handler type
+- Seamless integration with lazy handler resolution
+- Backward compatible (new features opt-in with sensible defaults)
+- 16 unit tests + 6 integration tests verifying all filtering scenarios
+
+**Related commits:** [squash merge from feature/retry-policy-enhancements]
