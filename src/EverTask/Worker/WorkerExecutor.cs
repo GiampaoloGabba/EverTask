@@ -37,8 +37,7 @@ public class WorkerExecutor(
         ITaskStorage? taskStorage = scope.ServiceProvider.GetService<ITaskStorage>();
 
         // Resolve handler (lazy or eager mode)
-        object handler = null!;  // Will be assigned in both if and else branches
-        bool shouldDisposeHandler = false;
+        object? handler = null!; // Will be assigned in both if and else branches
 
         try
         {
@@ -54,7 +53,6 @@ public class WorkerExecutor(
                 try
                 {
                     handler = task.GetOrResolveHandler(scope.ServiceProvider);
-                    shouldDisposeHandler = true;  // Must dispose after execution
 
                     logger.LogDebug("Resolved handler {handlerType} for lazy task {taskId}",
                         handler.GetType().Name, task.PersistenceId);
@@ -80,7 +78,6 @@ public class WorkerExecutor(
             {
                 // Eager mode: use existing handler instance
                 handler = task.Handler!;  // Non-null assertion safe (validated at dispatch)
-                shouldDisposeHandler = false;  // Don't dispose (may be shared or managed elsewhere)
             }
 
             RegisterInfo(task, "Starting task with id {0}.", task.PersistenceId);
@@ -105,8 +102,8 @@ public class WorkerExecutor(
         }
         finally
         {
-            // Dispose handler if lazy mode (BEFORE recurring scheduling)
-            if (shouldDisposeHandler && handler != null)
+            // Dispose handler if created (BEFORE recurring scheduling)
+            if (handler != null)
             {
                 await ExecuteDisposeHandler(handler);
             }
