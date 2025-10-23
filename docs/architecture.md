@@ -275,7 +275,7 @@ public class PeriodicTimerScheduler : IScheduler
 }
 ```
 
-The scheduler uses dynamic delays, sleeping only until the next task is due. When idle, it uses zero CPU. New tasks signal immediately for wake-up, resulting in 90% less lock contention compared to the old timer-based approach.
+The scheduler uses dynamic delays, sleeping only until the next task is due. When idle, it uses zero CPU. New tasks signal immediately for wake-up, resulting in minimal lock contention compared to the old timer-based approach.
 
 **Performance Comparison:**
 

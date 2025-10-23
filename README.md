@@ -20,7 +20,7 @@ Works great with ASP.NET Core, Windows Services, or any .NET project that needs 
 - 🚀 **Background Execution** - Fire-and-forget, scheduled, and recurring tasks with elegant API
 - 🎯 **Multi-Queue Support** (v1.6+) - Isolate workloads by priority, resource type, or business domain
 - 🔑 **Idempotent Task Registration** (v1.6+) - Prevent duplicate recurring tasks with unique keys
-- ⚡ **High-Performance Scheduler** (v2.0+) - PeriodicTimerScheduler with 90% less lock contention and zero CPU when idle
+- ⚡ **High-Performance Scheduler** (v2.0+) - PeriodicTimerScheduler with minimal lock contention and zero CPU when idle
 - 🔥 **Extreme Load Support** (v2.0+) - Optional sharded scheduler for >10k tasks/sec scenarios
 - 💾 **Smart Persistence** - Tasks resume after application restarts (SQL Server, SQLite, In-Memory)
 - 🔄 **Powerful Retry Policies** - Built-in linear retry, custom policies, Polly integration
@@ -81,17 +81,15 @@ Create a handler:
 public class SendWelcomeEmailHandler : EverTaskHandler<SendWelcomeEmailTask>
 {
     private readonly IEmailService _emailService;
-    private readonly ILogger<SendWelcomeEmailHandler> _logger;
 
-    public SendWelcomeEmailHandler(IEmailService emailService, ILogger<SendWelcomeEmailHandler> logger)
+    public SendWelcomeEmailHandler(IEmailService emailService)
     {
         _emailService = emailService;
-        _logger = logger;
     }
 
     public override async Task Handle(SendWelcomeEmailTask task, CancellationToken cancellationToken)
     {
-        _logger.LogInformation("Sending welcome email to {Email}", task.UserEmail);
+        Logger.LogInformation("Sending welcome email to {Email}", task.UserEmail);
 
         await _emailService.SendWelcomeEmailAsync(
             task.UserEmail,
@@ -317,9 +315,9 @@ Capture all logs written during task execution and persist them to the database 
 services.AddEverTask(cfg =>
 {
     cfg.RegisterTasksFromAssembly(typeof(Program).Assembly);
-    cfg.EnableLogCapture = true;                      // Opt-in feature
-    cfg.MinimumLogLevel = LogLevel.Information;       // Filter log level
-    cfg.MaxLogsPerTask = 1000;                        // Prevent unbounded growth
+    cfg.EnablePersistentHandlerLogging = true;        // Opt-in feature
+    cfg.MinimumPersistentLogLevel = LogLevel.Information;  // Filter log level
+    cfg.MaxPersistedLogsPerTask = 1000;               // Prevent unbounded growth
 })
 .AddSqlServerStorage(connectionString);
 
@@ -363,7 +361,7 @@ foreach (var log in logs)
 Version 2.0 is all about performance. We've optimized every hot path and made the defaults much smarter.
 
 ### Scheduler Improvements
-- **PeriodicTimerScheduler** is now the default, cutting lock contention by 90% and using zero CPU when idle
+- **PeriodicTimerScheduler** is now the default, with minimal lock contention and using zero CPU when idle
 - **ShardedScheduler** available for extreme loads—delivers 2-4x throughput when you're scheduling >10k tasks/sec
 
 ### Storage Optimizations
