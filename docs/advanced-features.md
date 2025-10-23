@@ -15,6 +15,7 @@ This guide covers advanced EverTask features for complex scenarios, high-load sy
 - [Task Continuations](#task-continuations)
 - [Task Cancellation](#task-cancellation)
 - [Custom Workflows](#custom-workflows)
+- [Task Execution Log Capture](#task-execution-log-capture)
 
 ## Multi-Queue Support
 
@@ -640,6 +641,159 @@ public class WorkflowOrchestrator : EverTaskHandler<WorkflowTask>
     }
 }
 ```
+
+## Task Execution Log Capture
+
+**Available since:** v3.0
+
+EverTask provides a built-in log capture system that records logs written during task execution. The logger acts as a **proxy** that ALWAYS forwards logs to the standard ILogger infrastructure (console, file, Serilog, Application Insights, etc.) and **optionally** persists them to the database for audit trails.
+
+### Why Use Log Capture?
+
+- **Debugging**: Review exactly what happened during task execution, including retry attempts
+- **Audit Trails**: Keep a permanent record of task execution logs in the database
+- **Compliance**: Meet regulatory requirements for task execution logging
+- **Root Cause Analysis**: Investigate failures with full execution context
+
+### Basic Usage
+
+Access the logger via the `Logger` property in your task handler:
+
+```csharp
+public class ProcessOrderHandler : EverTaskHandler<ProcessOrderTask>
+{
+    public override async Task Handle(ProcessOrderTask task, CancellationToken ct)
+    {
+        Logger.LogInformation("Processing order {OrderId}", task.OrderId);
+
+        // Your business logic here
+        await ProcessOrder(task.OrderId);
+
+        Logger.LogInformation("Order {OrderId} processed successfully", task.OrderId);
+    }
+}
+```
+
+**Key Point**: Logs are ALWAYS written to ILogger (console, file, etc.) regardless of persistence settings. This ensures you never lose visibility into task execution.
+
+### Configuration
+
+#### Enable Database Persistence (Optional)
+
+```csharp
+services.AddEverTask(opt => opt
+    .RegisterTasksFromAssembly(typeof(Program).Assembly)
+    .EnablePersistentHandlerLogging(true)           // Enable database persistence
+    .SetMinimumPersistentLogLevel(LogLevel.Information)  // Only persist Information+
+    .SetMaxPersistedLogsPerTask(1000))               // Limit logs per task
+    .AddSqlServerStorage(connectionString);
+```
+
+#### Configuration Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `EnablePersistentHandlerLogging` | `false` | Whether to persist logs to database. **Logs always go to ILogger regardless!** |
+| `MinimumPersistentLogLevel` | `Information` | Minimum log level to persist. Only affects database, not ILogger. |
+| `MaxPersistedLogsPerTask` | `1000` | Maximum logs to persist per task execution. `null` = unlimited. |
+
+### How It Works
+
+The log capture system uses a **proxy pattern**:
+
+```
+Handler.Logger.LogInformation("msg")
+         ↓
+   TaskLogCapture (proxy)
+    ↙          ↘
+ILogger        Database
+(always)     (optional)
+```
+
+1. **Always Log to ILogger**: Every log call forwards to `ILogger<THandler>` for standard logging infrastructure
+2. **Conditional Persistence**: If `EnablePersistentHandlerLogging = true`, logs are also stored in database
+3. **Filtered Persistence**: `MinimumPersistentLogLevel` filters only database persistence, not ILogger
+
+### Retrieving Persisted Logs
+
+```csharp
+// Get all logs for a task
+var logs = await storage.GetExecutionLogsAsync(taskId);
+
+foreach (var log in logs)
+{
+    Console.WriteLine($"[{log.Level}] {log.TimestampUtc}: {log.Message}");
+    if (log.ExceptionDetails != null)
+        Console.WriteLine($"Exception: {log.ExceptionDetails}");
+}
+
+// Get paginated logs
+var page = await storage.GetExecutionLogsAsync(taskId, skip: 0, take: 50);
+```
+
+### Retry Attempt Tracking
+
+Logs accumulate across ALL retry attempts:
+
+```csharp
+public class RetryTaskHandler : EverTaskHandler<RetryTask>
+{
+    public override async Task Handle(RetryTask task, CancellationToken ct)
+    {
+        Logger.LogInformation("Attempt started");
+
+        // If this fails and retries, each attempt logs "Attempt started"
+        // Database will contain: ["Attempt started", "Attempt started", "Attempt started", ...]
+    }
+}
+```
+
+This is **intentional** - it provides complete visibility into all execution attempts.
+
+### Performance Considerations
+
+- **When Disabled**: Single `if` check per log call (negligible overhead)
+- **When Enabled**: ~100 bytes per log in memory, single bulk INSERT after task completion
+- **ILogger Always Invoked**: Standard Microsoft.Extensions.Logging overhead applies
+
+### Best Practices
+
+1. **Use Standard Log Levels**: `LogInformation` for normal flow, `LogWarning` for issues, `LogError` for failures
+2. **Include Context**: Log task parameters and key decision points
+3. **Set Reasonable Limits**: Default 1000 logs per task prevents unbounded growth
+4. **Use for Debugging**: Don't rely on persisted logs for real-time monitoring (use ILogger infrastructure)
+5. **Clean Up Old Logs**: Implement retention policies to prevent database bloat
+
+### Example: Audit Trail
+
+```csharp
+public class PaymentProcessorHandler : EverTaskHandler<ProcessPaymentTask>
+{
+    public override async Task Handle(ProcessPaymentTask task, CancellationToken ct)
+    {
+        Logger.LogInformation("Payment processing started for amount {Amount}", task.Amount);
+
+        // Audit critical steps
+        Logger.LogInformation("Validating payment method");
+        await ValidatePaymentMethod(task.PaymentMethodId);
+
+        Logger.LogInformation("Charging payment gateway");
+        var result = await ChargePaymentGateway(task);
+
+        if (result.IsSuccess)
+        {
+            Logger.LogInformation("Payment succeeded with transaction ID {TransactionId}", result.TransactionId);
+        }
+        else
+        {
+            Logger.LogError("Payment failed: {ErrorMessage}", result.ErrorMessage);
+            throw new PaymentException(result.ErrorMessage);
+        }
+    }
+}
+```
+
+With `EnablePersistentHandlerLogging = true`, all these logs are stored in the database and queryable by `taskId`.
 
 ## Best Practices
 

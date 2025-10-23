@@ -25,6 +25,7 @@ Works great with ASP.NET Core, Windows Services, or any .NET project that needs 
 - 💾 **Smart Persistence** - Tasks resume after application restarts (SQL Server, SQLite, In-Memory)
 - 🔄 **Powerful Retry Policies** - Built-in linear retry, custom policies, Polly integration
 - ⏱️ **Timeout Management** - Global and per-task timeout configuration
+- 📝 **Task Execution Log Capture** (v3.0+) - Proxy logger that always logs to ILogger with optional database persistence for audit trails
 - 📊 **Real-Time Monitoring** - Local events + SignalR remote monitoring
 - 🎨 **Fluent Scheduling API** - Intuitive recurring task configuration (every minute, hour, day, week, month, cron)
 - 🔧 **Extensible Architecture** - Custom storage, retry policies, and schedulers

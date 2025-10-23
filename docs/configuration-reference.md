@@ -487,6 +487,86 @@ AddSerilog(Action<LoggerConfiguration> configure)
 }
 ```
 
+### EnablePersistentHandlerLogging
+
+**Available since:** v3.0
+
+Enables database persistence for task execution logs. When enabled, logs written via `Logger` property in handlers are stored in the database for audit trails.
+
+**Important:** Logs are ALWAYS forwarded to ILogger infrastructure (console, file, Serilog, etc.) regardless of this setting. This option only controls database persistence.
+
+**Signature:**
+```csharp
+EnablePersistentHandlerLogging(bool enabled)
+```
+
+**Parameters:**
+- `enabled` (bool): Whether to persist logs to database
+
+**Default:** `false`
+
+**Example:**
+```csharp
+.AddEverTask(opt => opt
+    .EnablePersistentHandlerLogging(true)
+    .SetMinimumPersistentLogLevel(LogLevel.Information)
+    .SetMaxPersistedLogsPerTask(1000))
+```
+
+### SetMinimumPersistentLogLevel
+
+**Available since:** v3.0
+
+Sets the minimum log level for database persistence. Logs below this level are not stored in the database but are still forwarded to ILogger.
+
+**Signature:**
+```csharp
+SetMinimumPersistentLogLevel(LogLevel level)
+```
+
+**Parameters:**
+- `level` (LogLevel): Minimum level to persist (`Trace`, `Debug`, `Information`, `Warning`, `Error`, `Critical`)
+
+**Default:** `LogLevel.Information`
+
+**Example:**
+```csharp
+// Only persist Warning and above
+.SetMinimumPersistentLogLevel(LogLevel.Warning)
+
+// Persist everything
+.SetMinimumPersistentLogLevel(LogLevel.Trace)
+```
+
+**Note:** This only affects database persistence. ILogger receives all log levels regardless of this setting.
+
+### SetMaxPersistedLogsPerTask
+
+**Available since:** v3.0
+
+Sets the maximum number of logs to persist per task execution. Once this limit is reached, additional logs are not persisted (but still forwarded to ILogger).
+
+**Signature:**
+```csharp
+SetMaxPersistedLogsPerTask(int? maxLogs)
+```
+
+**Parameters:**
+- `maxLogs` (int?): Maximum logs to persist. `null` = unlimited (not recommended for production)
+
+**Default:** `1000`
+
+**Example:**
+```csharp
+// Limit to 500 logs
+.SetMaxPersistedLogsPerTask(500)
+
+// Unlimited (use with caution!)
+.SetMaxPersistedLogsPerTask(null)
+```
+
+**Performance:** ~100 bytes per log in memory during execution. Single bulk INSERT to database after task completion.
+
 ## Monitoring Configuration
 
 ### AddSignalRMonitoring
