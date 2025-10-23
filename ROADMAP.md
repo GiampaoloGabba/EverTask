@@ -6,24 +6,6 @@ This document outlines planned features and improvements for EverTask.
 
 ## Version 3.1.0+
 
-### 📝 Task Execution Log Capture
-**Status:** Planned | **Priority:** High | **Effort:** 25-35 hours
-
-Capture and store all logs written during task execution in the database for complete audit trails and debugging.
-
-**Features:**
-- Opt-in log capture (zero overhead when disabled)
-- Store logs per task execution with full context (message, level, timestamp, exception)
-- Configurable filtering by log level and max logs per task
-- Access logs via storage API and monitoring dashboard
-- Thread-safe log collection during async handler execution
-- Integration with SignalR monitoring for real-time log viewing
-- Backward compatible (disabled by default)
-
-**Details:** See `.claude/tasks/task-execution-log-capture.md`
-
----
-
 ### 🌐 Distributed Clustering with Leader Election
 **Status:** Planned | **Priority:** High | **Effort:** 40-50 hours
 
@@ -89,6 +71,28 @@ High-priority tasks bypass rate limits and execute first.
 ---
 
 ## Completed Features
+
+### ✅ Task Execution Log Capture with Proxy Pattern
+**Completed:** v3.0.0 (2025-10-23) | **Effort:** 30 hours
+
+Implemented a comprehensive log capture system with proxy pattern architecture that always forwards logs to ILogger while optionally persisting to database.
+
+**Delivered:**
+- Proxy pattern: Logger ALWAYS forwards to ILogger infrastructure (console, file, Serilog, Application Insights)
+- Optional database persistence via `EnablePersistentHandlerLogging` configuration
+- `TaskExecutionLog` entity with cascade delete and sequence numbers
+- Thread-safe in-memory log collection with lock-based synchronization
+- Configurable filtering: `SetMinimumPersistentLogLevel`, `SetMaxPersistedLogsPerTask`
+- ILogger<THandler> injection for proper log categorization per handler type
+- Storage methods: `SaveExecutionLogsAsync()`, `GetExecutionLogsAsync()` with pagination
+- Logs persist even when tasks fail (captured in finally block)
+- Zero overhead when persistence disabled (conditional allocation)
+- Comprehensive test coverage: 13 proxy pattern unit tests + 5 storage tests + integration tests
+- Full documentation in advanced-features.md, configuration-reference.md, and cheatsheet
+
+**Related commits:** [squash merge from feature/logger]
+
+---
 
 ### ✅ Lazy Handler Resolution for Memory Optimization
 **Completed:** v3.1.0 (2025-10-22) | **Effort:** 14 hours
