@@ -237,5 +237,181 @@ public abstract class EfCoreTaskStorageTestsBase
         task[0].NextRunUtc.ShouldBe(nextRun);
     }
 
+    [Fact]
+    public async Task SaveExecutionLogsAsync_Should_PersistLogs()
+    {
+        // Arrange
+        var queued = QueuedTasks[0];
+        await _storage.Persist(queued);
+
+        var logs = new List<TaskExecutionLog>
+        {
+            new TaskExecutionLog
+            {
+                Id = Guid.NewGuid(),
+                TaskId = queued.Id,
+                TimestampUtc = DateTimeOffset.UtcNow,
+                Level = "Information",
+                Message = "Log 1",
+                SequenceNumber = 0
+            },
+            new TaskExecutionLog
+            {
+                Id = Guid.NewGuid(),
+                TaskId = queued.Id,
+                TimestampUtc = DateTimeOffset.UtcNow,
+                Level = "Warning",
+                Message = "Log 2",
+                SequenceNumber = 1
+            }
+        };
+
+        // Act
+        await _storage.SaveExecutionLogsAsync(queued.Id, logs, CancellationToken.None);
+
+        // Assert
+        var savedLogs = await _storage.GetExecutionLogsAsync(queued.Id, CancellationToken.None);
+        savedLogs.Count.ShouldBe(2);
+        savedLogs[0].Message.ShouldBe("Log 1");
+        savedLogs[0].Level.ShouldBe("Information");
+        savedLogs[1].Message.ShouldBe("Log 2");
+        savedLogs[1].Level.ShouldBe("Warning");
+    }
+
+    [Fact]
+    public async Task GetExecutionLogsAsync_Should_ReturnLogsOrderedBySequenceNumber()
+    {
+        // Arrange
+        var queued = QueuedTasks[0];
+        await _storage.Persist(queued);
+
+        var logs = new List<TaskExecutionLog>
+        {
+            new TaskExecutionLog
+            {
+                Id = Guid.NewGuid(),
+                TaskId = queued.Id,
+                TimestampUtc = DateTimeOffset.UtcNow,
+                Level = "Information",
+                Message = "First log",
+                SequenceNumber = 0
+            },
+            new TaskExecutionLog
+            {
+                Id = Guid.NewGuid(),
+                TaskId = queued.Id,
+                TimestampUtc = DateTimeOffset.UtcNow.AddSeconds(1),
+                Level = "Warning",
+                Message = "Second log",
+                SequenceNumber = 1
+            },
+            new TaskExecutionLog
+            {
+                Id = Guid.NewGuid(),
+                TaskId = queued.Id,
+                TimestampUtc = DateTimeOffset.UtcNow.AddSeconds(2),
+                Level = "Error",
+                Message = "Third log",
+                SequenceNumber = 2
+            }
+        };
+
+        await _storage.SaveExecutionLogsAsync(queued.Id, logs, CancellationToken.None);
+
+        // Act
+        var savedLogs = await _storage.GetExecutionLogsAsync(queued.Id, CancellationToken.None);
+
+        // Assert
+        savedLogs.Count.ShouldBe(3);
+        savedLogs[0].SequenceNumber.ShouldBe(0);
+        savedLogs[0].Message.ShouldBe("First log");
+        savedLogs[1].SequenceNumber.ShouldBe(1);
+        savedLogs[1].Message.ShouldBe("Second log");
+        savedLogs[2].SequenceNumber.ShouldBe(2);
+        savedLogs[2].Message.ShouldBe("Third log");
+    }
+
+    [Fact]
+    public async Task GetExecutionLogsAsync_WithPagination_Should_ReturnCorrectPage()
+    {
+        // Arrange
+        var queued = QueuedTasks[0];
+        await _storage.Persist(queued);
+
+        var logs = new List<TaskExecutionLog>();
+        for (int i = 0; i < 10; i++)
+        {
+            logs.Add(new TaskExecutionLog
+            {
+                Id = Guid.NewGuid(),
+                TaskId = queued.Id,
+                TimestampUtc = DateTimeOffset.UtcNow.AddSeconds(i),
+                Level = "Information",
+                Message = $"Log {i}",
+                SequenceNumber = i
+            });
+        }
+
+        await _storage.SaveExecutionLogsAsync(queued.Id, logs, CancellationToken.None);
+
+        // Act - get second page (skip 3, take 3)
+        var page = await _storage.GetExecutionLogsAsync(queued.Id, skip: 3, take: 3, CancellationToken.None);
+
+        // Assert
+        page.Count.ShouldBe(3);
+        page[0].SequenceNumber.ShouldBe(3);
+        page[0].Message.ShouldBe("Log 3");
+        page[1].SequenceNumber.ShouldBe(4);
+        page[1].Message.ShouldBe("Log 4");
+        page[2].SequenceNumber.ShouldBe(5);
+        page[2].Message.ShouldBe("Log 5");
+    }
+
+    [Fact]
+    public async Task GetExecutionLogsAsync_ForNonExistentTask_Should_ReturnEmptyList()
+    {
+        // Arrange
+        var nonExistentTaskId = Guid.NewGuid();
+
+        // Act
+        var logs = await _storage.GetExecutionLogsAsync(nonExistentTaskId, CancellationToken.None);
+
+        // Assert
+        logs.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task SaveExecutionLogsAsync_WithExceptionDetails_Should_PersistExceptionInfo()
+    {
+        // Arrange
+        var queued = QueuedTasks[0];
+        await _storage.Persist(queued);
+
+        var exception = new InvalidOperationException("Test exception");
+        var logs = new List<TaskExecutionLog>
+        {
+            new TaskExecutionLog
+            {
+                Id = Guid.NewGuid(),
+                TaskId = queued.Id,
+                TimestampUtc = DateTimeOffset.UtcNow,
+                Level = "Error",
+                Message = "Error occurred",
+                ExceptionDetails = exception.ToString(),
+                SequenceNumber = 0
+            }
+        };
+
+        // Act
+        await _storage.SaveExecutionLogsAsync(queued.Id, logs, CancellationToken.None);
+
+        // Assert
+        var savedLogs = await _storage.GetExecutionLogsAsync(queued.Id, CancellationToken.None);
+        savedLogs.Count.ShouldBe(1);
+        savedLogs[0].ExceptionDetails.ShouldNotBeNull();
+        savedLogs[0].ExceptionDetails!.ShouldContain("Test exception");
+        savedLogs[0].ExceptionDetails!.ShouldContain("InvalidOperationException");
+    }
+
     protected abstract Task CleanUpDatabase();
 }
