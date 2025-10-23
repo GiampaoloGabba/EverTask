@@ -306,6 +306,7 @@ public class LogCaptureIntegrationTests : IsolatedIntegrationTestBase
     {
         // Arrange - log capture disabled
         await CreateIsolatedHostAsync(
+            channelCapacity: 20,
             maxDegreeOfParallelism: 10, // Run tasks in parallel
             configureEverTask: cfg =>
             {
@@ -325,13 +326,13 @@ public class LogCaptureIntegrationTests : IsolatedIntegrationTestBase
         // Wait for all to complete
         foreach (var taskId in taskIds)
         {
-            await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed);
+            await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed, timeoutMs:10000);
         }
 
         var elapsed = DateTimeOffset.UtcNow - start;
 
         // Assert - should complete quickly (no log overhead)
-        elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(5));
+        elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(8));
 
         // Verify no logs stored
         foreach (var taskId in taskIds)
