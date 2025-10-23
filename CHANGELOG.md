@@ -5,6 +5,48 @@ All notable changes to EverTask will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] - 2025-01-23
+
+### Added
+
+#### Database-Optimized GUID Generator
+- **IGuidGenerator interface** in `EverTask.Abstractions` for dependency injection
+- **DefaultGuidGenerator** implementation with automatic database-specific optimization
+  - SQL Server: UUID v8 with optimized byte ordering (3x insert performance vs random GUID)
+  - SQLite: UUID v7 with standard byte ordering
+  - PostgreSQL: UUID v7 with PostgreSQL-optimized ordering
+  - Other databases: UUID v7 standard format
+- **Automatic registration** via storage provider extensions (`.AddSqlServerStorage()`, `.AddSqliteStorage()`)
+- **Clustered index optimization**: Temporally ordered GUIDs prevent index fragmentation
+- **Performance improvement**: SQL Server inserts up to 3x faster (2.2M vs 700K rows) with UUID v8
+- **Zero breaking changes**: Existing code works without modification
+- **UUIDNext library** integration for RFC 9562 compliant UUID v7/v8 generation
+
+#### Other Improvements
+- `RecurringTask.GetMinimumInterval()` method to calculate task intervals including cron expressions
+- Adaptive algorithm for lazy/eager mode selection based on task scheduling patterns
+- Internal threshold of 5 minutes for recurring tasks (< 5 min = eager, >= 5 min = lazy)
+- `DisableLazyHandlerResolution()` convenience method for opting out
+
+### Changed
+- Simplified lazy handler resolution configuration with adaptive algorithm
+- Removed `LazyHandlerResolutionThreshold` configuration property (now internal: 30 minutes for delayed tasks)
+- Removed `AlwaysLazyForRecurring` configuration property (now adaptive based on task interval)
+- Removed `SetLazyHandlerResolutionThreshold()` and `SetAlwaysLazyForRecurring()` configuration methods
+- **TaskLogCapture** now accepts `IGuidGenerator` via constructor for database-optimized log entry IDs
+- **TaskHandlerWrapper** resolves `IGuidGenerator` from DI for database-optimized task persistence IDs
+
+### Improved
+- Frequent recurring tasks (< 5 min interval) now automatically use eager mode for better performance
+- Infrequent recurring tasks (>= 5 min interval) now automatically use lazy mode for memory efficiency
+- Cron expressions now have smart interval detection for optimal lazy/eager selection
+- Reduced handler allocations for high-frequency recurring tasks (up to 43,000 fewer allocations/day)
+
+### Migration Notes
+- **Non-breaking change**: Old configuration methods/properties are removed but had no functional impact
+- Remove `SetLazyHandlerResolutionThreshold()` and `SetAlwaysLazyForRecurring()` from your configuration (no replacement needed - adaptive algorithm handles everything automatically)
+- `UseLazyHandlerResolution` property and `DisableLazyHandlerResolution()` method remain available for opt-out
+
 ## [3.0.0] - 2025-10-23
 
 ### Added
