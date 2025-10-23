@@ -51,27 +51,28 @@ public class EverTaskServiceConfiguration
     public bool AlwaysLazyForRecurring { get; set; } = true;
 
     /// <summary>
-    /// Gets or sets whether task execution logs should be captured and stored in the database.
-    /// When disabled, there is zero performance overhead (no allocations, no database writes).
+    /// Gets or sets whether task execution logs should be persisted to the database.
+    /// When enabled, handler logs (via Logger property) are stored in database for audit trails.
+    /// Handlers always log to standard ILogger infrastructure regardless of this setting.
     /// Default: false (opt-in feature).
     /// </summary>
-    public bool EnableLogCapture { get; set; } = false;
+    public bool EnablePersistentHandlerLogging { get; set; } = false;
 
     /// <summary>
-    /// Gets or sets the minimum log level to capture.
-    /// Logs below this level will be ignored.
-    /// Only applicable when <see cref="EnableLogCapture"/> is true.
+    /// Gets or sets the minimum log level to persist to database.
+    /// Logs below this level will not be stored (but still forwarded to ILogger).
+    /// Only applicable when <see cref="EnablePersistentHandlerLogging"/> is true.
     /// Default: LogLevel.Information.
     /// </summary>
-    public LogLevel MinimumLogLevel { get; set; } = LogLevel.Information;
+    public LogLevel MinimumPersistentLogLevel { get; set; } = LogLevel.Information;
 
     /// <summary>
-    /// Gets or sets the maximum number of logs to capture per task execution.
-    /// If a task exceeds this limit, older logs will be truncated.
+    /// Gets or sets the maximum number of logs to persist per task execution.
+    /// If a task exceeds this limit, persistence stops (oldest-first strategy).
     /// Set to null for unlimited (not recommended for production).
     /// Default: 1000.
     /// </summary>
-    public int? MaxLogsPerTask { get; set; } = 1000;
+    public int? MaxPersistedLogsPerTask { get; set; } = 1000;
 
     public EverTaskServiceConfiguration SetChannelOptions(int capacity)
     {

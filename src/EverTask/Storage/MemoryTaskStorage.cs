@@ -7,6 +7,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
 {
     private readonly List<QueuedTask> _pendingTasks = new();
     private readonly List<TaskExecutionLog> _executionLogs = new();
+    private readonly object _executionLogsLock = new();
 
     /// <inheritdoc />
     public Task<QueuedTask[]> Get(Expression<Func<QueuedTask, bool>> where, CancellationToken ct = default)
@@ -209,14 +210,17 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
 
         logger.LogInformation("Saving {Count} execution logs for task {TaskId}", logs.Count, taskId);
 
-        _executionLogs.AddRange(logs);
+        lock (_executionLogsLock)
+        {
+            _executionLogs.AddRange(logs);
+        }
         return Task.CompletedTask;
     }
 
     /// <inheritdoc />
     public Task<IReadOnlyList<TaskExecutionLog>> GetExecutionLogsAsync(Guid taskId, CancellationToken cancellationToken)
     {
-        var logs = GetExecutionLogsQuery(taskId).ToList();
+        var logs = GetExecutionLogsQuery(taskId);
         return Task.FromResult<IReadOnlyList<TaskExecutionLog>>(logs);
     }
 
@@ -231,10 +235,14 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         return Task.FromResult<IReadOnlyList<TaskExecutionLog>>(logs);
     }
 
-    private IOrderedEnumerable<TaskExecutionLog> GetExecutionLogsQuery(Guid taskId)
+    private List<TaskExecutionLog> GetExecutionLogsQuery(Guid taskId)
     {
-        return _executionLogs
-            .Where(log => log.TaskId == taskId)
-            .OrderBy(log => log.SequenceNumber);
+        lock (_executionLogsLock)
+        {
+            return _executionLogs
+                .Where(log => log.TaskId == taskId)
+                .OrderBy(log => log.SequenceNumber)
+                .ToList(); // Materialize inside lock
+        }
     }
 }

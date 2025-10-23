@@ -17,7 +17,8 @@ public class WorkerExecutor(
     IServiceScopeFactory serviceScopeFactory,
     IScheduler scheduler,
     ICancellationSourceProvider cancellationSourceProvider,
-    IEverTaskLogger<WorkerExecutor> logger) : IEverTaskWorkerExecutor
+    IEverTaskLogger<WorkerExecutor> logger,
+    ILoggerFactory loggerFactory) : IEverTaskWorkerExecutor
 {
     // Performance optimization: Cache for event data to avoid repeated serialization
     private static readonly ConditionalWeakTable<IEverTask, string> TaskJsonCache = new();
@@ -37,8 +38,9 @@ public class WorkerExecutor(
         using var     scope       = serviceScopeFactory.CreateScope();
         ITaskStorage? taskStorage = scope.ServiceProvider.GetService<ITaskStorage>();
 
-        // Create log capture instance (zero overhead if disabled)
-        var logCapture = CreateLogCapture(task.PersistenceId);
+        // Create log capture instance (always logs to ILogger, optionally persists)
+        // Will be injected with proper handler type after handler resolution
+        ITaskLogCaptureInternal? logCapture = null;
 
         // Resolve handler (lazy or eager mode)
         object? handler = null!; // Will be assigned in both if and else branches
@@ -84,10 +86,24 @@ public class WorkerExecutor(
                 handler = task.Handler!;  // Non-null assertion safe (validated at dispatch)
             }
 
+            // Create log capture with proper handler type for ILogger<THandler>
+            var handlerType = handler.GetType();
+            logCapture = CreateLogCapture(handlerType, task.PersistenceId);
+
             // Inject log capture into handler BEFORE OnStarted
-            if (handler is IEverTaskHandler<IEverTask> everTaskHandler)
+            // Find the SetLogCapture method via interface (explicitly implemented)
+            var interfaces = handlerType.GetInterfaces();
+            var handlerInterface = interfaces.FirstOrDefault(i =>
+                i.IsGenericType &&
+                i.GetGenericTypeDefinition() == typeof(IEverTaskHandler<>));
+
+            if (handlerInterface != null)
             {
-                everTaskHandler.SetLogCapture(logCapture);
+                var setLogCaptureMethod = handlerInterface.GetMethod(nameof(IEverTaskHandler<IEverTask>.SetLogCapture));
+                if (setLogCaptureMethod != null)
+                {
+                    setLogCaptureMethod.Invoke(handler, new object[] { logCapture });
+                }
             }
 
             RegisterInfo(task, "Starting task with id {0}.", task.PersistenceId);
@@ -118,24 +134,28 @@ public class WorkerExecutor(
                 await ExecuteDisposeHandler(handler);
             }
 
-            // Save execution logs (AFTER handler disposal, BEFORE recurring scheduling)
+            // Save persisted logs (AFTER handler disposal, BEFORE recurring scheduling)
             // Log save errors must NOT fail task execution
-            if (options.EnableLogCapture && taskStorage != null)
+            if (logCapture != null)
             {
                 try
                 {
-                    var logs = logCapture.GetCapturedLogs();
-                    if (logs.Count > 0)
+                    // Only save if persistence is enabled and logs were persisted
+                    if (options.EnablePersistentHandlerLogging && taskStorage != null)
                     {
-                        // Use CancellationToken.None to ensure logs are saved even if task was cancelled
-                        await taskStorage.SaveExecutionLogsAsync(task.PersistenceId, logs, CancellationToken.None)
-                            .ConfigureAwait(false);
+                        var persistedLogs = logCapture.GetPersistedLogs();
+                        if (persistedLogs.Count > 0)
+                        {
+                            // Use CancellationToken.None to ensure logs are saved even if task was cancelled
+                            await taskStorage.SaveExecutionLogsAsync(task.PersistenceId, persistedLogs, CancellationToken.None)
+                                .ConfigureAwait(false);
+                        }
                     }
                 }
                 catch (Exception logSaveEx)
                 {
                     // Log the error but don't fail the task
-                    logger.LogError(logSaveEx, "Failed to save execution logs for task {TaskId}", task.PersistenceId);
+                    logger.LogError(logSaveEx, "Failed to persist execution logs for task {TaskId}", task.PersistenceId);
                 }
             }
 
@@ -655,13 +675,20 @@ public class WorkerExecutor(
 
     /// <summary>
     /// Creates a log capture instance for the task execution.
-    /// Returns NullTaskLogCapture (zero overhead) when log capture is disabled.
+    /// Always forwards to ILogger, optionally persists to database based on configuration.
     /// </summary>
-    private ITaskLogCaptureInternal CreateLogCapture(Guid taskId)
+    private ITaskLogCaptureInternal CreateLogCapture(Type handlerType, Guid taskId)
     {
-        if (!options.EnableLogCapture)
-            return NullTaskLogCapture.Instance;
+        // Create ILogger<THandler> for the specific handler type
+        var handlerLogger = loggerFactory.CreateLogger(handlerType);
 
-        return new TaskLogCapture(taskId, options.MinimumLogLevel, options.MaxLogsPerTask);
+        // Create proxy that always logs to ILogger and optionally persists
+        return new TaskLogCapture(
+            handlerLogger,
+            taskId,
+            persistLogs: options.EnablePersistentHandlerLogging,
+            minPersistLevel: options.MinimumPersistentLogLevel,
+            maxPersistedLogs: options.MaxPersistedLogsPerTask
+        );
     }
 }

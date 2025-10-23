@@ -1,60 +1,102 @@
 namespace EverTask.Logging;
 
 /// <summary>
-/// Implementation of <see cref="ITaskLogCaptureInternal"/> that captures logs in-memory during task execution.
+/// Proxy implementation that forwards all logs to ILogger and optionally persists to database.
 /// Thread-safe for async/await handlers.
 /// </summary>
-internal sealed class TaskLogCapture(Guid taskId, LogLevel minLevel, int? maxLogs) : ITaskLogCaptureInternal
+internal sealed class TaskLogCapture : ITaskLogCaptureInternal
 {
-    private readonly List<TaskExecutionLog> _logs = new(capacity: maxLogs ?? 100);
-    private readonly object _lock = new();
+    private readonly ILogger _logger;
+    private readonly Guid _taskId;
+    private readonly bool _persistLogs;
+    private readonly LogLevel _minPersistLevel;
+    private readonly int? _maxPersistedLogs;
+    private readonly List<TaskExecutionLog>? _logs;
+    private readonly object? _lock;
     private int _sequenceNumber = 0;
 
+    public TaskLogCapture(
+        ILogger logger,
+        Guid taskId,
+        bool persistLogs,
+        LogLevel minPersistLevel,
+        int? maxPersistedLogs)
+    {
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _taskId = taskId;
+        _persistLogs = persistLogs;
+        _minPersistLevel = minPersistLevel;
+        _maxPersistedLogs = maxPersistedLogs;
+
+        // Only allocate list and lock if persistence is enabled
+        if (_persistLogs)
+        {
+            _logs = new List<TaskExecutionLog>(capacity: maxPersistedLogs ?? 100);
+            _lock = new object();
+        }
+    }
+
     public void LogTrace(string message)
-        => AddLog(LogLevel.Trace, message, null);
+        => LogWithPersistence(LogLevel.Trace, message, null);
 
     public void LogDebug(string message)
-        => AddLog(LogLevel.Debug, message, null);
+        => LogWithPersistence(LogLevel.Debug, message, null);
 
     public void LogInformation(string message)
-        => AddLog(LogLevel.Information, message, null);
+        => LogWithPersistence(LogLevel.Information, message, null);
 
     public void LogWarning(string message, Exception? exception = null)
-        => AddLog(LogLevel.Warning, message, exception);
+        => LogWithPersistence(LogLevel.Warning, message, exception);
 
     public void LogError(string message, Exception? exception = null)
-        => AddLog(LogLevel.Error, message, exception);
+        => LogWithPersistence(LogLevel.Error, message, exception);
 
     public void LogCritical(string message, Exception? exception = null)
-        => AddLog(LogLevel.Critical, message, exception);
+        => LogWithPersistence(LogLevel.Critical, message, exception);
 
-    public IReadOnlyList<TaskExecutionLog> GetCapturedLogs()
+    public IReadOnlyList<TaskExecutionLog> GetPersistedLogs()
     {
+        if (!_persistLogs || _logs == null || _lock == null)
+            return [];
+
         lock (_lock)
         {
             return _logs.ToArray(); // Return defensive copy
         }
     }
 
-    private void AddLog(LogLevel level, string message, Exception? exception)
+    private void LogWithPersistence(LogLevel level, string message, Exception? exception)
     {
-        // Filter by minimum level
-        if (level < minLevel)
+        // ALWAYS log to ILogger infrastructure (console, file, Serilog, etc.)
+        // Use the correct ILogger.Log signature
+        _logger.Log(level, new EventId(0), message, exception, (state, ex) => state?.ToString() ?? string.Empty);
+
+        // Optionally persist to database
+        if (_persistLogs && _logs != null && _lock != null)
+        {
+            PersistLog(level, message, exception);
+        }
+    }
+
+    private void PersistLog(LogLevel level, string message, Exception? exception)
+    {
+        // Filter by minimum persistence level
+        if (level < _minPersistLevel)
             return;
 
-        lock (_lock)
+        lock (_lock!)
         {
-            // Check if we've exceeded max logs
-            if (maxLogs.HasValue && _logs.Count >= maxLogs.Value)
+            // Check if we've exceeded max persisted logs
+            if (_maxPersistedLogs.HasValue && _logs!.Count >= _maxPersistedLogs.Value)
             {
-                // Stop capturing (keep oldest logs)
+                // Stop persisting (keep oldest logs)
                 return;
             }
 
             var log = new TaskExecutionLog
             {
                 Id = Guid.NewGuid(),
-                TaskId = taskId,
+                TaskId = _taskId,
                 TimestampUtc = DateTimeOffset.UtcNow,
                 Level = level.ToString(),
                 Message = message,
@@ -62,7 +104,7 @@ internal sealed class TaskLogCapture(Guid taskId, LogLevel minLevel, int? maxLog
                 SequenceNumber = _sequenceNumber++
             };
 
-            _logs.Add(log);
+            _logs!.Add(log);
         }
     }
 }

@@ -51,3 +51,32 @@ class TestInternalTaskHanlder : EverTaskHandler<InternalTestTaskRequest>
         return Task.CompletedTask;
     }
 }
+
+// ========================================
+// Log Capture Test Tasks
+// ========================================
+
+public record TaskThatLogs(string Data) : IEverTask;
+
+public class TaskThatLogsHandler : EverTaskHandler<TaskThatLogs>
+{
+    public override async Task Handle(TaskThatLogs task, CancellationToken ct)
+    {
+        Logger.LogInformation($"Processing data: {task.Data}");
+        await Task.Delay(10, ct);
+        Logger.LogInformation("Processing completed");
+    }
+}
+
+public record TaskThatFailsWithLogs : IEverTask;
+
+public class TaskThatFailsWithLogsHandler : EverTaskHandler<TaskThatFailsWithLogs>
+{
+    public override async Task Handle(TaskThatFailsWithLogs task, CancellationToken ct)
+    {
+        Logger.LogInformation("Task starting");
+        Logger.LogWarning("About to fail");
+        await Task.Delay(10, ct);
+        throw new InvalidOperationException("Test failure");
+    }
+}
