@@ -47,4 +47,11 @@ public interface IEverTaskHandler<in TTask> : IEverTaskHandlerOptions, IAsyncDis
     /// <param name="delay">Delay that was applied before this retry attempt</param>
     /// <returns>ValueTask for async operations (logging, metrics, alerting)</returns>
     ValueTask OnRetry(Guid taskId, int attemptNumber, Exception exception, TimeSpan delay);
+
+    /// <summary>
+    /// Internal method called by WorkerExecutor to inject log capture instance.
+    /// DO NOT call manually. DO NOT implement explicitly (base class handles it).
+    /// </summary>
+    /// <param name="logCapture">The log capture instance for this task execution.</param>
+    void SetLogCapture(ITaskLogCapture logCapture);
 }

@@ -87,4 +87,19 @@ public class TestTaskStorage : ITaskStorage
     {
         return Task.CompletedTask;
     }
+
+    public Task SaveExecutionLogsAsync(Guid taskId, IReadOnlyList<TaskExecutionLog> logs, CancellationToken ct = default)
+    {
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<TaskExecutionLog>> GetExecutionLogsAsync(Guid taskId, CancellationToken ct = default)
+    {
+        return Task.FromResult<IReadOnlyList<TaskExecutionLog>>(Array.Empty<TaskExecutionLog>());
+    }
+
+    public Task<IReadOnlyList<TaskExecutionLog>> GetExecutionLogsAsync(Guid taskId, int pageNumber, int pageSize, CancellationToken ct = default)
+    {
+        return Task.FromResult<IReadOnlyList<TaskExecutionLog>>(Array.Empty<TaskExecutionLog>());
+    }
 }

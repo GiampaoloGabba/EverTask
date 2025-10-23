@@ -173,10 +173,21 @@ public static class TaskWaitHelper
             task =>
             {
                 if (task == null) return false;
-                // Create a snapshot to avoid "Collection was modified" exception
-                // when RunsAudits is being modified by background threads
-                var audits = task.RunsAudits.ToArray();
-                return audits.Count(x => x != null && x.Status == QueuedTaskStatus.Completed) >= expectedRuns;
+
+                try
+                {
+                    // Create a snapshot to avoid "Collection was modified" exception
+                    // when RunsAudits is being modified by background threads.
+                    // If the collection is modified during ToArray(), catch the exception
+                    // and return false to retry the polling.
+                    var audits = task.RunsAudits.ToArray();
+                    return audits.Count(x => x != null && x.Status == QueuedTaskStatus.Completed) >= expectedRuns;
+                }
+                catch (ArgumentException)
+                {
+                    // Collection was modified during ToArray() - retry on next poll
+                    return false;
+                }
             },
             timeoutMs
         ) ?? throw new InvalidOperationException($"Task {taskId} not found in storage");

@@ -9,9 +9,10 @@ public abstract class TaskStoreEfDbContext<T>(
 {
     public string? Schema { get; } = storeOptions.Value.SchemaName;
 
-    public DbSet<QueuedTask>  QueuedTasks => Set<QueuedTask>();
-    public DbSet<StatusAudit> StatusAudit => Set<StatusAudit>();
-    public DbSet<RunsAudit>   RunsAudit   => Set<RunsAudit>();
+    public DbSet<QueuedTask>       QueuedTasks       => Set<QueuedTask>();
+    public DbSet<StatusAudit>      StatusAudit       => Set<StatusAudit>();
+    public DbSet<RunsAudit>        RunsAudit         => Set<RunsAudit>();
+    public DbSet<TaskExecutionLog> TaskExecutionLogs => Set<TaskExecutionLog>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -78,5 +79,38 @@ public abstract class TaskStoreEfDbContext<T>(
                     .Property(e => e.Status)
                     .HasConversion<string>().HasMaxLength(15)
                     .IsRequired();
+
+        // Configure TaskExecutionLog entity
+        modelBuilder.Entity<TaskExecutionLog>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+
+            entity.Property(e => e.Level)
+                .HasMaxLength(20)
+                .IsRequired();
+
+            entity.Property(e => e.Message)
+                .HasMaxLength(4000)
+                .IsRequired();
+
+            // ExceptionDetails: No MaxLength = NVARCHAR(MAX) in SQL Server, TEXT in Sqlite
+            entity.Property(e => e.ExceptionDetails);
+
+            entity.Property(e => e.TimestampUtc)
+                .IsRequired();
+
+            entity.Property(e => e.SequenceNumber)
+                .IsRequired();
+
+            // Index for efficient querying by TaskId and time
+            entity.HasIndex(e => new { e.TaskId, e.TimestampUtc })
+                .HasDatabaseName("IX_TaskExecutionLogs_TaskId_TimestampUtc");
+
+            // Foreign key with cascade delete
+            entity.HasOne(e => e.Task)
+                .WithMany(t => t.ExecutionLogs)
+                .HasForeignKey(e => e.TaskId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
     }
 }

@@ -22,6 +22,10 @@ builder.Services.AddEverTask(opt =>
        {
            opt.SetThrowIfUnableToPersist(true)
               .RegisterTasksFromAssembly(typeof(Program).Assembly);
+
+           // Enable log capture for debugging and auditing
+           opt.MinimumPersistentLogLevel = LogLevel.Information;
+           opt.MaxPersistedLogsPerTask = 1000;
        })
        // Configure the default queue for general tasks
        .ConfigureDefaultQueue(q => q

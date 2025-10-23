@@ -5,9 +5,58 @@ All notable changes to EverTask will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.1.0] - 2025-10-22
+## [3.0.0] - 2025-10-23
 
 ### Added
+
+#### Task Execution Log Capture with Proxy Pattern
+- **Proxy logger architecture**: Logger ALWAYS forwards to ILogger infrastructure (console, file, Serilog, Application Insights) with optional database persistence for audit trails
+  - Configure via `EnablePersistentHandlerLogging`, `SetMinimumPersistentLogLevel`, and `SetMaxPersistedLogsPerTask` in `EverTaskServiceConfiguration`
+  - Handlers use the built-in `Logger` property (from `EverTaskHandler<T>`)
+  - Logs saved to `TaskExecutionLogs` table with cascade delete (foreign key to `QueuedTasks`)
+  - Retrieve logs via `storage.GetPersistedLogsAsync(taskId)` with pagination support
+  - Zero overhead when persistence disabled (conditional allocation + minimal forwarding cost)
+  - Logs persist even when tasks fail (captured in finally block)
+  - Thread-safe in-memory collection with lock-based synchronization
+  - Includes exception details (stack traces) when logging errors
+  - Sequence numbers for log ordering
+  - Storage extension methods: `GetExecutionLogsAsync(taskId, skip, take)`
+  - ILogger<THandler> injection for proper log categorization
+
+**Architecture**:
+```
+Handler.Logger.LogInformation("msg")
+         ↓
+   TaskLogCapture (proxy)
+    ↙          ↘
+ILogger        Database
+(always)     (optional)
+```
+
+**Example Configuration**:
+```csharp
+services.AddEverTask(cfg =>
+{
+    cfg.RegisterTasksFromAssembly(typeof(Program).Assembly);
+    cfg.EnablePersistentHandlerLogging(true);                    // Opt-in DB persistence
+    cfg.SetMinimumPersistentLogLevel(LogLevel.Information);      // Filter persisted logs
+    cfg.SetMaxPersistedLogsPerTask(1000);                        // Prevent unbounded growth
+})
+.AddSqlServerStorage(connectionString);
+```
+
+**Example Usage in Handler**:
+```csharp
+public class SendEmailHandler : EverTaskHandler<SendEmailTask>
+{
+    public override async Task Handle(SendEmailTask task, CancellationToken ct)
+    {
+        Logger.LogInformation($"Sending email to {task.Recipient}");
+        await _emailService.SendAsync(task.Recipient, task.Subject, task.Body);
+        Logger.LogInformation("Email sent successfully");
+    }
+}
+```
 
 #### Lazy Handler Resolution for Memory Optimization
 - **Lazy handler resolution**: Handlers disposed after dispatch, re-created at execution time

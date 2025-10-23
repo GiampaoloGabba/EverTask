@@ -254,6 +254,39 @@ Task Dispatch -> Persistence -> Queue Selection -> Execution -> Monitoring
 5. Task dequeued by `WorkerExecutor`, blacklist checked (`WorkerExecutor.cs:32-33`)
 6. Task skipped, blacklist entry removed (`WorkerExecutor.cs:70`)
 
+### Log Capture System (`Logging/`)
+
+**Purpose**: Captures logs written during task execution and persists them to storage for debugging/auditing.
+
+**Components**:
+- `ITaskLogCapture` - Public interface with `LogInformation`, `LogWarning`, etc. methods
+- `TaskLogCapture` - Thread-safe in-memory collector with lock-based synchronization
+- `NullTaskLogCapture` - Null object pattern singleton (zero overhead when disabled)
+- `TaskExecutionLog` - Entity with FK to `QueuedTask` (cascade delete)
+
+**Lifecycle** (`WorkerExecutor.cs:21-62`):
+1. WorkerExecutor creates log capture based on configuration (line ~30)
+   - Disabled → `NullTaskLogCapture.Instance` (singleton, JIT-optimized)
+   - Enabled → `new TaskLogCapture(taskId, minLevel, maxLogs)`
+2. Injects into handler via `handler.SetLogCapture(logCapture)` (line ~38)
+3. Handler uses `Logger` property (from `EverTaskHandler<T>`)
+4. Logs saved to database in finally block via `storage.SaveExecutionLogsAsync()` (line ~55)
+
+**Performance**:
+- **Disabled**: Zero overhead - NullTaskLogCapture methods are no-ops, JIT eliminates dead code
+- **Enabled**: ~100 bytes per log × max logs (default 1000 = ~100KB in-memory)
+- **Database**: Single bulk INSERT after task completion (all logs in one transaction)
+
+**Storage Schema**:
+- Entity: `TaskExecutionLog` (Id, TaskId, TimestampUtc, Level, Message, ExceptionDetails, SequenceNumber)
+- Index: `(TaskId, TimestampUtc)` for efficient retrieval
+- Cascade Delete: QueuedTask → TaskExecutionLog[] (prevents orphaned logs)
+
+**Configuration** (`EverTaskServiceConfiguration.cs`):
+- `EnableLogCapture` (bool, default: `false`) - Opt-in feature
+- `MinimumLogLevel` (LogLevel, default: `Information`) - Filter log level
+- `MaxLogsPerTask` (int?, default: `1000`) - Prevent unbounded growth (`null` = unlimited)
+
 ## Dependencies
 
 ### Core NuGet Packages (from `EverTask.csproj`)

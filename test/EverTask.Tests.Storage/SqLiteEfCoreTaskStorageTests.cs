@@ -39,6 +39,7 @@ public class SqliteEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IDisposa
 
     protected override async Task CleanUpDatabase()
     {
+        _dbContext.TaskExecutionLogs.RemoveRange(_dbContext.TaskExecutionLogs.ToList());
         _dbContext.RunsAudit.RemoveRange(_dbContext.RunsAudit.ToList());
         _dbContext.StatusAudit.RemoveRange(_dbContext.StatusAudit.ToList());
         _dbContext.QueuedTasks.RemoveRange(_dbContext.QueuedTasks.ToList());

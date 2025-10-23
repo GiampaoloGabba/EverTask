@@ -73,6 +73,21 @@ Quick reference for all EverTask configuration options.
 ```
 - **Package:** `EverTask.Logging.Serilog`
 
+### Task Execution Log Capture (v3.0+)
+```csharp
+.EnablePersistentHandlerLogging(true)                  // Enable DB persistence
+.SetMinimumPersistentLogLevel(LogLevel.Information)    // Min level to persist
+.SetMaxPersistedLogsPerTask(1000)                       // Max logs per task
+```
+
+| Method | Parameters | Default | Notes |
+|--------|-----------|---------|-------|
+| `EnablePersistentHandlerLogging` | `bool` | `false` | Enable DB persistence. **Logs always go to ILogger!** |
+| `SetMinimumPersistentLogLevel` | `LogLevel` | `Information` | Min level to persist (not ILogger) |
+| `SetMaxPersistedLogsPerTask` | `int?` | `1000` | Max logs per task. `null` = unlimited |
+
+**Key Point:** Logs are ALWAYS forwarded to ILogger (console, file, Serilog, etc.) regardless of persistence settings.
+
 ## Monitoring Configuration
 
 ### SignalR

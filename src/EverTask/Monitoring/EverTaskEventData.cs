@@ -8,9 +8,10 @@ public record EverTaskEventData(
     string TaskHandlerType,
     string TaskParameters,
     string Message,
-    string? Exception = null)
+    string? Exception = null,
+    IReadOnlyList<TaskExecutionLog>? ExecutionLogs = null)
 {
-    internal static EverTaskEventData FromExecutor(TaskHandlerExecutor executor, SeverityLevel severity, string message, Exception? exception)
+    internal static EverTaskEventData FromExecutor(TaskHandlerExecutor executor, SeverityLevel severity, string message, Exception? exception, IReadOnlyList<TaskExecutionLog>? executionLogs = null)
     {
         // Handler type: get from Handler instance (eager) or HandlerTypeName (lazy)
         string handlerType;
@@ -36,7 +37,8 @@ public record EverTaskEventData(
             handlerType,
             JsonConvert.SerializeObject(executor.Task),
             message,
-            exception?.ToDetailedString());
+            exception?.ToDetailedString(),
+            executionLogs);
     }
 };
 

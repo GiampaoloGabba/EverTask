@@ -329,10 +329,11 @@ public class MultiQueueIntegrationTests : IsolatedIntegrationTestBase
 
         // Assert - Wait for all 6 tasks to complete (more efficient than waiting one by one)
         // 3 parallel tasks (~200ms concurrent) + 3 sequential tasks (~600ms sequential) = ~800ms + overhead
+        // Adaptive timeout: Local 5s (plenty of margin), CI 20s (coverage overhead)
         await TaskWaitHelper.WaitUntilAsync(
             async () => await Storage.GetAll(),
             tasks => tasks.Count(t => allTaskIds.Contains(t.Id) && t.Status == QueuedTaskStatus.Completed) >= 6,
-            timeoutMs: 3000 // Reduced from 20s with isolated test infrastructure
+            timeoutMs: TestEnvironment.GetTimeout(localMs: 5000, ciMs: 20000)
         );
 
         var tasks = await Storage.GetAll();

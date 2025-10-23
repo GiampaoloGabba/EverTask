@@ -146,6 +146,42 @@ namespace EverTask.Storage.Sqlite.Migrations
                     b.ToTable("StatusAudit");
                 });
 
+            modelBuilder.Entity("EverTask.Storage.TaskExecutionLog", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ExceptionDetails")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Level")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Message")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("SequenceNumber")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("TaskId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("TimestampUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TaskId", "TimestampUtc")
+                        .HasDatabaseName("IX_TaskExecutionLogs_TaskId_TimestampUtc");
+
+                    b.ToTable("TaskExecutionLogs");
+                });
+
             modelBuilder.Entity("EverTask.Storage.RunsAudit", b =>
                 {
                     b.HasOne("EverTask.Storage.QueuedTask", "QueuedTask")
@@ -168,8 +204,21 @@ namespace EverTask.Storage.Sqlite.Migrations
                     b.Navigation("QueuedTask");
                 });
 
+            modelBuilder.Entity("EverTask.Storage.TaskExecutionLog", b =>
+                {
+                    b.HasOne("EverTask.Storage.QueuedTask", "Task")
+                        .WithMany("ExecutionLogs")
+                        .HasForeignKey("TaskId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Task");
+                });
+
             modelBuilder.Entity("EverTask.Storage.QueuedTask", b =>
                 {
+                    b.Navigation("ExecutionLogs");
+
                     b.Navigation("RunsAudits");
 
                     b.Navigation("StatusAudits");
