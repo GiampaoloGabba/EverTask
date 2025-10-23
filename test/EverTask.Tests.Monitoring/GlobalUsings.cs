@@ -1,0 +1,9 @@
+global using EverTask.Abstractions;
+global using EverTask.Monitoring;
+global using EverTask.Worker;
+global using Microsoft.Extensions.DependencyInjection;
+global using Microsoft.Extensions.Hosting;
+global using Microsoft.Extensions.Options;
+global using Moq;
+global using Shouldly;
+global using Xunit;
