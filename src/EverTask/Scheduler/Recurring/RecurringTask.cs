@@ -83,6 +83,59 @@ public class RecurringTask
         return next;
     }
 
+    /// <summary>
+    /// Calculates the minimum interval for this recurring task.
+    /// For cron expressions, calculates the interval between the next two occurrences.
+    /// For interval-based tasks, returns the configured interval.
+    /// </summary>
+    /// <returns>Minimum interval between executions</returns>
+    public TimeSpan GetMinimumInterval()
+    {
+        // Cron: calculate interval between next two occurrences
+        if (CronInterval != null && !string.IsNullOrEmpty(CronInterval.CronExpression))
+        {
+            var now = DateTimeOffset.UtcNow;
+            var first = CronInterval.GetNextOccurrence(now);
+            if (!first.HasValue)
+            {
+                return TimeSpan.FromHours(1); // Fallback conservative
+            }
+
+            var second = CronInterval.GetNextOccurrence(first.Value);
+            if (!second.HasValue)
+            {
+                return TimeSpan.FromHours(1); // Fallback conservative
+            }
+
+            var interval = second.Value - first.Value;
+            return interval;
+        }
+
+        // Interval fields: use the most granular interval
+        if (SecondInterval?.Interval > 0)
+        {
+            return TimeSpan.FromSeconds(SecondInterval.Interval);
+        }
+        if (MinuteInterval?.Interval > 0)
+        {
+            return TimeSpan.FromMinutes(MinuteInterval.Interval);
+        }
+        if (HourInterval?.Interval > 0)
+        {
+            return TimeSpan.FromHours(HourInterval.Interval);
+        }
+        if (DayInterval?.Interval > 0)
+        {
+            return TimeSpan.FromDays(DayInterval.Interval);
+        }
+        if (MonthInterval?.Interval > 0)
+        {
+            return TimeSpan.FromDays(30); // Conservative approximation
+        }
+
+        return TimeSpan.FromMinutes(5); // Safe default
+    }
+
     private DateTimeOffset? GetNextOccurrence(DateTimeOffset current)
     {
         if (!string.IsNullOrEmpty(CronInterval?.CronExpression))

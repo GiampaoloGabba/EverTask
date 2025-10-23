@@ -206,7 +206,7 @@ public class Dispatcher(
     }
 
     /// <summary>
-    /// Determines if a task should use lazy handler resolution based on configuration and scheduling.
+    /// Determines if a task should use lazy handler resolution based on adaptive algorithm.
     /// </summary>
     /// <param name="executionTime">Scheduled execution time (null for immediate)</param>
     /// <param name="recurring">Recurring task configuration (null for one-time)</param>
@@ -215,17 +215,23 @@ public class Dispatcher(
     {
         // Feature disabled globally
         if (!serviceConfiguration.UseLazyHandlerResolution)
+        {
+            logger.LogDebug("Lazy handler resolution disabled globally (UseLazyHandlerResolution = false)");
             return false;
+        }
 
-        // Recurring tasks: use AlwaysLazyForRecurring setting
+        // Recurring tasks: adaptive based on interval
         if (recurring != null)
-            return serviceConfiguration.AlwaysLazyForRecurring;
+        {
+            var minInterval = recurring.GetMinimumInterval();
+            return minInterval >= TimeSpan.FromMinutes(5);
+        }
 
-        // Delayed tasks: check if delay exceeds threshold
+        // Delayed tasks: lazy if delay >= 30 minutes
         if (executionTime.HasValue)
         {
             var delay = executionTime.Value - DateTimeOffset.UtcNow;
-            return delay > serviceConfiguration.LazyHandlerResolutionThreshold;
+            return delay >= TimeSpan.FromMinutes(30);
         }
 
         // Immediate tasks: always eager
