@@ -6,6 +6,64 @@ This document outlines planned features and improvements for EverTask.
 
 ## Version 3.1.0+
 
+### 📊 Web Dashboard and Management API
+**Status:** In Progress | **Priority:** High | **Effort:** 35-45 hours
+
+Modern web dashboard and REST API for monitoring and managing EverTask instances.
+
+**Phase 1 - Monitoring (In Progress):**
+- Real-time task queue visualization
+- Task execution history and statistics
+- Status monitoring (queued, running, completed, failed)
+- Performance metrics and charts
+- Search and filtering capabilities
+- Task execution logs viewer
+
+**Phase 2 - Management (Planned):**
+- Task lifecycle management (start, stop, pause, resume)
+- Manual task dispatch with parameter input
+- Recurring task schedule editor
+- Configuration management
+- Bulk operations (cancel multiple tasks, retry failed tasks)
+- Task prioritization controls
+
+**Technical Stack:**
+- ASP.NET Core Web API with OpenAPI/Swagger
+- Modern SPA framework (React/Vue/Blazor)
+- SignalR for real-time updates
+- EverTask.Monitor.AspnetCore.SignalR integration
+
+---
+
+### 📚 Enhanced Examples and Showcase
+**Status:** Planned | **Priority:** Medium | **Effort:** 15-20 hours
+
+Comprehensive example projects demonstrating all EverTask capabilities in real-world scenarios.
+
+**Features:**
+- Complete sample applications (not just code snippets)
+- Real-world use cases (e-commerce order processing, email campaigns, data pipelines)
+- Showcase of all features:
+  - Immediate, delayed, and recurring tasks
+  - Retry policies with exception filtering
+  - Custom retry policies and timeout strategies
+  - Multi-queue configuration
+  - Task execution log capture
+  - Monitoring with SignalR
+  - Storage provider comparison (Memory, SQLite, SQL Server)
+- Performance benchmarking examples
+- Best practices demonstrations
+- Docker Compose setup for quick start
+- Detailed README per example with architecture diagrams
+
+**Example Projects:**
+- `EverTask.Example.ECommerce` - Order processing pipeline
+- `EverTask.Example.EmailCampaign` - Bulk email sender with rate limiting
+- `EverTask.Example.DataPipeline` - ETL workflow with error handling
+- `EverTask.Example.Monitoring` - Dashboard integration showcase
+
+---
+
 ### 🌐 Distributed Clustering with Leader Election
 **Status:** Planned | **Priority:** High | **Effort:** 40-50 hours
 
