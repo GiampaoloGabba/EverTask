@@ -120,11 +120,15 @@ public class WorkerExecutor(
 
             await ExecuteCallback(GetCompletedCallback(task, handler), task, "Completed").ConfigureAwait(false);
 
-            RegisterInfo(task, "Task with id {0} was completed in {1} ms.", task.PersistenceId, executionTime);
+            // Get logs for completion event (if capture is enabled)
+            var capturedLogs = logCapture?.GetPersistedLogs();
+            RegisterInfo(task, capturedLogs, "Task with id {0} was completed in {1} ms.", task.PersistenceId, executionTime);
         }
         catch (Exception ex)
         {
-            await HandleExceptionAsync(ex, task, handler, serviceToken, taskStorage);
+            // Get logs for error event (if capture is enabled)
+            var capturedLogs = logCapture?.GetPersistedLogs();
+            await HandleExceptionAsync(ex, task, handler, capturedLogs, serviceToken, taskStorage);
         }
         finally
         {
@@ -461,7 +465,9 @@ public class WorkerExecutor(
         }
     }
 
-    private async Task HandleExceptionAsync(Exception ex, TaskHandlerExecutor task, object handler, CancellationToken serviceToken,
+    private async Task HandleExceptionAsync(Exception ex, TaskHandlerExecutor task, object handler,
+                                            IReadOnlyList<TaskExecutionLog>? executionLogs,
+                                            CancellationToken serviceToken,
                                             ITaskStorage? taskStorage)
     {
         if (ex is OperationCanceledException oce)
@@ -477,7 +483,7 @@ public class WorkerExecutor(
             await ExecuteCallback(GetErrorCallback(task, handler), task, oce,
                 $"Task with id {task.PersistenceId} was cancelled").ConfigureAwait(false);
 
-            RegisterWarning(oce, task, "Task with id {0} was cancelled by service while stopping.", task.PersistenceId);
+            RegisterWarning(oce, task, executionLogs, "Task with id {0} was cancelled by service while stopping.", task.PersistenceId);
         }
         else
         {
@@ -489,7 +495,7 @@ public class WorkerExecutor(
             await ExecuteCallback(GetErrorCallback(task, handler), task, ex,
                 $"Error occurred executing the task with id {task.PersistenceId}").ConfigureAwait(false);
 
-            RegisterError(ex, task, "Error occurred executing task with id {0}.", task.PersistenceId);
+            RegisterError(ex, task, executionLogs, "Error occurred executing task with id {0}.", task.PersistenceId);
         }
     }
 
@@ -560,19 +566,30 @@ public class WorkerExecutor(
 
     #region Logging and event pubblishing
 
+    private void RegisterInfo(TaskHandlerExecutor executor, IReadOnlyList<TaskExecutionLog>? executionLogs, string message, params object[] messageArgs) =>
+        RegisterEvent(SeverityLevel.Information, executor, message, null, executionLogs, messageArgs);
+
     private void RegisterInfo(TaskHandlerExecutor executor, string message, params object[] messageArgs) =>
-        RegisterEvent(SeverityLevel.Information, executor, message, null, messageArgs);
+        RegisterEvent(SeverityLevel.Information, executor, message, null, null, messageArgs);
+
+    private void RegisterWarning(Exception? exception, TaskHandlerExecutor executor, IReadOnlyList<TaskExecutionLog>? executionLogs, string message,
+                                 params object[] messageArgs) =>
+        RegisterEvent(SeverityLevel.Warning, executor, message, exception, executionLogs, messageArgs);
 
     private void RegisterWarning(Exception? exception, TaskHandlerExecutor executor, string message,
                                  params object[] messageArgs) =>
-        RegisterEvent(SeverityLevel.Warning, executor, message, exception, messageArgs);
+        RegisterEvent(SeverityLevel.Warning, executor, message, exception, null, messageArgs);
+
+    private void RegisterError(Exception exception, TaskHandlerExecutor executor, IReadOnlyList<TaskExecutionLog>? executionLogs, string message,
+                               params object[] messageArgs) =>
+        RegisterEvent(SeverityLevel.Error, executor, message, exception, executionLogs, messageArgs);
 
     private void RegisterError(Exception exception, TaskHandlerExecutor executor, string message,
                                params object[] messageArgs) =>
-        RegisterEvent(SeverityLevel.Error, executor, message, exception, messageArgs);
+        RegisterEvent(SeverityLevel.Error, executor, message, exception, null, messageArgs);
 
     private void RegisterEvent(SeverityLevel severity, TaskHandlerExecutor executor, string message,
-                               Exception? exception = null, params object[] messageArgs)
+                               Exception? exception = null, IReadOnlyList<TaskExecutionLog>? executionLogs = null, params object[] messageArgs)
     {
         // Format message once for both logging and event publishing
         // This avoids "Message template should be compile time constant" warning
@@ -596,7 +613,7 @@ public class WorkerExecutor(
 
         try
         {
-            PublishEvent(executor, severity, formattedMessage, exception);
+            PublishEvent(executor, severity, formattedMessage, exception, executionLogs);
         }
         catch (Exception e)
         {

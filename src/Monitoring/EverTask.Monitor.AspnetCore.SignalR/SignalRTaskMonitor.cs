@@ -3,6 +3,7 @@ using EverTask.Monitoring;
 using EverTask.Worker;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace EverTask.Monitor.AspnetCore.SignalR;
 
@@ -11,13 +12,16 @@ public class SignalRTaskMonitor : ITaskMonitor
     private readonly IEverTaskWorkerExecutor _executor;
     private readonly IHubContext<TaskMonitorHub> _hubContext;
     private readonly IEverTaskLogger<SignalRTaskMonitor> _logger;
+    private readonly SignalRMonitoringOptions _options;
 
     public SignalRTaskMonitor(IEverTaskWorkerExecutor executor, IHubContext<TaskMonitorHub> hubContext,
-                              IEverTaskLogger<SignalRTaskMonitor> logger)
+                              IEverTaskLogger<SignalRTaskMonitor> logger,
+                              IOptions<SignalRMonitoringOptions> options)
     {
         _executor   = executor;
         _hubContext = hubContext;
         _logger     = logger;
+        _options    = options.Value;
     }
 
     public void SubScribe()
@@ -29,7 +33,13 @@ public class SignalRTaskMonitor : ITaskMonitor
     private async Task OnTaskEventOccurredAsync(EverTaskEventData eventData)
     {
         _logger.LogInformation("EverTask SignalR MonitorHub, message received: {@eventData}", eventData);
-        await _hubContext.Clients.All.SendAsync("EverTaskEvent", eventData).ConfigureAwait(false);
+
+        // Filter execution logs based on configuration
+        var filteredEventData = _options.IncludeExecutionLogs
+            ? eventData // Send with logs
+            : eventData with { ExecutionLogs = null }; // Strip logs for network efficiency
+
+        await _hubContext.Clients.All.SendAsync("EverTaskEvent", filteredEventData).ConfigureAwait(false);
     }
 
     public void Unsubscribe()
