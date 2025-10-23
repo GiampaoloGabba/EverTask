@@ -23,9 +23,9 @@ public class ExecutionLogsEventPropagationTests
             {
                 services.AddEverTask(cfg =>
                 {
-                    cfg.RegisterTasksFromAssembly(typeof(ExecutionLogsEventPropagationTests).Assembly);
-                    cfg.EnablePersistentHandlerLogging = true; // Enable log capture
-                    cfg.MinimumPersistentLogLevel = LogLevel.Information;
+                    cfg.RegisterTasksFromAssembly(typeof(ExecutionLogsEventPropagationTests).Assembly)
+                        .WithPersistentLogger(log => log // Enable log capture
+                            .SetMinimumLevel(LogLevel.Information));
                 })
                 .AddMemoryStorage();
 
@@ -95,9 +95,9 @@ public class ExecutionLogsEventPropagationTests
             {
                 services.AddEverTask(cfg =>
                 {
-                    cfg.RegisterTasksFromAssembly(typeof(ExecutionLogsEventPropagationTests).Assembly);
-                    cfg.EnablePersistentHandlerLogging = true; // Enable log capture
-                    cfg.MinimumPersistentLogLevel = LogLevel.Information;
+                    cfg.RegisterTasksFromAssembly(typeof(ExecutionLogsEventPropagationTests).Assembly)
+                        .WithPersistentLogger(log => log // Enable log capture
+                            .SetMinimumLevel(LogLevel.Information));
                 })
                 .AddMemoryStorage();
 
@@ -172,8 +172,8 @@ public class ExecutionLogsEventPropagationTests
             {
                 services.AddEverTask(cfg =>
                 {
-                    cfg.RegisterTasksFromAssembly(typeof(ExecutionLogsEventPropagationTests).Assembly);
-                    cfg.EnablePersistentHandlerLogging = false; // DISABLED
+                    cfg.RegisterTasksFromAssembly(typeof(ExecutionLogsEventPropagationTests).Assembly)
+                        .WithPersistentLogger(log => log.Disable()); // DISABLED
                 })
                 .AddMemoryStorage();
 
@@ -230,9 +230,9 @@ public class ExecutionLogsEventPropagationTests
             {
                 services.AddEverTask(cfg =>
                 {
-                    cfg.RegisterTasksFromAssembly(typeof(ExecutionLogsEventPropagationTests).Assembly);
-                    cfg.EnablePersistentHandlerLogging = true; // Enable log capture
-                    cfg.MinimumPersistentLogLevel = LogLevel.Information;
+                    cfg.RegisterTasksFromAssembly(typeof(ExecutionLogsEventPropagationTests).Assembly)
+                        .WithPersistentLogger(log => log // Enable log capture
+                            .SetMinimumLevel(LogLevel.Information));
                 })
                 .AddMemoryStorage()
                 .AddSignalRMonitoring(options =>

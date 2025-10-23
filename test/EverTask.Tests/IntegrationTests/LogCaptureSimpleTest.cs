@@ -13,8 +13,8 @@ public class LogCaptureSimpleTest : IsolatedIntegrationTestBase
         await CreateIsolatedHostAsync(
             configureEverTask: cfg =>
             {
-                cfg.EnablePersistentHandlerLogging = true;
-                cfg.MinimumPersistentLogLevel = LogLevel.Information;
+                cfg.WithPersistentLogger(log => log
+                    .SetMinimumLevel(LogLevel.Information));
             });
 
         // Act
@@ -36,7 +36,7 @@ public class LogCaptureSimpleTest : IsolatedIntegrationTestBase
         await CreateIsolatedHostAsync(
             configureEverTask: cfg =>
             {
-                cfg.EnablePersistentHandlerLogging = false;
+                cfg.WithPersistentLogger(log => log.Disable());
             });
 
         // Act
@@ -55,8 +55,8 @@ public class LogCaptureSimpleTest : IsolatedIntegrationTestBase
         await CreateIsolatedHostAsync(
             configureEverTask: cfg =>
             {
-                cfg.EnablePersistentHandlerLogging = true;
-                cfg.MinimumPersistentLogLevel = LogLevel.Information;
+                cfg.WithPersistentLogger(log => log
+                    .SetMinimumLevel(LogLevel.Information));
                 // Default retry policy: 3 retries (1 initial + 3 retries = 4 attempts total)
                 // 2 logs per attempt × 4 attempts = 8 logs total
             });

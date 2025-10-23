@@ -38,28 +38,11 @@ public class EverTaskServiceConfiguration
     public bool UseLazyHandlerResolution { get; set; } = true;
 
     /// <summary>
-    /// Gets or sets whether task execution logs should be persisted to the database.
-    /// When enabled, handler logs (via Logger property) are stored in database for audit trails.
-    /// Handlers always log to standard ILogger infrastructure regardless of this setting.
-    /// Default: false (opt-in feature).
+    /// Configuration for persistent handler logging.
+    /// When enabled, logs written via Logger property in handlers are stored in database for audit trails.
+    /// Logs are ALWAYS forwarded to ILogger infrastructure regardless of this setting.
     /// </summary>
-    public bool EnablePersistentHandlerLogging { get; set; } = false;
-
-    /// <summary>
-    /// Gets or sets the minimum log level to persist to database.
-    /// Logs below this level will not be stored (but still forwarded to ILogger).
-    /// Only applicable when <see cref="EnablePersistentHandlerLogging"/> is true.
-    /// Default: LogLevel.Information.
-    /// </summary>
-    public LogLevel MinimumPersistentLogLevel { get; set; } = LogLevel.Information;
-
-    /// <summary>
-    /// Gets or sets the maximum number of logs to persist per task execution.
-    /// If a task exceeds this limit, persistence stops (oldest-first strategy).
-    /// Set to null for unlimited (not recommended for production).
-    /// Default: 1000.
-    /// </summary>
-    public int? MaxPersistedLogsPerTask { get; set; } = 1000;
+    public PersistentLoggerOptions PersistentLogger { get; } = new();
 
     public EverTaskServiceConfiguration SetChannelOptions(int capacity)
     {
@@ -140,6 +123,20 @@ public class EverTaskServiceConfiguration
     public EverTaskServiceConfiguration DisableLazyHandlerResolution()
     {
         UseLazyHandlerResolution = false;
+        return this;
+    }
+
+    /// <summary>
+    /// Configures persistent handler logging options.
+    /// Automatically enables database persistence - logs written via Logger property in handlers are stored in database for audit trails.
+    /// Logs are ALWAYS forwarded to ILogger infrastructure (console, file, Serilog) regardless of this setting.
+    /// </summary>
+    /// <param name="configure">Action to configure persistent logger options</param>
+    /// <returns>The configuration instance for method chaining</returns>
+    public EverTaskServiceConfiguration WithPersistentLogger(Action<PersistentLoggerOptions> configure)
+    {
+        PersistentLogger.Enabled = true; // Auto-enable when WithPersistentLogger is called
+        configure(PersistentLogger);
         return this;
     }
 

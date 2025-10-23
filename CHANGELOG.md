@@ -53,7 +53,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Task Execution Log Capture with Proxy Pattern
 - **Proxy logger architecture**: Logger ALWAYS forwards to ILogger infrastructure (console, file, Serilog, Application Insights) with optional database persistence for audit trails
-  - Configure via `EnablePersistentHandlerLogging`, `SetMinimumPersistentLogLevel`, and `SetMaxPersistedLogsPerTask` in `EverTaskServiceConfiguration`
+  - Configure via fluent `.WithPersistentLogger()` API that auto-enables persistence
+  - Options: `.SetMinimumLevel()`, `.SetMaxLogsPerTask()`, `.Disable()`
   - Handlers use the built-in `Logger` property (from `EverTaskHandler<T>`)
   - Logs saved to `TaskExecutionLogs` table with cascade delete (foreign key to `QueuedTasks`)
   - Retrieve logs via `storage.GetPersistedLogsAsync(taskId)` with pagination support
@@ -79,10 +80,10 @@ ILogger        Database
 ```csharp
 services.AddEverTask(cfg =>
 {
-    cfg.RegisterTasksFromAssembly(typeof(Program).Assembly);
-    cfg.EnablePersistentHandlerLogging(true);                    // Opt-in DB persistence
-    cfg.SetMinimumPersistentLogLevel(LogLevel.Information);      // Filter persisted logs
-    cfg.SetMaxPersistedLogsPerTask(1000);                        // Prevent unbounded growth
+    cfg.RegisterTasksFromAssembly(typeof(Program).Assembly)
+        .WithPersistentLogger(log => log           // Auto-enables DB persistence
+            .SetMinimumLevel(LogLevel.Information) // Filter persisted logs
+            .SetMaxLogsPerTask(1000));             // Prevent unbounded growth
 })
 .AddSqlServerStorage(connectionString);
 ```

@@ -487,42 +487,44 @@ AddSerilog(Action<LoggerConfiguration> configure)
 }
 ```
 
-### EnablePersistentHandlerLogging
+### WithPersistentLogger
 
 **Available since:** v3.0
 
-Enables database persistence for task execution logs. When enabled, logs written via `Logger` property in handlers are stored in the database for audit trails.
+Configures persistent handler logging options. When enabled, logs written via `Logger` property in handlers are stored in the database for audit trails.
 
 **Important:** Logs are ALWAYS forwarded to ILogger infrastructure (console, file, Serilog, etc.) regardless of this setting. This option only controls database persistence.
 
 **Signature:**
 ```csharp
-EnablePersistentHandlerLogging(bool enabled)
+WithPersistentLogger(Action<PersistentLoggerOptions> configure)
 ```
 
 **Parameters:**
-- `enabled` (bool): Whether to persist logs to database
+- `configure` (Action): Configuration action for persistent logger options
 
-**Default:** `false`
+**Default:** Disabled
 
 **Example:**
 ```csharp
 .AddEverTask(opt => opt
-    .EnablePersistentHandlerLogging(true)
-    .SetMinimumPersistentLogLevel(LogLevel.Information)
-    .SetMaxPersistedLogsPerTask(1000))
+    .WithPersistentLogger(log => log
+        .SetMinimumLevel(LogLevel.Information)
+        .SetMaxLogsPerTask(1000)))
 ```
 
-### SetMinimumPersistentLogLevel
+**Note:** Calling `.WithPersistentLogger()` automatically enables database persistence. You don't need to call `.Enable()`.
 
-**Available since:** v3.0
+**PersistentLoggerOptions Methods:**
 
-Sets the minimum log level for database persistence. Logs below this level are not stored in the database but are still forwarded to ILogger.
-
-**Signature:**
+#### Disable()
+Disables persistent logging to the database (logs still go to ILogger). Use this if you want to temporarily disable persistence.
 ```csharp
-SetMinimumPersistentLogLevel(LogLevel level)
+.WithPersistentLogger(log => log.Disable())
 ```
+
+#### SetMinimumLevel(LogLevel level)
+Sets the minimum log level for database persistence. Logs below this level are not stored in the database but are still forwarded to ILogger.
 
 **Parameters:**
 - `level` (LogLevel): Minimum level to persist (`Trace`, `Debug`, `Information`, `Warning`, `Error`, `Critical`)
@@ -531,25 +533,14 @@ SetMinimumPersistentLogLevel(LogLevel level)
 
 **Example:**
 ```csharp
-// Only persist Warning and above
-.SetMinimumPersistentLogLevel(LogLevel.Warning)
-
-// Persist everything
-.SetMinimumPersistentLogLevel(LogLevel.Trace)
+.WithPersistentLogger(log => log
+    .SetMinimumLevel(LogLevel.Warning)) // Only persist Warning and above
 ```
 
 **Note:** This only affects database persistence. ILogger receives all log levels regardless of this setting.
 
-### SetMaxPersistedLogsPerTask
-
-**Available since:** v3.0
-
+#### SetMaxLogsPerTask(int? maxLogs)
 Sets the maximum number of logs to persist per task execution. Once this limit is reached, additional logs are not persisted (but still forwarded to ILogger).
-
-**Signature:**
-```csharp
-SetMaxPersistedLogsPerTask(int? maxLogs)
-```
 
 **Parameters:**
 - `maxLogs` (int?): Maximum logs to persist. `null` = unlimited (not recommended for production)
@@ -558,14 +549,20 @@ SetMaxPersistedLogsPerTask(int? maxLogs)
 
 **Example:**
 ```csharp
-// Limit to 500 logs
-.SetMaxPersistedLogsPerTask(500)
-
-// Unlimited (use with caution!)
-.SetMaxPersistedLogsPerTask(null)
+.WithPersistentLogger(log => log
+    .SetMaxLogsPerTask(500)) // Limit to 500 logs
 ```
 
 **Performance:** ~100 bytes per log in memory during execution. Single bulk INSERT to database after task completion.
+
+**Complete Example:**
+```csharp
+.AddEverTask(opt => opt
+    .RegisterTasksFromAssembly(typeof(Program).Assembly)
+    .WithPersistentLogger(log => log
+        .SetMinimumLevel(LogLevel.Information)
+        .SetMaxLogsPerTask(1000)))
+```
 
 ## Monitoring Configuration
 

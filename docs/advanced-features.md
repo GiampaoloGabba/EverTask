@@ -683,9 +683,9 @@ public class ProcessOrderHandler : EverTaskHandler<ProcessOrderTask>
 ```csharp
 services.AddEverTask(opt => opt
     .RegisterTasksFromAssembly(typeof(Program).Assembly)
-    .EnablePersistentHandlerLogging(true)           // Enable database persistence
-    .SetMinimumPersistentLogLevel(LogLevel.Information)  // Only persist Information+
-    .SetMaxPersistedLogsPerTask(1000))               // Limit logs per task
+    .WithPersistentLogger(log => log           // Auto-enables persistent logging
+        .SetMinimumLevel(LogLevel.Information) // Only persist Information+
+        .SetMaxLogsPerTask(1000)))             // Limit logs per task
     .AddSqlServerStorage(connectionString);
 ```
 
@@ -693,9 +693,10 @@ services.AddEverTask(opt => opt
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `EnablePersistentHandlerLogging` | `false` | Whether to persist logs to database. **Logs always go to ILogger regardless!** |
-| `MinimumPersistentLogLevel` | `Information` | Minimum log level to persist. Only affects database, not ILogger. |
-| `MaxPersistedLogsPerTask` | `1000` | Maximum logs to persist per task execution. `null` = unlimited. |
+| `WithPersistentLogger` | Disabled | Auto-enables persistent logging. **Logs always go to ILogger regardless!** |
+| `Disable()` | - | Disable database persistence (logs still go to ILogger) |
+| `SetMinimumLevel()` | `Information` | Minimum log level to persist. Only affects database, not ILogger. |
+| `SetMaxLogsPerTask()` | `1000` | Maximum logs to persist per task execution. `null` = unlimited. |
 
 ### How It Works
 
@@ -711,8 +712,8 @@ ILogger        Database
 ```
 
 1. **Always Log to ILogger**: Every log call forwards to `ILogger<THandler>` for standard logging infrastructure
-2. **Conditional Persistence**: If `EnablePersistentHandlerLogging = true`, logs are also stored in database
-3. **Filtered Persistence**: `MinimumPersistentLogLevel` filters only database persistence, not ILogger
+2. **Conditional Persistence**: If persistent logging is enabled via `.WithPersistentLogger(log => log.Enable())`, logs are also stored in database
+3. **Filtered Persistence**: `SetMinimumLevel()` filters only database persistence, not ILogger
 
 ### Retrieving Persisted Logs
 
@@ -793,7 +794,7 @@ public class PaymentProcessorHandler : EverTaskHandler<ProcessPaymentTask>
 }
 ```
 
-With `EnablePersistentHandlerLogging = true`, all these logs are stored in the database and queryable by `taskId`.
+With persistent logging enabled (`.WithPersistentLogger(...)`), all these logs are stored in the database and queryable by `taskId`.
 
 ## Best Practices
 

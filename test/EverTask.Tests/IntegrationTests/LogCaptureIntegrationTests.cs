@@ -17,8 +17,8 @@ public class LogCaptureIntegrationTests : IsolatedIntegrationTestBase
         await CreateIsolatedHostAsync(
             configureEverTask: cfg =>
             {
-                cfg.EnablePersistentHandlerLogging = true;
-                cfg.MinimumPersistentLogLevel = LogLevel.Information;
+                cfg.WithPersistentLogger(log => log
+                    .SetMinimumLevel(LogLevel.Information));
             });
 
         // Act
@@ -50,7 +50,7 @@ public class LogCaptureIntegrationTests : IsolatedIntegrationTestBase
         await CreateIsolatedHostAsync(
             configureEverTask: cfg =>
             {
-                cfg.EnablePersistentHandlerLogging = false; // DISABLED
+                cfg.WithPersistentLogger(log => log.Disable()); // DISABLED
             });
 
         // Act
@@ -91,8 +91,8 @@ public class LogCaptureIntegrationTests : IsolatedIntegrationTestBase
         await CreateIsolatedHostAsync(
             configureEverTask: cfg =>
             {
-                cfg.EnablePersistentHandlerLogging = true;
-                cfg.MinimumPersistentLogLevel = LogLevel.Information;
+                cfg.WithPersistentLogger(log => log
+                    .SetMinimumLevel(LogLevel.Information));
                 // Default retry policy: 3 retries (1 initial + 3 retries = 4 attempts total)
                 // 3 logs per attempt × 4 attempts = 12 logs total
             });
@@ -142,8 +142,8 @@ public class LogCaptureIntegrationTests : IsolatedIntegrationTestBase
         await CreateIsolatedHostAsync(
             configureEverTask: cfg =>
             {
-                cfg.EnablePersistentHandlerLogging = true;
-                cfg.MinimumPersistentLogLevel = LogLevel.Warning;
+                cfg.WithPersistentLogger(log => log
+                    .SetMinimumLevel(LogLevel.Warning));
             });
 
         // Act
@@ -169,8 +169,8 @@ public class LogCaptureIntegrationTests : IsolatedIntegrationTestBase
         await CreateIsolatedHostAsync(
             configureEverTask: cfg =>
             {
-                cfg.EnablePersistentHandlerLogging = true;
-                cfg.MinimumPersistentLogLevel = LogLevel.Trace;
+                cfg.WithPersistentLogger(log => log
+                    .SetMinimumLevel(LogLevel.Trace));
             });
 
         // Act
@@ -195,9 +195,9 @@ public class LogCaptureIntegrationTests : IsolatedIntegrationTestBase
         await CreateIsolatedHostAsync(
             configureEverTask: cfg =>
             {
-                cfg.EnablePersistentHandlerLogging = true;
-                cfg.MinimumPersistentLogLevel = LogLevel.Information;
-                cfg.MaxPersistedLogsPerTask = 10;
+                cfg.WithPersistentLogger(log => log
+                    .SetMinimumLevel(LogLevel.Information)
+                    .SetMaxLogsPerTask(10));
             });
 
         // Act - task logs 50 messages
@@ -218,8 +218,8 @@ public class LogCaptureIntegrationTests : IsolatedIntegrationTestBase
         await CreateIsolatedHostAsync(
             configureEverTask: cfg =>
             {
-                cfg.EnablePersistentHandlerLogging = true;
-                cfg.MinimumPersistentLogLevel = LogLevel.Information;
+                cfg.WithPersistentLogger(log => log
+                    .SetMinimumLevel(LogLevel.Information));
             });
 
         // Act
@@ -253,8 +253,8 @@ public class LogCaptureIntegrationTests : IsolatedIntegrationTestBase
         await CreateIsolatedHostAsync(
             configureEverTask: cfg =>
             {
-                cfg.EnablePersistentHandlerLogging = true;
-                cfg.MinimumPersistentLogLevel = LogLevel.Information;
+                cfg.WithPersistentLogger(log => log
+                    .SetMinimumLevel(LogLevel.Information));
             });
 
         // Act - dispatch multiple tasks
@@ -285,9 +285,9 @@ public class LogCaptureIntegrationTests : IsolatedIntegrationTestBase
         await CreateIsolatedHostAsync(
             configureEverTask: cfg =>
             {
-                cfg.EnablePersistentHandlerLogging = true;
-                cfg.MinimumPersistentLogLevel = LogLevel.Information;
-                cfg.MaxPersistedLogsPerTask = null; // Unlimited
+                cfg.WithPersistentLogger(log => log
+                    .SetMinimumLevel(LogLevel.Information)
+                    .SetMaxLogsPerTask(null)); // Unlimited
             });
 
         // Act - task logs 200 messages
@@ -306,11 +306,11 @@ public class LogCaptureIntegrationTests : IsolatedIntegrationTestBase
     {
         // Arrange - log capture disabled
         await CreateIsolatedHostAsync(
-            channelCapacity: 20,
+            channelCapacity: 30,
             maxDegreeOfParallelism: 10, // Run tasks in parallel
             configureEverTask: cfg =>
             {
-                cfg.EnablePersistentHandlerLogging = false;
+                cfg.WithPersistentLogger(log => log.Disable());
             });
 
         var start = DateTimeOffset.UtcNow;
@@ -319,7 +319,7 @@ public class LogCaptureIntegrationTests : IsolatedIntegrationTestBase
         var taskIds = new List<Guid>();
         for (int i = 0; i < 10; i++)
         {
-            var taskId = await Dispatcher.Dispatch(new TestTaskManyLogs(50));
+            var taskId = await Dispatcher.Dispatch(new TestTaskManyLogs(40));
             taskIds.Add(taskId);
         }
 

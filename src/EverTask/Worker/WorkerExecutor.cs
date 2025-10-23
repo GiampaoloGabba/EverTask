@@ -145,7 +145,7 @@ public class WorkerExecutor(
                 try
                 {
                     // Only save if persistence is enabled and logs were persisted
-                    if (options.EnablePersistentHandlerLogging && taskStorage != null)
+                    if (options.PersistentLogger.Enabled && taskStorage != null)
                     {
                         var persistedLogs = logCapture.GetPersistedLogs();
                         if (persistedLogs.Count > 0)
@@ -707,9 +707,9 @@ public class WorkerExecutor(
             handlerLogger,
             taskId,
             guidGenerator,
-            persistLogs: options.EnablePersistentHandlerLogging,
-            minPersistLevel: options.MinimumPersistentLogLevel,
-            maxPersistedLogs: options.MaxPersistedLogsPerTask
+            persistLogs: options.PersistentLogger.Enabled,
+            minPersistLevel: options.PersistentLogger.MinimumLevel,
+            maxPersistedLogs: options.PersistentLogger.MaxLogsPerTask
         );
     }
 }

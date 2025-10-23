@@ -314,10 +314,10 @@ Capture all logs written during task execution and persist them to the database 
 // Enable log capture in configuration
 services.AddEverTask(cfg =>
 {
-    cfg.RegisterTasksFromAssembly(typeof(Program).Assembly);
-    cfg.EnablePersistentHandlerLogging = true;        // Opt-in feature
-    cfg.MinimumPersistentLogLevel = LogLevel.Information;  // Filter log level
-    cfg.MaxPersistedLogsPerTask = 1000;               // Prevent unbounded growth
+    cfg.RegisterTasksFromAssembly(typeof(Program).Assembly)
+        .WithPersistentLogger(log => log        // Auto-enables persistence
+            .SetMinimumLevel(LogLevel.Information)  // Filter log level
+            .SetMaxLogsPerTask(1000));          // Prevent unbounded growth
 })
 .AddSqlServerStorage(connectionString);
 

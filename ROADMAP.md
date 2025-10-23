@@ -21,7 +21,6 @@ Modern web dashboard and REST API for monitoring and managing EverTask instances
 
 **Phase 2 - Management (Planned):**
 - Task lifecycle management (start, stop, pause, resume)
-- Manual task dispatch with parameter input
 - Recurring task schedule editor
 - Configuration management
 - Bulk operations (cancel multiple tasks, retry failed tasks)
@@ -29,7 +28,7 @@ Modern web dashboard and REST API for monitoring and managing EverTask instances
 
 **Technical Stack:**
 - ASP.NET Core Web API with OpenAPI/Swagger
-- Modern SPA framework (React/Vue/Blazor)
+- Modern SPA framework (React)
 - SignalR for real-time updates
 - EverTask.Monitor.AspnetCore.SignalR integration
 
@@ -81,7 +80,7 @@ Transform EverTask into a fully distributed system supporting horizontal scaling
 ---
 
 ### 🚀 Advanced Throttling and Rate Limiting System
-**Status:** Planned | **Priority:** High | **Effort:** 23-29 hours
+**Status:** Planned | **Priority:** High | **Effort:** 20-26 hours
 
 Comprehensive rate limiting and throttling system to prevent server overwhelm during task spikes.
 
@@ -90,7 +89,6 @@ Comprehensive rate limiting and throttling system to prevent server overwhelm du
 - Per-handler rate limiting (e.g., EmailHandler: 100/sec)
 - Concurrency limits per handler (e.g., max 5 concurrent instances)
 - Adaptive throttling based on CPU/memory pressure
-- Configurable recurring task skip behavior
 
 **Details:** See `.claude/tasks/advanced-throttling-rate-limiting.md`
 
@@ -137,10 +135,10 @@ Implemented a comprehensive log capture system with proxy pattern architecture t
 
 **Delivered:**
 - Proxy pattern: Logger ALWAYS forwards to ILogger infrastructure (console, file, Serilog, Application Insights)
-- Optional database persistence via `EnablePersistentHandlerLogging` configuration
+- Optional database persistence via `.WithPersistentLogger()` fluent API (auto-enables on call)
 - `TaskExecutionLog` entity with cascade delete and sequence numbers
 - Thread-safe in-memory log collection with lock-based synchronization
-- Configurable filtering: `SetMinimumPersistentLogLevel`, `SetMaxPersistedLogsPerTask`
+- Configurable filtering: `.SetMinimumLevel()`, `.SetMaxLogsPerTask()`
 - ILogger<THandler> injection for proper log categorization per handler type
 - Storage methods: `SaveExecutionLogsAsync()`, `GetExecutionLogsAsync()` with pagination
 - Logs persist even when tasks fail (captured in finally block)
