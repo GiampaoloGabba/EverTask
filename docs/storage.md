@@ -145,41 +145,30 @@ The schema contains:
 
 ### Migration Management
 
-#### Automatic Migrations
+EverTask automatically applies migrations on startup by default. You can disable this behavior if you prefer to manage migrations manually:
 
 ```csharp
+// Automatic migrations (default)
 .AddSqlServerStorage(connectionString, opt =>
 {
-    opt.AutoApplyMigrations = true; // Applies migrations on startup
+    opt.AutoApplyMigrations = true; // Default behavior
 });
-```
 
-#### Manual Migrations
-
-For production environments, we recommend manually controlling when migrations run:
-
-```bash
-# Create a migration
-dotnet ef migrations add InitialCreate --project YourProject --context TaskStoreDbContext
-
-# Apply migrations
-dotnet ef database update --project YourProject --context TaskStoreDbContext
-```
-
-```csharp
+// Manual migrations (if preferred)
 .AddSqlServerStorage(connectionString, opt =>
 {
     opt.AutoApplyMigrations = false;
 });
 ```
 
-You can generate SQL scripts and apply them through your normal deployment pipeline:
+If you choose to manage migrations manually, you can use EF Core tools:
 
 ```bash
+# Apply migrations
+dotnet ef database update --project YourProject --context TaskStoreDbContext
+
 # Generate SQL script
 dotnet ef migrations script --project YourProject --context TaskStoreDbContext --output migrations.sql
-
-# Review and apply via SQL Management Studio or deployment pipeline
 ```
 
 ### Performance Optimizations (v2.0+)
@@ -315,6 +304,10 @@ public interface ITaskStorage
 
     // Audit
     Task AddAuditAsync(TaskAudit audit, CancellationToken cancellationToken = default);
+
+    // Task execution log persistence (v3.0+)
+    Task SaveExecutionLogsAsync(Guid taskId, IReadOnlyList<TaskExecutionLog> logs, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<TaskExecutionLog>> GetExecutionLogsAsync(Guid taskId, int skip = 0, int take = 1000, CancellationToken cancellationToken = default);
 }
 ```
 
@@ -532,12 +525,17 @@ Pick the right storage provider for your scenario:
 ### Migration Strategy
 
 ```csharp
-// Development: Auto-apply
-#if DEBUG
+// Auto-apply migrations (default)
+.AddSqlServerStorage(connectionString, opt =>
+{
     opt.AutoApplyMigrations = true;
-#else
-    opt.AutoApplyMigrations = false; // Manual in production
-#endif
+});
+
+// Disable auto-apply if you prefer manual control
+.AddSqlServerStorage(connectionString, opt =>
+{
+    opt.AutoApplyMigrations = false;
+});
 ```
 
 ### Task Design for Serialization
