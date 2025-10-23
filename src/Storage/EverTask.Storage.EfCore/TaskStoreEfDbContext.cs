@@ -93,8 +93,8 @@ public abstract class TaskStoreEfDbContext<T>(
                 .HasMaxLength(4000)
                 .IsRequired();
 
-            entity.Property(e => e.ExceptionDetails)
-                .HasMaxLength(-1); // SQL Server: NVARCHAR(MAX), Sqlite: TEXT
+            // ExceptionDetails: No MaxLength = NVARCHAR(MAX) in SQL Server, TEXT in Sqlite
+            entity.Property(e => e.ExceptionDetails);
 
             entity.Property(e => e.TimestampUtc)
                 .IsRequired();
