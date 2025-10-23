@@ -20,6 +20,9 @@ public class HanlderExecutorTests
         serviceProviderMock.Setup(s => s.GetService(typeof(IEverTaskHandler<TestTaskRequestNoSerializable>)))
                            .Returns(new TestTaskHandlertNoSerializable());
 
+        serviceProviderMock.Setup(s => s.GetService(typeof(IGuidGenerator)))
+                           .Returns(new DefaultGuidGenerator(UUIDNext.Database.Other));
+
         _provider = serviceProviderMock.Object;
     }
 

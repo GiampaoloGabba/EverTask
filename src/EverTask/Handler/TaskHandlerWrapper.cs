@@ -18,6 +18,7 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
                                                IServiceProvider serviceFactory, Guid? existingTaskId = null, string? taskKey = null)
     {
         var handlerService = serviceFactory.GetService<IEverTaskHandler<TTask>>();
+        var guidGenerator = serviceFactory.GetRequiredService<IGuidGenerator>();
 
         executionTime = executionTime?.ToUniversalTime();
 
@@ -51,7 +52,7 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
             (persistenceId, exception, message) => handlerService.OnError(persistenceId, exception, message),
             persistenceId => handlerService.OnStarted(persistenceId),
             persistenceId => handlerService.OnCompleted(persistenceId),
-            existingTaskId ?? Guid.NewGuid(),
+            existingTaskId ?? guidGenerator.NewDatabaseFriendly(),
             queueName,
             taskKey
         );

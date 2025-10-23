@@ -6,6 +6,7 @@
 
   <ItemGroup>
     <PackageReference Include="Cronos" />
+    <PackageReference Include="UUIDNext" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />

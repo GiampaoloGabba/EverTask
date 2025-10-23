@@ -88,7 +88,7 @@ public class WorkerExecutor(
 
             // Create log capture with proper handler type for ILogger<THandler>
             var handlerType = handler.GetType();
-            logCapture = CreateLogCapture(handlerType, task.PersistenceId);
+            logCapture = CreateLogCapture(handlerType, task.PersistenceId, scope.ServiceProvider);
 
             // Inject log capture into handler BEFORE OnStarted
             // Find the SetLogCapture method via interface (explicitly implemented)
@@ -694,15 +694,19 @@ public class WorkerExecutor(
     /// Creates a log capture instance for the task execution.
     /// Always forwards to ILogger, optionally persists to database based on configuration.
     /// </summary>
-    private ITaskLogCaptureInternal CreateLogCapture(Type handlerType, Guid taskId)
+    private ITaskLogCaptureInternal CreateLogCapture(Type handlerType, Guid taskId, IServiceProvider serviceProvider)
     {
         // Create ILogger<THandler> for the specific handler type
         var handlerLogger = loggerFactory.CreateLogger(handlerType);
+
+        // Resolve GUID generator (database-specific)
+        var guidGenerator = serviceProvider.GetRequiredService<IGuidGenerator>();
 
         // Create proxy that always logs to ILogger and optionally persists
         return new TaskLogCapture(
             handlerLogger,
             taskId,
+            guidGenerator,
             persistLogs: options.EnablePersistentHandlerLogging,
             minPersistLevel: options.MinimumPersistentLogLevel,
             maxPersistedLogs: options.MaxPersistedLogsPerTask

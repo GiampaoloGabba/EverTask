@@ -39,6 +39,9 @@ public class DispatcherTests
         serviceProviderMock.Setup(s => s.GetService(typeof(IWorkerBlacklist)))
                            .Returns(new WorkerBlacklist());
 
+        serviceProviderMock.Setup(s => s.GetService(typeof(IGuidGenerator)))
+                           .Returns(new DefaultGuidGenerator(UUIDNext.Database.Other));
+
         // Setup the queue manager to return the default queue
         _workerQueueManagerMock.Setup(x => x.GetQueue("default")).Returns(_workerQueueMock.Object);
 

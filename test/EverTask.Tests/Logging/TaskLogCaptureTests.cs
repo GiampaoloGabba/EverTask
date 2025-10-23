@@ -12,10 +12,13 @@ namespace EverTask.Tests.Logging;
 public class TaskLogCaptureTests
 {
     private readonly Mock<ILogger> _mockLogger;
+    private readonly Mock<IGuidGenerator> _mockGuidGenerator;
 
     public TaskLogCaptureTests()
     {
         _mockLogger = new Mock<ILogger>();
+        _mockGuidGenerator = new Mock<IGuidGenerator>();
+        _mockGuidGenerator.Setup(x => x.NewDatabaseFriendly()).Returns(Guid.NewGuid());
     }
 
     [Fact]
@@ -26,6 +29,7 @@ public class TaskLogCaptureTests
         var capture = new TaskLogCapture(
             _mockLogger.Object,
             taskId,
+            _mockGuidGenerator.Object,
             persistLogs: true,
             minPersistLevel: LogLevel.Trace,
             maxPersistedLogs: 100);
@@ -67,6 +71,7 @@ public class TaskLogCaptureTests
         var capture = new TaskLogCapture(
             _mockLogger.Object,
             taskId,
+            _mockGuidGenerator.Object,
             persistLogs: true,
             minPersistLevel: LogLevel.Information,
             maxPersistedLogs: 100);
@@ -104,6 +109,7 @@ public class TaskLogCaptureTests
         var capture = new TaskLogCapture(
             _mockLogger.Object,
             taskId,
+            _mockGuidGenerator.Object,
             persistLogs: true,
             minPersistLevel: LogLevel.Trace,
             maxPersistedLogs: 3);
@@ -143,6 +149,7 @@ public class TaskLogCaptureTests
         var capture = new TaskLogCapture(
             _mockLogger.Object,
             taskId,
+            _mockGuidGenerator.Object,
             persistLogs: false,  // Persistence disabled
             minPersistLevel: LogLevel.Trace,
             maxPersistedLogs: 100);
@@ -175,6 +182,7 @@ public class TaskLogCaptureTests
         var capture = new TaskLogCapture(
             _mockLogger.Object,
             taskId,
+            _mockGuidGenerator.Object,
             persistLogs: true,
             minPersistLevel: LogLevel.Trace,
             maxPersistedLogs: 100);
@@ -201,6 +209,7 @@ public class TaskLogCaptureTests
         var capture = new TaskLogCapture(
             _mockLogger.Object,
             taskId,
+            _mockGuidGenerator.Object,
             persistLogs: true,
             minPersistLevel: LogLevel.Trace,
             maxPersistedLogs: 1000);
@@ -234,6 +243,7 @@ public class TaskLogCaptureTests
         var capture = new TaskLogCapture(
             _mockLogger.Object,
             taskId,
+            _mockGuidGenerator.Object,
             persistLogs: true,
             minPersistLevel: LogLevel.Trace,
             maxPersistedLogs: 100);
@@ -259,6 +269,7 @@ public class TaskLogCaptureTests
         var capture = new TaskLogCapture(
             _mockLogger.Object,
             taskId,
+            _mockGuidGenerator.Object,
             persistLogs: true,
             minPersistLevel: LogLevel.Trace,
             maxPersistedLogs: 100);
@@ -285,6 +296,7 @@ public class TaskLogCaptureTests
         var capture = new TaskLogCapture(
             _mockLogger.Object,
             taskId,
+            _mockGuidGenerator.Object,
             persistLogs: true,
             minPersistLevel: LogLevel.Trace,
             maxPersistedLogs: 100);
@@ -311,6 +323,7 @@ public class TaskLogCaptureTests
         var capture = new TaskLogCapture(
             _mockLogger.Object,
             taskId,
+            _mockGuidGenerator.Object,
             persistLogs: true,
             minPersistLevel: LogLevel.Trace,
             maxPersistedLogs: null);
@@ -334,6 +347,7 @@ public class TaskLogCaptureTests
         var capture = new TaskLogCapture(
             _mockLogger.Object,
             taskId,
+            _mockGuidGenerator.Object,
             persistLogs: true,
             minPersistLevel: LogLevel.Trace,
             maxPersistedLogs: 100);
@@ -360,6 +374,7 @@ public class TaskLogCaptureTests
         var capture = new TaskLogCapture(
             _mockLogger.Object,
             taskId,
+            _mockGuidGenerator.Object,
             persistLogs: true,
             minPersistLevel: LogLevel.Trace,
             maxPersistedLogs: 100);
@@ -386,6 +401,7 @@ public class TaskLogCaptureTests
         var capture = new TaskLogCapture(
             _mockLogger.Object,
             taskId,
+            _mockGuidGenerator.Object,
             persistLogs: false,  // Persistence disabled
             minPersistLevel: LogLevel.Critical,  // High filter level (shouldn't matter for ILogger)
             maxPersistedLogs: 0);

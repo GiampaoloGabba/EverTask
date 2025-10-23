@@ -50,6 +50,9 @@ public static class ServiceCollectionExtensions
             ((DbContext)dbContext).Database.Migrate();
         }
 
+        // Register SQL Server-optimized GUID generator (UUID v8)
+        builder.Services.TryAddSingleton<IGuidGenerator>(sp => new DefaultGuidGenerator(UUIDNext.Database.SqlServer));
+
         builder.Services.TryAddSingleton<ITaskStorage, SqlServerTaskStorage>();
         return builder;
     }

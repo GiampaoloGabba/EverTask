@@ -20,6 +20,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton(typeof(IEverTaskLogger<>), typeof(EverTaskLogger<>));
         services.TryAddSingleton<IWorkerBlacklist, WorkerBlacklist>();
 
+        // Register default GUID generator (UUID v7) - can be overridden by storage providers
+        services.TryAddSingleton<IGuidGenerator>(sp => new DefaultGuidGenerator(UUIDNext.Database.Other));
+
         // Register WorkerQueueManager instead of single WorkerQueue
         RegisterQueueManager(services, options);
 

@@ -8,6 +8,7 @@ internal sealed class TaskLogCapture : ITaskLogCaptureInternal
 {
     private readonly ILogger _logger;
     private readonly Guid _taskId;
+    private readonly IGuidGenerator _guidGenerator;
     private readonly bool _persistLogs;
     private readonly LogLevel _minPersistLevel;
     private readonly int? _maxPersistedLogs;
@@ -18,12 +19,14 @@ internal sealed class TaskLogCapture : ITaskLogCaptureInternal
     public TaskLogCapture(
         ILogger logger,
         Guid taskId,
+        IGuidGenerator guidGenerator,
         bool persistLogs,
         LogLevel minPersistLevel,
         int? maxPersistedLogs)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _taskId = taskId;
+        _guidGenerator = guidGenerator ?? throw new ArgumentNullException(nameof(guidGenerator));
         _persistLogs = persistLogs;
         _minPersistLevel = minPersistLevel;
         _maxPersistedLogs = maxPersistedLogs;
@@ -95,13 +98,13 @@ internal sealed class TaskLogCapture : ITaskLogCaptureInternal
 
             var log = new TaskExecutionLog
             {
-                Id = Guid.NewGuid(),
-                TaskId = _taskId,
-                TimestampUtc = DateTimeOffset.UtcNow,
-                Level = level.ToString(),
-                Message = message,
+                Id               = _guidGenerator.NewDatabaseFriendly(),
+                TaskId           = _taskId,
+                TimestampUtc     = DateTimeOffset.UtcNow,
+                Level            = level.ToString(),
+                Message          = message,
                 ExceptionDetails = exception?.ToString(),
-                SequenceNumber = _sequenceNumber++
+                SequenceNumber   = _sequenceNumber++
             };
 
             _logs!.Add(log);

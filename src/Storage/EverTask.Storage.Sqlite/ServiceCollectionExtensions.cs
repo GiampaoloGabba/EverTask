@@ -48,6 +48,9 @@ public static class ServiceCollectionExtensions
             ((DbContext)dbContext).Database.Migrate();
         }
 
+        // Register SQLite-optimized GUID generator (UUID v7)
+        builder.Services.TryAddSingleton<IGuidGenerator>(sp => new DefaultGuidGenerator(UUIDNext.Database.SQLite));
+
         builder.Services.TryAddSingleton<ITaskStorage, SqliteTaskStorage>();
         return builder;
     }

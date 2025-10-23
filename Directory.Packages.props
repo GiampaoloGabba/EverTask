@@ -89,6 +89,7 @@
     <PackageVersion Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageVersion Include="Respawn" Version="6.2.1" />
     <PackageVersion Include="Serilog.Sinks.Console" Version="6.0.0" />
+    <PackageVersion Include="UUIDNext" Version="4.2.1" />
   </ItemGroup>
   <ItemGroup>
     <PackageVersion Include="Testcontainers.MsSql" Version="4.7.0" />
