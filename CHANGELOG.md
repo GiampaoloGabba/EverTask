@@ -9,6 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Task Execution Log Capture
+- **Opt-in log capture system**: Capture all logs written during task execution and persist them to the database for debugging and auditing
+  - Configure via `EnableLogCapture`, `MinimumLogLevel`, and `MaxLogsPerTask` in `EverTaskServiceConfiguration`
+  - Handlers use the built-in `Logger` property (from `EverTaskHandler<T>`)
+  - Logs saved to `TaskExecutionLogs` table with cascade delete (foreign key to `QueuedTasks`)
+  - Retrieve logs via `storage.GetExecutionLogsAsync(taskId)` with pagination support
+  - Zero overhead when disabled (NullTaskLogCapture singleton + JIT optimizations)
+  - Logs persist even when tasks fail (captured in finally block)
+  - Thread-safe in-memory collection with lock-based synchronization
+  - Includes exception details (stack traces) when logging errors
+  - Sequence numbers for log ordering
+  - Storage extension methods: `GetExecutionLogsAsync(taskId, skip, take)`
+
+**Example Configuration**:
+```csharp
+services.AddEverTask(cfg =>
+{
+    cfg.RegisterTasksFromAssembly(typeof(Program).Assembly);
+    cfg.EnableLogCapture = true;                      // Opt-in feature
+    cfg.MinimumLogLevel = LogLevel.Information;       // Filter log level
+    cfg.MaxLogsPerTask = 1000;                        // Prevent unbounded growth
+})
+.AddSqlServerStorage(connectionString);
+```
+
+**Example Usage in Handler**:
+```csharp
+public class SendEmailHandler : EverTaskHandler<SendEmailTask>
+{
+    public override async Task Handle(SendEmailTask task, CancellationToken ct)
+    {
+        Logger.LogInformation($"Sending email to {task.Recipient}");
+        await _emailService.SendAsync(task.Recipient, task.Subject, task.Body);
+        Logger.LogInformation("Email sent successfully");
+    }
+}
+```
+
 #### Lazy Handler Resolution for Memory Optimization
 - **Lazy handler resolution**: Handlers disposed after dispatch, re-created at execution time
   - 70-90% memory reduction for delayed and recurring tasks
