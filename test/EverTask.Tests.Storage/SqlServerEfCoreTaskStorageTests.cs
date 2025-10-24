@@ -2,6 +2,7 @@
 using EverTask.Storage.EfCore;
 using EverTask.Storage.SqlServer;
 using EverTask.Tests.Storage.EfCore;
+using EverTask.Tests.TestHelpers;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -13,7 +14,7 @@ using Xunit;
 namespace EverTask.Tests.Storage;
 
 [Collection("StorageTests")]
-public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase
+public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IDisposable
 {
     private ITaskStoreDbContext _dbContext = null!;
     private ITaskStorage _taskStorage = null!;
@@ -79,5 +80,16 @@ public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase
     protected override ITaskStorage GetStorage()
     {
         return _taskStorage;
+    }
+
+    /// <summary>
+    /// Override to use SQL Server-optimized GUID v7 generation.
+    /// SQL Server uniqueidentifier has specific sorting behavior.
+    /// </summary>
+    protected override Guid GetGuidForProvider() => TestGuidGenerator.NewForSqlServer();
+
+    public void Dispose()
+    {
+        CleanUpDatabase().GetAwaiter().GetResult();
     }
 }

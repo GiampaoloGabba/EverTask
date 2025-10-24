@@ -2,6 +2,7 @@
 using EverTask.Storage.EfCore;
 using EverTask.Storage.Sqlite;
 using EverTask.Tests.Storage.EfCore;
+using EverTask.Tests.TestHelpers;
 using Microsoft.Extensions.DependencyInjection;
 using Shouldly;
 using Xunit;
@@ -55,6 +56,12 @@ public class SqliteEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IDisposa
     {
         return _taskStorage;
     }
+
+    /// <summary>
+    /// Override to use SQLite-optimized GUID v7 generation.
+    /// SQLite uses byte-by-byte lexicographic sorting for BLOB/TEXT.
+    /// </summary>
+    protected override Guid GetGuidForProvider() => TestGuidGenerator.NewForSqlite();
 
     public void Dispose()
     {
