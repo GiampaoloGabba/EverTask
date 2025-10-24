@@ -1,6 +1,6 @@
 using UUIDNext;
 
-namespace EverTask;
+namespace EverTask.Abstractions;
 
 /// <summary>
 /// Default GUID generator that produces database-optimized UUIDs (v7 or v8)
