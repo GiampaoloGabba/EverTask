@@ -156,13 +156,13 @@ public class Dispatcher(
                 if (existingTaskId == null)
                 {
                     // New task - persist it
-                    logger.LogInformation("Persisting Task: {Type}", taskEntity.Type);
+                    logger.LogDebug("Persisting Task: {Type}", taskEntity.Type);
                     await taskStorage.Persist(taskEntity, ct).ConfigureAwait(false);
                 }
                 else
                 {
                     // Existing task - update it
-                    logger.LogInformation("Updating Task: {Type}", taskEntity.Type);
+                    logger.LogDebug("Updating Task: {Type}", taskEntity.Type);
                     await taskStorage.UpdateTask(taskEntity, ct).ConfigureAwait(false);
                 }
             }

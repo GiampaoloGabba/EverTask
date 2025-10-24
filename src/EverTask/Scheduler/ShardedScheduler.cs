@@ -234,7 +234,8 @@ public class ShardedScheduler : IScheduler, IDisposable
         ArgumentNullException.ThrowIfNull(scheduledTime);
 
         // Hash-based sharding per distribuzione uniforme
-        int shardIndex = Math.Abs(item.PersistenceId.GetHashCode()) % _shardCount;
+        // Use unsigned hash to prevent negative modulo when GetHashCode() returns int.MinValue
+        int shardIndex = (int)((uint)item.PersistenceId.GetHashCode() % (uint)_shardCount);
 
         _shards[shardIndex].Schedule(item, scheduledTime.Value);
     }
