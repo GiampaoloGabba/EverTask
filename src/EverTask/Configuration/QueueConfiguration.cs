@@ -1,7 +1,3 @@
-using System.Threading.Channels;
-using EverTask.Abstractions;
-using EverTask.Resilience;
-
 namespace EverTask.Configuration;
 
 /// <summary>

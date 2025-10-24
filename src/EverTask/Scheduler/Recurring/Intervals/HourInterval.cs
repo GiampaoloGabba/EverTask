@@ -1,6 +1,4 @@
-﻿using Newtonsoft.Json;
-
-namespace EverTask.Scheduler.Recurring.Intervals;
+﻿namespace EverTask.Scheduler.Recurring.Intervals;
 
 public class HourInterval : IInterval
 {

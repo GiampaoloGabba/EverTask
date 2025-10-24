@@ -1,5 +1,4 @@
 using EverTask.Configuration;
-using EverTask.Logger;
 
 namespace EverTask.Scheduler;
 

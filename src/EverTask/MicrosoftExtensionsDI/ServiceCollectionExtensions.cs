@@ -1,5 +1,4 @@
 ﻿using EverTask.Configuration;
-using EverTask.Scheduler;
 
 namespace Microsoft.Extensions.DependencyInjection;
 

@@ -1,5 +1,4 @@
 ﻿using Cronos;
-using Newtonsoft.Json;
 
 namespace EverTask.Scheduler.Recurring.Intervals;
 

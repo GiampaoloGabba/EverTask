@@ -1,5 +1,3 @@
-using EverTask.Handler;
-
 namespace EverTask.Worker;
 
 /// <summary>
