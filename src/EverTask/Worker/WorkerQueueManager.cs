@@ -119,43 +119,49 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
             switch (config.QueueFullBehavior)
             {
                 case QueueFullBehavior.Wait:
-                    // Default behavior - wait until space is available
+                    // Wait until space is available (blocks if full)
                     await targetQueue.Queue(task).ConfigureAwait(false);
                     return true;
 
                 case QueueFullBehavior.ThrowException:
-                    // Try to queue with immediate failure if full
-                    await targetQueue.Queue(task).ConfigureAwait(false);
+                    // Try to queue immediately - throw if full
+                    if (!await targetQueue.TryQueue(task).ConfigureAwait(false))
+                    {
+                        throw new QueueFullException(targetQueueName, task.PersistenceId);
+                    }
                     return true;
 
                 case QueueFullBehavior.FallbackToDefault:
-                    // Try target queue first
-                    try
+                    // Try target queue first without waiting
+                    if (await targetQueue.TryQueue(task).ConfigureAwait(false))
                     {
-                        await targetQueue.Queue(task).ConfigureAwait(false);
                         return true;
                     }
-                    catch (ChannelClosedException)
+
+                    // Queue is full - fallback to default queue if not already default
+                    if (targetQueueName != QueueNames.Default)
                     {
-                        throw; // Re-throw if channel is closed
-                    }
-                    catch (Exception ex) when (targetQueueName != QueueNames.Default)
-                    {
-                        // Fallback to default queue if target queue fails and it's not already default
-                        _logger.LogWarning(ex,
-                            "Queue '{QueueName}' is full or unavailable, falling back to 'default' queue",
-                            targetQueueName);
+                        _logger.LogWarning(
+                            "Queue '{QueueName}' is full, falling back to 'default' queue for task {TaskId}",
+                            targetQueueName,
+                            task.PersistenceId);
 
                         if (TryGetQueue(QueueNames.Default, out var defaultQueue) && defaultQueue != null)
                         {
+                            // Use Wait behavior for default queue to ensure task is eventually queued
                             await defaultQueue.Queue(task).ConfigureAwait(false);
                             _logger.LogInformation("Task {TaskId} enqueued to 'default' queue as fallback",
                                 task.PersistenceId);
                             return true;
                         }
 
-                        throw;
+                        throw new QueueFullException(targetQueueName, task.PersistenceId,
+                            "Target queue is full and default queue is unavailable");
                     }
+
+                    // Already using default queue - throw
+                    throw new QueueFullException(targetQueueName, task.PersistenceId,
+                        "Default queue is full and no fallback is available");
 
                 default:
                     // Default to Wait behavior if unknown

@@ -73,7 +73,7 @@ public class WorkerQueue : IWorkerQueue
             await _taskStorage.SetQueued(task.PersistenceId).ConfigureAwait(false);
         try
         {
-            _logger.LogInformation("Queuing task with id {TaskId} to queue '{QueueName}'", task.PersistenceId, Name);
+            _logger.LogDebug("Queuing task with id {TaskId} to queue '{QueueName}'", task.PersistenceId, Name);
             await _queue.Writer.WriteAsync(task).ConfigureAwait(false);
         }
         catch (Exception e)
@@ -82,6 +82,39 @@ public class WorkerQueue : IWorkerQueue
             if (_taskStorage != null)
                 await _taskStorage.SetStatus(task.PersistenceId, QueuedTaskStatus.Failed, e).ConfigureAwait(false);
         }
+    }
+
+    public async ValueTask<bool> TryQueue(TaskHandlerExecutor task)
+    {
+        ArgumentNullException.ThrowIfNull(task);
+
+        if (_workerBlacklist.IsBlacklisted(task.PersistenceId))
+            return false;
+
+        // Try to write without waiting - returns false if queue is full
+        if (!_queue.Writer.TryWrite(task))
+        {
+            _logger.LogDebug("Queue '{QueueName}' is full, cannot enqueue task {TaskId}", Name, task.PersistenceId);
+            return false;
+        }
+
+        // Successfully queued - update storage
+        _logger.LogDebug("Task {TaskId} successfully enqueued to queue '{QueueName}'", task.PersistenceId, Name);
+
+        if (_taskStorage != null)
+        {
+            try
+            {
+                await _taskStorage.SetQueued(task.PersistenceId).ConfigureAwait(false);
+            }
+            catch (Exception e)
+            {
+                _logger.LogWarning(e, "Failed to update storage for task {TaskId} (task is queued but storage update failed)", task.PersistenceId);
+                // Don't fail the operation - task is already in queue
+            }
+        }
+
+        return true;
     }
 
     public async Task<TaskHandlerExecutor> Dequeue(CancellationToken cancellationToken) =>

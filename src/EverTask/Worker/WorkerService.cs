@@ -153,21 +153,31 @@ public class WorkerService(
             return;
         }
 
-        var pendingTasks = await taskStorage.RetrievePending(ct).ConfigureAwait(false);
-        logger.LogInformation("Found {Count} pending tasks to process", pendingTasks.Length);
+        // Process pending tasks using keyset pagination to avoid loading large backlogs into memory
+        const int pageSize = 100;
+        DateTimeOffset? lastCreatedAt = null;
+        Guid? lastId = null;
+        int totalProcessed = 0;
 
-        if (pendingTasks.Length == 0)
-            return;
-
-        // Process pending tasks with bounded parallelism to improve startup time
-        // Use configured MaxDegreeOfParallelism to respect user settings
-        var options = new ParallelOptions
+        while (true)
         {
-            MaxDegreeOfParallelism = configuration.MaxDegreeOfParallelism,
-            CancellationToken = ct
-        };
+            var pendingTasks = await taskStorage.RetrievePending(lastCreatedAt, lastId, pageSize, ct).ConfigureAwait(false);
 
-        await Parallel.ForEachAsync(pendingTasks, options, async (taskInfo, token) =>
+            if (pendingTasks.Length == 0)
+                break;
+
+            logger.LogInformation("Processing batch with {Count} pending tasks (lastCreatedAt={LastCreatedAt}, lastId={LastId})",
+                pendingTasks.Length, lastCreatedAt, lastId);
+
+            // Process pending tasks with bounded parallelism to improve startup time
+            // Use configured MaxDegreeOfParallelism to respect user settings
+            var options = new ParallelOptions
+            {
+                MaxDegreeOfParallelism = configuration.MaxDegreeOfParallelism,
+                CancellationToken = ct
+            };
+
+            await Parallel.ForEachAsync(pendingTasks, options, async (taskInfo, token) =>
         {
             IEverTask?     task          = null;
             RecurringTask? scheduledTask = null;
@@ -236,6 +246,14 @@ public class WorkerService(
                 }
             }
         }).ConfigureAwait(false);
+
+            totalProcessed += pendingTasks.Length;
+            var lastTask = pendingTasks[^1];
+            lastCreatedAt = lastTask.CreatedAtUtc;
+            lastId = lastTask.Id;
+        }
+
+        logger.LogInformation("Completed processing {TotalCount} pending tasks", totalProcessed);
     }
 
     public override async Task StopAsync(CancellationToken stoppingToken)
