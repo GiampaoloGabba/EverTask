@@ -1,115 +1,112 @@
-# CLAUDE.md - EverTask.Tests.Logging
+# EverTask.Tests.Logging
 
-Test project for EverTask logging integrations. Currently focuses on Serilog integration tests.
+## Purpose
 
-## Project Purpose
-
-Validates that logging integrations correctly implement the `IEverTaskLogger<T>` interface and integrate properly with EverTask's dependency injection system. Tests ensure log levels, scopes, and enrichment work as expected.
+Integration tests for EverTask logging integrations. Currently: Serilog. Future: NLog, etc.
 
 ## Test Organization
 
-### Directory Structure
-- `Serilog/ServiceRegistrationTests.cs` - DI registration and resolution tests
-- `Serilog/SerilogLoggerTests.cs` - Logger behavior and functionality tests
-
-### Test Categories
-1. **Service Registration Tests**: Verify that logging services register and resolve correctly through `AddSerilog()` extension
-2. **Logger Functionality Tests**: Validate logging operations (IsEnabled, Log, BeginScope)
-
-## Test Frameworks and Dependencies
-
-- **xUnit**: Primary test framework (not MSTest - note project uses xUnit despite repo standard)
-- **Serilog**: The logging library under test
-- **Serilog.Sinks**: Custom test sinks for capturing and asserting log events
-- **Moq**: Mocking framework (referenced but not actively used in current tests)
-- **Shouldly**: Assertion library (referenced but not actively used - tests use xUnit Assert)
-
-## Verification Patterns
-
-### Service Registration Pattern
-```csharp
-var services = new ServiceCollection();
-services.AddEverTask(opt => opt.RegisterTasksFromAssembly(typeof(Test).Assembly))
-        .AddSerilog();
-var serviceProvider = services.BuildServiceProvider();
-var logger = serviceProvider.GetService<IEverTaskLogger<Test>>();
-Assert.NotNull(logger);
-Assert.IsType<EverTaskSerilogLogger<Test>>(logger);
+```
+test/EverTask.Tests.Logging/
+├── Serilog/
+│   ├── ServiceRegistrationTests.cs  # DI registration and resolution
+│   └── SerilogLoggerTests.cs        # Logger behavior and functionality
+└── GlobalUsings.cs
 ```
 
-### Log Event Capture Pattern
-Use a custom `DelegateSink` to intercept and assert on log events:
+**IMPORTANT**: This project uses **xUnit** (NOT MSTest) with Shouldly assertions.
+
+## Quick Commands
+
+**Run all logging tests**:
+```bash
+dotnet test test/EverTask.Tests.Logging/EverTask.Tests.Logging.csproj
+```
+
+**Run Serilog tests only**:
+```bash
+dotnet test test/EverTask.Tests.Logging/ --filter "FullyQualifiedName~Serilog"
+```
+
+## Key Test Patterns
+
+### DelegateSink Pattern
+
+Custom `ILogEventSink` for inline assertions without external output:
+
 ```csharp
 var logger = new LoggerConfiguration()
     .WriteTo.Sink(new DelegateSink(logEvent => {
-        Assert.Equal("Expected message", logEvent.MessageTemplate.Text);
-        Assert.Equal(LogEventLevel.Error, logEvent.Level);
+        logEvent.MessageTemplate.Text.ShouldBe("Expected message");
+        logEvent.Level.ShouldBe(LogEventLevel.Error);
     }))
     .CreateLogger();
+
+logger.Error("Expected message");
 ```
 
-### Log Level Verification Pattern
+**Purpose**: Capture and assert on `LogEvent` properties (level, message, properties, exceptions) without file/console output.
+
+### LogLevel Verification
+
 ```csharp
+var everTaskLogger = new EverTaskSerilogLogger<MyClass>(logger);
+
+everTaskLogger.IsEnabled(LogLevel.Information).ShouldBeTrue();
+everTaskLogger.IsEnabled(LogLevel.None).ShouldBeFalse();
+```
+
+### Scope Enrichment Testing
+
+```csharp
+using (logger.BeginScope(new Dictionary<string, object> { ["Key"] = "Value" }))
+{
+    logger.LogInformation("Message");
+    // Assert enricher properties via DelegateSink
+}
+```
+
+## Adding New Logger Integration
+
+**When adding new logger provider** (e.g., NLog):
+
+- [ ] Create folder: `test/EverTask.Tests.Logging/NLog/`
+- [ ] Add: `NLog/ServiceRegistrationTests.cs` (verify DI registration)
+- [ ] Add: `NLog/NLogLoggerTests.cs` (verify logger behavior)
+- [ ] Follow Serilog test patterns (DelegateSink equivalent, LogLevel mapping, scope enrichment)
+
+**Folder structure should mirror Serilog**:
+```
+test/EverTask.Tests.Logging/
+├── Serilog/
+│   ├── ServiceRegistrationTests.cs
+│   └── SerilogLoggerTests.cs
+├── NLog/
+│   ├── ServiceRegistrationTests.cs
+│   └── NLogLoggerTests.cs
+```
+
+## Test Configuration
+
+**Disabling noisy console output** (optional, for cleaner test runs):
+```csharp
+// In test class constructor or setup
 var logger = new LoggerConfiguration()
-    .MinimumLevel.Information()
+    .MinimumLevel.Fatal()  // Suppress all output below Fatal
     .CreateLogger();
-var everTaskLogger = new EverTaskSerilogLogger<T>(logger);
-Assert.True(everTaskLogger.IsEnabled(LogLevel.Information));
-Assert.False(everTaskLogger.IsEnabled(LogLevel.None));
 ```
 
-## Implementation Details
-
-### IEverTaskLogger<T> Interface
-Custom logger interface extending `ILogger<T>` from Microsoft.Extensions.Logging. Located at `src/EverTask/Logger/IEverTaskLogger.cs`.
-
-### Two Logger Implementations
-1. **EverTaskLogger<T>** (core): Default implementation wrapping ILogger<T> from DI
-2. **EverTaskSerilogLogger<T>** (Serilog integration): Direct Serilog integration with:
-   - LogLevel to LogEventLevel conversion (Trace->Verbose, Critical->Fatal, etc.)
-   - Scope enrichment via `LogContext.Push()` and `ILogEventEnricher`
-   - KeyValuePair property extraction for structured logging
-
-### DelegateSink Pattern
-`DelegateSink` is a test utility class implementing `ILogEventSink`. It accepts an `Action<LogEvent>` delegate, allowing inline assertions on log events without external file/console output.
-
-## Adding Tests
-
-### Testing a New Logging Integration
-1. Create subdirectory under `test/EverTask.Tests.Logging/` (e.g., `NLog/`)
-2. Add service registration test verifying DI setup
-3. Add functionality tests for:
-   - Log level filtering (`IsEnabled`)
-   - Message formatting and emission (`Log`)
-   - Scope handling (`BeginScope`)
-4. Use test sinks/captures specific to the logging library
-
-### Testing Log Enrichment
-When testing enrichment (adding properties to log events):
-1. Use a custom sink to capture `LogEvent` instances
-2. Assert on `LogEvent.Properties` collection
-3. Verify property keys and values match expected enrichment
-
-Example:
+**When testing specific log levels**, configure minimum level accordingly:
 ```csharp
-.WriteTo.Sink(new DelegateSink(logEvent => {
-    Assert.Contains("TaskId", logEvent.Properties.Keys);
-    Assert.Equal("12345", logEvent.Properties["TaskId"].ToString());
-}))
+.MinimumLevel.Verbose()  // Capture all levels for testing
 ```
 
-### Testing Scope Behavior
-For structured logging with scopes:
-1. Call `BeginScope()` with state (typically `IEnumerable<KeyValuePair<string, object>>`)
-2. Log within the scope
-3. Verify enriched properties appear in the captured log event
-4. Dispose the scope and verify properties no longer appear
+## Key Assertions
 
-## Notes
-
-- This test project uses **xUnit** while the main test project (`EverTask.Tests`) uses **MSTest**
-- Serilog integration uses `LogContext.Push()` for scope enrichment, not the Microsoft.Extensions.Logging scope provider
-- The `EverTaskSerilogLogger<T>` returns `NoOpDisposable` for scopes that don't contain KeyValuePair properties
-- LogLevel mapping: None->Verbose (not suppressed), Critical->Fatal, Trace->Verbose
-- Test pattern favors direct logger instantiation over full DI container setup for unit tests
-- Service registration tests use full DI to verify integration, while logger tests use direct instantiation
+| Assertion | Example |
+|-----------|---------|
+| **LogLevel mapping** | `logEvent.Level.ShouldBe(LogEventLevel.Error)` |
+| **Message template** | `logEvent.MessageTemplate.Text.ShouldBe("Task {TaskId} started")` |
+| **Message properties** | `logEvent.Properties["TaskId"].ToString().ShouldBe(taskId.ToString())` |
+| **Exception** | `logEvent.Exception.ShouldBeOfType<InvalidOperationException>()` |
+| **IsEnabled** | `logger.IsEnabled(LogLevel.Information).ShouldBeTrue()` |

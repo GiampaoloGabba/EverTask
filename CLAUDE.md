@@ -4,240 +4,115 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-EverTask is a .NET background task execution library inspired by MediatR. It provides persistent, resilient task execution with support for scheduled, delayed, and recurring tasks. The library targets .NET 6.0, 7.0, and 8.0.
+EverTask is a .NET background task execution library inspired by MediatR. It provides persistent, resilient task execution with support for scheduled, delayed, and recurring tasks. Multi-targets **net6.0, net7.0, net8.0, net9.0**.
+
+**Key Features**: Request/handler pattern, persistent storage (SQL Server, SQLite, In-Memory), retry policies with exception filtering, scheduled/recurring tasks (cron + fluent API), lifecycle callbacks, timeout handling, monitoring integrations.
+
+## File Organization Principle
+
+- **Root CLAUDE.md** (this file) = Global rules, architecture, standards
+- **Local CLAUDE.md** = Module-specific gotchas, prerequisites, operational notes only
+- **IMPORTANT**: Avoid duplicating content between root and local files. Root = general guidance, local = specific operational details.
 
 ## Solution Structure
 
-The solution follows a modular architecture organized into several key areas:
-
-- **src/EverTask**: Core library implementing the task dispatcher and worker executor
-- **src/EverTask.Abstractions**: Lightweight package for application layers (contains interfaces like `IEverTask`, `ITaskDispatcher`)
-- **src/Storage/**: Persistence implementations (EfCore base, SqlServer, Sqlite)
+- **src/EverTask**: Core library (dispatcher, worker executor, scheduler, in-memory storage)
+- **src/EverTask.Abstractions**: Lightweight interfaces package (IEverTask, ITaskDispatcher, IEverTaskHandler)
+- **src/Storage/**: Persistence providers (EfCore, SqlServer, Sqlite)
 - **src/Logging/**: Logging integrations (Serilog)
-- **src/Monitoring/**: Monitoring implementations (SignalR)
-- **samples/**: Example implementations (AspnetCore, Console)
-- **test/**: Test projects for core, logging, and storage
+- **src/Monitoring/**: Monitoring integrations (SignalR)
+- **samples/**: Example implementations
+- **test/**: Test projects mirroring src/
 
-## Build and Test Commands
+## Build & Test Commands
 
-### Build
-```bash
-dotnet restore EverTask.sln
-dotnet build EverTask.sln
-```
+| Task | Command | Notes |
+|------|---------|-------|
+| **Build** | `dotnet build EverTask.sln -c Release` | Warnings as errors |
+| **Test All** | `dotnet test EverTask.sln -c Release` | Exclude SQL Server: add `--filter "FullyQualifiedName!~SqlServerEfCoreTaskStorageTests"` |
+| **Pack** | `dotnet pack <project.csproj> -c Release -o nupkg` | For all projects in src/ |
+| **Run Sample** | `dotnet run --project samples/<project>/<project>.csproj` | AspnetCore or Console |
 
-### Run Tests
-```bash
-# Run all tests
-dotnet test EverTask.sln
+**Prerequisites**: .NET 9 SDK (pinned in `global.json`), SQL Server/LocalDB optional for storage tests.
 
-# Run core tests only
-dotnet test test/EverTask.Tests/EverTask.Tests.csproj
+## Coding Standards
 
-# Run tests excluding SQL Server storage tests (requires container)
-dotnet test test/EverTask.Tests/EverTask.Tests.csproj --filter FullyQualifiedName!~EverTask.Tests.Storage.SqlServer.SqlServerEfCoreTaskStorageTests
+**IMPORTANT**: Strict code quality enforced.
 
-# Run storage tests
-dotnet test test/EverTask.Tests.Storage/EverTask.Tests.Storage.csproj
-
-# Run logging tests
-dotnet test test/EverTask.Tests.Logging/EverTask.Tests.Logging.csproj
-```
-
-### Create NuGet Packages
-```bash
-dotnet pack src/EverTask.Abstractions/EverTask.Abstractions.csproj -o nupkg
-dotnet pack src/EverTask/EverTask.csproj -o nupkg
-dotnet pack src/Storage/EverTask.Storage.SqlServer/EverTask.Storage.SqlServer.csproj -o nupkg
-dotnet pack src/Storage/EverTask.Storage.Sqlite/EverTask.Storage.Sqlite.csproj -o nupkg
-dotnet pack src/Logging/EverTask.Logging.Serilog/EverTask.Logging.Serilog.csproj -o nupkg
-dotnet pack src/Monitoring/EverTask.Monitor.AspnetCore.SignalR/EverTask.Monitor.AspnetCore.SignalR.csproj -o nupkg
-```
-
-### Run Examples
-```bash
-# ASP.NET Core example
-dotnet run --project samples/EverTask.Example.AspnetCore/EverTask.Example.AspnetCore.csproj
-
-# Console example
-dotnet run --project samples/EverTask.Example.Console/EverTask.Example.Console.csproj
-```
+- **Test Framework**: xUnit + Shouldly + Moq (NOT MSTest)
+- **Nullable**: Enabled project-wide (`<Nullable>enable</Nullable>`)
+- **Warnings as Errors**: `<TreatWarningsAsErrors>true</TreatWarningsAsErrors>` — code MUST build warning-free
+- **EditorConfig**: `.editorconfig` enforces 4-space indent, LF line endings, implicit `var`
+- **Naming**: PascalCase (types/public), camelCase (params/locals), _camelCase (private fields), I prefix (interfaces)
+- **Namespaces**: Match folder paths (e.g., `EverTask.Storage.SqlServer`)
 
 ## Architecture Overview
 
-### Task Execution Flow
-1. **Dispatch**: Tasks are dispatched via `ITaskDispatcher` (implemented by `Dispatcher.cs`)
-2. **Persistence**: Tasks are persisted to storage via `ITaskStorage` implementations
-3. **Queueing**: Tasks enter a `BoundedQueue` (using `System.Threading.Channels`) for immediate execution, or are added to a `ConcurrentPriorityQueue` for scheduled/recurring tasks
-4. **Execution**: The `WorkerExecutor` dequeues and executes tasks with retry policies, timeouts, and lifecycle callbacks
-5. **Monitoring**: Events are published via `TaskEventOccurredAsync` for monitoring integrations
+EverTask uses MediatR-inspired request/handler pattern adapted for persistent background execution:
 
-### Key Components
+- **Dispatcher** → Serializes & persists tasks (ITaskStorage) → Routes to queues:
+  - Immediate tasks: BoundedQueue (System.Threading.Channels)
+  - Scheduled/recurring: ConcurrentPriorityQueue (TimerScheduler)
+- **WorkerExecutor** → Executes with retry policies, timeouts, lifecycle callbacks (OnStarted, OnCompleted, OnError, OnRetry)
+- **TaskHandlerExecutor** → Task execution metadata, converts to/from QueuedTask for persistence
+- **ITaskStorage** → Abstract persistence (SqlServer, Sqlite, InMemory implementations in src/Storage/)
+- **Scheduler** → Cron + fluent API for recurring tasks
 
-**Dispatcher** (`src/EverTask/Dispatcher/Dispatcher.cs`)
-- Entry point for task dispatching
-- Handles task persistence, scheduling, and queueing
-- Adapted from MediatR's `Mediator.cs`
-
-**WorkerExecutor** (`src/EverTask/Worker/WorkerExecutor.cs`)
-- Executes tasks with configurable retry policies, timeouts, and CPU-bound handling
-- Manages task lifecycle callbacks (`OnStarted`, `OnCompleted`, `OnError`)
-- Publishes events to monitoring systems
-
-**TaskHandlerExecutor** (`src/EverTask/Handler/TaskHandlerExecutor.cs`)
-- Record type containing task execution metadata
-- Converts to/from `QueuedTask` for persistence
-- Adapted from MediatR's `NotificationHandlerExecutor.cs`
-
-**ITaskStorage** (various implementations in `src/Storage/`)
-- Abstract persistence layer
-- Implementations: SqlServer, Sqlite, InMemory
-- Stores task state, scheduled executions, and audit trails
-
-**Scheduler** (`src/EverTask/Scheduler/`)
-- Manages delayed and recurring task execution
-- Supports cron expressions and fluent scheduling API
-- Uses `ConcurrentPriorityQueue` for efficient scheduling
-
-### Request/Handler Pattern
-
-EverTask uses a request/handler pattern similar to MediatR:
-
+**Key Pattern**:
 ```csharp
-// Request
-public record MyTaskRequest(string Data) : IEverTask;
-
-// Handler
-public class MyTaskHandler : EverTaskHandler<MyTaskRequest>
-{
-    public override Task Handle(MyTaskRequest task, CancellationToken cancellationToken)
-    {
-        // Task logic here
-        return Task.CompletedTask;
-    }
-}
+// Request: public record MyTask(...) : IEverTask;
+// Handler: public class MyHandler : EverTaskHandler<MyTask> { ... }
+// Register: services.AddEverTask(opt => opt.RegisterTasksFromAssembly(...)).AddSqlServerStorage(...);
 ```
 
-Handlers support optional overrides: `OnStarted`, `OnCompleted`, `OnError`, `OnRetry`, `DisposeAsyncCore`
+See local CLAUDE.md files for implementation details.
 
-### Retry Policy Architecture (v1.6.0+)
+## Operative Checklists
 
-**Overview**: EverTask's retry system supports exception filtering and lifecycle callbacks to fail-fast on permanent errors while providing visibility into retry attempts.
+### Critical Design Decisions
+- **MediatR Inspiration**: `IEverTask` ≈ `INotification`, `IEverTaskHandler<T>` ≈ `INotificationHandler<T>`, `ITaskDispatcher` ≈ `IMediator`
+  - **Key Differences**: Persistent (survives restarts), scheduling/recurring, retry policies, timeouts, monitoring
+- **Serialization**: Uses **Newtonsoft.Json** (NOT System.Text.Json) for polymorphism support
+  - **Best Practice**: Keep tasks simple (primitives, Guid, DateTimeOffset), use IDs not entities (e.g., `Guid OrderId` not `Order Order`)
+- **DI Scoping**: WorkerExecutor creates **scoped service scope per task** (safe DbContext usage, no shared state)
+- **Retry Policies (v1.6.0+)**: Exception filtering (whitelist/blacklist), predicate filtering, OnRetry callback
+  - **Default**: Retry all except `OperationCanceledException` and `TimeoutException`
+  - See `src/EverTask.Abstractions/CLAUDE.md` for details
 
-**Key Files**:
-- `src/EverTask.Abstractions/IRetryPolicy.cs` - Interface with default `ShouldRetry(Exception)` method
-- `src/EverTask.Abstractions/LinearRetryPolicy.cs` - Built-in retry policy with fluent exception filtering API
-- `src/EverTask.Abstractions/RetryPolicyExtensions.cs` - Predefined exception sets (database, network, all transient errors)
-- `src/EverTask.Abstractions/EverTaskHandler.cs` - `OnRetry` virtual method (line ~94)
-- `src/EverTask/Worker/WorkerExecutor.cs` - Integrates retry policy with `OnRetry` callbacks
+### Testing
+- **Framework**: xUnit + Shouldly + Moq
+- **Naming**: `Should_{expected_behavior}_when_{condition}` or `Should_{expected_behavior}`
+- **Organization**: Tests mirror src/ structure
+- **Helpers**: `test/EverTask.Tests/TestHelpers/` (TaskWaitHelper, TestTaskStateManager)
+- **SQL Server Tests**: Require Docker (see `src/Storage/EverTask.Storage.SqlServer/CLAUDE.md`)
+- See `test/EverTask.Tests/CLAUDE.md` for patterns
 
-**Exception Filtering Flow**:
+### Commit & PR
+- **Format**: Conventional commits (imperative mood) — `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `build:`
+- **Scoped**: `feat(storage):`, `fix(scheduler):`, etc.
+- **PRs**: Link issues, outline behavioral impact/breaking changes, list verification steps, update docs/samples
 
-1. Handler execution throws exception in `WorkerExecutor.ExecuteTask()`
-2. `IRetryPolicy.Execute()` catches exception and calls `ShouldRetry(exception)`
-3. `LinearRetryPolicy.ShouldRetry()` evaluates filters in priority order:
-   - **Predicate** (`HandleWhen`): If configured, uses custom `Func<Exception, bool>` (highest priority)
-   - **Whitelist** (`Handle<T>`): If configured, only retry if exception type matches whitelist
-   - **Blacklist** (`DoNotHandle<T>`): If configured, retry all except blacklisted types
-   - **Default**: Retry all except `OperationCanceledException` and `TimeoutException`
-4. If `ShouldRetry()` returns `false`: Throw immediately (fail-fast)
-5. If `ShouldRetry()` returns `true`: Wait for delay, invoke `onRetryCallback`, then retry
+## Ops Quick Facts
 
-**OnRetry Callback Flow**:
+- **Package Management**: Central Package Management (`Directory.Packages.props`) — do NOT add `<PackageReference>` versions in .csproj, add to Directory.Packages.props
+- **Version**: Current 1.5.4 (defined in `Directory.Build.props`)
+- **CI/CD**: Build on push/PR to master (`.github/workflows/build.yml`), manual release workflow (`.github/workflows/release.yml`)
+- **MediatR Attribution**: Core files adapted from MediatR (Apache 2.0) — see attribution comments in Dispatcher.cs, TaskHandlerExecutor.cs, TaskHandlerWrapper.cs, HandlerRegistrar.cs
 
-1. `WorkerExecutor.ExecuteTask()` passes `onRetryCallback` lambda to `IRetryPolicy.Execute()`
-2. Lambda invokes handler's `OnRetry()` virtual method with task ID, attempt number, exception, and delay
-3. `LinearRetryPolicy.Execute()` calls `onRetryCallback` after delay, before retry attempt
-4. Callback exceptions are logged but don't prevent retry (reliability over observability)
-5. `OnRetry` is NOT called for initial execution, only retries (attempt numbers are 1-based)
+## Module-Specific Guidance
 
-**Implementation Details**:
+| Module | Local CLAUDE.md | Focus |
+|--------|-----------------|-------|
+| **Core** | `src/EverTask/CLAUDE.md` | Dispatcher/worker implementation, MediatR attribution, async guidance |
+| **Abstractions** | `src/EverTask.Abstractions/CLAUDE.md` | Interfaces, retry policy details, serialization gotchas |
+| **Recurring** | `src/EverTask/Scheduler/Recurring/CLAUDE.md` | Cron scheduling, builder flow, calculation gotchas |
+| **SQL Server** | `src/Storage/EverTask.Storage.SqlServer/CLAUDE.md` | Setup, schema-aware migrations, Docker testing |
+| **SQLite** | `src/Storage/EverTask.Storage.Sqlite/CLAUDE.md` | Setup, connection strings |
+| **EF Core** | `src/Storage/EverTask.Storage.EfCore/CLAUDE.md` | Base EF Core implementation |
+| **Serilog** | `src/Logging/EverTask.Logging.Serilog/CLAUDE.md` | Serilog integration |
+| **SignalR** | `src/Monitoring/EverTask.Monitor.AspnetCore.SignalR/CLAUDE.md` | SignalR monitoring |
+| **Tests** | `test/EverTask.Tests/CLAUDE.md` | Test organization, naming conventions, helpers |
+| **Storage Tests** | `test/EverTask.Tests.Storage/CLAUDE.md` | Storage integration tests |
+| **Logging Tests** | `test/EverTask.Tests.Logging/CLAUDE.md` | Logging integration tests |
 
-- `IRetryPolicy.Execute()` signature includes optional `Func<int, Exception, TimeSpan, ValueTask>? onRetryCallback` parameter (backward compatible, defaults to null)
-- `LinearRetryPolicy` uses `HashSet<Type>` for whitelist/blacklist with `Type.IsAssignableFrom()` for derived type matching (e.g., `Handle<IOException>()` also catches `FileNotFoundException`)
-- Exception filter validation prevents mixing `Handle<T>()` and `DoNotHandle<T>()` (throws `InvalidOperationException` on first conflicting call)
-- `OnRetry` attempt number is 1-based (first retry = 1, not 0) for user-friendly logging
-- `WorkerExecutor` wraps `OnRetry` in try-catch to prevent callback failures from impacting retry execution
-
-**Predefined Exception Sets** (extension methods):
-
-```csharp
-// Database transient errors
-.HandleTransientDatabaseErrors()  // DbException, TimeoutException
-
-// Network transient errors
-.HandleTransientNetworkErrors()   // HttpRequestException, SocketException, WebException, TaskCanceledException
-
-// All transient errors (combines above)
-.HandleAllTransientErrors()
-```
-
-**Fluent API Examples**:
-
-```csharp
-// Whitelist (type-safe generics)
-RetryPolicy = new LinearRetryPolicy(5, TimeSpan.FromSeconds(2))
-    .Handle<DbException>()
-    .Handle<HttpRequestException>();
-
-// Whitelist (params Type[] for many types)
-RetryPolicy = new LinearRetryPolicy(5, TimeSpan.FromSeconds(2))
-    .Handle(typeof(DbException), typeof(SqlException), typeof(HttpRequestException));
-
-// Blacklist
-RetryPolicy = new LinearRetryPolicy(3, TimeSpan.FromSeconds(1))
-    .DoNotHandle<ArgumentException>()
-    .DoNotHandle<ValidationException>();
-
-// Predicate (custom logic)
-RetryPolicy = new LinearRetryPolicy(3, TimeSpan.FromSeconds(1))
-    .HandleWhen(ex => ex is HttpRequestException httpEx && httpEx.StatusCode >= 500);
-```
-
-**Integration Points**:
-
-- `IRetryPolicy.ShouldRetry(Exception)`: Default interface method (C# 8+) with backward-compatible default implementation
-- `IRetryPolicy.Execute(...)`: Signature updated with optional `onRetryCallback` parameter (existing implementations remain compatible)
-- `WorkerExecutor.ExecuteTask()`: Passes handler instance to callback lambda for `OnRetry()` invocation
-
-### Dependency Injection
-
-Register tasks from assemblies containing `IEverTask` implementations:
-
-```csharp
-services.AddEverTask(opt => opt.RegisterTasksFromAssembly(typeof(Program).Assembly))
-    .AddMemoryStorage(); // or AddSqlServerStorage, AddSqliteStorage
-```
-
-## Package Management
-
-This project uses **Central Package Management**. Package versions are defined in `Directory.Packages.props` with conditional versioning based on target framework (.NET 6, 7, or 8).
-
-## Serialization
-
-EverTask uses **Newtonsoft.Json** for task serialization/deserialization due to its robust polymorphism support. Keep task requests simple (primitives or basic objects) to ensure reliable persistence.
-
-## MediatR Attribution
-
-Several core files were adapted from MediatR (Apache 2.0 License). These files contain attribution comments:
-- `src/EverTask/Dispatcher/Dispatcher.cs`
-- `src/EverTask/Handler/TaskHandlerExecutor.cs`
-- `src/EverTask/Handler/TaskHandlerWrapper.cs`
-- `src/EverTask/MicrosoftExtensionsDI/HandlerRegistrar.cs`
-
-## Version Management
-
-Current version: 1.5.4 (defined in `Directory.Build.props`)
-
-## CI/CD
-
-- **Build**: Triggered on push/PR to master (.github/workflows/build.yml)
-- **Release**: Manual workflow dispatch for NuGet publishing (.github/workflows/release.yml)
-
-## Storage Implementations
-
-When working with storage:
-- EfCore base is in `src/Storage/EverTask.Storage.EfCore/`
-- SQL Server uses schema `EverTask` by default (configurable)
-- Migrations can be auto-applied or manual
-- DbContext is scoped per task execution for thread safety (see `WorkerExecutor.cs:25`)
+**Adding New Modules**: Create local CLAUDE.md only for module-specific prerequisites or critical gotchas. Link to external docs for extended explanations. Follow 40-100 line guideline.
