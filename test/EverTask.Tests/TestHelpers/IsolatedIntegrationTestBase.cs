@@ -17,6 +17,7 @@ public abstract class IsolatedIntegrationTestBase : IAsyncDisposable
     protected IEverTaskWorkerExecutor WorkerExecutor { get; private set; } = null!;
     protected ICancellationSourceProvider CancellationSourceProvider { get; private set; } = null!;
     protected TestTaskStateManager StateManager { get; private set; } = null!;
+    protected IGuidGenerator GuidGenerator { get; private set; } = null!;
 
     private const int DefaultStopTimeoutMs = 2000;
 
@@ -67,6 +68,7 @@ public abstract class IsolatedIntegrationTestBase : IAsyncDisposable
         WorkerExecutor = Host.Services.GetRequiredService<IEverTaskWorkerExecutor>();
         CancellationSourceProvider = Host.Services.GetRequiredService<ICancellationSourceProvider>();
         StateManager = Host.Services.GetRequiredService<TestTaskStateManager>();
+        GuidGenerator = Host.Services.GetRequiredService<IGuidGenerator>();
 
         // Start the host
         await Host.StartAsync();
@@ -107,6 +109,7 @@ public abstract class IsolatedIntegrationTestBase : IAsyncDisposable
         WorkerExecutor = Host.Services.GetRequiredService<IEverTaskWorkerExecutor>();
         CancellationSourceProvider = Host.Services.GetRequiredService<ICancellationSourceProvider>();
         StateManager = Host.Services.GetRequiredService<TestTaskStateManager>();
+        GuidGenerator = Host.Services.GetRequiredService<IGuidGenerator>();
 
         if (startHost)
         {

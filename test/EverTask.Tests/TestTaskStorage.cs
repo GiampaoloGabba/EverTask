@@ -23,7 +23,12 @@ public class TestTaskStorage : ITaskStorage
         return Task.CompletedTask;
     }
 
-    public Task<QueuedTask[]> RetrievePending(CancellationToken ct = default)
+    public Task<QueuedTask[]> RetrievePending(DateTimeOffset? lastCreatedAt, Guid? lastId, int take, CancellationToken ct = default)
+    {
+        return Task.FromResult(Array.Empty<QueuedTask>());
+    }
+
+    public Task<QueuedTask[]> RetrievePendingPaged(int skip, int take, CancellationToken ct = default)
     {
         return Task.FromResult(Array.Empty<QueuedTask>());
     }
