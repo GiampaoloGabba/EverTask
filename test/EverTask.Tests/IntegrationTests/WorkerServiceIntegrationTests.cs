@@ -21,7 +21,7 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         // Wait for task to complete
         await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed);
 
-        var pt = await Storage.RetrievePending();
+        var pt = await Storage.RetrievePending(null, null, 10);
         pt.Length.ShouldBe(0);
 
         var tasks = await Storage.GetAll();
@@ -52,7 +52,7 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         // Wait for task to complete
         await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed);
 
-        var pt = await Storage.RetrievePending();
+        var pt = await Storage.RetrievePending(null, null, 10);
         pt.Length.ShouldBe(0);
 
         var tasks = await Storage.GetAll();
@@ -85,7 +85,7 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
 
         CancellationSourceProvider.TryGet(taskId).ShouldBeNull();
 
-        var pt = await Storage.RetrievePending();
+        var pt = await Storage.RetrievePending(null, null, 10);
         pt.Length.ShouldBe(0);
 
         var tasks = await Storage.GetAll();
@@ -114,7 +114,7 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         // Wait for task to be cancelled
         await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Cancelled);
 
-        var pt = await Storage.RetrievePending();
+        var pt = await Storage.RetrievePending(null, null, 10);
         pt.Length.ShouldBe(0);
 
         var tasks = await Storage.GetAll();
@@ -156,7 +156,7 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         // Wait a bit for the service stopped status to be persisted
         await Task.Delay(300);
 
-        var pt = await Storage.RetrievePending();
+        var pt = await Storage.RetrievePending(null, null, 10);
         pt.Length.ShouldBe(1);
 
         var tasks = await Storage.GetAll();
@@ -182,7 +182,7 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         // Wait for task to complete with retries (3 attempts)
         await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed, timeoutMs: 3000);
 
-        var pt = await Storage.RetrievePending();
+        var pt = await Storage.RetrievePending(null, null, 10);
         pt.Length.ShouldBe(0);
 
         var tasks = await Storage.GetAll();
@@ -207,7 +207,7 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         // Wait for task to complete with custom retry policy (5 attempts)
         await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed, timeoutMs: 2000);
 
-        var pt = await Storage.RetrievePending();
+        var pt = await Storage.RetrievePending(null, null, 10);
         pt.Length.ShouldBe(0);
 
         var tasks = await Storage.GetAll();
@@ -235,7 +235,7 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         // Adaptive: Local 5s, CI 15s (coverage tool overhead)
         await WaitForRecurringRunsAsync(taskId, expectedRuns: 3, timeoutMs: TestEnvironment.GetTimeout(5000, 15000));
 
-        var pt = await Storage.RetrievePending();
+        var pt = await Storage.RetrievePending(null, null, 10);
         pt.Length.ShouldBe(0);
 
         var tasks = await Storage.GetAll();
@@ -264,7 +264,7 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         // Adaptive: Local 6s, CI 18s (coverage tool overhead)
         await WaitForRecurringRunsAsync(taskId, expectedRuns: 4, timeoutMs: TestEnvironment.GetTimeout(6000, 18000));
 
-        var pt = await Storage.RetrievePending();
+        var pt = await Storage.RetrievePending(null, null, 10);
         pt.Length.ShouldBe(0);
 
         var tasks = await Storage.GetAll();
@@ -290,7 +290,7 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         // Wait for task to fail due to timeout (timeout is 300ms, handler takes 500ms)
         await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Failed, timeoutMs: 2000);
 
-        var pt = await Storage.RetrievePending();
+        var pt = await Storage.RetrievePending(null, null, 10);
         pt.Length.ShouldBe(0);
 
         var tasks = await Storage.GetAll();
@@ -313,7 +313,7 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         // Wait for task to fail (with retries)
         await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Failed, timeoutMs: 3000);
 
-        var pt = await Storage.RetrievePending();
+        var pt = await Storage.RetrievePending(null, null, 10);
         pt.Length.ShouldBe(0);
 
         var tasks = await Storage.GetAll();
@@ -351,7 +351,7 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         dequeued.Task.ShouldBe(task2);
 
         // Verify both tasks are in pending state
-        var pt = await Storage.RetrievePending();
+        var pt = await Storage.RetrievePending(null, null, 10);
         pt.Length.ShouldBe(2);
 
         // NOW start the host - it should pick up the pending tasks and execute them
