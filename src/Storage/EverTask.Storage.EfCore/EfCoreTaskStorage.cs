@@ -9,7 +9,8 @@ namespace EverTask.Storage.EfCore;
 public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTaskLogger<EfCoreTaskStorage> logger)
     : ITaskStorage
 {
-    public virtual async Task<QueuedTask[]> Get(Expression<Func<QueuedTask, bool>> where, CancellationToken ct = default)
+    public virtual async Task<QueuedTask[]> Get(Expression<Func<QueuedTask, bool>> where,
+                                                CancellationToken ct = default)
     {
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
 
@@ -41,24 +42,40 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         logger.LogInformation("Task {name} persisted", taskEntity.Type);
     }
 
-    public virtual async Task<QueuedTask[]> RetrievePending(CancellationToken ct = default)
+    public virtual async Task<QueuedTask[]> RetrievePending(DateTimeOffset? lastCreatedAt, Guid? lastId, int take, CancellationToken ct = default)
     {
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
 
-        logger.LogInformation("Retrieving Pending Tasks");
+        logger.LogInformation("Retrieving Pending Tasks (keyset: lastCreatedAt={LastCreatedAt}, lastId={LastId}, take={Take})",
+            lastCreatedAt, lastId, take);
 
         var now = DateTimeOffset.UtcNow;
 
-        return await dbContext.QueuedTasks
-                              .AsNoTracking()
-                              .Where(t => (t.MaxRuns == null || t.CurrentRunCount <= t.MaxRuns)
-                                          && (t.RunUntil == null || t.RunUntil >= now)
-                                          && (t.Status == QueuedTaskStatus.Queued ||
-                                              t.Status == QueuedTaskStatus.Pending ||
-                                              t.Status == QueuedTaskStatus.ServiceStopped ||
-                                              t.Status == QueuedTaskStatus.InProgress))
-                              .ToArrayAsync(ct)
-                              .ConfigureAwait(false);
+        var query = dbContext.QueuedTasks
+                             .AsNoTracking()
+                             .Where(t => (t.MaxRuns == null || t.CurrentRunCount <= t.MaxRuns)
+                                         && (t.RunUntil == null || t.RunUntil >= now)
+                                         && (t.Status == QueuedTaskStatus.Queued ||
+                                             t.Status == QueuedTaskStatus.Pending ||
+                                             t.Status == QueuedTaskStatus.ServiceStopped ||
+                                             t.Status == QueuedTaskStatus.InProgress));
+
+        if (lastCreatedAt.HasValue)
+        {
+            var lastTime = lastCreatedAt.Value;
+            var lastGuid = lastId ?? Guid.Empty;
+
+            query = query.Where(t =>
+                t.CreatedAtUtc > lastTime ||
+                (t.CreatedAtUtc == lastTime && t.Id.CompareTo(lastGuid) > 0));
+        }
+
+        return await query
+                     .OrderBy(t => t.CreatedAtUtc)
+                     .ThenBy(t => t.Id)
+                     .Take(take)
+                     .ToArrayAsync(ct)
+                     .ConfigureAwait(false);
     }
 
     public async Task SetQueued(Guid taskId, CancellationToken ct = default) =>
@@ -77,7 +94,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         await SetStatus(taskId, QueuedTaskStatus.ServiceStopped, exception).ConfigureAwait(false);
 
     public virtual async Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception = null,
-                                    CancellationToken ct = default)
+                                        CancellationToken ct = default)
     {
         logger.LogInformation("Set Task {taskId} with Status {status}", taskId, status);
 
@@ -99,9 +116,10 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             var rowsAffected = await dbContext.QueuedTasks
                                               .Where(x => x.Id == taskId)
                                               .ExecuteUpdateAsync(setters => setters
-                                                  .SetProperty(t => t.Status, status)
-                                                  .SetProperty(t => t.LastExecutionUtc, lastExecutionUtc)
-                                                  .SetProperty(t => t.Exception, ex), ct)
+                                                                             .SetProperty(t => t.Status, status)
+                                                                             .SetProperty(t => t.LastExecutionUtc,
+                                                                                 lastExecutionUtc)
+                                                                             .SetProperty(t => t.Exception, ex), ct)
                                               .ConfigureAwait(false);
 
             if (rowsAffected == 0)
@@ -164,7 +182,6 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
         if (task != null)
         {
-
             task.RunsAudits.Add(new RunsAudit
             {
                 QueuedTaskId = taskId,
@@ -210,18 +227,26 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             var rowsAffected = await dbContext.QueuedTasks
                                               .Where(t => t.Id == task.Id)
                                               .ExecuteUpdateAsync(setters => setters
-                                                  .SetProperty(t => t.Type, task.Type)
-                                                  .SetProperty(t => t.Request, task.Request)
-                                                  .SetProperty(t => t.Handler, task.Handler)
-                                                  .SetProperty(t => t.ScheduledExecutionUtc, task.ScheduledExecutionUtc)
-                                                  .SetProperty(t => t.IsRecurring, task.IsRecurring)
-                                                  .SetProperty(t => t.RecurringTask, task.RecurringTask)
-                                                  .SetProperty(t => t.RecurringInfo, task.RecurringInfo)
-                                                  .SetProperty(t => t.MaxRuns, task.MaxRuns)
-                                                  .SetProperty(t => t.RunUntil, task.RunUntil)
-                                                  .SetProperty(t => t.NextRunUtc, task.NextRunUtc)
-                                                  .SetProperty(t => t.QueueName, task.QueueName)
-                                                  .SetProperty(t => t.TaskKey, task.TaskKey), ct)
+                                                                             .SetProperty(t => t.Type, task.Type)
+                                                                             .SetProperty(t => t.Request, task.Request)
+                                                                             .SetProperty(t => t.Handler, task.Handler)
+                                                                             .SetProperty(t => t.ScheduledExecutionUtc,
+                                                                                 task.ScheduledExecutionUtc)
+                                                                             .SetProperty(t => t.IsRecurring,
+                                                                                 task.IsRecurring)
+                                                                             .SetProperty(t => t.RecurringTask,
+                                                                                 task.RecurringTask)
+                                                                             .SetProperty(t => t.RecurringInfo,
+                                                                                 task.RecurringInfo)
+                                                                             .SetProperty(t => t.MaxRuns, task.MaxRuns)
+                                                                             .SetProperty(t => t.RunUntil,
+                                                                                 task.RunUntil)
+                                                                             .SetProperty(t => t.NextRunUtc,
+                                                                                 task.NextRunUtc)
+                                                                             .SetProperty(t => t.QueueName,
+                                                                                 task.QueueName)
+                                                                             .SetProperty(t => t.TaskKey, task.TaskKey),
+                                                  ct)
                                               .ConfigureAwait(false);
 
             if (rowsAffected == 0)
@@ -262,12 +287,14 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     }
 
     /// <inheritdoc />
-    public async Task RecordSkippedOccurrences(Guid taskId, List<DateTimeOffset> skippedOccurrences, CancellationToken ct = default)
+    public async Task RecordSkippedOccurrences(Guid taskId, List<DateTimeOffset> skippedOccurrences,
+                                               CancellationToken ct = default)
     {
         if (skippedOccurrences.Count == 0)
             return;
 
-        logger.LogInformation("Recording {Count} skipped occurrences for task {TaskId}", skippedOccurrences.Count, taskId);
+        logger.LogInformation("Recording {Count} skipped occurrences for task {TaskId}", skippedOccurrences.Count,
+            taskId);
 
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
 
@@ -275,7 +302,8 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         {
             // Crea messaggio e inserisci direttamente: la FK garantisce l'esistenza
             var skippedTimes = string.Join(", ", skippedOccurrences.Select(d => d.ToString("yyyy-MM-dd HH:mm:ss")));
-            var skipMessage = $"Skipped {skippedOccurrences.Count} missed occurrence(s) to maintain schedule: {skippedTimes}";
+            var skipMessage =
+                $"Skipped {skippedOccurrences.Count} missed occurrence(s) to maintain schedule: {skippedTimes}";
 
             var runsAudit = new RunsAudit
             {
@@ -296,7 +324,8 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     }
 
     /// <inheritdoc />
-    public async Task SaveExecutionLogsAsync(Guid taskId, IReadOnlyList<TaskExecutionLog> logs, CancellationToken cancellationToken)
+    public async Task SaveExecutionLogsAsync(Guid taskId, IReadOnlyList<TaskExecutionLog> logs,
+                                             CancellationToken cancellationToken)
     {
         // Performance optimization: skip if no logs
         if (logs.Count == 0)
@@ -310,7 +339,8 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<TaskExecutionLog>> GetExecutionLogsAsync(Guid taskId, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<TaskExecutionLog>> GetExecutionLogsAsync(
+        Guid taskId, CancellationToken cancellationToken)
     {
         await using var dbContext = await contextFactory.CreateDbContextAsync(cancellationToken);
 
@@ -319,16 +349,17 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<TaskExecutionLog>> GetExecutionLogsAsync(Guid taskId, int skip, int take, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<TaskExecutionLog>> GetExecutionLogsAsync(
+        Guid taskId, int skip, int take, CancellationToken cancellationToken)
     {
         await using var dbContext = await contextFactory.CreateDbContextAsync(cancellationToken);
 
         var query = GetExecutionLogsQuery(dbContext, taskId);
         return await query
-            .Skip(skip)
-            .Take(take)
-            .ToListAsync(cancellationToken)
-            .ConfigureAwait(false);
+                     .Skip(skip)
+                     .Take(take)
+                     .ToListAsync(cancellationToken)
+                     .ConfigureAwait(false);
     }
 
     private static IQueryable<TaskExecutionLog> GetExecutionLogsQuery(ITaskStoreDbContext dbContext, Guid taskId) =>

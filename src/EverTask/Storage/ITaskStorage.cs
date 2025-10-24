@@ -31,11 +31,18 @@ public interface ITaskStorage
     Task Persist(QueuedTask executor, CancellationToken ct = default);
 
     /// <summary>
-    /// Retrieves all pending tasks.
+    /// Retrieves pending tasks using keyset pagination ordered by creation timestamp.
     /// </summary>
+    /// <param name="lastCreatedAt">
+    /// The creation timestamp of the last processed task. Pass <c>null</c> to retrieve the first page.
+    /// </param>
+    /// <param name="lastId">
+    /// The identifier of the last processed task (used as tie-breaker when timestamps are equal).
+    /// </param>
+    /// <param name="take">Maximum number of tasks to retrieve.</param>
     /// <param name="ct">Optional cancellation token.</param>
-    /// <returns>An array of pending tasks.</returns>
-    Task<QueuedTask[]> RetrievePending(CancellationToken ct = default);
+    /// <returns>An array of pending tasks (up to <paramref name="take"/> count).</returns>
+    Task<QueuedTask[]> RetrievePending(DateTimeOffset? lastCreatedAt, Guid? lastId, int take, CancellationToken ct = default);
 
     /// <summary>
     /// Sets a task's status to queued.

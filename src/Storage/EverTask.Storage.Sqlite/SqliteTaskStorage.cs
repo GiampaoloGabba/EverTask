@@ -22,15 +22,15 @@ public class SqliteTaskStorage : EfCoreTaskStorage
     }
 
     /// <summary>
-    /// Retrieves pending tasks with SQLite-compatible query.
-    /// Filters by status and MaxRuns in the database, then applies RunUntil filter in memory
+    /// Retrieves pending tasks using keyset pagination, applying RunUntil filtering in memory
     /// to avoid SQLite DateTimeOffset comparison issues.
     /// </summary>
-    public override async Task<QueuedTask[]> RetrievePending(CancellationToken ct = default)
+    public override async Task<QueuedTask[]> RetrievePending(DateTimeOffset? lastCreatedAt, Guid? lastId, int take, CancellationToken ct = default)
     {
         await using var dbContext = await _contextFactory.CreateDbContextAsync(ct);
 
-        _logger.LogInformation("Retrieving Pending Tasks (SQLite)");
+        _logger.LogInformation("Retrieving Pending Tasks (SQLite keyset: lastCreatedAt={LastCreatedAt}, lastId={LastId}, take={Take})",
+            lastCreatedAt, lastId, take);
 
         var now = DateTimeOffset.UtcNow;
 
@@ -38,16 +38,24 @@ public class SqliteTaskStorage : EfCoreTaskStorage
         var tasks = await dbContext.QueuedTasks
             .AsNoTracking()
             .Where(t => (t.MaxRuns == null || t.CurrentRunCount <= t.MaxRuns)
-                     && (t.Status == QueuedTaskStatus.Queued ||
-                         t.Status == QueuedTaskStatus.Pending ||
-                         t.Status == QueuedTaskStatus.ServiceStopped ||
-                         t.Status == QueuedTaskStatus.InProgress))
+                        && (t.Status == QueuedTaskStatus.Queued ||
+                            t.Status == QueuedTaskStatus.Pending ||
+                            t.Status == QueuedTaskStatus.ServiceStopped ||
+                            t.Status == QueuedTaskStatus.InProgress))
             .ToArrayAsync(ct)
             .ConfigureAwait(false);
 
         // Apply RunUntil filter in memory (SQLite has issues with DateTimeOffset comparisons)
-        return tasks
-            .Where(t => t.RunUntil == null || t.RunUntil >= now)
+        var filtered = tasks
+            .Where(t => (t.RunUntil == null || t.RunUntil >= now)
+                        && (!lastCreatedAt.HasValue ||
+                            t.CreatedAtUtc > lastCreatedAt.Value ||
+                            (t.CreatedAtUtc == lastCreatedAt.Value && lastId.HasValue && t.Id.CompareTo(lastId.Value) > 0)))
+            .OrderBy(t => t.CreatedAtUtc)
+            .ThenBy(t => t.Id)
+            .Take(take)
             .ToArray();
+
+        return filtered;
     }
 }
