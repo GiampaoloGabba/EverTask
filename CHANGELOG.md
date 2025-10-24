@@ -5,6 +5,57 @@ All notable changes to EverTask will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.1] - 2025-10-23
+
+### Fixed
+
+#### Critical Bug Fixes
+- **ShardedScheduler hash overflow**: Fixed IndexOutOfRangeException when `GetHashCode()` returns `int.MinValue` by using unsigned hash calculation `(uint)GetHashCode() % (uint)shardCount`
+- **Queue-full policies never triggered**: Fixed `QueueFullBehavior.ThrowException` and `QueueFullBehavior.FallbackToDefault` policies that silently behaved like `Wait` under pressure
+  - Added `IWorkerQueue.TryQueue()` method that uses `TryWrite` for immediate rejection
+  - Created `QueueFullException` for meaningful error reporting
+  - Reworked `WorkerQueueManager.TryEnqueue()` to honor configured overflow policies
+- **Pending recovery OOM**: Fixed memory issues when recovering from outages with large task backlogs (100k+ tasks)
+  - Replaced skip/take paging with **keyset pagination** using `(CreatedAtUtc, Id)`
+  - Updated `ITaskStorage.RetrievePending(...)` signature to accept `lastCreatedAt`, `lastId`, and `take`
+  - Implemented keyset logic in `MemoryTaskStorage`, `EfCoreTaskStorage`, and `SqliteTaskStorage`
+  - Refactored `WorkerService.ProcessPendingAsync()` to iterate via `(lastCreatedAt, lastId)` cursor (default: 100 tasks/page)
+- **MemoryTaskStorage concurrency**: Fixed race conditions when dispatcher threads add tasks while worker enumerates the list
+  - Added `_pendingTasksLock` to protect all `_pendingTasks` operations
+  - All read/write operations now thread-safe via lock-based synchronization
+
+#### Performance Improvements
+- **Reduced logging verbosity**: Changed hot-path logging from `LogInformation` to `LogDebug` in:
+  - `Dispatcher.Persist/Update` operations
+  - `WorkerQueue.Queue` operations
+  - Prevents log saturation at high throughput (10k+ tasks/sec)
+
+### Added
+- **New Methods**:
+  - `IWorkerQueue.TryQueue(task)`: Non-blocking queue attempt that returns false if full
+
+- **New Tests**:
+  - `ShardedSchedulerTests.Should_Handle_Negative_Hash_Without_Exception()`: Verifies no exceptions with random GUIDs (including negative hash codes)
+  - `ShardedSchedulerTests.Should_Distribute_Tasks_Across_Shards_Without_Index_Out_Of_Range()`: Theory test for multiple shard counts
+  - `MemoryTaskStorageConcurrencyTests`: 6 comprehensive concurrency tests covering parallel persist, read/write, status updates, removals, and run counters
+  - `PendingRecoveryPagingTests` & `EfCoreTaskStorageTestsBase` updated with deterministic GUID v7 helpers and keyset assertions to guarantee completeness and ordering
+
+### Changed
+- **Breaking change**:
+  - `ITaskStorage.RetrievePending(...)` signature changed to `(DateTimeOffset? lastCreatedAt, Guid? lastId, int take, CancellationToken ct = default)` for keyset pagination
+  - Custom storage implementations must update to the new signature and honor `(CreatedAtUtc, Id)` ordering
+
+### Migration Notes
+- **Breaking**: Update custom storage providers to the new `RetrievePending` signature and implement `(CreatedAtUtc, Id)` keyset logic
+- **SQLite note**: Due to provider limitations, SQLite applies keyset filtering in memory; recommended only for demos or small workloads
+- **Optional**: Switch logging level to `Debug` for Dispatcher and WorkerQueue operations to reduce verbosity
+
+### Testing
+- Added comprehensive concurrency tests for `MemoryTaskStorage`
+- Added regression tests for ShardedScheduler hash calculation
+- Added deterministic keyset pagination tests covering completeness, ordering, and overlap detection
+- All existing tests continue to pass
+
 ## [3.1.0] - 2025-01-23
 
 ### Added

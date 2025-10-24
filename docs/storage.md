@@ -269,6 +269,8 @@ var dbPath = Path.Combine(
 - ✅ Lower infrastructure cost
 - ❌ Limited concurrent writes
 - ❌ Single server only (no clustering)
+- ⚠️ Provider limitation: EF Core cannot translate `DateTimeOffset` comparison operators for SQLite.  
+  EverTask falls back to in-memory keyset filtering during recovery (`ProcessPendingAsync`), so avoid very large backlogs on SQLite or switch to SQL Server for heavy workloads.
 
 ### Use Cases
 

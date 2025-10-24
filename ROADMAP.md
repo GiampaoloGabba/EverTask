@@ -63,16 +63,32 @@ Comprehensive example projects demonstrating all EverTask capabilities in real-w
 
 ---
 
+### 📦 Batch Dispatch Support
+**Status:** Planned | **Priority:** High | **Effort:** 10-12 hours
+
+First-class batching support to dispatch and track multiple tasks as a single unit.
+
+**Features:**
+- `IBatchDispatcher` abstraction + runtime implementation
+- Optional batch persistence (in-memory or SQL)
+- Aggregated batch status (completed, running, failed, cancelled)
+- Batch monitoring events
+- Developer APIs and samples
+
+**Details:** See `.claude/tasks/batch-dispatch.md`
+
+---
+
 ### 🌐 Distributed Clustering with Leader Election
 **Status:** Planned | **Priority:** High | **Effort:** 40-50 hours
 
 Transform EverTask into a fully distributed system supporting horizontal scaling with multiple server instances.
 
 **Features:**
-- Execution clustering with external queues (RabbitMQ, Azure Service Bus, AWS SQS)
+- Execution clustering with external queues
 - Scheduler high availability with automatic leader election and failover
 - Pluggable queue providers for message delivery and distribution
-- Pluggable distributed lock providers (Redis, Azure Blob Storage, Consul)
+- Pluggable distributed lock providers
 - Backward compatible (single-instance mode still supported)
 
 **Details:** See `.claude/tasks/distributed-clustering-leader-election.md`
