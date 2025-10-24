@@ -3,6 +3,7 @@ using EverTask.Handler;
 using EverTask.Logger;
 using EverTask.Scheduler;
 using EverTask.Storage;
+using EverTask.Tests.TestHelpers;
 
 namespace EverTask.Tests;
 
@@ -38,7 +39,7 @@ public class QueueTests
             null,
             null,
             null,
-            Guid.NewGuid(),
+            TestGuidGenerator.New(),
             null,
             null);
     }
@@ -57,7 +58,7 @@ public class QueueTests
         await _memoryStorage.Persist(_executor.ToQueuedTask());
 
         await _workerQueue.Queue(_executor);
-        var persist = await _memoryStorage.RetrievePending();
+        var persist = await _memoryStorage.RetrievePending(null,null, 10);
         persist.Length.ShouldBe(1);
         persist[0].Status.ShouldBe(QueuedTaskStatus.Queued);
     }
@@ -68,7 +69,7 @@ public class QueueTests
         await _memoryStorage.Persist(_executor.ToQueuedTask());
 
         await _workerQueue.Queue(_executor);
-        var persist = await _memoryStorage.RetrievePending();
+        var persist = await _memoryStorage.RetrievePending(null, null, 10);
         persist.Length.ShouldBe(1);
         persist[0].Status.ShouldBe(QueuedTaskStatus.Queued);
 

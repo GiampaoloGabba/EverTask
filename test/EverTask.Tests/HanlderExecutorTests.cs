@@ -1,3 +1,4 @@
+using EverTask.Tests.TestHelpers;
 ﻿using EverTask.Handler;
 using EverTask.Monitoring;
 using EverTask.Scheduler.Recurring;
@@ -29,7 +30,7 @@ public class HanlderExecutorTests
     [Fact]
     public void Should_return_Executor()
     {
-        var guid               = Guid.NewGuid();
+        var guid               = TestGuidGenerator.New();
         var task               = new TestTaskRequest("test");
         var taskHandlerWrapper = new TaskHandlerWrapperImp<TestTaskRequest>();
         var executor           = taskHandlerWrapper.Handle(task, null, null, _provider, guid);
@@ -47,7 +48,7 @@ public class HanlderExecutorTests
         var expectedOffset = new DateTimeOffset(inputOffset.UtcDateTime);
 
         var handlerWrapper = new TaskHandlerWrapperImp<TestTaskRequest>();
-        var executor       = handlerWrapper.Handle(task, inputOffset, null, _provider, Guid.NewGuid());
+        var executor       = handlerWrapper.Handle(task, inputOffset, null, _provider, TestGuidGenerator.New());
 
         executor.ExecutionTime.ShouldBe(expectedOffset);
     }
@@ -87,7 +88,7 @@ public class HanlderExecutorTests
     [Fact]
     public void Should_persis_existing_Guid()
     {
-        var guid               = Guid.NewGuid();
+        var guid               = TestGuidGenerator.New();
         var task               = new TestTaskRequest("test");
         var taskHandlerWrapper = new TaskHandlerWrapperImp<TestTaskRequest>();
         var executor           = taskHandlerWrapper.Handle(task, null, null, _provider, guid);
@@ -101,7 +102,7 @@ public class HanlderExecutorTests
     public void Should_throw_for_null_Request()
     {
         var executor =
-            new TaskHandlerExecutor(null!, new TestTaskHanlder(), null, null, null, null!, null, null, null, Guid.NewGuid(), null, null);
+            new TaskHandlerExecutor(null!, new TestTaskHanlder(), null, null, null, null!, null, null, null, TestGuidGenerator.New(), null, null);
         Should.Throw<ArgumentNullException>(() => executor.ToQueuedTask());
     }
 
@@ -109,7 +110,7 @@ public class HanlderExecutorTests
     public void Should_throw_for_null_Handler_Handle()
     {
         var executor = new TaskHandlerExecutor(new TestTaskRequest("Test"), null!, null, null, null, null!, null, null, null,
-            Guid.NewGuid(), null, null);
+            TestGuidGenerator.New(), null, null);
         Should.Throw<InvalidOperationException>(() => executor.ToQueuedTask());
     }
 
@@ -119,7 +120,7 @@ public class HanlderExecutorTests
         var task          = new TestTaskRequest("test");
         var handler       = new object();
         var executionTime = DateTimeOffset.UtcNow;
-        var persistenceId = Guid.NewGuid();
+        var persistenceId = TestGuidGenerator.New();
         var runUntil      = DateTimeOffset.UtcNow.AddMinutes(2);
         var recurringTask = new RecurringTask{ RunNow = true, RunUntil = runUntil, MaxRuns = 2 };
 
@@ -166,7 +167,7 @@ public class HanlderExecutorTests
             HandlerErrorCallback: null,
             HandlerStartedCallback: null,
             HandlerCompletedCallback: null,
-            PersistenceId: Guid.NewGuid(),
+            PersistenceId: TestGuidGenerator.New(),
             QueueName: null,
             TaskKey: null);
 
@@ -186,7 +187,7 @@ public class HanlderExecutorTests
             HandlerErrorCallback: null,
             HandlerStartedCallback: null,
             HandlerCompletedCallback: null,
-            PersistenceId: Guid.NewGuid(),
+            PersistenceId: TestGuidGenerator.New(),
             QueueName: null,
             TaskKey: null);
 
@@ -199,7 +200,7 @@ public class HanlderExecutorTests
         var task          = new TestTaskRequest("test");
         var handler       = new object();
         var executionTime = DateTimeOffset.UtcNow;
-        var persistenceId = Guid.NewGuid();
+        var persistenceId = TestGuidGenerator.New();
 
         var executor = new TaskHandlerExecutor(
             Task: task,

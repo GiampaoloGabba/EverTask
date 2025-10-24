@@ -1,3 +1,4 @@
+using EverTask.Tests.TestHelpers;
 ﻿using System.Reflection;
 using Cronos;
 using EverTask.Configuration;
@@ -249,7 +250,7 @@ public class TimerSchedulerTests
             null,
             null,
             null,
-            Guid.NewGuid(),
+            TestGuidGenerator.New(),
             null,
             null);
 

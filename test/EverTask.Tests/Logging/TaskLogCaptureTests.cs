@@ -1,3 +1,4 @@
+using EverTask.Tests.TestHelpers;
 using System;
 using System.Linq;
 using System.Threading.Tasks;
@@ -18,14 +19,14 @@ public class TaskLogCaptureTests
     {
         _mockLogger = new Mock<ILogger>();
         _mockGuidGenerator = new Mock<IGuidGenerator>();
-        _mockGuidGenerator.Setup(x => x.NewDatabaseFriendly()).Returns(Guid.NewGuid());
+        _mockGuidGenerator.Setup(x => x.NewDatabaseFriendly()).Returns(TestGuidGenerator.New());
     }
 
     [Fact]
     public void TaskLogCapture_WithPersistence_ShouldPersistLogsInOrder()
     {
         // Arrange
-        var taskId = Guid.NewGuid();
+        var taskId = TestGuidGenerator.New();
         var capture = new TaskLogCapture(
             _mockLogger.Object,
             taskId,
@@ -67,7 +68,7 @@ public class TaskLogCaptureTests
     public void TaskLogCapture_WithPersistence_ShouldFilterByLogLevel()
     {
         // Arrange
-        var taskId = Guid.NewGuid();
+        var taskId = TestGuidGenerator.New();
         var capture = new TaskLogCapture(
             _mockLogger.Object,
             taskId,
@@ -105,7 +106,7 @@ public class TaskLogCaptureTests
     public void TaskLogCapture_WithPersistence_ShouldRespectMaxLogs()
     {
         // Arrange
-        var taskId = Guid.NewGuid();
+        var taskId = TestGuidGenerator.New();
         var capture = new TaskLogCapture(
             _mockLogger.Object,
             taskId,
@@ -145,7 +146,7 @@ public class TaskLogCaptureTests
     public void TaskLogCapture_WithoutPersistence_ShouldNotPersistLogs()
     {
         // Arrange
-        var taskId = Guid.NewGuid();
+        var taskId = TestGuidGenerator.New();
         var capture = new TaskLogCapture(
             _mockLogger.Object,
             taskId,
@@ -178,7 +179,7 @@ public class TaskLogCaptureTests
     public void TaskLogCapture_ShouldCaptureExceptions()
     {
         // Arrange
-        var taskId = Guid.NewGuid();
+        var taskId = TestGuidGenerator.New();
         var capture = new TaskLogCapture(
             _mockLogger.Object,
             taskId,
@@ -205,7 +206,7 @@ public class TaskLogCaptureTests
     public void TaskLogCapture_ShouldBeThreadSafe()
     {
         // Arrange
-        var taskId = Guid.NewGuid();
+        var taskId = TestGuidGenerator.New();
         var capture = new TaskLogCapture(
             _mockLogger.Object,
             taskId,
@@ -239,7 +240,7 @@ public class TaskLogCaptureTests
     public void GetPersistedLogs_ShouldReturnDefensiveCopy()
     {
         // Arrange
-        var taskId = Guid.NewGuid();
+        var taskId = TestGuidGenerator.New();
         var capture = new TaskLogCapture(
             _mockLogger.Object,
             taskId,
@@ -265,7 +266,7 @@ public class TaskLogCaptureTests
     public void TaskLogCapture_ShouldSetTaskIdOnAllLogs()
     {
         // Arrange
-        var taskId = Guid.NewGuid();
+        var taskId = TestGuidGenerator.New();
         var capture = new TaskLogCapture(
             _mockLogger.Object,
             taskId,
@@ -292,7 +293,7 @@ public class TaskLogCaptureTests
     public void TaskLogCapture_ShouldSetTimestampsToUtc()
     {
         // Arrange
-        var taskId = Guid.NewGuid();
+        var taskId = TestGuidGenerator.New();
         var capture = new TaskLogCapture(
             _mockLogger.Object,
             taskId,
@@ -319,7 +320,7 @@ public class TaskLogCaptureTests
     public void TaskLogCapture_WithNullMaxLogs_ShouldPersistUnlimited()
     {
         // Arrange
-        var taskId = Guid.NewGuid();
+        var taskId = TestGuidGenerator.New();
         var capture = new TaskLogCapture(
             _mockLogger.Object,
             taskId,
@@ -343,7 +344,7 @@ public class TaskLogCaptureTests
     public void TaskLogCapture_ShouldHandleWarningWithException()
     {
         // Arrange
-        var taskId = Guid.NewGuid();
+        var taskId = TestGuidGenerator.New();
         var capture = new TaskLogCapture(
             _mockLogger.Object,
             taskId,
@@ -370,7 +371,7 @@ public class TaskLogCaptureTests
     public void TaskLogCapture_ShouldHandleCriticalWithException()
     {
         // Arrange
-        var taskId = Guid.NewGuid();
+        var taskId = TestGuidGenerator.New();
         var capture = new TaskLogCapture(
             _mockLogger.Object,
             taskId,
@@ -397,7 +398,7 @@ public class TaskLogCaptureTests
     public void TaskLogCapture_ShouldAlwaysForwardToILogger()
     {
         // Arrange
-        var taskId = Guid.NewGuid();
+        var taskId = TestGuidGenerator.New();
         var capture = new TaskLogCapture(
             _mockLogger.Object,
             taskId,

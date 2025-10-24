@@ -1,3 +1,4 @@
+using EverTask.Tests.TestHelpers;
 using EverTask.Abstractions;
 using EverTask.Configuration;
 using EverTask.Dispatcher;
@@ -38,7 +39,7 @@ public class MultiQueueRoutingTests
             null,
             null,
             null,
-            Guid.NewGuid(),
+            TestGuidGenerator.New(),
             "high-priority",
             null
         );
@@ -72,7 +73,7 @@ public class MultiQueueRoutingTests
             null,
             null,
             null,
-            Guid.NewGuid(),
+            TestGuidGenerator.New(),
             null,
             null
         );
@@ -107,7 +108,7 @@ public class MultiQueueRoutingTests
             null,
             null,
             null,
-            Guid.NewGuid(),
+            TestGuidGenerator.New(),
             null,
             null
         );
@@ -143,7 +144,7 @@ public class MultiQueueRoutingTests
             null,
             null,
             null,
-            Guid.NewGuid(),
+            TestGuidGenerator.New(),
             "background",
             null
         );
@@ -175,7 +176,7 @@ public class MultiQueueRoutingTests
             null,
             null,
             null,
-            Guid.NewGuid(),
+            TestGuidGenerator.New(),
             queueName,
             null
         );
@@ -201,7 +202,7 @@ public class MultiQueueRoutingTests
             null,
             null,
             null,
-            Guid.NewGuid(),
+            TestGuidGenerator.New(),
             queueName,
             null
         );

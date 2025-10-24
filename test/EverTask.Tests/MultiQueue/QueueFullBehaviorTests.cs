@@ -1,3 +1,4 @@
+using EverTask.Tests.TestHelpers;
 using System.Threading.Channels;
 using EverTask.Configuration;
 using EverTask.Handler;
@@ -171,7 +172,7 @@ public class QueueFullBehaviorTests
             null,
             null,
             null,
-            Guid.NewGuid(),
+            TestGuidGenerator.New(),
             queueName,
             null
         );

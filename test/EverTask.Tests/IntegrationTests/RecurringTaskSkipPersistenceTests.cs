@@ -141,7 +141,7 @@ public class RecurringTaskSkipPersistenceTests : IsolatedIntegrationTestBase
         await CreateIsolatedHostAsync();
 
         // Try to record skips for a task that doesn't exist
-        var nonExistentTaskId = Guid.NewGuid();
+        var nonExistentTaskId = TestGuidGenerator.New();
         var skippedOccurrences = new List<DateTimeOffset>
         {
             DateTimeOffset.UtcNow.AddMinutes(-5)

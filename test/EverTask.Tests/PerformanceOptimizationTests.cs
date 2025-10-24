@@ -1,3 +1,4 @@
+using EverTask.Tests.TestHelpers;
 using EverTask.Configuration;
 using EverTask.Handler;
 using EverTask.Scheduler.Recurring;
@@ -218,7 +219,7 @@ public class PerformanceOptimizationTests
             (id, ex, msg) => ValueTask.CompletedTask,
             id => ValueTask.CompletedTask,
             id => ValueTask.CompletedTask,
-            Guid.NewGuid(),
+            TestGuidGenerator.New(),
             QueueNames.Default,
             null
         );

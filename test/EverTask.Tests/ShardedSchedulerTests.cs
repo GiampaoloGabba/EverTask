@@ -1,3 +1,4 @@
+using EverTask.Tests.TestHelpers;
 using EverTask.Handler;
 using EverTask.Logger;
 using EverTask.Scheduler;
@@ -125,7 +126,7 @@ public class ShardedSchedulerTests : IDisposable
         // Act - Schedule 1000 tasks with random Guids
         for (int i = 0; i < taskCount; i++)
         {
-            var taskId = Guid.NewGuid();
+            var taskId = TestGuidGenerator.New();
             var executor = CreateTaskHandlerExecutor(DateTimeOffset.UtcNow.AddHours(1), taskId: taskId);
 
             // Calculate which shard this task would go to (same logic as ShardedScheduler)
@@ -268,7 +269,7 @@ public class ShardedSchedulerTests : IDisposable
         // Create tasks that will be distributed across different shards
         for (int i = 0; i < 20; i++)
         {
-            var taskId = Guid.NewGuid();
+            var taskId = TestGuidGenerator.New();
             var executor = CreateTaskHandlerExecutor(DateTimeOffset.UtcNow.AddSeconds(1), taskId: taskId);
             tasks.Add(executor);
             _shardedScheduler.Schedule(executor);
@@ -356,7 +357,7 @@ public class ShardedSchedulerTests : IDisposable
         var tasks = new List<TaskHandlerExecutor>();
         for (int i = 0; i < 100; i++)
         {
-            var taskId = Guid.NewGuid();
+            var taskId = TestGuidGenerator.New();
             var executor = CreateTaskHandlerExecutor(DateTimeOffset.UtcNow.AddSeconds(1), taskId: taskId);
             tasks.Add(executor);
             _shardedScheduler.Schedule(executor);
@@ -421,6 +422,54 @@ public class ShardedSchedulerTests : IDisposable
             "Task with past execution time should be processed immediately");
     }
 
+    [Fact]
+    public void Should_Handle_Negative_Hash_Without_Exception()
+    {
+        // Arrange
+        _shardedScheduler = new ShardedScheduler(_mockWorkerQueueManager.Object, _mockLogger.Object, null, shardCount: 4);
+        var executionTime = DateTimeOffset.UtcNow.AddSeconds(10);
+
+        // Act & Assert
+        // Schedule many tasks with random GUIDs - statistically some will have negative hash codes
+        // (int.MinValue case: Math.Abs(int.MinValue) == int.MinValue, still negative)
+        // The fix using (uint) cast should handle all cases without IndexOutOfRangeException
+        var exception = Record.Exception(() =>
+        {
+            for (int i = 0; i < 10000; i++)
+            {
+                var taskExecutor = CreateTaskHandlerExecutor(executionTime, TestGuidGenerator.New());
+                _shardedScheduler.Schedule(taskExecutor);
+            }
+        });
+
+        // Assert - No exception should be thrown (especially IndexOutOfRangeException)
+        exception.ShouldBeNull("Scheduling should handle all hash codes (including negative) without throwing");
+    }
+
+    [Theory]
+    [InlineData(2)]
+    [InlineData(4)]
+    [InlineData(8)]
+    [InlineData(16)]
+    public void Should_Distribute_Tasks_Across_Shards_Without_Index_Out_Of_Range(int shardCount)
+    {
+        // Arrange
+        _shardedScheduler = new ShardedScheduler(_mockWorkerQueueManager.Object, _mockLogger.Object, null, shardCount);
+        var executionTime = DateTimeOffset.UtcNow.AddSeconds(5);
+
+        // Act & Assert - Test with many GUIDs to ensure shard index is always in valid range [0, shardCount)
+        var exception = Record.Exception(() =>
+        {
+            for (int i = 0; i < 5000; i++)
+            {
+                var taskExecutor = CreateTaskHandlerExecutor(executionTime, TestGuidGenerator.New());
+                _shardedScheduler.Schedule(taskExecutor);
+            }
+        });
+
+        exception.ShouldBeNull($"Scheduling with {shardCount} shards should never produce IndexOutOfRangeException");
+    }
+
     public void Dispose()
     {
         _shardedScheduler?.Dispose();
@@ -437,7 +486,7 @@ public class ShardedSchedulerTests : IDisposable
             null,
             null,
             null,
-            taskId ?? Guid.NewGuid(),
+            taskId ?? TestGuidGenerator.New(),
             null,
             null);
 }

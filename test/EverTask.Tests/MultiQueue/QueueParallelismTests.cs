@@ -1,3 +1,4 @@
+using EverTask.Tests.TestHelpers;
 using System.Collections.Concurrent;
 using System.Threading.Channels;
 using EverTask.Abstractions;
@@ -220,7 +221,7 @@ public class QueueParallelismTests
             null,
             null,
             null,
-            Guid.NewGuid(),
+            TestGuidGenerator.New(),
             queueName,
             null
         );

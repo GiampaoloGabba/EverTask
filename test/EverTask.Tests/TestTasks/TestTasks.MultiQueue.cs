@@ -114,7 +114,7 @@ public class TestTaskDefaultQueueHandler : EverTaskHandler<TestTaskDefaultQueue>
 /// </summary>
 public class TestTaskParallel : IEverTask
 {
-    public string Id { get; init; } = Guid.NewGuid().ToString();
+    public string Id { get; init; } = TestGuidGenerator.New().ToString();
 }
 
 public class TestTaskParallelHandler : EverTaskHandler<TestTaskParallel>
@@ -145,7 +145,7 @@ public class TestTaskParallelHandler : EverTaskHandler<TestTaskParallel>
 /// </summary>
 public class TestTaskSequential : IEverTask
 {
-    public string Id { get; init; } = Guid.NewGuid().ToString();
+    public string Id { get; init; } = TestGuidGenerator.New().ToString();
 }
 
 public class TestTaskSequentialHandler : EverTaskHandler<TestTaskSequential>
