@@ -23,7 +23,7 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
 
         // Wait for task to complete after delay
         await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed, timeoutMs: 2000);
-        pt = await Storage.RetrievePending();
+        pt = await Storage.RetrievePending(null, null, 10);
         pt.Length.ShouldBe(0);
 
         var tasks = await Storage.GetAll();
@@ -52,7 +52,7 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
 
         // Wait for task to complete after scheduled time
         await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed, timeoutMs: 2000);
-        pt = await Storage.RetrievePending();
+        pt = await Storage.RetrievePending(null, null, 10);
         pt.Length.ShouldBe(0);
 
         var tasks = await Storage.GetAll();

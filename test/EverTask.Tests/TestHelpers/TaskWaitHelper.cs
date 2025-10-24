@@ -135,7 +135,7 @@ public static class TaskWaitHelper
         int timeoutMs = DefaultTimeoutMs)
     {
         return await WaitUntilAsync(
-            async () => await storage.RetrievePending(),
+            async () => await storage.RetrievePending(null,  null, 10),
             tasks => tasks.Length == expectedCount,
             timeoutMs
         );

@@ -257,7 +257,7 @@ public class MultiQueueIntegrationTests : IsolatedIntegrationTestBase
         var taskId = await Dispatcher.Dispatch(new TestTaskHighPriority());
 
         // Verify task is persisted with correct queue name
-        var pendingTasks = await Storage.RetrievePending();
+        var pendingTasks = await Storage.RetrievePending(null, null, 10);
         pendingTasks.Length.ShouldBe(1);
         pendingTasks[0].QueueName.ShouldBe("high-priority");
         pendingTasks[0].Status.ShouldBe(QueuedTaskStatus.Queued); // Task is queued even without starting the host
