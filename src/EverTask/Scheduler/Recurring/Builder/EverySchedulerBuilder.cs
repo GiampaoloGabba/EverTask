@@ -38,6 +38,12 @@ public class EverySchedulerBuilder : IEverySchedulerBuilder
         return new DailyTimeSchedulerBuilder(_task);
     }
 
+    public IWeeklySchedulerBuilder Weeks()
+    {
+        _task.WeekInterval = new WeekInterval(_interval);
+        return new WeeklySchedulerBuilder(_task);
+    }
+
     public IMonthlySchedulerBuilder Months()
     {
         _task.MonthInterval = new MonthInterval(_interval);

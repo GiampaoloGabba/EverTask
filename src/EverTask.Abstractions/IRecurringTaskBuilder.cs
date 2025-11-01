@@ -19,6 +19,7 @@ public interface IIntervalSchedulerBuilder
     IMinuteSchedulerBuilder EveryMinute();
     IHourSchedulerBuilder EveryHour();
     IDailyTimeSchedulerBuilder EveryDay();
+    IWeeklySchedulerBuilder EveryWeek();
     IMonthlySchedulerBuilder EveryMonth();
 
     IDailyTimeSchedulerBuilder OnDays(params DayOfWeek[] days);
@@ -31,6 +32,7 @@ public interface IEverySchedulerBuilder
     IMinuteSchedulerBuilder Minutes();
     IHourSchedulerBuilder Hours();
     IDailyTimeSchedulerBuilder Days();
+    IWeeklySchedulerBuilder Weeks();
     IMonthlySchedulerBuilder Months();
 }
 
@@ -52,6 +54,22 @@ public interface IDailyTimeSchedulerBuilder : IBuildableSchedulerBuilder
 {
     IBuildableSchedulerBuilder AtTime(TimeOnly time);
     IBuildableSchedulerBuilder AtTimes(params TimeOnly[] times);
+}
+
+/// <summary>
+/// Builder for configuring weekly recurring tasks
+/// </summary>
+public interface IWeeklySchedulerBuilder : IBuildableSchedulerBuilder
+{
+    /// <summary>
+    /// Specifies the task should run on a specific day of the week
+    /// </summary>
+    IBuildableSchedulerBuilder OnDay(DayOfWeek day);
+
+    /// <summary>
+    /// Specifies the task should run on specific days of the week
+    /// </summary>
+    IBuildableSchedulerBuilder OnDays(params DayOfWeek[] days);
 }
 
 public interface IMonthlySchedulerBuilder : IBuildableSchedulerBuilder

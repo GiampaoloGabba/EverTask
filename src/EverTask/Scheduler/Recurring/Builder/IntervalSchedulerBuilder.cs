@@ -34,6 +34,12 @@ public class IntervalSchedulerBuilder(RecurringTask task) : IIntervalSchedulerBu
         return new DailyTimeSchedulerBuilder(task);
     }
 
+    public IWeeklySchedulerBuilder EveryWeek()
+    {
+        task.WeekInterval = new WeekInterval(1);
+        return new WeeklySchedulerBuilder(task);
+    }
+
     public IMonthlySchedulerBuilder EveryMonth()
     {
         task.MonthInterval = new MonthInterval(1);

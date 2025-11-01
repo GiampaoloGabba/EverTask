@@ -156,6 +156,7 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
             .Every(10).Minutes() // Long interval → lazy mode
             .MaxRuns(1));
 
+
         // At this point, dispatch is complete but task hasn't executed
         // In lazy mode, handler is NOT created during dispatch (null in TaskHandlerExecutor)
         TestTaskLazyModeRecurringWithAsyncDispose.DisposeCount.ShouldBe(0,
@@ -168,6 +169,20 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
         var tasksBefore = await Storage.GetAll();
         tasksBefore.Length.ShouldBe(1);
         tasksBefore[0].Status.ShouldBe(QueuedTaskStatus.WaitingQueue);
+
+        // IMPORTANT: Clear the task from storage before starting host to prevent recovery logic
+        // from re-dispatching it (which would cause double execution).
+        // The task is already scheduled in-memory. We'll re-add a fresh entry so that
+        // the task can update its status when it executes.
+        var originalTask = tasksBefore[0];
+        await Storage.Remove(taskId);
+
+        // Re-persist a clean task entry with Completed status so the task can update it
+        // This prevents recovery from re-scheduling while allowing status updates
+        originalTask.Status = QueuedTaskStatus.Completed;
+        originalTask.CurrentRunCount = null;
+        originalTask.RunsAudits.Clear();
+        await Storage.Persist(originalTask);
 
         // Now start the host and let the task execute
         await Host!.StartAsync();

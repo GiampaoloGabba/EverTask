@@ -171,7 +171,7 @@ public class TaskDispatcherIntegrationTests : IAsyncDisposable
         pending[0].Id.ShouldBeOfType<Guid>();
         pending[0].IsRecurring.ShouldBe(true);
         pending[0].RecurringInfo.ShouldBe("Use Cron expression: 5 * * * *");
-        pending[0].RecurringTask.ShouldBe("{\"RunNow\":false,\"InitialDelay\":null,\"SpecificRunTime\":null,\"CronInterval\":{\"CronExpression\":\"5 * * * *\"},\"SecondInterval\":null,\"MinuteInterval\":null,\"HourInterval\":null,\"DayInterval\":null,\"MonthInterval\":null,\"MaxRuns\":null,\"RunUntil\":null}");
+        pending[0].RecurringTask.ShouldBe("{\"RunNow\":false,\"InitialDelay\":null,\"SpecificRunTime\":null,\"CronInterval\":{\"CronExpression\":\"5 * * * *\"},\"SecondInterval\":null,\"MinuteInterval\":null,\"HourInterval\":null,\"DayInterval\":null,\"WeekInterval\":null,\"MonthInterval\":null,\"MaxRuns\":null,\"RunUntil\":null}");
     }
 
     [Fact]

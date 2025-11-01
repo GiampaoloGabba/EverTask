@@ -1,4 +1,4 @@
-﻿namespace EverTask.Scheduler.Recurring;
+namespace EverTask.Scheduler.Recurring;
 
 public class RecurringTask
 {
@@ -10,6 +10,7 @@ public class RecurringTask
     public MinuteInterval? MinuteInterval  { get; set; }
     public HourInterval?   HourInterval    { get; set; }
     public DayInterval?    DayInterval     { get; set; }
+    public WeekInterval?   WeekInterval    { get; set; }
     public MonthInterval?  MonthInterval   { get; set; }
     public int?            MaxRuns         { get; set; }
     public DateTimeOffset? RunUntil        { get; set; }
@@ -128,6 +129,10 @@ public class RecurringTask
         {
             return TimeSpan.FromDays(DayInterval.Interval);
         }
+        if (WeekInterval?.Interval > 0)
+        {
+            return TimeSpan.FromDays(7 * WeekInterval.Interval);
+        }
         if (MonthInterval?.Interval > 0)
         {
             return TimeSpan.FromDays(30); // Conservative approximation
@@ -148,6 +153,7 @@ public class RecurringTask
         }
 
         var nextRun = MonthInterval?.GetNextOccurrence(current) ?? current;
+        nextRun = WeekInterval?.GetNextOccurrence(nextRun) ?? nextRun;
         nextRun = DayInterval?.GetNextOccurrence(nextRun) ?? nextRun;
         nextRun = HourInterval?.GetNextOccurrence(nextRun) ?? nextRun;
         nextRun = MinuteInterval?.GetNextOccurrence(nextRun) ?? nextRun;
@@ -214,6 +220,14 @@ public class RecurringTask
                 parts.Add($"at {string.Join(" - ", DayInterval.OnTimes)}");
             if (DayInterval.OnDays.Any())
                 parts.Add($"on {string.Join(" - ", DayInterval.OnDays)}");
+        }
+
+        if (WeekInterval != null)
+        {
+            if (WeekInterval.Interval > 0)
+                parts.Add($"every {WeekInterval.Interval} week(s)");
+            if (WeekInterval.OnDays.Any())
+                parts.Add($"on {string.Join(" - ", WeekInterval.OnDays)}");
         }
 
         if (MonthInterval != null)
