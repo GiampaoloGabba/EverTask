@@ -4,11 +4,13 @@ public class DailyTimeSchedulerBuilder(RecurringTask task) : IDailyTimeScheduler
 {
     public IBuildableSchedulerBuilder AtTime(TimeOnly time)
     {
-        if (task.DayInterval == null && task.MonthInterval == null)
-            throw new InvalidOperationException("DayInterval or MonthInterval must be set");
+        if (task.DayInterval == null && task.WeekInterval == null && task.MonthInterval == null)
+            throw new InvalidOperationException("DayInterval, WeekInterval, or MonthInterval must be set");
 
         if (task.DayInterval != null)
             task.DayInterval.OnTimes = new[] { time.ToUniversalTime() };
+        else if (task.WeekInterval != null)
+            task.WeekInterval.OnTimes = new[] { time.ToUniversalTime() };
         else if (task.MonthInterval != null)
             task.MonthInterval.OnTimes = new[] { time.ToUniversalTime() };
 
@@ -17,14 +19,16 @@ public class DailyTimeSchedulerBuilder(RecurringTask task) : IDailyTimeScheduler
 
     public IBuildableSchedulerBuilder AtTimes(params TimeOnly[] times)
     {
-        if (task.DayInterval == null && task.MonthInterval == null)
-            throw new InvalidOperationException("DayInterval or MonthInterval must be set");
+        if (task.DayInterval == null && task.WeekInterval == null && task.MonthInterval == null)
+            throw new InvalidOperationException("DayInterval, WeekInterval, or MonthInterval must be set");
 
         // Note: OnTimes property setter will sort the array automatically
         var utcTimes = times.Select(time => time.ToUniversalTime()).Distinct().ToArray();
 
         if (task.DayInterval != null)
             task.DayInterval.OnTimes = utcTimes;
+        else if (task.WeekInterval != null)
+            task.WeekInterval.OnTimes = utcTimes;
         else if (task.MonthInterval != null)
             task.MonthInterval.OnTimes = utcTimes;
 

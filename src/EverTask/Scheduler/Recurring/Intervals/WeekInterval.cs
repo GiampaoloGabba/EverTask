@@ -17,7 +17,14 @@ public class WeekInterval : IInterval
         OnDays   = onDays.Distinct().ToArray();
     }
 
+    private TimeOnly[] _onTimes = [TimeOnly.Parse("00:00")];
+
     public int         Interval { get; init; } = 1;
+    public TimeOnly[]  OnTimes
+    {
+        get => _onTimes;
+        set => _onTimes = value.OrderBy(t => t).ToArray(); // Always keep sorted
+    }
     public DayOfWeek[] OnDays   { get; internal set; } = [];
 
     public void Validate()
@@ -36,6 +43,6 @@ public class WeekInterval : IInterval
         if (OnDays.Any())
             nextWeek = nextWeek.NextValidDayOfWeek(OnDays);
 
-        return nextWeek;
+        return nextWeek.GetNextRequestedTime(current, OnTimes, false);
     }
 }

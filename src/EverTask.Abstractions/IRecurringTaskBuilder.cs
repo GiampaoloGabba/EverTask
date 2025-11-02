@@ -64,12 +64,12 @@ public interface IWeeklySchedulerBuilder : IBuildableSchedulerBuilder
     /// <summary>
     /// Specifies the task should run on a specific day of the week
     /// </summary>
-    IBuildableSchedulerBuilder OnDay(DayOfWeek day);
+    IDailyTimeSchedulerBuilder OnDay(DayOfWeek day);
 
     /// <summary>
     /// Specifies the task should run on specific days of the week
     /// </summary>
-    IBuildableSchedulerBuilder OnDays(params DayOfWeek[] days);
+    IDailyTimeSchedulerBuilder OnDays(params DayOfWeek[] days);
 }
 
 public interface IMonthlySchedulerBuilder : IBuildableSchedulerBuilder
