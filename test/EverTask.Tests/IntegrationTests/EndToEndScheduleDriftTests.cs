@@ -10,6 +10,7 @@ namespace EverTask.Tests.IntegrationTests;
 /// Tests complete scenarios with multiple components working together.
 /// Related to schedule drift fix - see docs/test-plan-schedule-drift-fix.md
 /// </summary>
+[Collection("StorageTests")]
 public class EndToEndScheduleDriftTests : IsolatedIntegrationTestBase
 {
 
@@ -55,6 +56,7 @@ public class EndToEndScheduleDriftTests : IsolatedIntegrationTestBase
             channelCapacity: 10,
             maxDegreeOfParallelism: 5);
 
+        TestTaskRecurringWithFailure.Counter = 0; // Reset static counter
         TestTaskRecurringWithFailure.FailUntilCount = 2; // Fail twice, then succeed
 
         // Act: Dispatch recurring task with retry policy (every 2 seconds)

@@ -21,6 +21,9 @@ public class TestTaskWithRetryPolicyHandler : EverTaskHandler<TestTaskWithRetryP
 {
     private readonly TestTaskStateManager? _stateManager;
 
+    // Configure retry policy: 3 attempts with short delays for testing
+    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(3, TimeSpan.FromMilliseconds(50));
+
     public TestTaskWithRetryPolicyHandler(TestTaskStateManager? stateManager = null)
     {
         _stateManager = stateManager;
@@ -34,7 +37,7 @@ public class TestTaskWithRetryPolicyHandler : EverTaskHandler<TestTaskWithRetryP
 
         if (TestTaskWithRetryPolicy.Counter < 3)
         {
-            throw new Exception();
+            throw new Exception("Simulated failure for retry testing");
         }
 
         return Task.CompletedTask;

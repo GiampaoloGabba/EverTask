@@ -4,6 +4,7 @@ using EverTask.Tests.TestHelpers;
 
 namespace EverTask.Tests.IntegrationTests;
 
+[Collection("StorageTests")]
 public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
 {
     [Fact]
@@ -176,6 +177,7 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
     {
         await CreateIsolatedHostAsync();
 
+        TestTaskWithRetryPolicy.Counter = 0; // Reset static counter
         var task = new TestTaskWithRetryPolicy();
         var taskId = await Dispatcher.Dispatch(task);
 

@@ -230,7 +230,7 @@ public class QueueFullBehaviorTests
         await queue.Queue(task);
 
         // Assert - Verify SetQueued was called
-        mockStorage.Verify(x => x.SetQueued(task.PersistenceId, It.IsAny<CancellationToken>()), Times.Once);
+        mockStorage.Verify(x => x.SetQueued(task.PersistenceId, AuditLevel.Full, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -263,6 +263,6 @@ public class QueueFullBehaviorTests
 
         // Assert
         result.ShouldBeFalse();
-        mockStorage.Verify(x => x.SetQueued(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+        mockStorage.Verify(x => x.SetQueued(It.IsAny<Guid>(), AuditLevel.Full,It.IsAny<CancellationToken>()), Times.Never);
     }
 }
