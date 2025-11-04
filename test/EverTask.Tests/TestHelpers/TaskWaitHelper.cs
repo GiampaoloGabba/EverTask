@@ -197,4 +197,42 @@ public static class TaskWaitHelper
             timeoutMs
         ) ?? throw new InvalidOperationException($"Task {taskId} not found in storage");
     }
+
+    /// <summary>
+    /// Waits for task to reach expected status AND for execution logs to be persisted.
+    /// Use this to avoid race conditions where status is updated before logs are saved.
+    /// </summary>
+    public static async Task<(QueuedTask Task, IReadOnlyList<TaskExecutionLog> Logs)> WaitForTaskStatusWithLogsAsync(
+        ITaskStorage storage,
+        Guid taskId,
+        QueuedTaskStatus expectedStatus,
+        int expectedLogCount,
+        int timeoutMs = DefaultTimeoutMs)
+    {
+        // First wait for task to reach expected status
+        var task = await WaitForTaskStatusAsync(storage, taskId, expectedStatus, timeoutMs);
+
+        // Then wait for logs to be persisted (small additional timeout)
+        var logs = await WaitUntilAsync(
+            async () => await storage.GetExecutionLogsAsync(taskId, CancellationToken.None),
+            logList => logList.Count >= expectedLogCount,
+            timeoutMs: 2000, // Additional 2s for log persistence
+            pollingIntervalMs: 50
+        );
+
+        return (task, logs);
+    }
+
+    /// <summary>
+    /// Waits for task to complete AND for execution logs to be persisted.
+    /// Convenience method for completed tasks.
+    /// </summary>
+    public static async Task<(QueuedTask Task, IReadOnlyList<TaskExecutionLog> Logs)> WaitForTaskCompletionWithLogsAsync(
+        ITaskStorage storage,
+        Guid taskId,
+        int expectedLogCount,
+        int timeoutMs = DefaultTimeoutMs)
+    {
+        return await WaitForTaskStatusWithLogsAsync(storage, taskId, QueuedTaskStatus.Completed, expectedLogCount, timeoutMs);
+    }
 }

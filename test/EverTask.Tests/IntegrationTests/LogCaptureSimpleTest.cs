@@ -19,10 +19,9 @@ public class LogCaptureSimpleTest : IsolatedIntegrationTestBase
 
         // Act
         var taskId = await Dispatcher.Dispatch(new TaskThatLogs("test-data"));
-        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed);
+        var (_, logs) = await TaskWaitHelper.WaitForTaskCompletionWithLogsAsync(Storage, taskId, expectedLogCount: 2);
 
         // Assert
-        var logs = await Storage.GetExecutionLogsAsync(taskId, CancellationToken.None);
         logs.ShouldNotBeEmpty();
         logs.Count.ShouldBe(2);
         logs[0].Message.ShouldBe("Processing data: test-data");
@@ -63,10 +62,9 @@ public class LogCaptureSimpleTest : IsolatedIntegrationTestBase
 
         // Act
         var taskId = await Dispatcher.Dispatch(new TaskThatFailsWithLogs());
-        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Failed);
+        var (_, logs) = await TaskWaitHelper.WaitForTaskStatusWithLogsAsync(Storage, taskId, QueuedTaskStatus.Failed, expectedLogCount: 8);
 
         // Assert - logs should include ALL retry attempts
-        var logs = await Storage.GetExecutionLogsAsync(taskId, CancellationToken.None);
         logs.ShouldNotBeEmpty();
         logs.Count.ShouldBe(8); // 2 logs × 4 attempts (1 initial + 3 retries)
 

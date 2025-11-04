@@ -23,10 +23,9 @@ public class LogCaptureIntegrationTests : IsolatedIntegrationTestBase
 
         // Act
         var taskId = await Dispatcher.Dispatch(new TestTaskWithLogs("test data"));
-        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed);
+        var (_, logs) = await TaskWaitHelper.WaitForTaskCompletionWithLogsAsync(Storage, taskId, expectedLogCount: 2);
 
         // Assert
-        var logs = await Storage.GetExecutionLogsAsync(taskId, CancellationToken.None);
         logs.ShouldNotBeEmpty();
         logs.Count.ShouldBe(2);
         logs[0].Message.ShouldBe("Processing task with data: test data");
@@ -99,10 +98,9 @@ public class LogCaptureIntegrationTests : IsolatedIntegrationTestBase
 
         // Act
         var taskId = await Dispatcher.Dispatch(new TestTaskThatFailsWithLogs("test data"));
-        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Failed);
+        var (_, logs) = await TaskWaitHelper.WaitForTaskStatusWithLogsAsync(Storage, taskId, QueuedTaskStatus.Failed, expectedLogCount: 12);
 
         // Assert - logs should be captured for ALL retry attempts (including failures)
-        var logs = await Storage.GetExecutionLogsAsync(taskId, CancellationToken.None);
         logs.ShouldNotBeEmpty();
         logs.Count.ShouldBe(12); // 3 logs × 4 attempts (1 initial + 3 retries)
 
@@ -148,10 +146,9 @@ public class LogCaptureIntegrationTests : IsolatedIntegrationTestBase
 
         // Act
         var taskId = await Dispatcher.Dispatch(new TestTaskMultiLevelLogs());
-        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed);
+        var (_, logs) = await TaskWaitHelper.WaitForTaskCompletionWithLogsAsync(Storage, taskId, expectedLogCount: 3);
 
         // Assert - only Warning, Error, Critical should be captured
-        var logs = await Storage.GetExecutionLogsAsync(taskId, CancellationToken.None);
         logs.ShouldNotBeEmpty();
         logs.Count.ShouldBe(3);
         logs[0].Level.ShouldBe("Warning");
@@ -175,10 +172,9 @@ public class LogCaptureIntegrationTests : IsolatedIntegrationTestBase
 
         // Act
         var taskId = await Dispatcher.Dispatch(new TestTaskMultiLevelLogs());
-        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed);
+        var (_, logs) = await TaskWaitHelper.WaitForTaskCompletionWithLogsAsync(Storage, taskId, expectedLogCount: 6);
 
         // Assert - all levels should be captured
-        var logs = await Storage.GetExecutionLogsAsync(taskId, CancellationToken.None);
         logs.Count.ShouldBe(6);
         logs[0].Level.ShouldBe("Trace");
         logs[1].Level.ShouldBe("Debug");
@@ -202,10 +198,9 @@ public class LogCaptureIntegrationTests : IsolatedIntegrationTestBase
 
         // Act - task logs 50 messages
         var taskId = await Dispatcher.Dispatch(new TestTaskManyLogs(50));
-        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed);
+        var (_, logs) = await TaskWaitHelper.WaitForTaskCompletionWithLogsAsync(Storage, taskId, expectedLogCount: 10);
 
         // Assert - only first 10 logs should be captured
-        var logs = await Storage.GetExecutionLogsAsync(taskId, CancellationToken.None);
         logs.Count.ShouldBe(10);
         logs[0].Message.ShouldBe("Log message 1 of 50");
         logs[9].Message.ShouldBe("Log message 10 of 50");
@@ -224,10 +219,9 @@ public class LogCaptureIntegrationTests : IsolatedIntegrationTestBase
 
         // Act
         var taskId = await Dispatcher.Dispatch(new TestTaskLogWithException());
-        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed);
+        var (_, logs) = await TaskWaitHelper.WaitForTaskCompletionWithLogsAsync(Storage, taskId, expectedLogCount: 3);
 
         // Assert
-        var logs = await Storage.GetExecutionLogsAsync(taskId, CancellationToken.None);
         logs.Count.ShouldBe(3);
 
         // First log: no exception
@@ -261,13 +255,10 @@ public class LogCaptureIntegrationTests : IsolatedIntegrationTestBase
         var taskId1 = await Dispatcher.Dispatch(new TestTaskWithLogs("task1"));
         var taskId2 = await Dispatcher.Dispatch(new TestTaskWithLogs("task2"));
 
-        await WaitForTaskStatusAsync(taskId1, QueuedTaskStatus.Completed);
-        await WaitForTaskStatusAsync(taskId2, QueuedTaskStatus.Completed);
+        var (_, logs1) = await TaskWaitHelper.WaitForTaskCompletionWithLogsAsync(Storage, taskId1, expectedLogCount: 2);
+        var (_, logs2) = await TaskWaitHelper.WaitForTaskCompletionWithLogsAsync(Storage, taskId2, expectedLogCount: 2);
 
         // Assert - each task should have its own logs
-        var logs1 = await Storage.GetExecutionLogsAsync(taskId1, CancellationToken.None);
-        var logs2 = await Storage.GetExecutionLogsAsync(taskId2, CancellationToken.None);
-
         logs1.ShouldNotBeEmpty();
         logs2.ShouldNotBeEmpty();
 
@@ -292,10 +283,9 @@ public class LogCaptureIntegrationTests : IsolatedIntegrationTestBase
 
         // Act - task logs 200 messages
         var taskId = await Dispatcher.Dispatch(new TestTaskManyLogs(200));
-        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed);
+        var (_, logs) = await TaskWaitHelper.WaitForTaskCompletionWithLogsAsync(Storage, taskId, expectedLogCount: 200, timeoutMs: 10000);
 
         // Assert - all 200 logs should be captured
-        var logs = await Storage.GetExecutionLogsAsync(taskId, CancellationToken.None);
         logs.Count.ShouldBe(200);
         logs[0].Message.ShouldBe("Log message 1 of 200");
         logs[199].Message.ShouldBe("Log message 200 of 200");
