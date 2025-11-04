@@ -41,7 +41,8 @@ public class QueueTests
             null,
             TestGuidGenerator.New(),
             null,
-            null);
+            null,
+            AuditLevel.Full);
     }
 
     [Fact]

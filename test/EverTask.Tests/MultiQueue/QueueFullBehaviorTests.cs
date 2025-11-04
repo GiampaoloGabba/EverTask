@@ -174,7 +174,8 @@ public class QueueFullBehaviorTests
             null,
             TestGuidGenerator.New(),
             queueName,
-            null
+            null,
+            AuditLevel.Full
         );
     }
 

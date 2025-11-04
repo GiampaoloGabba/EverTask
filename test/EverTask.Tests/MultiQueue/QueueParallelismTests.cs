@@ -223,7 +223,8 @@ public class QueueParallelismTests
             null,
             TestGuidGenerator.New(),
             queueName,
-            null
+            null,
+            AuditLevel.Full
         );
     }
 

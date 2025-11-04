@@ -1,4 +1,5 @@
-﻿using Xunit;
+﻿using EverTask.Abstractions;
+using Xunit;
 using EverTask.Storage.EfCore;
 using EverTask.Storage;
 using Shouldly;
@@ -226,7 +227,7 @@ public abstract class EfCoreTaskStorageTestsBase
         var count = await _storage.GetCurrentRunCount(taskId);
         count.ShouldBe(0); // Inizialmente zero
 
-        await _storage.UpdateCurrentRun(taskId, null); // Aggiorna la corsa
+        await _storage.UpdateCurrentRun(taskId, null, AuditLevel.Full); // Aggiorna la corsa
         count = await _storage.GetCurrentRunCount(taskId);
         count.ShouldBe(1); // Dovrebbe essere incrementato
     }
@@ -239,7 +240,7 @@ public abstract class EfCoreTaskStorageTestsBase
         var taskId  = queued.Id;
         var nextRun = DateTimeOffset.UtcNow.AddDays(1);
 
-        await _storage.UpdateCurrentRun(taskId, nextRun);
+        await _storage.UpdateCurrentRun(taskId, nextRun, AuditLevel.Full);
 
         var task = await _storage.Get(x => x.Id == taskId);
         task[0].CurrentRunCount.ShouldBe(1);

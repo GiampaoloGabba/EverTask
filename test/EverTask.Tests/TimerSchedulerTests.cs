@@ -20,22 +20,22 @@ public class TimerSchedulerTests
 
     public TimerSchedulerTests()
     {
-        _mockWorkerQueue = new Mock<IWorkerQueue>();
+        _mockWorkerQueue        = new Mock<IWorkerQueue>();
         _mockWorkerQueueManager = new Mock<IWorkerQueueManager>();
-        _mockLogger      = new Mock<IEverTaskLogger<PeriodicTimerScheduler>>();
+        _mockLogger             = new Mock<IEverTaskLogger<PeriodicTimerScheduler>>();
 
         // Setup the queue manager to return the default queue
         _mockWorkerQueueManager.Setup(x => x.GetQueue("default")).Returns(_mockWorkerQueue.Object);
 
         // Setup TryEnqueue to delegate to the worker queue
         _mockWorkerQueueManager.Setup(x => x.TryEnqueue(It.IsAny<string?>(), It.IsAny<TaskHandlerExecutor>()))
-            .Returns<string?, TaskHandlerExecutor>(async (queueName, executor) =>
-            {
-                await _mockWorkerQueue.Object.Queue(executor);
-                return true;
-            });
+                               .Returns<string?, TaskHandlerExecutor>(async (queueName, executor) =>
+                               {
+                                   await _mockWorkerQueue.Object.Queue(executor);
+                                   return true;
+                               });
 
-        _timerScheduler  = new PeriodicTimerScheduler(_mockWorkerQueueManager.Object, _mockLogger.Object);
+        _timerScheduler = new PeriodicTimerScheduler(_mockWorkerQueueManager.Object, _mockLogger.Object);
     }
 
     [Fact]
@@ -54,7 +54,7 @@ public class TimerSchedulerTests
     [Fact]
     public void Schedule_should_enqueue_recurring_cron_item_with_correct_execution_time()
     {
-        var cronExpresison      = "*/5 * * * *";
+        var cronExpresison = "*/5 * * * *";
         var nextOccourrence = CronExpression.Parse(cronExpresison)
                                             .GetNextOccurrence(DateTimeOffset.UtcNow, TimeZoneInfo.Utc);
         var recurringTask       = new RecurringTask { CronInterval = new CronInterval(cronExpresison) };
@@ -66,15 +66,15 @@ public class TimerSchedulerTests
 
         var itemInQueue = _timerScheduler.GetQueue().Dequeue();
 
-        Assert.Equal(nextOccourrence, itemInQueue.RecurringTask!.CalculateNextRun(DateTimeOffset.UtcNow,0));
+        Assert.Equal(nextOccourrence, itemInQueue.RecurringTask!.CalculateNextRun(DateTimeOffset.UtcNow, 0));
     }
 
 
     [Fact]
     public void Schedule_should_enqueue_recurring_item_with_correct_execution_time()
     {
-        var nextOccourrence = new MinuteInterval(10){ OnSecond = 0}.GetNextOccurrence(DateTimeOffset.UtcNow);
-        var recurringTask       = new RecurringTask { MinuteInterval = new MinuteInterval(10) { OnSecond = 0} };
+        var nextOccourrence     = new MinuteInterval(10) { OnSecond = 0 }.GetNextOccurrence(DateTimeOffset.UtcNow);
+        var recurringTask       = new RecurringTask { MinuteInterval = new MinuteInterval(10) { OnSecond = 0 } };
         var taskHandlerExecutor = CreateTaskHandlerExecutor(null, recurringTask);
 
         _timerScheduler.Schedule(taskHandlerExecutor, nextOccourrence);
@@ -82,7 +82,7 @@ public class TimerSchedulerTests
         var itemInQueue = _timerScheduler.GetQueue().Dequeue();
 
         nextOccourrence = nextOccourrence!.Value.AddTicks(-nextOccourrence.Value.Ticks);
-        var nextrun = itemInQueue.RecurringTask!.CalculateNextRun(DateTimeOffset.UtcNow,0);
+        var nextrun = itemInQueue.RecurringTask!.CalculateNextRun(DateTimeOffset.UtcNow, 0);
         nextrun = nextrun!.Value.AddTicks(-nextrun.Value.Ticks);
 
         Assert.Equal(nextOccourrence, nextrun);
@@ -239,11 +239,12 @@ public class TimerSchedulerTests
 #endif
     }
 
-    private TaskHandlerExecutor CreateTaskHandlerExecutor(DateTimeOffset? executionTime = null, RecurringTask? recurringTask = null) =>
+    private TaskHandlerExecutor CreateTaskHandlerExecutor(DateTimeOffset? executionTime = null,
+                                                          RecurringTask? recurringTask = null) =>
         new(
             new TestTaskRequest2(),
             new TestTaskHanlder2(),
-            null,  // HandlerTypeName - null for eager mode
+            null, // HandlerTypeName - null for eager mode
             executionTime,
             recurringTask,
             null!,
@@ -252,7 +253,8 @@ public class TimerSchedulerTests
             null,
             TestGuidGenerator.New(),
             null,
-            null);
+            null,
+            AuditLevel.Full);
 
     #region PeriodicTimerScheduler Specific Tests (v2.0.0)
 
@@ -306,7 +308,7 @@ public class TimerSchedulerTests
     public async Task PeriodicTimerScheduler_Should_ProcessMultipleReadyTasks_InSingleCycle()
     {
         // Arrange: Schedule multiple tasks with same execution time
-        var now = DateTimeOffset.UtcNow.AddMilliseconds(100);
+        var now   = DateTimeOffset.UtcNow.AddMilliseconds(100);
         var task1 = CreateTaskHandlerExecutor(now);
         var task2 = CreateTaskHandlerExecutor(now);
         var task3 = CreateTaskHandlerExecutor(now);
@@ -332,7 +334,7 @@ public class TimerSchedulerTests
     {
         // Arrange: Schedule task with delay < checkInterval (1 second)
         var shortDelay = DateTimeOffset.UtcNow.AddMilliseconds(300);
-        var task = CreateTaskHandlerExecutor(shortDelay);
+        var task       = CreateTaskHandlerExecutor(shortDelay);
 
         // Act
         _timerScheduler.Schedule(task);
@@ -355,8 +357,8 @@ public class TimerSchedulerTests
     {
         // Arrange: Create multiple tasks
         var tasks = Enumerable.Range(0, 10)
-            .Select(_ => CreateTaskHandlerExecutor(DateTimeOffset.UtcNow.AddMilliseconds(200)))
-            .ToList();
+                              .Select(_ => CreateTaskHandlerExecutor(DateTimeOffset.UtcNow.AddMilliseconds(200)))
+                              .ToList();
 
         // Act: Schedule concurrently
         var scheduleTasks = tasks.Select(task => Task.Run(() => _timerScheduler.Schedule(task)));
@@ -380,18 +382,18 @@ public class TimerSchedulerTests
     {
         // Arrange: Create recurring task without explicit queue name
         var recurringTask = new RecurringTask { MinuteInterval = new MinuteInterval(5) };
-        var nextRun = DateTimeOffset.UtcNow.AddMilliseconds(100);
-        var taskExecutor = CreateTaskHandlerExecutor(null, recurringTask);
+        var nextRun       = DateTimeOffset.UtcNow.AddMilliseconds(100);
+        var taskExecutor  = CreateTaskHandlerExecutor(null, recurringTask);
 
         // Setup queue manager to track queue name
         string? capturedQueueName = null;
         _mockWorkerQueueManager.Setup(x => x.TryEnqueue(It.IsAny<string?>(), It.IsAny<TaskHandlerExecutor>()))
-            .Returns<string?, TaskHandlerExecutor>(async (queueName, executor) =>
-            {
-                capturedQueueName = queueName;
-                await _mockWorkerQueue.Object.Queue(executor);
-                return true;
-            });
+                               .Returns<string?, TaskHandlerExecutor>(async (queueName, executor) =>
+                               {
+                                   capturedQueueName = queueName;
+                                   await _mockWorkerQueue.Object.Queue(executor);
+                                   return true;
+                               });
 
         // Act
         _timerScheduler.Schedule(taskExecutor, nextRun);
@@ -410,12 +412,12 @@ public class TimerSchedulerTests
         // Setup queue manager to track queue name
         string? capturedQueueName = null;
         _mockWorkerQueueManager.Setup(x => x.TryEnqueue(It.IsAny<string?>(), It.IsAny<TaskHandlerExecutor>()))
-            .Returns<string?, TaskHandlerExecutor>(async (queueName, executor) =>
-            {
-                capturedQueueName = queueName;
-                await _mockWorkerQueue.Object.Queue(executor);
-                return true;
-            });
+                               .Returns<string?, TaskHandlerExecutor>(async (queueName, executor) =>
+                               {
+                                   capturedQueueName = queueName;
+                                   await _mockWorkerQueue.Object.Queue(executor);
+                                   return true;
+                               });
 
         // Act
         _timerScheduler.Schedule(taskExecutor);
@@ -430,7 +432,7 @@ public class TimerSchedulerTests
     {
         // Arrange: Schedule task exactly 2 hours in future (boundary condition)
         var exactlyTwoHours = DateTimeOffset.UtcNow.AddHours(2);
-        var task = CreateTaskHandlerExecutor(exactlyTwoHours);
+        var task            = CreateTaskHandlerExecutor(exactlyTwoHours);
 
         // Act
         _timerScheduler.Schedule(task);
@@ -449,7 +451,7 @@ public class TimerSchedulerTests
     {
         // Arrange
         var scheduler = new PeriodicTimerScheduler(_mockWorkerQueueManager.Object, _mockLogger.Object);
-        var task = CreateTaskHandlerExecutor(DateTimeOffset.UtcNow.AddHours(1));
+        var task      = CreateTaskHandlerExecutor(DateTimeOffset.UtcNow.AddHours(1));
         scheduler.Schedule(task);
 
         // Act: Dispose should not throw
@@ -463,7 +465,7 @@ public class TimerSchedulerTests
     public async Task PeriodicTimerScheduler_Should_StopProcessing_AfterDispose()
     {
         // Arrange
-        var scheduler = new PeriodicTimerScheduler(_mockWorkerQueueManager.Object, _mockLogger.Object);
+        var scheduler  = new PeriodicTimerScheduler(_mockWorkerQueueManager.Object, _mockLogger.Object);
         var futureTask = CreateTaskHandlerExecutor(DateTimeOffset.UtcNow.AddSeconds(2));
         scheduler.Schedule(futureTask);
 

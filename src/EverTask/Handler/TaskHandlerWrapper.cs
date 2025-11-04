@@ -53,7 +53,6 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
             (persistenceId, exception, message) => handlerService.OnError(persistenceId, exception, message),
             persistenceId => handlerService.OnStarted(persistenceId),
             persistenceId => handlerService.OnCompleted(persistenceId),
-            (persistenceId, attempt, exception, delay) => handlerService.OnRetry(persistenceId, attempt, exception, delay),
             existingTaskId ?? guidGenerator.NewDatabaseFriendly(),
             queueName,
             taskKey,

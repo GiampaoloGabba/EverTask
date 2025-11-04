@@ -488,5 +488,6 @@ public class ShardedSchedulerTests : IDisposable
             null,
             taskId ?? TestGuidGenerator.New(),
             null,
-            null);
+            null,
+            AuditLevel.Full);
 }

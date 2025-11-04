@@ -27,7 +27,8 @@ public class QueueFullBehaviorTests
             null,
             TestGuidGenerator.New(),
             null,
-            null);
+            null,
+            AuditLevel.Full);
 
     [Fact]
     public async Task TryQueue_Should_Return_False_When_Queue_Is_Full()

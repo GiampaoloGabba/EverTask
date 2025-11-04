@@ -33,7 +33,7 @@ public class HanlderExecutorTests
         var guid               = TestGuidGenerator.New();
         var task               = new TestTaskRequest("test");
         var taskHandlerWrapper = new TaskHandlerWrapperImp<TestTaskRequest>();
-        var executor           = taskHandlerWrapper.Handle(task, null, null, _provider, guid);
+        var executor           = taskHandlerWrapper.Handle(task, null, null, _provider, AuditLevel.Full, guid);
 
         executor.PersistenceId.ShouldBe(guid);
         executor.Task.ShouldBe(task);
@@ -48,7 +48,7 @@ public class HanlderExecutorTests
         var expectedOffset = new DateTimeOffset(inputOffset.UtcDateTime);
 
         var handlerWrapper = new TaskHandlerWrapperImp<TestTaskRequest>();
-        var executor       = handlerWrapper.Handle(task, inputOffset, null, _provider, TestGuidGenerator.New());
+        var executor       = handlerWrapper.Handle(task, inputOffset, null, _provider, AuditLevel.Full, TestGuidGenerator.New());
 
         executor.ExecutionTime.ShouldBe(expectedOffset);
     }
@@ -57,7 +57,7 @@ public class HanlderExecutorTests
     public void Should_throw_for_not_registered()
     {
         var taskHandlerWrapper = new TaskHandlerWrapperImp<TestTaskRequestNoHandler>();
-        Should.Throw<ArgumentNullException>(() => taskHandlerWrapper.Handle(null!, null, null, _provider));
+        Should.Throw<ArgumentNullException>(() => taskHandlerWrapper.Handle(null!, null, null, _provider, AuditLevel.Full));
     }
 
     [Fact]
@@ -65,7 +65,7 @@ public class HanlderExecutorTests
     {
         var taskHandlerWrapper = new TaskHandlerWrapperImp<TestTaskRequestNoSerializable>();
         var executor =
-            taskHandlerWrapper.Handle(new TestTaskRequestNoSerializable(IPAddress.None), null, null, _provider);
+            taskHandlerWrapper.Handle(new TestTaskRequestNoSerializable(IPAddress.None), null, null, _provider, AuditLevel.Full);
 
         Should.Throw<JsonSerializationException>(() => executor.ToQueuedTask());
     }
@@ -74,7 +74,7 @@ public class HanlderExecutorTests
     public void Should_return_queued_task()
     {
         var taskHandlerWrapper = new TaskHandlerWrapperImp<TestTaskRequest>();
-        var executor           = taskHandlerWrapper.Handle(new TestTaskRequest("test"), null, null, _provider);
+        var executor           = taskHandlerWrapper.Handle(new TestTaskRequest("test"), null, null, _provider, AuditLevel.Full);
 
         var queuedTask = executor.ToQueuedTask();
 
@@ -91,7 +91,7 @@ public class HanlderExecutorTests
         var guid               = TestGuidGenerator.New();
         var task               = new TestTaskRequest("test");
         var taskHandlerWrapper = new TaskHandlerWrapperImp<TestTaskRequest>();
-        var executor           = taskHandlerWrapper.Handle(task, null, null, _provider, guid);
+        var executor           = taskHandlerWrapper.Handle(task, null, null, _provider, AuditLevel.Full, guid);
 
         var queuedTask = executor.ToQueuedTask();
 
@@ -102,7 +102,7 @@ public class HanlderExecutorTests
     public void Should_throw_for_null_Request()
     {
         var executor =
-            new TaskHandlerExecutor(null!, new TestTaskHanlder(), null, null, null, null!, null, null, null, TestGuidGenerator.New(), null, null);
+            new TaskHandlerExecutor(null!, new TestTaskHanlder(), null, null, null, null!, null, null, null, TestGuidGenerator.New(), null, null, AuditLevel.Full);
         Should.Throw<ArgumentNullException>(() => executor.ToQueuedTask());
     }
 
@@ -110,7 +110,7 @@ public class HanlderExecutorTests
     public void Should_throw_for_null_Handler_Handle()
     {
         var executor = new TaskHandlerExecutor(new TestTaskRequest("Test"), null!, null, null, null, null!, null, null, null,
-            TestGuidGenerator.New(), null, null);
+            TestGuidGenerator.New(), null, null, AuditLevel.Full);
         Should.Throw<InvalidOperationException>(() => executor.ToQueuedTask());
     }
 
@@ -136,7 +136,8 @@ public class HanlderExecutorTests
             HandlerCompletedCallback: null,
             PersistenceId: persistenceId,
             QueueName: null,
-            TaskKey: null);
+            TaskKey: null,
+            AuditLevel: AuditLevel.Full);
 
         var queuedTask = executor.ToQueuedTask();
 
@@ -169,7 +170,8 @@ public class HanlderExecutorTests
             HandlerCompletedCallback: null,
             PersistenceId: TestGuidGenerator.New(),
             QueueName: null,
-            TaskKey: null);
+            TaskKey: null,
+            AuditLevel: AuditLevel.Full);
 
         Should.Throw<ArgumentNullException>(() => executor.ToQueuedTask());
     }
@@ -189,7 +191,8 @@ public class HanlderExecutorTests
             HandlerCompletedCallback: null,
             PersistenceId: TestGuidGenerator.New(),
             QueueName: null,
-            TaskKey: null);
+            TaskKey: null,
+            AuditLevel: AuditLevel.Full);
 
         Should.Throw<InvalidOperationException>(() => executor.ToQueuedTask());
     }
@@ -214,7 +217,8 @@ public class HanlderExecutorTests
             HandlerCompletedCallback: null,
             PersistenceId: persistenceId,
             QueueName: null,
-            TaskKey: null);
+            TaskKey: null,
+            AuditLevel: AuditLevel.Full);
 
         var eventData = EverTaskEventData.FromExecutor(executor, SeverityLevel.Information, "test", null);
 

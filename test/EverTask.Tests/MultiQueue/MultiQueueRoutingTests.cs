@@ -41,7 +41,8 @@ public class MultiQueueRoutingTests
             null,
             TestGuidGenerator.New(),
             "high-priority",
-            null
+            null,
+            AuditLevel.Full
         );
 
         // Act
@@ -75,7 +76,8 @@ public class MultiQueueRoutingTests
             null,
             TestGuidGenerator.New(),
             null,
-            null
+            null,
+            AuditLevel.Full
         );
 
         // Act
@@ -110,7 +112,8 @@ public class MultiQueueRoutingTests
             null,
             TestGuidGenerator.New(),
             null,
-            null
+            null,
+            AuditLevel.Full
         );
 
         // Act - simulate routing logic
@@ -146,7 +149,8 @@ public class MultiQueueRoutingTests
             null,
             TestGuidGenerator.New(),
             "background",
-            null
+            null,
+            AuditLevel.Full
         );
 
         // Act
@@ -178,7 +182,8 @@ public class MultiQueueRoutingTests
             null,
             TestGuidGenerator.New(),
             queueName,
-            null
+            null,
+            AuditLevel.Full
         );
 
         // Assert
@@ -204,7 +209,8 @@ public class MultiQueueRoutingTests
             null,
             TestGuidGenerator.New(),
             queueName,
-            null
+            null,
+            AuditLevel.Full
         );
 
         // Act

@@ -221,7 +221,8 @@ public class PerformanceOptimizationTests
             id => ValueTask.CompletedTask,
             TestGuidGenerator.New(),
             QueueNames.Default,
-            null
+            null,
+            AuditLevel.Full
         );
     }
 
