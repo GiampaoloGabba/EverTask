@@ -5,6 +5,126 @@ All notable changes to EverTask will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.0] - 2025-11-04
+
+### Added
+
+#### Configurable Audit Levels for Database Bloat Control
+- **AuditLevel enum** with four granularity levels to control audit trail verbosity:
+  - `Full` (default): Complete audit trail with all status transitions and executions
+  - `Minimal`: Only errors in StatusAudit, all executions in RunsAudit (75% reduction)
+  - `ErrorsOnly`: Only failed executions tracked (60% reduction)
+  - `None`: No audit trail (100% reduction for extremely high-frequency tasks)
+
+- **Global audit configuration**: `SetDefaultAuditLevel(AuditLevel)` method in `EverTaskServiceConfiguration`
+  - Sets default audit level for all tasks
+  - Default: `AuditLevel.Full` (backward compatible)
+
+- **Per-task audit override**: Optional `auditLevel` parameter added to all `ITaskDispatcher.Dispatch()` overloads
+  - Override global default on a per-task basis
+  - Ideal for high-frequency recurring tasks (health checks, monitoring, cache refresh)
+
+- **Database schema updates**:
+  - `AuditLevel` column added to `QueuedTasks` table (nullable, default: Full)
+  - Database migrations for SQL Server (`20251104000000_AddAuditLevel`, `20251104004411_UpdateStoredProcedureForAuditLevel`)
+  - Database migrations for SQLite (`20251104000000_AddAuditLevel`)
+
+- **Storage interface updates**:
+  - `AuditLevel` parameter added to `ITaskStorage.SetStatus()` method signature
+  - `AuditLevel` parameter added to `ITaskStorage.UpdateCurrentRun()` method signature
+  - All storage implementations updated: `MemoryTaskStorage`, `EfCoreTaskStorage`, `SqlServerTaskStorage`
+
+- **Audit retention policy system**:
+  - `AuditRetentionPolicy` class for configurable retention periods per audit level
+  - `AuditCleanupHostedService` for automatic background cleanup of old audit records
+  - `AddAuditCleanup()` extension method for opt-in audit cleanup registration
+  - Configurable retention periods: Full (90 days), Minimal (60 days), ErrorsOnly (30 days)
+  - Scheduled cleanup runs every 24 hours by default
+
+### Changed
+- **ITaskDispatcher interface**: All `Dispatch()` method signatures now include optional `AuditLevel? auditLevel = null` parameter
+- **Dispatcher implementation**: Passes `AuditLevel` through execution pipeline to storage layer
+- **WorkerExecutor**: Passes task's `AuditLevel` to storage methods during status updates
+- **Database behavior**: Audit records conditionally created based on task's `AuditLevel` configuration
+
+### Performance Impact
+
+**Database Growth Example** (task running every 5 minutes, 24/7):
+
+| Audit Level | Daily Audit Records | Storage Reduction |
+|-------------|---------------------|-------------------|
+| Full        | ~2,304 records/day | Baseline          |
+| Minimal     | ~576 records/day   | 75% reduction     |
+| ErrorsOnly  | ~903 records/day*  | 60% reduction     |
+| None        | 0 records/day      | 100% reduction    |
+
+*Assuming typical failure rates (5-10%)
+
+**Use Cases by Task Type**:
+- **Full**: Critical payment processing, order fulfillment, compliance-required operations
+- **Minimal**: Health checks, data sync, recurring monitoring tasks (tracks last run + errors)
+- **ErrorsOnly**: Fire-and-forget tasks, background cleanup, non-critical operations
+- **None**: Extremely high-frequency tasks (< 1 minute intervals), temporary cache warming
+
+### Documentation
+- Comprehensive audit configuration guide added to `docs/storage.md`
+- Configuration reference updated in `docs/configuration-reference.md`
+- Quick reference added to `docs/configuration-cheatsheet.md`
+- README.md updated with audit level examples and performance impact tables
+
+### Backward Compatibility
+- **Fully backward compatible**: Null `AuditLevel` in database treated as `Full` (default)
+- **Existing tasks**: Tasks created before v3.2 continue with Full audit level
+- **Custom storage**: Implementations must update method signatures (see Migration Notes below)
+
+### Migration Notes
+- **Custom storage implementations**: Update `SetStatus()` and `UpdateCurrentRun()` signatures to accept `AuditLevel` parameter
+- **No data migration required**: Column added with nullable constraint (backward compatible)
+- **Automatic migrations**: Enabled by default via `AutoApplyMigrations = true`
+- **Manual migrations**: Run EF Core migrations if `AutoApplyMigrations = false`
+
+### Examples
+
+**Global Configuration:**
+```csharp
+builder.Services.AddEverTask(opt => opt
+    .RegisterTasksFromAssembly(typeof(Program).Assembly)
+    .SetDefaultAuditLevel(AuditLevel.Minimal)) // Conservative default
+    .AddSqlServerStorage(connectionString);
+```
+
+**Per-Task Override:**
+```csharp
+// High-frequency health check - minimal audit
+await dispatcher.Dispatch(
+    new HealthCheckTask(),
+    recurring => recurring.Every(5).Minutes(),
+    auditLevel: AuditLevel.Minimal);
+
+// Critical payment - full audit
+await dispatcher.Dispatch(
+    new ProcessPaymentTask(orderId),
+    auditLevel: AuditLevel.Full);
+
+// Temporary cache warmer - no audit
+await dispatcher.Dispatch(
+    new WarmCacheTask(),
+    recurring => recurring.Every(30).Seconds(),
+    auditLevel: AuditLevel.None);
+```
+
+**Audit Cleanup Configuration:**
+```csharp
+builder.Services.AddEverTask(opt => opt
+    .RegisterTasksFromAssembly(typeof(Program).Assembly))
+    .AddSqlServerStorage(connectionString)
+    .AddAuditCleanup(opt => opt
+        .SetRetentionPeriod(AuditLevel.Full, TimeSpan.FromDays(90))
+        .SetRetentionPeriod(AuditLevel.Minimal, TimeSpan.FromDays(60))
+        .SetRetentionPeriod(AuditLevel.ErrorsOnly, TimeSpan.FromDays(30))
+        .SetCleanupInterval(TimeSpan.FromHours(24)));
+```
+
 ## [3.1.1] - 2025-10-23
 
 ### Fixed
