@@ -321,7 +321,8 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
         var taskId = await Dispatcher.Dispatch(task, builder => builder
             .RunNow()  // Execute first run immediately
             .Then()
-            .Every(6).Minutes());  // Interval >= 5 min → lazy mode (no MaxRuns = infinite)
+            .Every(6).Minutes()  // Interval >= 5 min → lazy mode
+            .MaxRuns(1));  // Limit to 1 run for test isolation
 
         // Wait for first run to complete
         await WaitForRecurringRunsAsync(taskId, expectedRuns: 1,
@@ -367,7 +368,8 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
         var taskId = await Dispatcher.Dispatch(task, builder => builder
             .RunNow()
             .Then()
-            .Every(2).Seconds());  // Interval < 5 min → eager mode
+            .Every(2).Seconds()  // Interval < 5 min → eager mode
+            .MaxRuns(1));  // Limit to 1 run to prevent race condition on slow CI
 
         await WaitForRecurringRunsAsync(taskId, expectedRuns: 1,
             timeoutMs: TestEnvironment.GetTimeout(1000, 3000));
@@ -407,7 +409,8 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
         var taskId = await Dispatcher.Dispatch(task, builder => builder
             .RunNow()
             .Then()
-            .UseCron("0 0 * * *"));  // Daily at midnight (~24h interval → lazy)
+            .UseCron("0 0 * * *")  // Daily at midnight (~24h interval → lazy)
+            .MaxRuns(1));  // Limit to 1 run for test isolation
 
         await WaitForRecurringRunsAsync(taskId, expectedRuns: 1,
             timeoutMs: TestEnvironment.GetTimeout(1000, 3000));
@@ -447,7 +450,8 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
         var taskId = await Dispatcher.Dispatch(task, builder => builder
             .RunNow()
             .Then()
-            .UseCron("*/10 * * * * *"));  // Every 10 seconds < 5 min → eager mode
+            .UseCron("*/10 * * * * *")  // Every 10 seconds < 5 min → eager mode
+            .MaxRuns(1));  // Limit to 1 run to prevent race condition on slow CI
 
         await WaitForRecurringRunsAsync(taskId, expectedRuns: 1,
             timeoutMs: TestEnvironment.GetTimeout(1000, 3000));
@@ -493,7 +497,8 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
         var taskId = await Dispatcher.Dispatch(task, builder => builder
             .RunNow()
             .Then()
-            .Every(6).Minutes());
+            .Every(6).Minutes()
+            .MaxRuns(1));  // Limit to 1 run for test isolation
 
         await WaitForRecurringRunsAsync(taskId, expectedRuns: 1,
             timeoutMs: TestEnvironment.GetTimeout(1000, 3000));
