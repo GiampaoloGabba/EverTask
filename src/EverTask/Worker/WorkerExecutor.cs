@@ -73,6 +73,7 @@ public class WorkerExecutor(
                             task.PersistenceId,
                             QueuedTaskStatus.Failed,
                             ex,
+                            task.AuditLevel,
                             serviceToken
                         ).ConfigureAwait(false);
                     }

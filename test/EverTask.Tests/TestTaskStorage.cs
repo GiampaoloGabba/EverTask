@@ -58,7 +58,7 @@ public class TestTaskStorage : ITaskStorage
         return Task.CompletedTask;
     }
 
-    public Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception = null, CancellationToken ct = default)
+    public Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception, AuditLevel auditLevel, CancellationToken ct = default)
     {
         return Task.CompletedTask;
     }
@@ -68,7 +68,7 @@ public class TestTaskStorage : ITaskStorage
         return Task.FromResult(0);
     }
 
-    public Task UpdateCurrentRun(Guid taskId, DateTimeOffset? nextRun)
+    public Task UpdateCurrentRun(Guid taskId, DateTimeOffset? nextRun, AuditLevel auditLevel)
     {
         return Task.CompletedTask;
     }
