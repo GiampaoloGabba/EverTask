@@ -73,22 +73,22 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
     }
 
     /// <inheritdoc />
-    public Task SetQueued(Guid taskId, CancellationToken ct = default) =>
-        SetStatus(taskId, QueuedTaskStatus.Queued, null, AuditLevel.Full, ct);
+    public Task SetQueued(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default) =>
+        SetStatus(taskId, QueuedTaskStatus.Queued, null, auditLevel, ct);
 
     /// <inheritdoc />
-    public Task SetInProgress(Guid taskId, CancellationToken ct = default) =>
-        SetStatus(taskId, QueuedTaskStatus.InProgress, null, AuditLevel.Full, ct);
+    public Task SetInProgress(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default) =>
+        SetStatus(taskId, QueuedTaskStatus.InProgress, null, auditLevel, ct);
 
     /// <inheritdoc />
-    public Task SetCompleted(Guid taskId) =>
-        SetStatus(taskId, QueuedTaskStatus.Completed, null, AuditLevel.Full);
+    public Task SetCompleted(Guid taskId, AuditLevel auditLevel) =>
+        SetStatus(taskId, QueuedTaskStatus.Completed, null, auditLevel);
 
-    public Task SetCancelledByUser(Guid taskId) =>
-        SetStatus(taskId, QueuedTaskStatus.Cancelled, null, AuditLevel.Full);
+    public Task SetCancelledByUser(Guid taskId, AuditLevel auditLevel) =>
+        SetStatus(taskId, QueuedTaskStatus.Cancelled, null, auditLevel);
 
-    public Task SetCancelledByService(Guid taskId, Exception exception) =>
-        SetStatus(taskId, QueuedTaskStatus.ServiceStopped, exception, AuditLevel.Full);
+    public Task SetCancelledByService(Guid taskId, Exception exception, AuditLevel auditLevel) =>
+        SetStatus(taskId, QueuedTaskStatus.ServiceStopped, exception, auditLevel);
 
     /// <inheritdoc />
     public Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception, AuditLevel auditLevel,

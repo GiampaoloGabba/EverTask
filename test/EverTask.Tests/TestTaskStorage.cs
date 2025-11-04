@@ -33,27 +33,27 @@ public class TestTaskStorage : ITaskStorage
         return Task.FromResult(Array.Empty<QueuedTask>());
     }
 
-    public Task SetQueued(Guid taskId, CancellationToken ct = default)
+    public Task SetQueued(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default)
     {
         return Task.CompletedTask;
     }
 
-    public Task SetInProgress(Guid taskId, CancellationToken ct = default)
+    public Task SetInProgress(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default)
     {
         return Task.CompletedTask;
     }
 
-    public Task SetCompleted(Guid taskId)
+    public Task SetCompleted(Guid taskId, AuditLevel auditLevel)
     {
         return Task.CompletedTask;
     }
 
-    public Task SetCancelledByUser(Guid taskId)
+    public Task SetCancelledByUser(Guid taskId, AuditLevel auditLevel)
     {
         return Task.CompletedTask;
     }
 
-    public Task SetCancelledByService(Guid taskId, Exception exception)
+    public Task SetCancelledByService(Guid taskId, Exception exception, AuditLevel auditLevel)
     {
         return Task.CompletedTask;
     }

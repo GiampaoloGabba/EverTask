@@ -70,7 +70,7 @@ public class WorkerQueue : IWorkerQueue
             return;
 
         if (_taskStorage != null)
-            await _taskStorage.SetQueued(task.PersistenceId).ConfigureAwait(false);
+            await _taskStorage.SetQueued(task.PersistenceId, task.AuditLevel).ConfigureAwait(false);
         try
         {
             _logger.LogDebug("Queuing task with id {TaskId} to queue '{QueueName}'", task.PersistenceId, Name);
@@ -105,7 +105,7 @@ public class WorkerQueue : IWorkerQueue
         {
             try
             {
-                await _taskStorage.SetQueued(task.PersistenceId).ConfigureAwait(false);
+                await _taskStorage.SetQueued(task.PersistenceId, task.AuditLevel).ConfigureAwait(false);
             }
             catch (Exception e)
             {

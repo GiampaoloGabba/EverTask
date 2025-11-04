@@ -142,7 +142,7 @@ public abstract class EfCoreTaskStorageTestsBase
         var result = await _storage.Get(x => x.Id == queued.Id);
         var startingLength = _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == result[0].Id);
 
-        await _storage.SetQueued(result[0].Id);
+        await _storage.SetQueued(result[0].Id, AuditLevel.Full);
 
         result = await _storage.Get(x => x.Id == queued.Id);
         result[0].Status.ShouldBe(QueuedTaskStatus.Queued);
@@ -161,7 +161,7 @@ public abstract class EfCoreTaskStorageTestsBase
         var result         = await _storage.Get(x => x.Id == queued.Id);
         var startingLength = _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == result[0].Id);
 
-        await _storage.SetInProgress(result[0].Id);
+        await _storage.SetInProgress(result[0].Id, AuditLevel.Full);
 
         result = await _storage.Get(x => x.Id == queued.Id);
         result[0].Status.ShouldBe(QueuedTaskStatus.InProgress);
@@ -179,7 +179,7 @@ public abstract class EfCoreTaskStorageTestsBase
         var result         = await _storage.Get(x => x.Id == queued.Id);
         var startingLength = _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == result[0].Id);
 
-        await _storage.SetCompleted(result[0].Id);
+        await _storage.SetCompleted(result[0].Id, AuditLevel.Full);
 
         result = await _storage.Get(x => x.Id == queued.Id);
         result[0].Status.ShouldBe(QueuedTaskStatus.Completed);
@@ -196,7 +196,7 @@ public abstract class EfCoreTaskStorageTestsBase
         await _storage.Persist(queued);
         var result = await _storage.Get(x => x.Id == queued.Id);
 
-        await _storage.SetCancelledByUser(result[0].Id);
+        await _storage.SetCancelledByUser(result[0].Id, AuditLevel.Full);
 
         result = await _storage.Get(x => x.Id == queued.Id);
         result[0].Status.ShouldBe(QueuedTaskStatus.Cancelled);
@@ -210,7 +210,7 @@ public abstract class EfCoreTaskStorageTestsBase
         var result = await _storage.Get(x => x.Id == queued.Id);
 
         var exception = new Exception("Test Exception");
-        await _storage.SetCancelledByService(result[0].Id, exception);
+        await _storage.SetCancelledByService(result[0].Id, exception, AuditLevel.Full);
 
         result = await _storage.Get(x => x.Id == queued.Id);
         result[0].Status.ShouldBe(QueuedTaskStatus.ServiceStopped);
@@ -670,6 +670,518 @@ public abstract class EfCoreTaskStorageTestsBase
                 $"Pagination order does NOT match creation order!");
         }
     }
+
+    #region AuditLevel Tests
+
+    /// <summary>
+    /// Tests for AuditLevel.Full - complete audit trail (default behavior)
+    /// </summary>
+    [Fact]
+    public async Task Should_create_status_audit_when_audit_level_is_full_and_task_completes()
+    {
+        // Arrange
+        var taskId = GetGuidForProvider();
+        await _storage.Persist(new QueuedTask
+        {
+            Id = taskId,
+            Type = "TestTask",
+            Request = "{}",
+            Handler = "TestHandler",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            Status = QueuedTaskStatus.Queued
+        });
+
+        var startingAuditCount = _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == taskId);
+
+        // Act
+        await _storage.SetStatus(taskId, QueuedTaskStatus.Completed, null, AuditLevel.Full);
+
+        // Assert
+        var task = await _storage.Get(x => x.Id == taskId);
+        task[0].Status.ShouldBe(QueuedTaskStatus.Completed);
+        task[0].LastExecutionUtc.ShouldNotBeNull("LastExecutionUtc should be set for terminal status");
+
+        var auditCount = _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == taskId);
+        auditCount.ShouldBe(startingAuditCount + 1, "Full audit level should create StatusAudit record");
+
+        var latestAudit = _mockedDbContext.StatusAudit.OrderByDescending(x => x.Id).FirstOrDefault(x => x.QueuedTaskId == taskId);
+        latestAudit.ShouldNotBeNull();
+        latestAudit.NewStatus.ShouldBe(QueuedTaskStatus.Completed);
+    }
+
+    [Fact]
+    public async Task Should_create_status_audit_when_audit_level_is_full_and_task_fails()
+    {
+        // Arrange
+        var taskId = GetGuidForProvider();
+        await _storage.Persist(new QueuedTask
+        {
+            Id = taskId,
+            Type = "TestTask",
+            Request = "{}",
+            Handler = "TestHandler",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            Status = QueuedTaskStatus.InProgress
+        });
+
+        var exception = new InvalidOperationException("Test exception");
+        var startingAuditCount = _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == taskId);
+
+        // Act
+        await _storage.SetStatus(taskId, QueuedTaskStatus.Failed, exception, AuditLevel.Full);
+
+        // Assert
+        var task = await _storage.Get(x => x.Id == taskId);
+        task[0].Status.ShouldBe(QueuedTaskStatus.Failed);
+        task[0].Exception.ShouldNotBeNull();
+        task[0].Exception!.ShouldContain("Test exception");
+        task[0].LastExecutionUtc.ShouldNotBeNull();
+
+        var auditCount = _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == taskId);
+        auditCount.ShouldBe(startingAuditCount + 1);
+
+        var latestAudit = _mockedDbContext.StatusAudit.OrderByDescending(x => x.Id).FirstOrDefault(x => x.QueuedTaskId == taskId);
+        latestAudit.ShouldNotBeNull();
+        latestAudit.NewStatus.ShouldBe(QueuedTaskStatus.Failed);
+        latestAudit.Exception.ShouldNotBeNull();
+        latestAudit.Exception!.ShouldContain("Test exception");
+    }
+
+    /// <summary>
+    /// Tests for AuditLevel.Minimal - only errors create StatusAudit, but always create RunsAudit for recurring
+    /// </summary>
+    [Fact]
+    public async Task Should_not_create_status_audit_when_audit_level_is_minimal_and_task_completes_successfully()
+    {
+        // Arrange
+        var taskId = GetGuidForProvider();
+        await _storage.Persist(new QueuedTask
+        {
+            Id = taskId,
+            Type = "TestTask",
+            Request = "{}",
+            Handler = "TestHandler",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            Status = QueuedTaskStatus.InProgress
+        });
+
+        var startingAuditCount = _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == taskId);
+
+        // Act
+        await _storage.SetStatus(taskId, QueuedTaskStatus.Completed, null, AuditLevel.Minimal);
+
+        // Assert
+        var task = await _storage.Get(x => x.Id == taskId);
+        task[0].Status.ShouldBe(QueuedTaskStatus.Completed);
+        task[0].LastExecutionUtc.ShouldNotBeNull();
+
+        var auditCount = _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == taskId);
+        auditCount.ShouldBe(startingAuditCount, "Minimal audit level should NOT create StatusAudit for successful completion");
+    }
+
+    [Fact]
+    public async Task Should_create_status_audit_when_audit_level_is_minimal_and_task_fails()
+    {
+        // Arrange
+        var taskId = GetGuidForProvider();
+        await _storage.Persist(new QueuedTask
+        {
+            Id = taskId,
+            Type = "TestTask",
+            Request = "{}",
+            Handler = "TestHandler",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            Status = QueuedTaskStatus.InProgress
+        });
+
+        var exception = new InvalidOperationException("Test failure");
+        var startingAuditCount = _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == taskId);
+
+        // Act
+        await _storage.SetStatus(taskId, QueuedTaskStatus.Failed, exception, AuditLevel.Minimal);
+
+        // Assert
+        var task = await _storage.Get(x => x.Id == taskId);
+        task[0].Status.ShouldBe(QueuedTaskStatus.Failed);
+        task[0].Exception.ShouldNotBeNull();
+        task[0].Exception!.ShouldContain("Test failure");
+
+        var auditCount = _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == taskId);
+        auditCount.ShouldBe(startingAuditCount + 1, "Minimal audit level should create StatusAudit for failures");
+
+        var latestAudit = _mockedDbContext.StatusAudit.OrderByDescending(x => x.Id).FirstOrDefault(x => x.QueuedTaskId == taskId);
+        latestAudit.ShouldNotBeNull();
+        latestAudit.NewStatus.ShouldBe(QueuedTaskStatus.Failed);
+        latestAudit.Exception.ShouldNotBeNull();
+        latestAudit.Exception!.ShouldContain("Test failure");
+    }
+
+    [Fact]
+    public async Task Should_create_status_audit_when_audit_level_is_minimal_and_task_is_service_stopped()
+    {
+        // Arrange
+        var taskId = GetGuidForProvider();
+        await _storage.Persist(new QueuedTask
+        {
+            Id = taskId,
+            Type = "TestTask",
+            Request = "{}",
+            Handler = "TestHandler",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            Status = QueuedTaskStatus.InProgress
+        });
+
+        var startingAuditCount = _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == taskId);
+
+        // Act - ServiceStopped is considered an error state even without exception
+        await _storage.SetStatus(taskId, QueuedTaskStatus.ServiceStopped, null, AuditLevel.Minimal);
+
+        // Assert
+        var task = await _storage.Get(x => x.Id == taskId);
+        task[0].Status.ShouldBe(QueuedTaskStatus.ServiceStopped);
+
+        var auditCount = _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == taskId);
+        auditCount.ShouldBe(startingAuditCount + 1, "Minimal audit level should create StatusAudit for ServiceStopped");
+    }
+
+    /// <summary>
+    /// Tests for AuditLevel.ErrorsOnly - only errors create audit records
+    /// </summary>
+    [Fact]
+    public async Task Should_not_create_status_audit_when_audit_level_is_errors_only_and_task_completes()
+    {
+        // Arrange
+        var taskId = GetGuidForProvider();
+        await _storage.Persist(new QueuedTask
+        {
+            Id = taskId,
+            Type = "TestTask",
+            Request = "{}",
+            Handler = "TestHandler",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            Status = QueuedTaskStatus.InProgress
+        });
+
+        var startingAuditCount = _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == taskId);
+
+        // Act
+        await _storage.SetStatus(taskId, QueuedTaskStatus.Completed, null, AuditLevel.ErrorsOnly);
+
+        // Assert
+        var task = await _storage.Get(x => x.Id == taskId);
+        task[0].Status.ShouldBe(QueuedTaskStatus.Completed);
+        task[0].LastExecutionUtc.ShouldNotBeNull();
+
+        var auditCount = _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == taskId);
+        auditCount.ShouldBe(startingAuditCount, "ErrorsOnly audit level should NOT create StatusAudit for success");
+    }
+
+    [Fact]
+    public async Task Should_create_status_audit_when_audit_level_is_errors_only_and_task_fails()
+    {
+        // Arrange
+        var taskId = GetGuidForProvider();
+        await _storage.Persist(new QueuedTask
+        {
+            Id = taskId,
+            Type = "TestTask",
+            Request = "{}",
+            Handler = "TestHandler",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            Status = QueuedTaskStatus.InProgress
+        });
+
+        var exception = new InvalidOperationException("Error test");
+        var startingAuditCount = _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == taskId);
+
+        // Act
+        await _storage.SetStatus(taskId, QueuedTaskStatus.Failed, exception, AuditLevel.ErrorsOnly);
+
+        // Assert
+        var task = await _storage.Get(x => x.Id == taskId);
+        task[0].Status.ShouldBe(QueuedTaskStatus.Failed);
+
+        var auditCount = _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == taskId);
+        auditCount.ShouldBe(startingAuditCount + 1, "ErrorsOnly audit level should create StatusAudit for failures");
+    }
+
+    /// <summary>
+    /// Tests for AuditLevel.None - no audit trail at all
+    /// </summary>
+    [Fact]
+    public async Task Should_not_create_status_audit_when_audit_level_is_none_and_task_completes()
+    {
+        // Arrange
+        var taskId = GetGuidForProvider();
+        await _storage.Persist(new QueuedTask
+        {
+            Id = taskId,
+            Type = "TestTask",
+            Request = "{}",
+            Handler = "TestHandler",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            Status = QueuedTaskStatus.InProgress
+        });
+
+        var startingAuditCount = _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == taskId);
+
+        // Act
+        await _storage.SetStatus(taskId, QueuedTaskStatus.Completed, null, AuditLevel.None);
+
+        // Assert
+        var task = await _storage.Get(x => x.Id == taskId);
+        task[0].Status.ShouldBe(QueuedTaskStatus.Completed);
+        task[0].LastExecutionUtc.ShouldNotBeNull();
+
+        var auditCount = _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == taskId);
+        auditCount.ShouldBe(startingAuditCount, "None audit level should NOT create StatusAudit");
+    }
+
+    [Fact]
+    public async Task Should_not_create_status_audit_when_audit_level_is_none_and_task_fails()
+    {
+        // Arrange
+        var taskId = GetGuidForProvider();
+        await _storage.Persist(new QueuedTask
+        {
+            Id = taskId,
+            Type = "TestTask",
+            Request = "{}",
+            Handler = "TestHandler",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            Status = QueuedTaskStatus.InProgress
+        });
+
+        var exception = new InvalidOperationException("Test failure");
+        var startingAuditCount = _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == taskId);
+
+        // Act
+        await _storage.SetStatus(taskId, QueuedTaskStatus.Failed, exception, AuditLevel.None);
+
+        // Assert
+        var task = await _storage.Get(x => x.Id == taskId);
+        task[0].Status.ShouldBe(QueuedTaskStatus.Failed);
+        task[0].Exception.ShouldNotBeNull();
+        task[0].Exception!.ShouldContain("Test failure");
+
+        var auditCount = _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == taskId);
+        auditCount.ShouldBe(startingAuditCount, "None audit level should NOT create StatusAudit even for failures");
+    }
+
+    /// <summary>
+    /// Tests for UpdateCurrentRun with different audit levels (recurring tasks)
+    /// </summary>
+    [Fact]
+    public async Task Should_create_runs_audit_when_audit_level_is_full_and_recurring_task_executes()
+    {
+        // Arrange
+        var taskId = GetGuidForProvider();
+        await _storage.Persist(new QueuedTask
+        {
+            Id = taskId,
+            Type = "TestTask",
+            Request = "{}",
+            Handler = "TestHandler",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            Status = QueuedTaskStatus.Completed,
+            IsRecurring = true,
+            CurrentRunCount = 0
+        });
+
+        var startingRunsCount = _mockedDbContext.RunsAudit.Count(x => x.QueuedTaskId == taskId);
+        var nextRun = DateTimeOffset.UtcNow.AddHours(1);
+
+        // Act
+        await _storage.UpdateCurrentRun(taskId, nextRun, AuditLevel.Full);
+
+        // Assert
+        var task = await _storage.Get(x => x.Id == taskId);
+        task[0].CurrentRunCount.ShouldBe(1);
+        task[0].NextRunUtc.ShouldBe(nextRun);
+
+        var runsCount = _mockedDbContext.RunsAudit.Count(x => x.QueuedTaskId == taskId);
+        runsCount.ShouldBe(startingRunsCount + 1, "Full audit level should create RunsAudit record");
+    }
+
+    [Fact]
+    public async Task Should_create_runs_audit_when_audit_level_is_minimal_and_recurring_task_executes()
+    {
+        // Arrange
+        var taskId = GetGuidForProvider();
+        await _storage.Persist(new QueuedTask
+        {
+            Id = taskId,
+            Type = "TestTask",
+            Request = "{}",
+            Handler = "TestHandler",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            Status = QueuedTaskStatus.Completed,
+            IsRecurring = true,
+            CurrentRunCount = 0
+        });
+
+        var startingRunsCount = _mockedDbContext.RunsAudit.Count(x => x.QueuedTaskId == taskId);
+        var nextRun = DateTimeOffset.UtcNow.AddHours(1);
+
+        // Act
+        await _storage.UpdateCurrentRun(taskId, nextRun, AuditLevel.Minimal);
+
+        // Assert
+        var task = await _storage.Get(x => x.Id == taskId);
+        task[0].CurrentRunCount.ShouldBe(1);
+
+        var runsCount = _mockedDbContext.RunsAudit.Count(x => x.QueuedTaskId == taskId);
+        runsCount.ShouldBe(startingRunsCount + 1, "Minimal audit level should ALWAYS create RunsAudit to track last run");
+    }
+
+    [Fact]
+    public async Task Should_not_create_runs_audit_when_audit_level_is_errors_only_and_recurring_task_succeeds()
+    {
+        // Arrange
+        var taskId = GetGuidForProvider();
+        await _storage.Persist(new QueuedTask
+        {
+            Id = taskId,
+            Type = "TestTask",
+            Request = "{}",
+            Handler = "TestHandler",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            Status = QueuedTaskStatus.Completed,
+            IsRecurring = true,
+            CurrentRunCount = 0
+        });
+
+        var startingRunsCount = _mockedDbContext.RunsAudit.Count(x => x.QueuedTaskId == taskId);
+        var nextRun = DateTimeOffset.UtcNow.AddHours(1);
+
+        // Act
+        await _storage.UpdateCurrentRun(taskId, nextRun, AuditLevel.ErrorsOnly);
+
+        // Assert
+        var task = await _storage.Get(x => x.Id == taskId);
+        task[0].CurrentRunCount.ShouldBe(1);
+
+        var runsCount = _mockedDbContext.RunsAudit.Count(x => x.QueuedTaskId == taskId);
+        runsCount.ShouldBe(startingRunsCount, "ErrorsOnly audit level should NOT create RunsAudit for successful runs");
+    }
+
+    [Fact]
+    public async Task Should_create_runs_audit_when_audit_level_is_errors_only_and_recurring_task_fails()
+    {
+        // Arrange
+        var taskId = GetGuidForProvider();
+        var exception = new InvalidOperationException("Recurring task failure");
+
+        await _storage.Persist(new QueuedTask
+        {
+            Id = taskId,
+            Type = "TestTask",
+            Request = "{}",
+            Handler = "TestHandler",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            Status = QueuedTaskStatus.Failed,
+            Exception = exception.ToString(),
+            IsRecurring = true,
+            CurrentRunCount = 0
+        });
+
+        var startingRunsCount = _mockedDbContext.RunsAudit.Count(x => x.QueuedTaskId == taskId);
+        var nextRun = DateTimeOffset.UtcNow.AddHours(1);
+
+        // Act
+        await _storage.UpdateCurrentRun(taskId, nextRun, AuditLevel.ErrorsOnly);
+
+        // Assert
+        var task = await _storage.Get(x => x.Id == taskId);
+        task[0].CurrentRunCount.ShouldBe(1);
+
+        var runsCount = _mockedDbContext.RunsAudit.Count(x => x.QueuedTaskId == taskId);
+        runsCount.ShouldBe(startingRunsCount + 1, "ErrorsOnly audit level should create RunsAudit for failed runs");
+    }
+
+    [Fact]
+    public async Task Should_not_create_runs_audit_when_audit_level_is_none()
+    {
+        // Arrange
+        var taskId = GetGuidForProvider();
+        await _storage.Persist(new QueuedTask
+        {
+            Id = taskId,
+            Type = "TestTask",
+            Request = "{}",
+            Handler = "TestHandler",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            Status = QueuedTaskStatus.Completed,
+            IsRecurring = true,
+            CurrentRunCount = 0
+        });
+
+        var startingRunsCount = _mockedDbContext.RunsAudit.Count(x => x.QueuedTaskId == taskId);
+        var nextRun = DateTimeOffset.UtcNow.AddHours(1);
+
+        // Act
+        await _storage.UpdateCurrentRun(taskId, nextRun, AuditLevel.None);
+
+        // Assert
+        var task = await _storage.Get(x => x.Id == taskId);
+        task[0].CurrentRunCount.ShouldBe(1, "CurrentRunCount should be incremented even with None audit level");
+
+        var runsCount = _mockedDbContext.RunsAudit.Count(x => x.QueuedTaskId == taskId);
+        runsCount.ShouldBe(startingRunsCount, "None audit level should NOT create RunsAudit");
+    }
+
+    /// <summary>
+    /// Tests for terminal vs intermediate states with LastExecutionUtc
+    /// </summary>
+    [Fact]
+    public async Task Should_update_last_execution_utc_for_terminal_states()
+    {
+        // Arrange
+        var taskId = GetGuidForProvider();
+        await _storage.Persist(new QueuedTask
+        {
+            Id = taskId,
+            Type = "TestTask",
+            Request = "{}",
+            Handler = "TestHandler",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            Status = QueuedTaskStatus.InProgress,
+            LastExecutionUtc = null
+        });
+
+        // Act - Completed is a terminal state
+        await _storage.SetStatus(taskId, QueuedTaskStatus.Completed, null, AuditLevel.Full);
+
+        // Assert
+        var task = await _storage.Get(x => x.Id == taskId);
+        task[0].LastExecutionUtc.ShouldNotBeNull("Terminal states should set LastExecutionUtc");
+    }
+
+    [Fact]
+    public async Task Should_not_update_last_execution_utc_for_intermediate_states()
+    {
+        // Arrange
+        var taskId = GetGuidForProvider();
+        await _storage.Persist(new QueuedTask
+        {
+            Id = taskId,
+            Type = "TestTask",
+            Request = "{}",
+            Handler = "TestHandler",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            Status = QueuedTaskStatus.Queued,
+            LastExecutionUtc = null
+        });
+
+        // Act - InProgress is an intermediate state
+        await _storage.SetStatus(taskId, QueuedTaskStatus.InProgress, null, AuditLevel.Full);
+
+        // Assert
+        var task = await _storage.Get(x => x.Id == taskId);
+        task[0].LastExecutionUtc.ShouldBeNull("Intermediate states should NOT set LastExecutionUtc");
+    }
+
+    #endregion
 
     protected abstract Task CleanUpDatabase();
 }

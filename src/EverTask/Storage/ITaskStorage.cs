@@ -48,39 +48,44 @@ public interface ITaskStorage
     /// Sets a task's status to queued.
     /// </summary>
     /// <param name="taskId">The ID of the task.</param>
+    /// <param name="auditLevel">Audit level for this task.</param>
     /// <param name="ct">Optional cancellation token.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    Task SetQueued(Guid taskId, CancellationToken ct = default);
+    Task SetQueued(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default);
 
     /// <summary>
     /// Sets a task's status to in progress.
     /// </summary>
     /// <param name="taskId">The ID of the task.</param>
+    /// <param name="auditLevel">Audit level for this task.</param>
     /// <param name="ct">Optional cancellation token.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    Task SetInProgress(Guid taskId, CancellationToken ct = default);
+    Task SetInProgress(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default);
 
     /// <summary>
     /// Sets a task's status to completed.
     /// </summary>
     /// <param name="taskId">The ID of the task.</param>
+    /// <param name="auditLevel">Audit level for this task.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    Task SetCompleted(Guid taskId);
+    Task SetCompleted(Guid taskId, AuditLevel auditLevel);
 
     /// <summary>
     /// Sets a task's status to manually cancelled by the user.
     /// </summary>
     /// <param name="taskId">The ID of the task.</param>
+    /// <param name="auditLevel">Audit level for this task.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    Task SetCancelledByUser(Guid taskId);
+    Task SetCancelledByUser(Guid taskId, AuditLevel auditLevel);
 
     /// <summary>
     /// Sets a task's status to SystemStopped, indicating that the task was cancelled by the background service while stopping.
     /// </summary>
     /// <param name="taskId">The ID of the task.</param>
     /// <param name="exception">The exception that caused the task to be cancelled.</param>
+    /// <param name="auditLevel">Audit level for this task.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    Task SetCancelledByService(Guid taskId, Exception exception);
+    Task SetCancelledByService(Guid taskId, Exception exception, AuditLevel auditLevel);
 
     /// <summary>
     /// Sets the status of a task.

@@ -79,20 +79,20 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                      .ConfigureAwait(false);
     }
 
-    public async Task SetQueued(Guid taskId, CancellationToken ct = default) =>
-        await SetStatus(taskId, QueuedTaskStatus.Queued, null, AuditLevel.Full, ct).ConfigureAwait(false);
+    public async Task SetQueued(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default) =>
+        await SetStatus(taskId, QueuedTaskStatus.Queued, null, auditLevel, ct).ConfigureAwait(false);
 
-    public async Task SetInProgress(Guid taskId, CancellationToken ct = default) =>
-        await SetStatus(taskId, QueuedTaskStatus.InProgress, null, AuditLevel.Full, ct).ConfigureAwait(false);
+    public async Task SetInProgress(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default) =>
+        await SetStatus(taskId, QueuedTaskStatus.InProgress, null, auditLevel, ct).ConfigureAwait(false);
 
-    public async Task SetCompleted(Guid taskId) =>
-        await SetStatus(taskId, QueuedTaskStatus.Completed, null, AuditLevel.Full).ConfigureAwait(false);
+    public async Task SetCompleted(Guid taskId, AuditLevel auditLevel) =>
+        await SetStatus(taskId, QueuedTaskStatus.Completed, null, auditLevel).ConfigureAwait(false);
 
-    public async Task SetCancelledByUser(Guid taskId) =>
-        await SetStatus(taskId, QueuedTaskStatus.Cancelled, null, AuditLevel.Full).ConfigureAwait(false);
+    public async Task SetCancelledByUser(Guid taskId, AuditLevel auditLevel) =>
+        await SetStatus(taskId, QueuedTaskStatus.Cancelled, null, auditLevel).ConfigureAwait(false);
 
-    public async Task SetCancelledByService(Guid taskId, Exception exception) =>
-        await SetStatus(taskId, QueuedTaskStatus.ServiceStopped, exception, AuditLevel.Full).ConfigureAwait(false);
+    public async Task SetCancelledByService(Guid taskId, Exception exception, AuditLevel auditLevel) =>
+        await SetStatus(taskId, QueuedTaskStatus.ServiceStopped, exception, auditLevel).ConfigureAwait(false);
 
     public virtual async Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception, AuditLevel auditLevel,
                                     CancellationToken ct = default)

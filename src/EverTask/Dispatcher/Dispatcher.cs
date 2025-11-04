@@ -48,7 +48,9 @@ public class Dispatcher(
     public async Task Cancel(Guid taskId, CancellationToken cancellationToken = default)
     {
         if (taskStorage != null)
-            await taskStorage.SetCancelledByUser(taskId).ConfigureAwait(false);
+        {
+            await taskStorage.SetCancelledByUser(taskId, AuditLevel.ErrorsOnly).ConfigureAwait(false);
+        }
 
         cancellationSourceProvider.CancelTokenForTask(taskId);
 

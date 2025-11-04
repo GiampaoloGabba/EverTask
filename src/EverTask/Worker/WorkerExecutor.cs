@@ -110,14 +110,14 @@ public class WorkerExecutor(
             RegisterInfo(task, "Starting task with id {0}.", task.PersistenceId);
 
             if (taskStorage != null)
-                await taskStorage.SetInProgress(task.PersistenceId, serviceToken).ConfigureAwait(false);
+                await taskStorage.SetInProgress(task.PersistenceId, task.AuditLevel, serviceToken).ConfigureAwait(false);
 
             await ExecuteCallback(GetStartedCallback(task, handler), task, "Started").ConfigureAwait(false);
 
-            var executionTime = await ExecuteTask(task, handler, scope.ServiceProvider, serviceToken);
+            var executionTime = await ExecuteTask(task, handler, scope.ServiceProvider, serviceToken, taskStorage);
 
             if (taskStorage != null)
-                await taskStorage.SetCompleted(task.PersistenceId).ConfigureAwait(false);
+                await taskStorage.SetCompleted(task.PersistenceId, task.AuditLevel).ConfigureAwait(false);
 
             await ExecuteCallback(GetCompletedCallback(task, handler), task, "Completed").ConfigureAwait(false);
 
@@ -182,7 +182,7 @@ public class WorkerExecutor(
         return false;
     }
 
-    private async Task<double> ExecuteTask(TaskHandlerExecutor task, object handler, IServiceProvider serviceProvider, CancellationToken serviceToken)
+    private async Task<double> ExecuteTask(TaskHandlerExecutor task, object handler, IServiceProvider serviceProvider, CancellationToken serviceToken, ITaskStorage? taskStorage)
     {
         serviceToken.ThrowIfCancellationRequested();
 
@@ -476,9 +476,9 @@ public class WorkerExecutor(
             if (taskStorage != null)
             {
                 if (serviceToken.IsCancellationRequested)
-                    await taskStorage.SetCancelledByService(task.PersistenceId, oce).ConfigureAwait(false);
+                    await taskStorage.SetCancelledByService(task.PersistenceId, oce, task.AuditLevel).ConfigureAwait(false);
                 else
-                    await taskStorage.SetCancelledByUser(task.PersistenceId).ConfigureAwait(false);
+                    await taskStorage.SetCancelledByUser(task.PersistenceId, task.AuditLevel).ConfigureAwait(false);
             }
 
             await ExecuteCallback(GetErrorCallback(task, handler), task, oce,
