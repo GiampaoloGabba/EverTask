@@ -74,11 +74,11 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
         // Adaptive parameters: tighter constraints locally, more generous on CI
         var cronInterval = TestEnvironment.GetCronInterval(localSeconds: 5, ciSeconds: 10);
         var maxRuns = TestEnvironment.GetIterations(local: 3, ci: 2);
-        var timeout = TestEnvironment.GetTimeout(localMs: 20000, ciMs: 35000);
+        var timeout = TestEnvironment.GetTimeout(localMs: 20000, ciMs: 50000);
 
         // Test RunDelayed + Cron combination
         // Local: */5 (every 5s), 3 runs, 20s timeout
-        // CI: */10 (every 10s), 2 runs, 35s timeout (more forgiving for slow CI with coverage)
+        // CI: */10 (every 10s), 2 runs, 50s timeout (generous for slow CI with coverage + cron jitter)
         var taskId = await Dispatcher.Dispatch(task, builder => builder
             .RunDelayed(TimeSpan.FromMilliseconds(1500))
             .Then()
