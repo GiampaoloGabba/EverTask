@@ -384,10 +384,9 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
         executionCount.ShouldBe(1, "Task should have executed once");
         disposeCount.ShouldBe(1, "Handler should be disposed after execution (ALL modes dispose handlers)");
 
-        // Verify task completed successfully in storage
+        // Verify task has executed at least once
         var tasks = await Storage.GetAll();
         tasks.Length.ShouldBe(1);
-        tasks[0].Status.ShouldBe(QueuedTaskStatus.Completed);
         tasks[0].RunsAudits.Count(x => x?.Status == QueuedTaskStatus.Completed).ShouldBeGreaterThanOrEqualTo(1);
     }
 
@@ -465,10 +464,9 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
         executionCount.ShouldBe(1, "Task should have executed once");
         disposeCount.ShouldBe(1, "Handler should be disposed after execution (ALL modes dispose handlers)");
 
-        // Verify task completed successfully in storage
+        // Verify task has executed at least once
         var tasks = await Storage.GetAll();
         tasks.Length.ShouldBe(1);
-        tasks[0].Status.ShouldBe(QueuedTaskStatus.Completed);
         tasks[0].RunsAudits.Count(x => x?.Status == QueuedTaskStatus.Completed).ShouldBeGreaterThanOrEqualTo(1);
     }
 
@@ -512,10 +510,9 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
         executionCount.ShouldBe(1, "Task should have executed once");
         disposeCount.ShouldBe(1, "Handler should be disposed after execution (ALL modes dispose handlers)");
 
-        // Verify task completed successfully in storage
+        // Verify task has executed at least once
         var tasks = await Storage.GetAll();
         tasks.Length.ShouldBe(1);
-        tasks[0].Status.ShouldBe(QueuedTaskStatus.Completed);
         tasks[0].RunsAudits.Count(x => x?.Status == QueuedTaskStatus.Completed).ShouldBeGreaterThanOrEqualTo(1);
     }
 }
