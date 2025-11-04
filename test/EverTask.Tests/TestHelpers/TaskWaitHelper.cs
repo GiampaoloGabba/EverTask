@@ -181,7 +181,12 @@ public static class TaskWaitHelper
                     // If the collection is modified during ToArray(), catch the exception
                     // and return false to retry the polling.
                     var audits = task.RunsAudits.ToArray();
-                    return audits.Count(x => x != null && x.Status == QueuedTaskStatus.Completed) >= expectedRuns;
+                    var completedCount = audits.Count(x => x != null && x.Status == QueuedTaskStatus.Completed);
+
+                    // IMPORTANT: Wait for BOTH RunsAudits AND CurrentRunCount to be updated
+                    // There's a race condition where RunsAudits is updated before CurrentRunCount
+                    var currentRunCount = task.CurrentRunCount ?? 0;
+                    return completedCount >= expectedRuns && currentRunCount >= expectedRuns;
                 }
                 catch (ArgumentException)
                 {
