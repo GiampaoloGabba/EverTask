@@ -19,6 +19,7 @@ public class QueuedTask
     public DateTimeOffset? NextRunUtc            { get; set; }
     public string?         QueueName             { get; set; }
     public string?         TaskKey               { get; set; }
+    public int?            AuditLevel            { get; set; }
 
     public QueuedTaskStatus         Status       { get; set; }
     public ICollection<StatusAudit> StatusAudits { get; set; } = new List<StatusAudit>();

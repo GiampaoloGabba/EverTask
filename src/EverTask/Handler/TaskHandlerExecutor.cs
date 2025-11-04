@@ -20,9 +20,11 @@ public record TaskHandlerExecutor(
         Func<Guid, Exception?, string, ValueTask>? HandlerErrorCallback,
         Func<Guid, ValueTask>? HandlerStartedCallback,
         Func<Guid, ValueTask>? HandlerCompletedCallback,
+        Func<Guid, int, Exception, TimeSpan, ValueTask>? HandlerRetryCallback,
         Guid PersistenceId,
         string? QueueName,
-        string? TaskKey)
+        string? TaskKey,
+        AuditLevel AuditLevel)
     {
     /// <summary>
     /// Indicates whether this executor is in lazy mode (handler not yet resolved).
@@ -127,9 +129,11 @@ public record TaskHandlerExecutor(
                 HandlerErrorCallback: null,
                 HandlerStartedCallback: null,
                 HandlerCompletedCallback: null,
+                HandlerRetryCallback: null,
                 PersistenceId,
                 QueueName,
-                TaskKey
+                TaskKey,
+                AuditLevel
             );
         }
 
@@ -148,9 +152,11 @@ public record TaskHandlerExecutor(
             HandlerErrorCallback: null,
             HandlerStartedCallback: null,
             HandlerCompletedCallback: null,
+            HandlerRetryCallback: null,
             PersistenceId,
             QueueName,
-            TaskKey
+            TaskKey,
+            AuditLevel
         );
     }
 };
@@ -249,7 +255,8 @@ public static class TaskHandlerExecutorExtensions
             NextRunUtc            = nextRun,
             CurrentRunCount       = 0,
             QueueName             = executor.QueueName,
-            TaskKey               = executor.TaskKey
+            TaskKey               = executor.TaskKey,
+            AuditLevel            = (int)executor.AuditLevel
         };
     }
 }

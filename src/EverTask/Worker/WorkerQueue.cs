@@ -80,7 +80,7 @@ public class WorkerQueue : IWorkerQueue
         {
             _logger.LogError(e, "Unable to queue task with id {TaskId} to queue '{QueueName}'", task.PersistenceId, Name);
             if (_taskStorage != null)
-                await _taskStorage.SetStatus(task.PersistenceId, QueuedTaskStatus.Failed, e).ConfigureAwait(false);
+                await _taskStorage.SetStatus(task.PersistenceId, QueuedTaskStatus.Failed, e, task.AuditLevel).ConfigureAwait(false);
         }
     }
 

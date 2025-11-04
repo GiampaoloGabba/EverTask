@@ -88,9 +88,10 @@ public interface ITaskStorage
     /// <param name="taskId">The ID of the task.</param>
     /// <param name="status">The new status of the task.</param>
     /// <param name="exception">Optional exception related to the task status change.</param>
+    /// <param name="auditLevel">Audit level for this task (determines if audit record should be created).</param>
     /// <param name="ct">Optional cancellation token.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception = null,
+    Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception, AuditLevel auditLevel,
                        CancellationToken ct = default);
 
     /// <summary>
@@ -105,8 +106,9 @@ public interface ITaskStorage
     /// </summary>
     /// <param name="taskId">The ID of the task.</param>
     /// <param name="nextRun">The next run date.</param>
+    /// <param name="auditLevel">Audit level for this task (determines if audit record should be created).</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    Task UpdateCurrentRun(Guid taskId, DateTimeOffset? nextRun);
+    Task UpdateCurrentRun(Guid taskId, DateTimeOffset? nextRun, AuditLevel auditLevel);
 
     /// <summary>
     /// Retrieves a task by its unique task key.

@@ -4,6 +4,7 @@ using EverTask.Storage.SqlServer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace EverTask.Storage.SqlServer.Migrations
 {
     [DbContext(typeof(SqlServerTaskStoreContext))]
-    partial class TaskStoreDbContextModelSnapshot : ModelSnapshot
+    [Migration("20251104004411_UpdateStoredProcedureForAuditLevel")]
+    partial class UpdateStoredProcedureForAuditLevel
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -160,42 +163,6 @@ namespace EverTask.Storage.SqlServer.Migrations
                     b.ToTable("StatusAudit", "EverTask");
                 });
 
-            modelBuilder.Entity("EverTask.Storage.TaskExecutionLog", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("ExceptionDetails")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("Level")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("nvarchar(20)");
-
-                    b.Property<string>("Message")
-                        .IsRequired()
-                        .HasMaxLength(4000)
-                        .HasColumnType("nvarchar(4000)");
-
-                    b.Property<int>("SequenceNumber")
-                        .HasColumnType("int");
-
-                    b.Property<Guid>("TaskId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTimeOffset>("TimestampUtc")
-                        .HasColumnType("datetimeoffset");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TaskId", "TimestampUtc")
-                        .HasDatabaseName("IX_TaskExecutionLogs_TaskId_TimestampUtc");
-
-                    b.ToTable("TaskExecutionLogs", "EverTask");
-                });
-
             modelBuilder.Entity("EverTask.Storage.RunsAudit", b =>
                 {
                     b.HasOne("EverTask.Storage.QueuedTask", "QueuedTask")
@@ -218,21 +185,8 @@ namespace EverTask.Storage.SqlServer.Migrations
                     b.Navigation("QueuedTask");
                 });
 
-            modelBuilder.Entity("EverTask.Storage.TaskExecutionLog", b =>
-                {
-                    b.HasOne("EverTask.Storage.QueuedTask", "Task")
-                        .WithMany("ExecutionLogs")
-                        .HasForeignKey("TaskId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Task");
-                });
-
             modelBuilder.Entity("EverTask.Storage.QueuedTask", b =>
                 {
-                    b.Navigation("ExecutionLogs");
-
                     b.Navigation("RunsAudits");
 
                     b.Navigation("StatusAudits");

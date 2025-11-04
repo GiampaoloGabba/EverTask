@@ -16,9 +16,32 @@ Quick reference for all EverTask configuration options.
 | `SetMaxDegreeOfParallelism` | `int parallelism` | `ProcessorCount * 2` (min 4) | Concurrent workers |
 | `SetDefaultRetryPolicy` | `IRetryPolicy` | `LinearRetryPolicy(3, 500ms)` | Global retry policy |
 | `SetDefaultTimeout` | `TimeSpan?` | `null` | Global timeout |
+| `SetDefaultAuditLevel` | `AuditLevel` | `Full` | Audit trail verbosity |
 | `SetThrowIfUnableToPersist` | `bool` | `true` | Throw on save failure |
 | `UseShardedScheduler` | `int shardCount` | Auto (min 4) | For >10k/sec loads |
 | `RegisterTasksFromAssembly` | `Assembly` | - | Scan for handlers |
+
+## Audit Configuration
+
+### Audit Levels
+| Level | StatusAudit | RunsAudit | Records/Day* | Use Case |
+|-------|-------------|-----------|--------------|----------|
+| `Full` (default) | All transitions | All executions | ~2,304 | Critical tasks |
+| `Minimal` | Errors only | All executions | ~576 | High-frequency recurring |
+| `ErrorsOnly` | Errors only | Errors only | ~903** | Fire-and-forget |
+| `None` | Never | Never | 0 | Extremely high-frequency |
+
+*For 100 tasks every 5 minutes. **Assuming typical failure rates.
+
+### Configuration Examples
+```csharp
+// Global default
+.SetDefaultAuditLevel(AuditLevel.Minimal)
+
+// Per-task override
+await dispatcher.Dispatch(task, auditLevel: AuditLevel.ErrorsOnly);
+await dispatcher.Dispatch(task, recurring => ..., auditLevel: AuditLevel.Minimal);
+```
 
 ## Queue Configuration
 

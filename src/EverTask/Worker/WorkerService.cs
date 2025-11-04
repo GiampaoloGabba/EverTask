@@ -207,6 +207,9 @@ public class WorkerService(
                 logger.LogError(e, "Unable to deserialize recurring task info with id {TaskId}", taskInfo.Id);
             }
 
+            // Get audit level from task info (null means Full for backward compatibility)
+            var auditLevel = taskInfo.AuditLevel.HasValue ? (AuditLevel)taskInfo.AuditLevel.Value : AuditLevel.Full;
+
             if (task != null)
             {
                 try
@@ -223,7 +226,7 @@ public class WorkerService(
 
                     if (itemStorage != null)
                     {
-                        await itemStorage.SetStatus(taskInfo.Id, QueuedTaskStatus.Failed, ex, token)
+                        await itemStorage.SetStatus(taskInfo.Id, QueuedTaskStatus.Failed, ex, auditLevel, token)
                             .ConfigureAwait(false);
                     }
 
@@ -242,6 +245,7 @@ public class WorkerService(
                         taskInfo.Id,
                         QueuedTaskStatus.Failed,
                         new Exception("Unable to create the IBackground task from the specified properties"),
+                        auditLevel,
                         token).ConfigureAwait(false);
                 }
             }

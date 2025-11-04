@@ -1,4 +1,5 @@
 ﻿using System.Linq.Expressions;
+using EverTask.Abstractions;
 using EverTask.Logger;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -79,27 +80,50 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     }
 
     public async Task SetQueued(Guid taskId, CancellationToken ct = default) =>
-        await SetStatus(taskId, QueuedTaskStatus.Queued, null, ct).ConfigureAwait(false);
+        await SetStatus(taskId, QueuedTaskStatus.Queued, null, AuditLevel.Full, ct).ConfigureAwait(false);
 
     public async Task SetInProgress(Guid taskId, CancellationToken ct = default) =>
-        await SetStatus(taskId, QueuedTaskStatus.InProgress, null, ct).ConfigureAwait(false);
+        await SetStatus(taskId, QueuedTaskStatus.InProgress, null, AuditLevel.Full, ct).ConfigureAwait(false);
 
     public async Task SetCompleted(Guid taskId) =>
-        await SetStatus(taskId, QueuedTaskStatus.Completed).ConfigureAwait(false);
+        await SetStatus(taskId, QueuedTaskStatus.Completed, null, AuditLevel.Full).ConfigureAwait(false);
 
     public async Task SetCancelledByUser(Guid taskId) =>
-        await SetStatus(taskId, QueuedTaskStatus.Cancelled).ConfigureAwait(false);
+        await SetStatus(taskId, QueuedTaskStatus.Cancelled, null, AuditLevel.Full).ConfigureAwait(false);
 
     public async Task SetCancelledByService(Guid taskId, Exception exception) =>
-        await SetStatus(taskId, QueuedTaskStatus.ServiceStopped, exception).ConfigureAwait(false);
+        await SetStatus(taskId, QueuedTaskStatus.ServiceStopped, exception, AuditLevel.Full).ConfigureAwait(false);
 
-    public virtual async Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception = null,
-                                        CancellationToken ct = default)
+    public virtual async Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception, AuditLevel auditLevel,
+                                    CancellationToken ct = default)
     {
         logger.LogInformation("Set Task {taskId} with Status {status}", taskId, status);
 
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
 
+        if (ShouldCreateStatusAudit(auditLevel, status, exception))
+        {
+            var detailedException = exception.ToDetailedString();
+            var statusAudit = new StatusAudit
+            {
+                QueuedTaskId = taskId,
+                UpdatedAtUtc = DateTimeOffset.UtcNow,
+                NewStatus    = status,
+                Exception    = detailedException
+            };
+            dbContext.StatusAudit.Add(statusAudit);
+
+            try
+            {
+                await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
+            }
+            catch (Exception e)
+            {
+                logger.LogWarning(e, "Unable to save the audit status for taskId {taskId}", taskId);
+            }
+        }
+
+        // Update task status using bulk update (no tracking overhead)
         var ex = exception.ToDetailedString();
         var lastExecutionUtc = status != QueuedTaskStatus.Queued
                                && status != QueuedTaskStatus.InProgress
@@ -107,9 +131,6 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                                && status != QueuedTaskStatus.Pending
                                    ? DateTimeOffset.UtcNow
                                    : (DateTimeOffset?)null;
-
-
-        await Audit(dbContext, taskId, status, exception, ct).ConfigureAwait(false);
 
         try
         {
@@ -133,28 +154,25 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         }
     }
 
-    private async Task Audit(ITaskStoreDbContext dbContext, Guid taskId, QueuedTaskStatus status, Exception? exception,
-                             CancellationToken ct)
-    {
-        var detailedException = exception.ToDetailedString();
-        var statusAudit = new StatusAudit
+    private static bool ShouldCreateStatusAudit(AuditLevel auditLevel, QueuedTaskStatus status, Exception? exception) =>
+        auditLevel switch
         {
-            QueuedTaskId = taskId,
-            UpdatedAtUtc = DateTimeOffset.UtcNow,
-            NewStatus    = status,
-            Exception    = detailedException
+            AuditLevel.None => false,
+            AuditLevel.ErrorsOnly => exception != null || status is QueuedTaskStatus.Failed or QueuedTaskStatus.ServiceStopped,
+            AuditLevel.Minimal => exception != null || status is QueuedTaskStatus.Failed or QueuedTaskStatus.ServiceStopped,
+            AuditLevel.Full => true,
+            _ => true // Default to full audit for unknown levels
         };
-        dbContext.StatusAudit.Add(statusAudit);
 
-        try
+    private static bool ShouldCreateRunsAudit(AuditLevel auditLevel, QueuedTaskStatus status, string? exception) =>
+        auditLevel switch
         {
-            await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
-        }
-        catch (Exception e)
-        {
-            logger.LogWarning(e, "Unable to save the audit status for taskId {taskId}", taskId);
-        }
-    }
+            AuditLevel.None => false,
+            AuditLevel.ErrorsOnly => !string.IsNullOrEmpty(exception) || status == QueuedTaskStatus.Failed,
+            AuditLevel.Minimal => true, // Minimal creates runs audit for recurring tasks (tracks last run)
+            AuditLevel.Full => true,
+            _ => true // Default to full audit for unknown levels
+        };
 
     public virtual async Task<int> GetCurrentRunCount(Guid taskId)
     {
@@ -169,38 +187,73 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         return task?.CurrentRunCount ?? 0;
     }
 
-    public async Task UpdateCurrentRun(Guid taskId, DateTimeOffset? nextRun)
+    public async Task UpdateCurrentRun(Guid taskId, DateTimeOffset? nextRun, AuditLevel auditLevel)
     {
         logger.LogInformation("Update the current run counter for Task {taskId}", taskId);
 
         await using var dbContext = await contextFactory.CreateDbContextAsync();
 
-        var task = await dbContext.QueuedTasks
-                                  .Where(x => x.Id == taskId)
-                                  .FirstOrDefaultAsync()
-                                  .ConfigureAwait(false);
+        // Get current status and exception for audit
+        var taskInfo = await dbContext.QueuedTasks
+                                      .Where(x => x.Id == taskId)
+                                      .Select(t => new { t.Status, t.Exception, t.CurrentRunCount })
+                                      .FirstOrDefaultAsync()
+                                      .ConfigureAwait(false);
 
-        if (task != null)
+        if (taskInfo == null)
         {
-            task.RunsAudits.Add(new RunsAudit
-            {
-                QueuedTaskId = taskId,
-                ExecutedAt   = DateTimeOffset.UtcNow,
-                Status       = task.Status,
-                Exception    = task.Exception
-            });
+            logger.LogWarning("Task {taskId} not found for run count update", taskId);
+            return;
+        }
 
-            task.NextRunUtc = nextRun;
-            var currentRun = task.CurrentRunCount ?? 0;
-            task.CurrentRunCount = currentRun + 1;
+        // If we need to create runs audit, load full task with tracking
+        if (ShouldCreateRunsAudit(auditLevel, taskInfo.Status, taskInfo.Exception))
+        {
+            var task = await dbContext.QueuedTasks
+                                      .Where(x => x.Id == taskId)
+                                      .FirstOrDefaultAsync()
+                                      .ConfigureAwait(false);
+
+            if (task != null)
+            {
+                task.RunsAudits.Add(new RunsAudit
+                {
+                    QueuedTaskId = taskId,
+                    ExecutedAt   = DateTimeOffset.UtcNow,
+                    Status       = task.Status,
+                    Exception    = task.Exception
+                });
+
+                task.NextRunUtc = nextRun;
+                task.CurrentRunCount = (task.CurrentRunCount ?? 0) + 1;
+
+                try
+                {
+                    await dbContext.SaveChangesAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception e)
+                {
+                    logger.LogCritical(e, "Update the current run counter for Task for taskId {taskId}", taskId);
+                }
+            }
+        }
+        else
+        {
+            // No audit needed, use ExecuteUpdateAsync for better performance
+            var newRunCount = (taskInfo.CurrentRunCount ?? 0) + 1;
 
             try
             {
-                await dbContext.SaveChangesAsync(CancellationToken.None).ConfigureAwait(false);
+                await dbContext.QueuedTasks
+                               .Where(x => x.Id == taskId)
+                               .ExecuteUpdateAsync(setters => setters
+                                   .SetProperty(t => t.NextRunUtc, nextRun)
+                                   .SetProperty(t => t.CurrentRunCount, newRunCount))
+                               .ConfigureAwait(false);
             }
             catch (Exception e)
             {
-                logger.LogCritical(e, "Update the current run counter for Task  for taskId {taskId}", taskId);
+                logger.LogCritical(e, "Update the current run counter for Task for taskId {taskId}", taskId);
             }
         }
     }
@@ -300,6 +353,24 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
         try
         {
+            // Get task audit level
+            var auditLevelValue = await dbContext.QueuedTasks
+                                                 .AsNoTracking()
+                                                 .Where(t => t.Id == taskId)
+                                                 .Select(t => t.AuditLevel)
+                                                 .FirstOrDefaultAsync(ct)
+                                                 .ConfigureAwait(false);
+
+            // Null means Full (backward compatibility)
+            var auditLevel = auditLevelValue.HasValue ? (AuditLevel)auditLevelValue.Value : AuditLevel.Full;
+
+            // For skipped occurrences, respect audit level (treat as informational, not error)
+            if (auditLevel is AuditLevel.None or AuditLevel.ErrorsOnly)
+            {
+                // Skip audit creation for None and ErrorsOnly levels
+                return;
+            }
+
             // Crea messaggio e inserisci direttamente: la FK garantisce l'esistenza
             var skippedTimes = string.Join(", ", skippedOccurrences.Select(d => d.ToString("yyyy-MM-dd HH:mm:ss")));
             var skipMessage =

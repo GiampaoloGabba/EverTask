@@ -1,4 +1,5 @@
-﻿using EverTask.Configuration;
+﻿using EverTask.Abstractions;
+using EverTask.Configuration;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -43,6 +44,10 @@ public class EverTaskServiceConfiguration
     /// Logs are ALWAYS forwarded to ILogger infrastructure regardless of this setting.
     /// </summary>
     public PersistentLoggerOptions PersistentLogger { get; } = new();
+
+    internal AuditLevel DefaultAuditLevel { get; private set; } = AuditLevel.Full;
+
+    internal AuditRetentionPolicy? RetentionPolicy { get; private set; }
 
     public EverTaskServiceConfiguration SetChannelOptions(int capacity)
     {
@@ -165,6 +170,53 @@ public class EverTaskServiceConfiguration
     public EverTaskServiceConfiguration UseShardedScheduler(int shardCount = 0)
     {
         ShardedSchedulerShardCount = shardCount;
+        return this;
+    }
+
+    /// <summary>
+    /// Sets the default audit level for all task handlers.
+    /// Individual handlers can override this using the <see cref="AuditLevelAttribute"/> attribute.
+    /// </summary>
+    /// <param name="auditLevel">
+    /// The default audit level to apply.
+    /// - Full: Complete audit trail with all status transitions (default, backward compatible)
+    /// - Minimal: Only errors and last execution timestamp (optimized for high-frequency tasks)
+    /// - ErrorsOnly: Only failed executions are audited
+    /// - None: No audit trail, only QueuedTask table updated
+    /// </param>
+    /// <returns>The configuration instance for method chaining.</returns>
+    /// <remarks>
+    /// Use lower audit levels (Minimal/ErrorsOnly/None) for high-frequency recurring tasks
+    /// to prevent database bloat. For example, a task running every 5 minutes generates
+    /// 1,152 audit records/day with Full audit level, but 0 records with Minimal (if successful).
+    /// </remarks>
+    public EverTaskServiceConfiguration SetDefaultAuditLevel(AuditLevel auditLevel)
+    {
+        DefaultAuditLevel = auditLevel;
+        return this;
+    }
+
+    /// <summary>
+    /// Configures automatic audit trail retention policy.
+    /// Retention is enforced by the optional <see cref="AuditCleanupHostedService"/>.
+    /// </summary>
+    /// <param name="retentionPolicy">
+    /// The retention policy to apply. Set to null to disable retention (default).
+    /// Use <see cref="AuditRetentionPolicy.WithUniformRetention"/> for simple TTL or
+    /// <see cref="AuditRetentionPolicy.WithErrorPriority"/> to keep errors longer.
+    /// </param>
+    /// <returns>The configuration instance for method chaining.</returns>
+    /// <remarks>
+    /// Retention policy requires registering the cleanup service:
+    /// <code>
+    /// services.AddEverTask(opt => opt.SetAuditRetentionPolicy(
+    ///     AuditRetentionPolicy.WithErrorPriority(successRetentionDays: 7, errorRetentionDays: 90)
+    /// )).AddAuditCleanup(cleanupIntervalHours: 24);
+    /// </code>
+    /// </remarks>
+    public EverTaskServiceConfiguration SetAuditRetentionPolicy(AuditRetentionPolicy? retentionPolicy)
+    {
+        RetentionPolicy = retentionPolicy;
         return this;
     }
 

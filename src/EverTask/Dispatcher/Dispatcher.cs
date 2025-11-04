@@ -24,28 +24,24 @@ public class Dispatcher(
     private static readonly ConcurrentDictionary<Type, Func<TaskHandlerWrapper>> WrapperFactoryCache = new();
 
     /// <inheritdoc />
-    public Task<Guid> Dispatch(IEverTask task, string? taskKey = null, CancellationToken cancellationToken = default) =>
-        ExecuteDispatch(task, null, null, null, cancellationToken, null, taskKey);
+    public Task<Guid> Dispatch(IEverTask task, AuditLevel? auditLevel = null, string? taskKey = null, CancellationToken cancellationToken = default) =>
+        ExecuteDispatch(task, null, null, null, cancellationToken, null, taskKey, auditLevel);
 
     /// <inheritdoc />
-    public Task<Guid> Dispatch(IEverTask task, TimeSpan executionDelay, string? taskKey = null,
-                               CancellationToken cancellationToken = default) =>
-        ExecuteDispatch(task, executionDelay, cancellationToken, null, taskKey);
+    public Task<Guid> Dispatch(IEverTask task, TimeSpan executionDelay, AuditLevel? auditLevel = null, string? taskKey = null, CancellationToken cancellationToken = default) =>
+        ExecuteDispatch(task, executionDelay, cancellationToken, null, taskKey, auditLevel);
 
     /// <inheritdoc />
-    public Task<Guid> Dispatch(IEverTask task, DateTimeOffset executionTime, string? taskKey = null,
-                               CancellationToken cancellationToken = default) =>
-        ExecuteDispatch(task, executionTime, null, null, cancellationToken, null, taskKey);
+    public Task<Guid> Dispatch(IEverTask task, DateTimeOffset executionTime, AuditLevel? auditLevel = null, string? taskKey = null, CancellationToken cancellationToken = default) =>
+        ExecuteDispatch(task, executionTime, null, null, cancellationToken, null, taskKey, auditLevel);
 
     /// <inheritdoc />
-    public async Task<Guid> Dispatch(IEverTask task, Action<IRecurringTaskBuilder> recurring, string? taskKey = null,
-                                     CancellationToken cancellationToken = default)
+    public async Task<Guid> Dispatch(IEverTask task, Action<IRecurringTaskBuilder> recurring, AuditLevel? auditLevel = null, string? taskKey = null, CancellationToken cancellationToken = default)
     {
         var builder = new RecurringTaskBuilder();
         recurring(builder);
 
-        return await ExecuteDispatch(task, null, builder.RecurringTask, null, cancellationToken, null, taskKey)
-                   .ConfigureAwait(false);
+        return await ExecuteDispatch(task, null, builder.RecurringTask, null, cancellationToken, null, taskKey, auditLevel).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -60,15 +56,15 @@ public class Dispatcher(
     }
 
     /// <inheritdoc />
-    public async Task<Guid> ExecuteDispatch(IEverTask task, CancellationToken ct = default, Guid? existingTaskId = null,
-                                            string? taskKey = null) =>
-        await ExecuteDispatch(task, null, null, null, ct, existingTaskId, taskKey).ConfigureAwait(false);
+    public async Task<Guid> ExecuteDispatch(IEverTask task, CancellationToken ct = default, Guid? existingTaskId = null, string? taskKey = null) =>
+        await ExecuteDispatch(task, null, null, null, ct, existingTaskId, taskKey, null).ConfigureAwait(false);
 
     /// <inheritdoc />
     public async Task<Guid> ExecuteDispatch(IEverTask task, TimeSpan? executionDelay = null,
                                             CancellationToken ct = default,
                                             Guid? existingTaskId = null,
-                                            string? taskKey = null)
+                                            string? taskKey = null,
+                                            AuditLevel? auditLevel = null)
     {
         ArgumentNullException.ThrowIfNull(task);
 
@@ -76,14 +72,12 @@ public class Dispatcher(
                                 ? DateTimeOffset.UtcNow.Add(executionDelay.Value)
                                 : (DateTimeOffset?)null;
 
-        return await ExecuteDispatch(task, executionTime, null, null, ct, existingTaskId, taskKey)
-                   .ConfigureAwait(false);
+        return await ExecuteDispatch(task, executionTime, null, null, ct, existingTaskId, taskKey, auditLevel).ConfigureAwait(false);
     }
 
     public async Task<Guid> ExecuteDispatch(IEverTask task, DateTimeOffset? executionTime = null,
                                             RecurringTask? recurring = null, int? currentRun = null,
-                                            CancellationToken ct = default, Guid? existingTaskId = null,
-                                            string? taskKey = null)
+                                            CancellationToken ct = default, Guid? existingTaskId = null, string? taskKey = null, AuditLevel? auditLevel = null)
     {
         ArgumentNullException.ThrowIfNull(task);
 
@@ -144,7 +138,10 @@ public class Dispatcher(
 
         var handler = CreateCachedWrapper(taskType);
 
-        var executor = handler.Handle(task, executionTime, recurring, serviceProvider, existingTaskId, taskKey);
+        // Use provided audit level or fall back to global default
+        var effectiveAuditLevel = auditLevel ?? serviceConfiguration.DefaultAuditLevel;
+
+        var executor = handler.Handle(task, executionTime, recurring, serviceProvider, effectiveAuditLevel, existingTaskId, taskKey);
 
         // Persist or update task (lazy serialize only if storage exists)
         if (taskStorage != null)

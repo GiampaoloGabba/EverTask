@@ -23,8 +23,9 @@ public interface ITaskDispatcherInternal : ITaskDispatcher
     /// <param name="ct">/// Optional. A token for canceling the scheduling before its execution.</param>
     /// <param name="existingTaskId">Optional existing persistence guid for the task</param>
     /// <param name="taskKey">Optional. A unique key for idempotent task registration.</param>
+    /// <param name="auditLevel">Optional. Audit level for this task.</param>
     /// <returns>A task that represents the queue operation.</returns>
-    internal Task<Guid> ExecuteDispatch(IEverTask task, TimeSpan? scheduleDelay, CancellationToken ct = default, Guid? existingTaskId = null, string? taskKey = null);
+    internal Task<Guid> ExecuteDispatch(IEverTask task, TimeSpan? scheduleDelay, CancellationToken ct = default, Guid? existingTaskId = null, string? taskKey = null, AuditLevel? auditLevel = null);
 
     /// <summary>
     /// For internal use only! - Asynchronously enqueues a task to the background queue with an optional delay before execution.
@@ -39,6 +40,7 @@ public interface ITaskDispatcherInternal : ITaskDispatcher
     /// <param name="ct">/// Optional. A token for canceling the scheduling before its execution.</param>
     /// <param name="existingTaskId">Optional existing persistence guid for the task</param>
     /// <param name="taskKey">Optional. A unique key for idempotent task registration.</param>
+    /// <param name="auditLevel">Optional. Audit level for this task.</param>
     /// <returns>A task that represents the queue operation.</returns>
-    internal Task<Guid> ExecuteDispatch(IEverTask task, DateTimeOffset? executionTime = null, RecurringTask? recurring = null, int? currentRun = null, CancellationToken ct = default, Guid? existingTaskId = null, string? taskKey = null);
+    internal Task<Guid> ExecuteDispatch(IEverTask task, DateTimeOffset? executionTime = null, RecurringTask? recurring = null, int? currentRun = null, CancellationToken ct = default, Guid? existingTaskId = null, string? taskKey = null, AuditLevel? auditLevel = null);
 }

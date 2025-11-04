@@ -1,4 +1,5 @@
-﻿using EverTask.Configuration;
+﻿using EverTask.Abstractions;
+using EverTask.Configuration;
 
 namespace EverTask.Handler;
 
@@ -9,13 +10,13 @@ namespace EverTask.Handler;
 internal abstract class TaskHandlerWrapper
 {
     public abstract TaskHandlerExecutor Handle(IEverTask task, DateTimeOffset? executionTime, RecurringTask? recurring,
-                                               IServiceProvider serviceFactory, Guid? existingTaskId = null, string? taskKey = null);
+                                               IServiceProvider serviceFactory, AuditLevel auditLevel, Guid? existingTaskId = null, string? taskKey = null);
 }
 
 internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TTask : IEverTask
 {
     public override TaskHandlerExecutor Handle(IEverTask task, DateTimeOffset? executionTime, RecurringTask? recurring,
-                                               IServiceProvider serviceFactory, Guid? existingTaskId = null, string? taskKey = null)
+                                               IServiceProvider serviceFactory, AuditLevel auditLevel, Guid? existingTaskId = null, string? taskKey = null)
     {
         var handlerService = serviceFactory.GetService<IEverTaskHandler<TTask>>();
         var guidGenerator = serviceFactory.GetRequiredService<IGuidGenerator>();
@@ -52,9 +53,11 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
             (persistenceId, exception, message) => handlerService.OnError(persistenceId, exception, message),
             persistenceId => handlerService.OnStarted(persistenceId),
             persistenceId => handlerService.OnCompleted(persistenceId),
+            (persistenceId, attempt, exception, delay) => handlerService.OnRetry(persistenceId, attempt, exception, delay),
             existingTaskId ?? guidGenerator.NewDatabaseFriendly(),
             queueName,
-            taskKey
+            taskKey,
+            auditLevel
         );
     }
 }

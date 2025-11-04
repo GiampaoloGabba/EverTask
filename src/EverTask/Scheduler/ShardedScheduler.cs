@@ -168,6 +168,7 @@ public class ShardedScheduler : IScheduler, IDisposable
                         item.PersistenceId,
                         QueuedTaskStatus.Failed,
                         ex,
+                        item.AuditLevel,
                         CancellationToken.None
                     ).ConfigureAwait(false);
                 }

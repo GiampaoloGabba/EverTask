@@ -1,9 +1,7 @@
+using EverTask.Abstractions;
 using EverTask.Logger;
-using EverTask.Storage.EfCore;
 using Microsoft.Data.SqlClient;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 
 namespace EverTask.Storage.SqlServer;
 
@@ -30,12 +28,12 @@ public class SqlServerTaskStorage : EfCoreTaskStorage
 
     /// <summary>
     /// Sets task status using optimized stored procedure.
-    /// Performs audit insert + task update in a single atomic database roundtrip.
+    /// Performs audit insert (if required by AuditLevel) + task update in a single atomic database roundtrip.
     /// </summary>
-    public override async Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception = null,
+    public override async Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception, AuditLevel auditLevel,
                                             CancellationToken ct = default)
     {
-        _logger.LogInformation("Set Task {TaskId} with Status {Status} (SQL Server optimized)", taskId, status);
+        _logger.LogInformation("Set Task {TaskId} with Status {Status} using SQL Server stored procedure", taskId, status);
 
         await using var dbContext = await _contextFactory.CreateDbContextAsync(ct);
 
@@ -45,14 +43,15 @@ public class SqlServerTaskStorage : EfCoreTaskStorage
         {
             // Cast to DbContext to access Database property
             // Build SQL command with schema name (sanitized from configuration)
-            var sql = $"EXEC [{_schema}].[usp_SetTaskStatus] @TaskId, @Status, @Exception";
+            var sql = $"EXEC [{_schema}].[usp_SetTaskStatus] @TaskId, @Status, @Exception, @AuditLevel";
 
             await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(
                 sql,
                 [
                     new SqlParameter("@TaskId", taskId),
                     new SqlParameter("@Status", status.ToString()),
-                    new SqlParameter("@Exception", (object?)exString ?? DBNull.Value)
+                    new SqlParameter("@Exception", (object?)exString ?? DBNull.Value),
+                    new SqlParameter("@AuditLevel", (int)auditLevel)
                 ],
                 ct
             ).ConfigureAwait(false);

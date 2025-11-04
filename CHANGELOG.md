@@ -222,6 +222,11 @@ public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(3, TimeSpan.F
   - Better channel throughput under high load
 - **Handler DI registration by concrete type**: Enables proper lazy resolution with scoped dependencies
 - **IRetryPolicy.Execute Signature**: Added optional `Func<int, Exception, TimeSpan, ValueTask>? onRetryCallback` parameter for retry notifications. Existing implementations remain compatible (parameter defaults to null).
+- **ITaskStorage Interface Signatures** (minor breaking change for custom storage implementations):
+  - `SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception, AuditLevel auditLevel, CancellationToken ct)` - Added `AuditLevel auditLevel` parameter
+  - `UpdateCurrentRun(Guid taskId, DateTimeOffset? nextRun, AuditLevel auditLevel)` - Added `AuditLevel auditLevel` parameter
+  - **Impact**: Custom `ITaskStorage` implementations must update method signatures
+  - **Migration**: Add `AuditLevel auditLevel` parameter and use it to conditionally create audit records (see `EfCoreTaskStorage.ShouldCreateStatusAudit()` for reference implementation)
 
 ### Fixed
 
@@ -235,6 +240,21 @@ public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(3, TimeSpan.F
   - Optimized test timeouts (50% reduction) without sacrificing reliability
 
 ### Improved
+
+#### Audit System Performance Optimizations
+
+- **Eliminated AuditLevel SELECT queries**: Storage operations no longer query database to retrieve task's AuditLevel
+  - `ITaskStorage.SetStatus()` now accepts `AuditLevel` as parameter (passed from `WorkerExecutor`)
+  - `ITaskStorage.UpdateCurrentRun()` now accepts `AuditLevel` as parameter
+  - **Impact**: Reduces database roundtrips by 1 SELECT per status update (50% reduction from 2 to 1 query)
+  - **SQL Server optimization preserved**: Stored procedure `usp_SetTaskStatus` updated to accept `@AuditLevel` parameter
+    - Single atomic operation: audit insert (if required) + status update in one database call
+    - AuditLevel logic (`ShouldCreateStatusAudit`) implemented in T-SQL for maximum performance
+    - Backward compatible with default `@AuditLevel = 0` (Full audit level)
+  - **Migration**: New migration `UpdateStoredProcedureForAuditLevel` updates SQL Server stored procedure
+  - All storage implementations updated: `EfCoreTaskStorage`, `SqlServerTaskStorage`, `MemoryTaskStorage`
+
+#### Retry Policy Enhancements
 
 - **Fail-Fast on Permanent Errors**: Retry policies configured with exception filters now immediately fail for non-transient errors (e.g., `ArgumentException`, `ValidationException`, `NullReferenceException`), reducing wasted retry attempts and improving error visibility
 - **Better Retry Visibility**: `OnRetry` callback provides granular insight into retry behavior, enabling proactive monitoring and alerting

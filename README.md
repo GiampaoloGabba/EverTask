@@ -23,7 +23,7 @@ Works great with ASP.NET Core, Windows Services, or any .NET project that needs 
 - ⚡ **High-Performance Scheduler** (v2.0+) - PeriodicTimerScheduler with minimal lock contention and zero CPU when idle
 - 🔥 **Extreme Load Support** (v2.0+) - Optional sharded scheduler for >10k tasks/sec scenarios
 - 💾 **Smart Persistence** - Tasks resume after application restarts (SQL Server, SQLite, In-Memory)
-- 🔄 **Powerful Retry Policies** - Built-in linear retry, custom policies, Polly integration
+- 🔄 **Powerful Retry Policies** - Built-in linear retry, custom policies, Polly integration, exception filtering
 - ⏱️ **Timeout Management** - Global and per-task timeout configuration
 - 📝 **Task Execution Log Capture** (v3.0+) - Proxy logger that always logs to ILogger with optional database persistence for audit trails
 - 📊 **Real-Time Monitoring** - Local events + SignalR remote monitoring
@@ -31,6 +31,7 @@ Works great with ASP.NET Core, Windows Services, or any .NET project that needs 
 - 🔧 **Extensible Architecture** - Custom storage, retry policies, and schedulers
 - 🏎️ **Optimized Performance** (v2.0+) - Reflection caching, lazy serialization, DbContext pooling
 - 📈 **Auto-Scaling Defaults** (v2.0+) - Configuration that scales with your CPU cores
+- 📝 **Configurable Audit Levels** (v1.7+) - Control database bloat with granular audit trail settings
 - 🔌 **Serilog Integration** - Detailed structured logging
 - ✨ **Async All The Way** - Fully asynchronous for maximum scalability
 
@@ -386,6 +387,31 @@ No more manual tuning—defaults now scale with your CPU cores:
 - Configuration validation catches problems early with helpful warnings
 - Zero-allocation patterns on .NET 7+
 - Thread safety improvements and race condition fixes throughout
+
+### Audit Trail Management (v1.7+)
+- **Configurable Audit Levels** - Control database bloat from high-frequency tasks
+- **Global and Per-Task Control** - Set default audit level globally, override per task
+- **Performance Optimizations** - Eliminate SELECT queries, SQL Server stored procedures with conditional audit logic
+- **Flexible Levels**:
+  - `Full` (default): Complete audit trail for critical tasks
+  - `Minimal`: 75% reduction - only errors in StatusAudit, all runs tracked (ideal for recurring tasks)
+  - `ErrorsOnly`: 60% reduction - only failed executions
+  - `None`: 100% reduction - no audit trail for extremely high-frequency tasks
+
+**Example**: A task running every 5 minutes generates ~2,304 audit records/day with Full audit, but only ~576 records/day with Minimal (75% reduction).
+
+```csharp
+// Global default
+builder.Services.AddEverTask(opt => opt
+    .SetDefaultAuditLevel(AuditLevel.Minimal))
+    .AddSqlServerStorage(connectionString);
+
+// Per-task override
+await dispatcher.Dispatch(
+    new HealthCheckTask(),
+    recurring => recurring.Every(5).Minutes(),
+    auditLevel: AuditLevel.Minimal);
+```
 
 [View Complete Changelog](CHANGELOG.md)
 

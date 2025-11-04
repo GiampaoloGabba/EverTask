@@ -74,24 +74,24 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
 
     /// <inheritdoc />
     public Task SetQueued(Guid taskId, CancellationToken ct = default) =>
-        SetStatus(taskId, QueuedTaskStatus.Queued, null, ct);
+        SetStatus(taskId, QueuedTaskStatus.Queued, null, AuditLevel.Full, ct);
 
     /// <inheritdoc />
     public Task SetInProgress(Guid taskId, CancellationToken ct = default) =>
-        SetStatus(taskId, QueuedTaskStatus.InProgress, null, ct);
+        SetStatus(taskId, QueuedTaskStatus.InProgress, null, AuditLevel.Full, ct);
 
     /// <inheritdoc />
     public Task SetCompleted(Guid taskId) =>
-        SetStatus(taskId, QueuedTaskStatus.Completed);
+        SetStatus(taskId, QueuedTaskStatus.Completed, null, AuditLevel.Full);
 
     public Task SetCancelledByUser(Guid taskId) =>
-        SetStatus(taskId, QueuedTaskStatus.Cancelled);
+        SetStatus(taskId, QueuedTaskStatus.Cancelled, null, AuditLevel.Full);
 
     public Task SetCancelledByService(Guid taskId, Exception exception) =>
-        SetStatus(taskId, QueuedTaskStatus.ServiceStopped, exception);
+        SetStatus(taskId, QueuedTaskStatus.ServiceStopped, exception, AuditLevel.Full);
 
     /// <inheritdoc />
-    public Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception = null,
+    public Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception, AuditLevel auditLevel,
                           CancellationToken ct = default)
     {
         logger.LogInformation("Set Task {taskId} with Status {status}", taskId, status);
@@ -105,18 +105,32 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
                 task.LastExecutionUtc = DateTimeOffset.UtcNow;
                 task.Exception        = exception.ToDetailedString();
 
-                task.StatusAudits.Add(new StatusAudit
+                // Respect audit level
+                if (ShouldCreateStatusAudit(auditLevel, status, exception))
                 {
-                    QueuedTaskId = taskId,
-                    UpdatedAtUtc = DateTimeOffset.UtcNow,
-                    NewStatus    = status,
-                    Exception    = exception.ToDetailedString()
-                });
+                    task.StatusAudits.Add(new StatusAudit
+                    {
+                        QueuedTaskId = taskId,
+                        UpdatedAtUtc = DateTimeOffset.UtcNow,
+                        NewStatus    = status,
+                        Exception    = exception.ToDetailedString()
+                    });
+                }
             }
         }
 
         return Task.CompletedTask;
     }
+
+    private static bool ShouldCreateStatusAudit(AuditLevel auditLevel, QueuedTaskStatus status, Exception? exception) =>
+        auditLevel switch
+        {
+            AuditLevel.None => false,
+            AuditLevel.ErrorsOnly => exception != null || status is QueuedTaskStatus.Failed or QueuedTaskStatus.ServiceStopped,
+            AuditLevel.Minimal => exception != null || status is QueuedTaskStatus.Failed or QueuedTaskStatus.ServiceStopped,
+            AuditLevel.Full => true,
+            _ => true
+        };
 
     public Task<int> GetCurrentRunCount(Guid taskId)
     {
@@ -132,7 +146,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         }
     }
 
-    public Task UpdateCurrentRun(Guid taskId, DateTimeOffset? nextRun)
+    public Task UpdateCurrentRun(Guid taskId, DateTimeOffset? nextRun, AuditLevel auditLevel)
     {
         logger.LogInformation("Update the current run counter for Task {taskId}", taskId);
 
@@ -142,13 +156,17 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
 
             if (task != null)
             {
-                task.RunsAudits.Add(new RunsAudit
+                // Respect audit level
+                if (ShouldCreateRunsAudit(auditLevel, task.Status, task.Exception))
                 {
-                    QueuedTaskId = taskId,
-                    ExecutedAt   = task.LastExecutionUtc ?? DateTimeOffset.UtcNow,
-                    Status       = task.Status,
-                    Exception    = task.Exception
-                });
+                    task.RunsAudits.Add(new RunsAudit
+                    {
+                        QueuedTaskId = taskId,
+                        ExecutedAt   = task.LastExecutionUtc ?? DateTimeOffset.UtcNow,
+                        Status       = task.Status,
+                        Exception    = task.Exception
+                    });
+                }
 
                 task.NextRunUtc = nextRun;
                 var currentRun = task.CurrentRunCount ?? 0;
@@ -159,6 +177,16 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
 
         return Task.CompletedTask;
     }
+
+    private static bool ShouldCreateRunsAudit(AuditLevel auditLevel, QueuedTaskStatus status, string? exception) =>
+        auditLevel switch
+        {
+            AuditLevel.None => false,
+            AuditLevel.ErrorsOnly => !string.IsNullOrEmpty(exception) || status == QueuedTaskStatus.Failed,
+            AuditLevel.Minimal => true,
+            AuditLevel.Full => true,
+            _ => true
+        };
 
     public Task<QueuedTask?> GetByTaskKey(string taskKey, CancellationToken ct = default)
     {

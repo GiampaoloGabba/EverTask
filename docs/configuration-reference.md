@@ -150,6 +150,45 @@ opt.SetDefaultTimeout(null)
 - Your handler needs to check the token for this to work (cooperative cancellation)
 - You can override this per handler or per queue
 
+### SetDefaultAuditLevel
+
+Sets the default audit trail level for all tasks (controls database bloat from high-frequency tasks).
+
+**Signature:**
+```csharp
+SetDefaultAuditLevel(AuditLevel auditLevel)
+```
+
+**Parameters:**
+- `auditLevel` (AuditLevel): Audit verbosity level
+  - `Full` (default): Complete audit trail (all status transitions and executions)
+  - `Minimal`: Only errors in StatusAudit, all executions in RunsAudit (75% reduction)
+  - `ErrorsOnly`: Only failed executions (60% reduction)
+  - `None`: No audit trail (100% reduction)
+
+**Default:** `AuditLevel.Full`
+
+**Examples:**
+```csharp
+// Full audit (default)
+opt.SetDefaultAuditLevel(AuditLevel.Full)
+
+// Minimal audit for high-frequency tasks
+opt.SetDefaultAuditLevel(AuditLevel.Minimal)
+
+// Only audit errors
+opt.SetDefaultAuditLevel(AuditLevel.ErrorsOnly)
+
+// No audit trail
+opt.SetDefaultAuditLevel(AuditLevel.None)
+```
+
+**Notes:**
+- For tasks running every 5 minutes: Full = ~2,304 records/day, Minimal = ~576 records/day
+- You can override this per task when dispatching
+- Use lower levels (Minimal/ErrorsOnly/None) for high-frequency recurring tasks
+- See [Audit Configuration](storage.md#audit-configuration) for detailed usage guide
+
 ### SetThrowIfUnableToPersist
 
 Controls what happens when a task can't be saved to storage.

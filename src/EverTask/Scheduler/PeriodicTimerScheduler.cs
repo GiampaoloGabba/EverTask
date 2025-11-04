@@ -192,7 +192,7 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
             if (_taskStorage != null)
             {
                 await _taskStorage
-                      .SetStatus(item.PersistenceId, QueuedTaskStatus.Failed, ex, CancellationToken.None)
+                      .SetStatus(item.PersistenceId, QueuedTaskStatus.Failed, ex, item.AuditLevel, CancellationToken.None)
                       .ConfigureAwait(false);
             }
         }

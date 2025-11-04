@@ -27,7 +27,7 @@ public class WorkerExecutor(
     // Performance optimization: Cache handler options to avoid runtime casts per execution
     private static readonly ConcurrentDictionary<Type, HandlerOptionsCache> HandlerOptionsInternalCache = new();
 
-    private record HandlerOptionsCache(IRetryPolicy RetryPolicy, TimeSpan? Timeout, System.Reflection.MethodInfo? OnRetryMethod);
+    private record HandlerOptionsCache(IRetryPolicy RetryPolicy, TimeSpan? Timeout, MethodInfo? OnRetryMethod);
 
     public event Func<EverTaskEventData, Task>? TaskEventOccurredAsync;
 
@@ -198,7 +198,7 @@ public class WorkerExecutor(
                 // Resolve OnRetry method once and cache it
                 var onRetryMethod = handlerInstance.GetType().GetMethod(
                     nameof(IEverTaskHandler<IEverTask>.OnRetry),
-                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                    BindingFlags.Public | BindingFlags.Instance);
 
                 // Cast only once per handler type (first time)
                 if (handlerInstance is IEverTaskHandlerOptions options)
@@ -489,7 +489,7 @@ public class WorkerExecutor(
         {
             // Logica per le altre eccezioni
             if (taskStorage != null)
-                await taskStorage.SetStatus(task.PersistenceId, QueuedTaskStatus.Failed, ex, serviceToken)
+                await taskStorage.SetStatus(task.PersistenceId, QueuedTaskStatus.Failed, ex, task.AuditLevel, serviceToken)
                                  .ConfigureAwait(false);
 
             await ExecuteCallback(GetErrorCallback(task, handler), task, ex,
@@ -556,7 +556,7 @@ public class WorkerExecutor(
                     CancellationToken.None).ConfigureAwait(false);
             }
 
-            await taskStorage.UpdateCurrentRun(task.PersistenceId, result.NextRun)
+            await taskStorage.UpdateCurrentRun(task.PersistenceId, result.NextRun, task.AuditLevel)
                              .ConfigureAwait(false);
 
             if (result.NextRun.HasValue)
