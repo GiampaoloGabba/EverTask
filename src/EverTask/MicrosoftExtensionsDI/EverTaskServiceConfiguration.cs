@@ -49,36 +49,146 @@ public class EverTaskServiceConfiguration
 
     internal AuditRetentionPolicy? RetentionPolicy { get; private set; }
 
+    /// <summary>
+    /// Sets the channel capacity for the default queue.
+    /// This determines the maximum number of tasks that can be queued in memory before backpressure is applied.
+    /// </summary>
+    /// <param name="capacity">
+    /// Maximum number of tasks to queue in memory.
+    /// Recommended values:
+    /// - Small projects / low throughput: 500-1000
+    /// - Medium projects / moderate spikes: 2000-5000
+    /// - High-throughput / large spikes: 10000+
+    /// </param>
+    /// <returns>The configuration instance for method chaining.</returns>
+    /// <remarks>
+    /// When the channel is full, the dispatcher will block (backpressure) until space becomes available.
+    /// Tasks are persisted to storage before entering the channel, ensuring no data loss during traffic spikes.
+    /// </remarks>
     public EverTaskServiceConfiguration SetChannelOptions(int capacity)
     {
         ChannelOptions.Capacity = capacity;
         return this;
     }
 
+    /// <summary>
+    /// Sets advanced channel options for the default queue.
+    /// Allows fine-grained control over channel behavior (full mode, continuations, reader/writer settings).
+    /// </summary>
+    /// <param name="options">Fully configured <see cref="BoundedChannelOptions"/> instance.</param>
+    /// <returns>The configuration instance for method chaining.</returns>
+    /// <remarks>
+    /// Use this overload when you need to customize:
+    /// - FullMode (Wait, DropWrite, DropOldest)
+    /// - SingleReader/SingleWriter optimizations
+    /// - AllowSynchronousContinuations behavior
+    /// For simple capacity changes, use <see cref="SetChannelOptions(int)"/> instead.
+    /// </remarks>
     public EverTaskServiceConfiguration SetChannelOptions(BoundedChannelOptions options)
     {
         ChannelOptions = options;
         return this;
     }
 
+    /// <summary>
+    /// Sets the maximum number of tasks that can execute concurrently.
+    /// </summary>
+    /// <param name="parallelism">
+    /// Maximum concurrent tasks.
+    /// Recommended values:
+    /// - CPU-bound tasks: Environment.ProcessorCount
+    /// - I/O-bound tasks: Environment.ProcessorCount * 2-4
+    /// - Mixed workloads: Use separate queues with different parallelism settings
+    /// </param>
+    /// <returns>The configuration instance for method chaining.</returns>
+    /// <remarks>
+    /// Higher parallelism increases throughput for I/O-bound tasks (API calls, database queries, file operations).
+    /// For CPU-intensive tasks, avoid exceeding Environment.ProcessorCount to prevent thread contention.
+    /// </remarks>
     public EverTaskServiceConfiguration SetMaxDegreeOfParallelism(int parallelism)
     {
         MaxDegreeOfParallelism = parallelism;
         return this;
     }
 
+    /// <summary>
+    /// Sets whether to throw an exception if a task cannot be persisted to storage.
+    /// </summary>
+    /// <param name="value">
+    /// True (default): Throw exception if persistence fails, preventing task loss at the cost of request failure.
+    /// False: Silently fail persistence, allowing the request to succeed but risking task loss on restart.
+    /// </param>
+    /// <returns>The configuration instance for method chaining.</returns>
+    /// <remarks>
+    /// <para>
+    /// Recommended: Keep this true (default) to prevent silent data loss.
+    /// </para>
+    /// <para>
+    /// Set to false only when:
+    /// - Using in-memory storage for testing
+    /// - Task execution is truly optional and best-effort
+    /// - You have external monitoring to detect persistence failures
+    /// </para>
+    /// </remarks>
     public EverTaskServiceConfiguration SetThrowIfUnableToPersist(bool value)
     {
         ThrowIfUnableToPersist = value;
         return this;
     }
 
+    /// <summary>
+    /// Sets the default retry policy for all tasks.
+    /// Individual handlers can override this via the <see cref="IEverTaskHandler{T}.RetryPolicy"/> property.
+    /// </summary>
+    /// <param name="policy">
+    /// Retry policy instance (LinearRetryPolicy, ExponentialRetryPolicy, or custom implementation).
+    /// </param>
+    /// <returns>The configuration instance for method chaining.</returns>
+    /// <remarks>
+    /// <para>
+    /// Default: LinearRetryPolicy with 3 retries and 500ms delay between attempts.
+    /// </para>
+    /// <para>
+    /// Built-in policies:
+    /// - <see cref="LinearRetryPolicy"/>: Fixed delay between retries (good for transient failures)
+    /// - <see cref="ExponentialRetryPolicy"/>: Exponential backoff (good for rate-limited APIs)
+    /// - <see cref="NoRetryPolicy"/>: Disable retries entirely
+    /// </para>
+    /// <para>
+    /// Retry policies support exception filtering (v1.6.0+) to avoid retrying non-transient failures.
+    /// </para>
+    /// </remarks>
     public EverTaskServiceConfiguration SetDefaultRetryPolicy(IRetryPolicy policy)
     {
         DefaultRetryPolicy = policy;
         return this;
     }
 
+    /// <summary>
+    /// Sets the default timeout for task execution.
+    /// Individual handlers can override this via the <see cref="IEverTaskHandler{T}.Timeout"/> property.
+    /// </summary>
+    /// <param name="timeout">
+    /// Maximum execution time. Null (default) means no timeout.
+    /// </param>
+    /// <returns>The configuration instance for method chaining.</returns>
+    /// <remarks>
+    /// <para>
+    /// When a task exceeds the timeout, it is cancelled via <see cref="CancellationToken"/>.
+    /// If the handler ignores the cancellation token, the task may continue running.
+    /// </para>
+    /// <para>
+    /// Recommended timeout values:
+    /// - API calls: 30 seconds - 2 minutes
+    /// - Database queries: 1-5 minutes
+    /// - File processing: 5-30 minutes
+    /// - Long-running batch jobs: 1+ hours
+    /// </para>
+    /// <para>
+    /// Timeout exceptions (TimeoutException) are NOT retried by default.
+    /// Use custom retry policies with exception filtering if needed.
+    /// </para>
+    /// </remarks>
     public EverTaskServiceConfiguration SetDefaultTimeout(TimeSpan? timeout)
     {
         DefaultTimeout = timeout;

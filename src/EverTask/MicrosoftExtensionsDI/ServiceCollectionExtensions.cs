@@ -4,6 +4,35 @@ namespace Microsoft.Extensions.DependencyInjection;
 
 public static class ServiceCollectionExtensions
 {
+    /// <summary>
+    /// Registers EverTask services with the dependency injection container.
+    /// This is the main entry point for configuring EverTask in your application.
+    /// </summary>
+    /// <param name="services">The service collection to add EverTask services to.</param>
+    /// <param name="configure">Optional action to configure EverTask service options (parallelism, channels, retry policies, etc.).</param>
+    /// <returns>An <see cref="EverTaskServiceBuilder"/> for further configuration (storage, queues, monitoring).</returns>
+    /// <exception cref="ArgumentException">Thrown if no assemblies are registered for handler scanning.</exception>
+    /// <remarks>
+    /// <para>
+    /// Basic usage:
+    /// <code>
+    /// services.AddEverTask(opt => opt
+    ///     .RegisterTasksFromAssembly(typeof(Program).Assembly))
+    /// .AddMemoryStorage();
+    /// </code>
+    /// </para>
+    /// <para>
+    /// This method registers:
+    /// - Task dispatcher and worker executor
+    /// - Default or sharded scheduler (based on configuration)
+    /// - Queue manager for workload isolation
+    /// - Handler resolution and lifecycle services
+    /// </para>
+    /// <para>
+    /// You MUST call a storage method (AddMemoryStorage, AddSqlServerStorage, AddSqliteStorage)
+    /// after AddEverTask to enable task persistence.
+    /// </para>
+    /// </remarks>
     public static EverTaskServiceBuilder AddEverTask(this IServiceCollection services,
                                                      Action<EverTaskServiceConfiguration>? configure = null)
     {
@@ -116,6 +145,26 @@ public static class ServiceCollectionExtensions
         HandlerRegistrar.RegisterConnectedImplementations(services, assembliesToScan);
     }
 
+    /// <summary>
+    /// Registers in-memory task storage for development and testing.
+    /// </summary>
+    /// <param name="builder">The service builder.</param>
+    /// <returns>The service builder for method chaining.</returns>
+    /// <remarks>
+    /// <para>
+    /// In-memory storage does NOT persist tasks across application restarts.
+    /// All queued, scheduled, and recurring tasks will be lost when the application stops.
+    /// </para>
+    /// <para>
+    /// Use this for:
+    /// - Development and local testing
+    /// - Integration tests
+    /// - Prototyping
+    /// </para>
+    /// <para>
+    /// For production deployments, use AddSqlServerStorage or AddSqliteStorage instead.
+    /// </para>
+    /// </remarks>
     public static EverTaskServiceBuilder AddMemoryStorage(this EverTaskServiceBuilder builder)
     {
         builder.Services.TryAddSingleton<ITaskStorage, MemoryTaskStorage>();

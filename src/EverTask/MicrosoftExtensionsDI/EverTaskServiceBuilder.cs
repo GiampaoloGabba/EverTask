@@ -4,6 +4,10 @@ namespace Microsoft.Extensions.DependencyInjection;
 
 public class EverTaskServiceBuilder
 {
+    /// <summary>
+    /// Gets the service collection to which EverTask services are being added.
+    /// Use this to register additional services or customize the service registration.
+    /// </summary>
     public IServiceCollection Services { get; private set; }
     private readonly EverTaskServiceConfiguration _configuration;
 
