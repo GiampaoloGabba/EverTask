@@ -41,7 +41,8 @@ public class MonitoringTestWebAppFactory : WebApplicationFactory<TestProgram>
             services.AddEverTask(cfg => cfg
                 .RegisterTasksFromAssembly(typeof(SampleTask).Assembly)
                 .SetChannelOptions(10)
-                .SetMaxDegreeOfParallelism(5))
+                .SetMaxDegreeOfParallelism(5)
+                .SetDefaultRetryPolicy(new EverTask.Resilience.LinearRetryPolicy(1, TimeSpan.FromMilliseconds(1))))
                 .AddMemoryStorage()
                 .AddSignalRMonitoring(); // Add SignalR monitoring for real-time events
 

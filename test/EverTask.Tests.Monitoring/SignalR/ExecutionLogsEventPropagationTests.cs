@@ -3,6 +3,8 @@ using EverTask.Resilience;
 using EverTask.Storage;
 using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
+using EverTask.Monitoring;
+using IRetryPolicy = EverTask.Abstractions.IRetryPolicy;
 
 namespace EverTask.Tests.Monitoring.SignalR;
 
