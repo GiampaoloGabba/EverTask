@@ -43,11 +43,13 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         logger.LogInformation("Task {name} persisted", taskEntity.Type);
     }
 
-    public virtual async Task<QueuedTask[]> RetrievePending(DateTimeOffset? lastCreatedAt, Guid? lastId, int take, CancellationToken ct = default)
+    public virtual async Task<QueuedTask[]> RetrievePending(DateTimeOffset? lastCreatedAt, Guid? lastId, int take,
+                                                            CancellationToken ct = default)
     {
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
 
-        logger.LogInformation("Retrieving Pending Tasks (keyset: lastCreatedAt={LastCreatedAt}, lastId={LastId}, take={Take})",
+        logger.LogInformation(
+            "Retrieving Pending Tasks (keyset: lastCreatedAt={LastCreatedAt}, lastId={LastId}, take={Take})",
             lastCreatedAt, lastId, take);
 
         var now = DateTimeOffset.UtcNow;
@@ -94,8 +96,9 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     public async Task SetCancelledByService(Guid taskId, Exception exception, AuditLevel auditLevel) =>
         await SetStatus(taskId, QueuedTaskStatus.ServiceStopped, exception, auditLevel).ConfigureAwait(false);
 
-    public virtual async Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception, AuditLevel auditLevel,
-                                    CancellationToken ct = default)
+    public virtual async Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception,
+                                        AuditLevel auditLevel,
+                                        CancellationToken ct = default)
     {
         logger.LogInformation("Set Task {taskId} with Status {status}", taskId, status);
 
@@ -158,8 +161,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         auditLevel switch
         {
             AuditLevel.None => false,
-            AuditLevel.ErrorsOnly => exception != null || status is QueuedTaskStatus.Failed or QueuedTaskStatus.ServiceStopped,
-            AuditLevel.Minimal => exception != null || status is QueuedTaskStatus.Failed or QueuedTaskStatus.ServiceStopped,
+            AuditLevel.ErrorsOnly or AuditLevel.Minimal => IsRealError(status, exception),
             AuditLevel.Full => true,
             _ => true // Default to full audit for unknown levels
         };
@@ -172,6 +174,20 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             AuditLevel.Minimal => true, // Minimal creates runs audit for recurring tasks (tracks last run)
             AuditLevel.Full => true,
             _ => true // Default to full audit for unknown levels
+        };
+
+    /// <summary>
+    /// Determines if a task status represents a real error that should be audited.
+    /// Excludes expected shutdown scenarios (ServiceStopped with OperationCanceledException).
+    /// </summary>
+    private static bool IsRealError(QueuedTaskStatus status, Exception? exception) =>
+        status switch
+        {
+            // Always audit Failed status
+            QueuedTaskStatus.Failed => true,
+            // ServiceStopped with OperationCanceledException is expected shutdown behavior, not an error
+            QueuedTaskStatus.ServiceStopped when exception is OperationCanceledException => false,
+            _ => exception != null
         };
 
     public virtual async Task<int> GetCurrentRunCount(Guid taskId)
@@ -224,7 +240,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                     Exception    = task.Exception
                 });
 
-                task.NextRunUtc = nextRun;
+                task.NextRunUtc      = nextRun;
                 task.CurrentRunCount = (task.CurrentRunCount ?? 0) + 1;
 
                 try
@@ -247,8 +263,8 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                 await dbContext.QueuedTasks
                                .Where(x => x.Id == taskId)
                                .ExecuteUpdateAsync(setters => setters
-                                   .SetProperty(t => t.NextRunUtc, nextRun)
-                                   .SetProperty(t => t.CurrentRunCount, newRunCount))
+                                                              .SetProperty(t => t.NextRunUtc, nextRun)
+                                                              .SetProperty(t => t.CurrentRunCount, newRunCount))
                                .ConfigureAwait(false);
             }
             catch (Exception e)
