@@ -189,6 +189,119 @@ opt.SetDefaultAuditLevel(AuditLevel.None)
 - Use lower levels (Minimal/ErrorsOnly/None) for high-frequency recurring tasks
 - See [Audit Configuration](storage.md#audit-configuration) for detailed usage guide
 
+### SetAuditRetentionPolicy
+
+Configures automatic audit trail retention policies to prevent unbounded growth of audit tables. Retention is enforced by the optional `AuditCleanupHostedService` that periodically deletes old audit records.
+
+**Signature:**
+```csharp
+SetAuditRetentionPolicy(AuditRetentionPolicy? retentionPolicy)
+```
+
+**Parameters:**
+- `retentionPolicy` (AuditRetentionPolicy?): The retention policy to apply. Set to null to disable retention (default).
+
+**Default:** `null` (unlimited retention)
+
+**Factory Methods:**
+```csharp
+// Uniform retention: same TTL for all audit types
+AuditRetentionPolicy.WithUniformRetention(int retentionDays)
+
+// Error priority: keep errors longer than successful executions
+AuditRetentionPolicy.WithErrorPriority(int successRetentionDays, int errorRetentionDays)
+```
+
+**Examples:**
+
+**Basic Setup (Uniform Retention):**
+```csharp
+builder.Services.AddEverTask(opt => opt
+    .RegisterTasksFromAssembly(typeof(Program).Assembly)
+    .SetAuditRetentionPolicy(AuditRetentionPolicy.WithUniformRetention(30)))
+    .AddSqlServerStorage(connectionString)
+    .AddAuditCleanup(
+        AuditRetentionPolicy.WithUniformRetention(30),
+        cleanupIntervalHours: 24);
+```
+
+**Advanced Setup (Keep Errors Longer):**
+```csharp
+builder.Services.AddEverTask(opt => opt
+    .RegisterTasksFromAssembly(typeof(Program).Assembly)
+    .SetAuditRetentionPolicy(
+        AuditRetentionPolicy.WithErrorPriority(
+            successRetentionDays: 7,
+            errorRetentionDays: 90)))
+    .AddSqlServerStorage(connectionString)
+    .AddAuditCleanup(
+        AuditRetentionPolicy.WithErrorPriority(7, 90),
+        cleanupIntervalHours: 24);
+```
+
+**Custom Policy:**
+```csharp
+var policy = new AuditRetentionPolicy
+{
+    StatusAuditRetentionDays = 14,         // Status changes retained for 14 days
+    RunsAuditRetentionDays = 7,            // Execution history retained for 7 days
+    ErrorAuditRetentionDays = 90,          // Errors retained for 90 days
+    DeleteCompletedTasksWithAudits = true // Delete QueuedTask when audits are purged
+};
+
+builder.Services.AddEverTask(opt => opt
+    .SetAuditRetentionPolicy(policy))
+    .AddSqlServerStorage(connectionString)
+    .AddAuditCleanup(policy, cleanupIntervalHours: 12);
+```
+
+**Retention Policy Properties:**
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `StatusAuditRetentionDays` | `int?` | `null` | Days to retain status audit records (Queued → InProgress → Completed/Failed) |
+| `RunsAuditRetentionDays` | `int?` | `null` | Days to retain execution audit records (recurring task runs) |
+| `ErrorAuditRetentionDays` | `int?` | `null` | Days to retain error audit records (overrides above for failures) |
+| `DeleteCompletedTasksWithAudits` | `bool` | `false` | Delete completed tasks when their audit trail is purged |
+
+**Cleanup Service Registration:**
+
+The `AddAuditCleanup()` method registers a hosted service that periodically deletes old audit records:
+
+```csharp
+.AddAuditCleanup(
+    retentionPolicy,              // Same policy passed to SetAuditRetentionPolicy
+    cleanupIntervalHours: 24)     // Cleanup frequency (default: 24 hours)
+```
+
+**Important Notes:**
+
+1. **Policy Synchronization**: Pass the **same policy** to both `SetAuditRetentionPolicy()` and `AddAuditCleanup()`
+2. **Cleanup Service Required**: Retention is enforced by `AddAuditCleanup()` - without it, policy has no effect
+3. **Recurring Tasks**: Never auto-deleted, even with `DeleteCompletedTasksWithAudits = true` (they need to reschedule)
+4. **Failed/Cancelled Tasks**: Preserved for visibility, even with `DeleteCompletedTasksWithAudits = true`
+5. **Database Impact**: Cleanup runs in background, uses DELETE queries with date filters
+
+**Monitoring Cleanup:**
+
+Check cleanup service logs:
+```
+[02:00:15 INF] AuditCleanupHostedService: Starting audit cleanup cycle
+[02:00:16 INF] Deleted 1,543 status audit records older than 30 days
+[02:00:16 INF] Deleted 8,921 runs audit records older than 30 days
+[02:00:16 INF] Deleted 234 completed tasks with no remaining audits
+[02:00:16 INF] AuditCleanupHostedService: Cleanup cycle completed in 1.2s
+```
+
+**Recommended Settings by Workload:**
+
+| Workload Type | Success Retention | Error Retention | Cleanup Interval |
+|---------------|------------------|-----------------|------------------|
+| **Development** | 7 days | 30 days | 24 hours |
+| **Production (Low Volume)** | 30 days | 90 days | 24 hours |
+| **Production (High Volume)** | 7 days | 90 days | 12 hours |
+| **Compliance/Audit** | 365 days | 365 days | 24 hours |
+
 ### SetThrowIfUnableToPersist
 
 Controls what happens when a task can't be saved to storage.
@@ -294,6 +407,66 @@ opt.RegisterTasksFromAssemblies(
     typeof(ApiTask).Assembly,
     typeof(BackgroundTask).Assembly)
 ```
+
+### SetUseLazyHandlerResolution
+
+Controls whether EverTask uses lazy handler resolution for scheduled and recurring tasks. When enabled (default), handlers are disposed after dispatch and recreated at execution time based on task scheduling characteristics.
+
+**Signature:**
+```csharp
+SetUseLazyHandlerResolution(bool enabled)
+DisableLazyHandlerResolution()  // Convenience method for disabling
+```
+
+**Parameters:**
+- `enabled` (bool): True to enable lazy resolution (default), false to disable
+
+**Default:** `true` (enabled with adaptive algorithm)
+
+**Examples:**
+```csharp
+// Keep default (recommended - adaptive lazy resolution)
+opt.RegisterTasksFromAssembly(typeof(Program).Assembly)
+
+// Explicitly enable (same as default)
+opt.SetUseLazyHandlerResolution(true)
+
+// Disable lazy resolution (handlers kept in memory)
+opt.SetUseLazyHandlerResolution(false)
+
+// Convenience method for disabling
+opt.DisableLazyHandlerResolution()
+```
+
+**Adaptive Algorithm:**
+
+When enabled, EverTask automatically chooses the best resolution strategy:
+
+- **Recurring tasks with intervals ≥ 5 minutes**: Lazy mode (memory efficient)
+- **Recurring tasks with intervals < 5 minutes**: Eager mode (performance efficient)
+- **Delayed tasks with delay ≥ 30 minutes**: Lazy mode
+- **Delayed tasks with delay < 30 minutes**: Eager mode
+
+**Benefits:**
+- **Memory Optimization**: Handlers are disposed after dispatch, reducing memory footprint for long-running scheduled tasks
+- **Fresh Dependencies**: Handlers get fresh scoped services at execution time (important for DbContext, etc.)
+- **Automatic Tuning**: Adaptive algorithm balances memory and performance
+
+**When to Disable:**
+
+Only disable lazy resolution if:
+- You have handlers with expensive initialization that should be cached
+- Your environment has issues with lazy resolution (rare)
+- You're debugging handler lifecycle issues
+
+**Performance Impact:**
+
+- **Memory**: Up to 43,000 fewer handler allocations per day for high-frequency recurring tasks
+- **CPU**: Negligible overhead (handler instantiation is fast with DI)
+
+**Notes:**
+- Immediate tasks always use eager resolution (no benefit from lazy)
+- Handler dependencies are resolved at execution time, ensuring fresh scoped services
 
 ## Queue Configuration
 
@@ -605,6 +778,325 @@ Sets the maximum number of logs to persist per task execution. Once this limit i
 
 ## Monitoring Configuration
 
+### AddMonitoringApi
+
+Adds EverTask Monitoring API with optional embedded React dashboard for comprehensive task monitoring, analytics, and management.
+
+**Package:** `EverTask.Monitor.Api`
+
+**Signature:**
+```csharp
+AddMonitoringApi()
+AddMonitoringApi(Action<EverTaskApiOptions> configure)
+```
+
+**Parameters:**
+- `configure` (Action): Configuration options for the monitoring API
+
+**Examples:**
+
+**Basic Setup (Default Settings):**
+```csharp
+.AddMonitoringApi()
+
+// Dashboard: http://localhost:5000/monitoring
+// API:       http://localhost:5000/monitoring/api
+// Credentials: admin / admin
+```
+
+**Custom Configuration:**
+```csharp
+.AddMonitoringApi(options =>
+{
+    options.BasePath = "/admin/tasks";
+    options.EnableUI = true;
+    options.Username = "monitor_user";
+    options.Password = "secure_password_123";
+    options.RequireAuthentication = true;
+    options.AllowAnonymousReadAccess = false;
+    options.SignalRHubPath = "/realtime/monitor";
+    options.EnableCors = true;
+    options.CorsAllowedOrigins = new[] { "https://myapp.com" };
+})
+```
+
+**API-Only Mode (No Dashboard):**
+```csharp
+.AddMonitoringApi(options =>
+{
+    options.BasePath = "/api/evertask";
+    options.EnableUI = false;  // Disable embedded dashboard
+    options.RequireAuthentication = false;  // Open API for custom frontend
+})
+```
+
+**Environment-Specific Configuration:**
+```csharp
+.AddMonitoringApi(options =>
+{
+    options.BasePath = "/monitoring";
+    options.EnableUI = true;
+
+    if (builder.Environment.IsDevelopment())
+    {
+        // Development: No authentication
+        options.RequireAuthentication = false;
+    }
+    else
+    {
+        // Production: Secure credentials from environment
+        options.RequireAuthentication = true;
+        options.Username = Environment.GetEnvironmentVariable("MONITOR_USERNAME")
+            ?? throw new InvalidOperationException("MONITOR_USERNAME not set");
+        options.Password = Environment.GetEnvironmentVariable("MONITOR_PASSWORD")
+            ?? throw new InvalidOperationException("MONITOR_PASSWORD not set");
+        options.EnableCors = true;
+        options.CorsAllowedOrigins = new[] { "https://app.example.com" };
+    }
+})
+```
+
+**EverTaskApiOptions Properties:**
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `BasePath` | `string` | `"/monitoring"` | Base path for API and UI endpoints |
+| `EnableUI` | `bool` | `true` | Enable embedded React dashboard |
+| `ApiBasePath` | `string` | `"{BasePath}/api"` | API endpoint path (readonly, derived from BasePath) |
+| `UIBasePath` | `string` | `"{BasePath}"` | UI endpoint path (readonly, derived from BasePath) |
+| `Username` | `string` | `"admin"` | Basic Authentication username |
+| `Password` | `string` | `"admin"` | Basic Authentication password (CHANGE IN PRODUCTION!) |
+| `SignalRHubPath` | `string` | `"/monitoring/monitor"` | SignalR hub path for real-time updates |
+| `RequireAuthentication` | `bool` | `true` | Enable Basic Authentication |
+| `AllowAnonymousReadAccess` | `bool` | `false` | Allow read-only endpoints without authentication |
+| `EnableCors` | `bool` | `true` | Enable CORS for API endpoints |
+| `CorsAllowedOrigins` | `string[]` | `[]` | CORS allowed origins (empty = allow all) |
+
+#### BasePath
+
+Sets the base path for both API and dashboard endpoints.
+
+**Examples:**
+```csharp
+options.BasePath = "/monitoring";     // Dashboard: /monitoring, API: /monitoring/api
+options.BasePath = "/admin/tasks";    // Dashboard: /admin/tasks, API: /admin/tasks/api
+options.BasePath = "/evertask";       // Dashboard: /evertask, API: /evertask/api
+```
+
+#### EnableUI
+
+Controls whether the embedded React dashboard is served.
+
+**Examples:**
+```csharp
+// Full mode (default): API + Dashboard
+options.EnableUI = true;
+
+// API-only mode: REST API without dashboard
+options.EnableUI = false;
+```
+
+**Use Cases for API-Only Mode:**
+- Building custom frontend applications
+- Mobile app integration
+- Third-party monitoring system integration
+- Headless server environments
+
+#### Username / Password
+
+Basic Authentication credentials for accessing the monitoring dashboard and API.
+
+**Examples:**
+```csharp
+// Development (not recommended for production)
+options.Username = "admin";
+options.Password = "admin";
+
+// Production: Environment variables
+options.Username = Environment.GetEnvironmentVariable("MONITOR_USERNAME") ?? "admin";
+options.Password = Environment.GetEnvironmentVariable("MONITOR_PASSWORD") ?? "changeme";
+
+// Production: Configuration
+options.Username = configuration["Monitoring:Username"];
+options.Password = configuration["Monitoring:Password"];
+```
+
+**Security Notes:**
+- Always change default credentials in production
+- Use environment variables or secure configuration systems
+- Always use HTTPS when authentication is enabled
+- Consider using anonymous read access for internal networks
+
+#### RequireAuthentication
+
+Controls whether Basic Authentication is required for API endpoints.
+
+**Examples:**
+```csharp
+// Require authentication (default, recommended for production)
+options.RequireAuthentication = true;
+
+// No authentication (development only)
+options.RequireAuthentication = false;
+
+// Environment-specific
+options.RequireAuthentication = !builder.Environment.IsDevelopment();
+```
+
+**Notes:**
+- The `/config` endpoint is always accessible without authentication (dashboard needs it)
+- When disabled, all endpoints are publicly accessible
+- Combine with `AllowAnonymousReadAccess` for granular control
+
+#### AllowAnonymousReadAccess
+
+Allows read-only endpoints (GET, HEAD) to be accessed without authentication while still requiring authentication for write operations (future).
+
+**Examples:**
+```csharp
+// Require authentication for everything (default)
+options.RequireAuthentication = true;
+options.AllowAnonymousReadAccess = false;
+
+// Allow reading task data without authentication
+options.RequireAuthentication = true;
+options.AllowAnonymousReadAccess = true;  // GET/HEAD don't need auth
+```
+
+**Use Cases:**
+- Internal monitoring dashboards on secure networks
+- Public status pages showing task statistics
+- Integration with external monitoring tools
+
+#### SignalRHubPath
+
+Sets the SignalR hub path for real-time monitoring updates.
+
+**Examples:**
+```csharp
+// Default path
+options.SignalRHubPath = "/monitoring/monitor";
+
+// Custom path
+options.SignalRHubPath = "/realtime/tasks";
+options.SignalRHubPath = "/hub/evertask";
+```
+
+**Notes:**
+- Must match the path used by SignalR clients
+- SignalR monitoring is automatically configured if not already registered
+- Dashboard automatically uses this path for real-time updates
+
+#### EnableCors
+
+Enables CORS (Cross-Origin Resource Sharing) for API endpoints.
+
+**Examples:**
+```csharp
+// Enable CORS (default)
+options.EnableCors = true;
+
+// Disable CORS
+options.EnableCors = false;
+```
+
+**Notes:**
+- Required when dashboard/frontend is hosted on different origin
+- Required for custom frontend applications
+- Not needed when API and frontend are on same origin
+
+#### CorsAllowedOrigins
+
+Specifies allowed origins for CORS requests.
+
+**Examples:**
+```csharp
+// Allow all origins (default, useful for development)
+options.CorsAllowedOrigins = Array.Empty<string>();
+
+// Restrict to specific origins (production)
+options.CorsAllowedOrigins = new[]
+{
+    "https://myapp.com",
+    "https://dashboard.myapp.com"
+};
+
+// Environment-specific origins
+options.CorsAllowedOrigins = builder.Environment.IsDevelopment()
+    ? Array.Empty<string>()  // Allow all in development
+    : new[] { "https://app.example.com" };  // Restrict in production
+```
+
+**Security Notes:**
+- Empty array = allow all origins (convenient for development)
+- Always restrict origins in production
+- Use HTTPS origins in production
+
+### API Endpoints
+
+Once configured, the monitoring API provides REST endpoints for task querying, statistics, and analytics. All endpoints are relative to `{BasePath}/api` (default: `/monitoring/api`).
+
+**Key Endpoints:**
+- `GET /tasks` - Paginated task list with filtering
+- `GET /tasks/{id}` - Task details
+- `GET /tasks/{id}/status-audit` - Status change history
+- `GET /tasks/{id}/runs-audit` - Execution history
+- `GET /dashboard/overview` - Dashboard statistics
+- `GET /queues` - Queue metrics
+- `GET /statistics/success-rate-trend` - Success rate trends
+
+See [Monitoring Dashboard](monitoring-dashboard.md) for complete API documentation.
+
+### Dashboard Features
+
+When `EnableUI` is true, the embedded React dashboard provides:
+
+- **Overview Dashboard**: Total tasks, success rate, active queues, execution times
+- **Task List**: Filtering, sorting, pagination, status filters
+- **Task Details**: Complete information, execution history, error details
+- **Queue Metrics**: Per-queue statistics and health monitoring
+- **Analytics**: Success rate trends, task type distribution, execution times
+- **Real-Time Updates**: Live task updates via SignalR
+
+### Mapping Endpoints
+
+After configuring the monitoring API, map the endpoints in your application:
+
+```csharp
+var app = builder.Build();
+
+// Map EverTask monitoring endpoints
+app.MapEverTaskApi();
+
+app.Run();
+```
+
+This single call:
+- Maps all API controllers
+- Maps SignalR hub (if configured)
+- Serves embedded dashboard (if `EnableUI` is true)
+- Configures authentication middleware
+- Applies CORS policy (if enabled)
+
+### Integration with SignalR
+
+The monitoring API automatically configures SignalR monitoring if it hasn't been added:
+
+```csharp
+// This is sufficient - SignalR is auto-configured
+.AddMonitoringApi()
+
+// Manual SignalR configuration (if you need more control)
+.AddSignalRMonitoring(opt =>
+{
+    opt.IncludeExecutionLogs = true;  // Include logs in SignalR events
+})
+.AddMonitoringApi(options =>
+{
+    options.SignalRHubPath = "/monitoring/monitor";  // Must match SignalR path
+})
+```
+
 ### AddSignalRMonitoring
 
 Enables real-time task monitoring via SignalR.
@@ -622,20 +1114,28 @@ AddSignalRMonitoring(Action<SignalRMonitorOptions> configure)
 
 **Examples:**
 ```csharp
-// Basic
+// Basic (default configuration)
 .AddSignalRMonitoring()
 
-// With options
+// With execution log streaming enabled
 .AddSignalRMonitoring(opt =>
 {
-    opt.HubRoute = "/evertask-hub";
-    opt.EnableDetailedErrors = true;
+    opt.IncludeExecutionLogs = true;  // Stream logs to SignalR clients (increases bandwidth)
 })
 ```
 
-**SignalRMonitorOptions Properties:**
-- `HubRoute` (string): SignalR hub endpoint (default: "/evertask-hub")
-- `EnableDetailedErrors` (bool): Include detailed error messages (default: false)
+**SignalRMonitoringOptions Properties:**
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `IncludeExecutionLogs` | `bool` | `false` | Include execution logs in SignalR events (increases message size) |
+
+**Important Notes:**
+
+- **Hub Route**: Fixed at `/evertask/monitor` (configured separately via `MapEverTaskMonitorHub()`)
+- **Log Streaming**: Execution logs are always available via ILogger and database persistence (if enabled)
+- **Performance Impact**: Enabling `IncludeExecutionLogs` significantly increases SignalR message size and network bandwidth
+- **Use Case**: Enable only when you need real-time log streaming to monitoring dashboards
 
 **Client-Side Setup:**
 
@@ -645,24 +1145,40 @@ AddSignalRMonitoring(Action<SignalRMonitorOptions> configure)
 
 <script>
 const connection = new signalR.HubConnectionBuilder()
-    .withUrl("/evertask-hub")
+    .withUrl("/evertask/monitor")  // Default hub route
+    .withAutomaticReconnect()
     .build();
 
-connection.on("TaskEvent", (event) => {
-    console.log("Task event:", event);
-    // event.TaskId, event.EventType, event.Timestamp, etc.
+connection.on("EverTaskEvent", (eventData) => {
+    console.log("Task event:", eventData);
+    // eventData.TaskId, eventData.Severity, eventData.Message, eventData.Exception, etc.
 });
 
-connection.start().catch(err => console.error(err));
+connection.start()
+    .then(() => console.log("SignalR connected"))
+    .catch(err => console.error("SignalR connection error:", err));
 </script>
 ```
 
-**Event Types:**
-- `TaskDispatched`: Task was dispatched
-- `TaskStarted`: Task execution started
-- `TaskCompleted`: Task completed successfully
-- `TaskFailed`: Task failed after all retries
-- `TaskCancelled`: Task was cancelled
+**Event Data Structure:**
+
+```javascript
+{
+    "TaskId": "dc49351d-476d-49f0-a1e8-3e2a39182d22",
+    "EventDateUtc": "2024-10-19T16:10:20Z",
+    "Severity": "Information",  // "Information" | "Warning" | "Error"
+    "TaskType": "MyApp.Tasks.SendEmailTask",
+    "TaskHandlerType": "MyApp.Tasks.SendEmailHandler",
+    "TaskParameters": "{\"Email\":\"user@example.com\"}",
+    "Message": "Task completed successfully",
+    "Exception": null  // Stack trace if task failed
+}
+```
+
+**Severity Levels:**
+- `Information`: Task started, completed, or scheduled
+- `Warning`: Task cancelled or timed out
+- `Error`: Task failed with exception
 
 ## Storage Provider Details
 

@@ -1,12 +1,14 @@
 ---
 layout: default
-title: Monitoring
+title: Monitoring Events
 nav_order: 10
 ---
 
-# Monitoring
+# Monitoring Events
 
-EverTask gives you visibility into your background tasks through a flexible event system that tracks execution, failures, and performance.
+> **New in v3.0:** Looking for the web dashboard? Check out the [Monitoring Dashboard](monitoring-dashboard.md) guide for REST API endpoints, embedded React UI, and real-time monitoring features.
+
+EverTask gives you visibility into your background tasks through a flexible event system that tracks execution, failures, and performance. This page covers the event-based monitoring system and custom integrations. For a complete monitoring solution with web dashboard, see the [Monitoring Dashboard](monitoring-dashboard.md) guide.
 
 ## Table of Contents
 
@@ -175,6 +177,8 @@ private Task OnTaskEventAsync(EverTaskEventData eventData)
 ## SignalR Real-Time Monitoring
 
 If you're building an ASP.NET Core application, you can watch tasks execute in real-time using the SignalR integration. This is especially useful for admin dashboards or debugging during development.
+
+> **Note:** The [Monitoring Dashboard](monitoring-dashboard.md) automatically includes SignalR integration with a modern React UI. Use the approach below only if you're building a custom monitoring interface.
 
 ### Installation
 
@@ -716,6 +720,40 @@ private Task OnTaskEventAsync(EverTaskEventData eventData)
 }
 ```
 
+## Web Dashboard
+
+For a complete monitoring solution with web UI and REST API, see the [Monitoring Dashboard](monitoring-dashboard.md) guide.
+
+The monitoring dashboard provides:
+- REST API for task querying and analytics
+- Embedded React dashboard with modern UI
+- Real-time updates via SignalR
+- Task filtering, sorting, and detailed views
+- Statistics and performance analytics
+- Queue metrics and health monitoring
+
+Quick setup:
+
+```csharp
+builder.Services.AddEverTask(opt =>
+{
+    opt.RegisterTasksFromAssembly(typeof(Program).Assembly);
+})
+.AddSqlServerStorage(connectionString)
+.AddMonitoringApi(options =>
+{
+    options.BasePath = "/monitoring";
+    options.EnableUI = true;
+    options.Username = "admin";
+    options.Password = "admin";
+});
+
+var app = builder.Build();
+app.MapEverTaskApi();
+
+// Dashboard: http://localhost:5000/monitoring
+```
+
 ## Future Monitoring Options
 
 We're planning to add:
@@ -723,12 +761,12 @@ We're planning to add:
 - **Sentry Crons** - Automatic cron monitoring for recurring tasks
 - **OpenTelemetry** - Distributed tracing and metrics
 - **Health Checks** - Built-in health check endpoints
-- **Admin Dashboard** - Web-based monitoring and management UI
 
 Stay tuned for updates!
 
 ## Next Steps
 
+- **[Monitoring Dashboard](monitoring-dashboard.md)** - Web dashboard, REST API, and real-time monitoring
 - **[Resilience](resilience.md)** - Configure retry policies and error handling
 - **[Storage](storage.md)** - Query task status and history from storage
 - **[Configuration Reference](configuration-reference.md)** - All configuration options

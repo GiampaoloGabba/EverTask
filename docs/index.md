@@ -24,7 +24,8 @@ EverTask is a .NET background task execution library built for persistence and r
 ### Advanced Topics
 - [Recurring Tasks](recurring-tasks.md) - Schedule jobs with the fluent API or cron expressions
 - [Resilience](resilience.md) - Handle failures with retry policies and timeouts
-- [Monitoring](monitoring.md) - Track task execution and integrate with monitoring systems
+- [Monitoring Dashboard](monitoring-dashboard.md) - Web dashboard, REST API, and real-time monitoring
+- [Monitoring Events](monitoring.md) - Track task execution and integrate with monitoring systems
 - [Advanced Features](advanced-features.md) - Multi-queue, sharded scheduler, and task continuations
 
 ## Quick Links

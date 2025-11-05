@@ -114,15 +114,68 @@ await dispatcher.Dispatch(task, recurring => ..., auditLevel: AuditLevel.Minimal
 
 ## Monitoring Configuration
 
+### Monitoring API & Dashboard
+
+```csharp
+.AddMonitoringApi(opt => {
+    opt.BasePath = "/monitoring";              // Default: "/monitoring"
+    opt.EnableUI = true;                       // Default: true
+    opt.Username = "admin";                    // Default: "admin"
+    opt.Password = "admin";                    // Default: "admin" (CHANGE IN PRODUCTION!)
+    opt.RequireAuthentication = true;          // Default: true
+    opt.AllowAnonymousReadAccess = false;      // Default: false
+    opt.SignalRHubPath = "/monitoring/monitor"; // Default: "/monitoring/monitor"
+    opt.EnableCors = true;                     // Default: true
+    opt.CorsAllowedOrigins = new[] {           // Default: empty (allow all)
+        "https://myapp.com"
+    };
+})
+```
+
+- **Package:** `EverTask.Monitor.Api`
+- **Features:** REST API + embedded React dashboard
+- **Dashboard URL:** `{BasePath}` (default: `/monitoring`)
+- **API URL:** `{BasePath}/api` (default: `/monitoring/api`)
+- **Auto-configures SignalR:** Automatically adds SignalR monitoring if not already registered
+
+**Common Patterns:**
+
+```csharp
+// Development: No authentication
+.AddMonitoringApi(opt => {
+    opt.RequireAuthentication = false;
+})
+
+// Production: Environment variables
+.AddMonitoringApi(opt => {
+    opt.Username = Environment.GetEnvironmentVariable("MONITOR_USER") ?? "admin";
+    opt.Password = Environment.GetEnvironmentVariable("MONITOR_PASS") ?? throw new Exception();
+})
+
+// API-only mode (no UI)
+.AddMonitoringApi(opt => {
+    opt.EnableUI = false;
+    opt.BasePath = "/api/evertask";
+})
+
+// Custom frontend integration
+.AddMonitoringApi(opt => {
+    opt.EnableUI = false;
+    opt.EnableCors = true;
+    opt.CorsAllowedOrigins = new[] { "https://dashboard.myapp.com" };
+})
+```
+
 ### SignalR
 ```csharp
 .AddSignalRMonitoring(opt => {
-    opt.HubRoute = "/evertask-hub";       // Default: "/evertask-hub"
-    opt.EnableDetailedErrors = false;     // Default: false
+    opt.IncludeExecutionLogs = false;     // Default: false (increases bandwidth if enabled)
 })
 ```
 - **Package:** `EverTask.Monitor.AspnetCore.SignalR`
-- **Events:** TaskDispatched, TaskStarted, TaskCompleted, TaskFailed, TaskCancelled
+- **Hub Route:** `/evertask/monitor` (configured via `MapEverTaskMonitorHub()`)
+- **Events:** TaskStarted, TaskCompleted, TaskFailed, TaskCancelled, TaskTimeout
+- **Event Method:** `EverTaskEvent` (receives `EverTaskEventData`)
 
 ## Handler Configuration
 

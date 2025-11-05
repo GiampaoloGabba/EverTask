@@ -6,6 +6,7 @@
 [![NuGet](https://img.shields.io/nuget/vpre/evertask.sqlserver.svg?label=Evertask.SqlServer)](https://www.nuget.org/packages/evertask.sqlserver)
 [![NuGet](https://img.shields.io/nuget/vpre/evertask.serilog.svg?label=Evertask.Serilog)](https://www.nuget.org/packages/evertask.serilog)
 [![NuGet](https://img.shields.io/nuget/vpre/EverTask.Monitor.AspnetCore.SignalR.svg?label=EverTask.Monitor.AspnetCore.SignalR)](https://www.nuget.org/packages/EverTask.Monitor.AspnetCore.SignalR)
+[![NuGet](https://img.shields.io/nuget/vpre/EverTask.Monitor.Api.svg?label=EverTask.Monitor.Api)](https://www.nuget.org/packages/EverTask.Monitor.Api)
 
 ## Overview
 
@@ -27,6 +28,7 @@ Works great with ASP.NET Core, Windows Services, or any .NET project that needs 
 - ⏱️ **Timeout Management** - Global and per-task timeout configuration
 - 📝 **Task Execution Log Capture** (v3.0+) - Proxy logger that always logs to ILogger with optional database persistence for audit trails
 - 📊 **Real-Time Monitoring** - Local events + SignalR remote monitoring
+- 🌐 **Web Dashboard** (v3.0+) - REST API and embedded React UI for monitoring, analytics, and task management
 - 🎨 **Fluent Scheduling API** - Intuitive recurring task configuration (every minute, hour, day, week, month, cron)
 - 🔧 **Extensible Architecture** - Custom storage, retry policies, and schedulers
 - 🏎️ **Optimized Performance** (v2.0+) - Reflection caching, lazy serialization, DbContext pooling
@@ -134,7 +136,8 @@ public class UserController : ControllerBase
 - **[Recurring Tasks](https://GiampaoloGabba.github.io/EverTask/recurring-tasks.html)** - Fluent scheduling API, cron expressions, idempotent registration
 - **[Advanced Features](https://GiampaoloGabba.github.io/EverTask/advanced-features.html)** - Multi-queue, sharded scheduler, continuations, cancellation
 - **[Resilience & Error Handling](https://GiampaoloGabba.github.io/EverTask/resilience.html)** - Retry policies, timeouts, CancellationToken usage
-- **[Monitoring](https://GiampaoloGabba.github.io/EverTask/monitoring.html)** - Events, SignalR integration, custom monitoring
+- **[Monitoring Dashboard](https://GiampaoloGabba.github.io/EverTask/monitoring-dashboard.html)** - Web dashboard, REST API, real-time monitoring
+- **[Monitoring Events](https://GiampaoloGabba.github.io/EverTask/monitoring.html)** - Events, SignalR integration, custom monitoring
 - **[Storage Configuration](https://GiampaoloGabba.github.io/EverTask/storage.html)** - SQL Server, SQLite, In-Memory, custom implementations
 - **[Configuration Reference](https://GiampaoloGabba.github.io/EverTask/configuration-reference.html)** - Complete configuration documentation
 - **[Configuration Cheatsheet](https://GiampaoloGabba.github.io/EverTask/configuration-cheatsheet.html)** - Quick reference for all config options
@@ -307,6 +310,42 @@ public class RecurringTasksRegistrar : IHostedService
 builder.Services.AddHostedService<RecurringTasksRegistrar>();
 ```
 
+### Monitoring Dashboard
+
+Monitor your tasks with a modern web dashboard providing real-time insights, analytics, and task management:
+
+```csharp
+// Add monitoring API and dashboard
+builder.Services.AddEverTask(opt =>
+{
+    opt.RegisterTasksFromAssembly(typeof(Program).Assembly);
+})
+.AddSqlServerStorage(connectionString)
+.AddMonitoringApi(options =>
+{
+    options.BasePath = "/monitoring";
+    options.EnableUI = true;
+    options.Username = "admin";
+    options.Password = "admin";
+    options.RequireAuthentication = true;
+});
+
+var app = builder.Build();
+app.MapEverTaskApi();
+
+// Dashboard: http://localhost:5000/monitoring
+// API:       http://localhost:5000/monitoring/api
+```
+
+**Dashboard Features:**
+- Real-time task monitoring with live updates
+- Overview dashboard with statistics and charts
+- Task list with filtering, sorting, and pagination
+- Detailed task view with execution history
+- Queue metrics and analytics
+- Success rate trends and performance analysis
+- REST API for custom integrations
+
 ### Task Execution Log Capture
 
 Capture all logs written during task execution and persist them to the database for debugging and auditing:
@@ -422,6 +461,7 @@ await dispatcher.Dispatch(
   - [EverTask.SqlServer](https://www.nuget.org/packages/evertask.sqlserver) - SQL Server storage
   - [EverTask.Sqlite](https://www.nuget.org/packages/evertask.sqlite) - SQLite storage
   - [EverTask.Serilog](https://www.nuget.org/packages/evertask.serilog) - Serilog integration
+  - [EverTask.Monitor.Api](https://www.nuget.org/packages/EverTask.Monitor.Api) - Monitoring dashboard and REST API
   - [EverTask.Monitor.AspnetCore.SignalR](https://www.nuget.org/packages/EverTask.Monitor.AspnetCore.SignalR) - Real-time monitoring
 
 - 📝 **Resources**
@@ -434,11 +474,10 @@ await dispatcher.Dispatch(
 
 We have some exciting features in the pipeline:
 
-- **Web Dashboard**: A simple web UI for monitoring and managing tasks
-- **WebAPI Endpoints**: RESTful API for remote task management
 - **Additional Monitoring**: Sentry Crons, Application Insights, OpenTelemetry support
 - **More Storage Options**: PostgreSQL, MySQL, Redis, Cosmos DB
 - **Clustering**: Multi-server task distribution with load balancing and failover
+- **Task Management API**: REST endpoints for dispatching and cancelling tasks
 
 ## Contributing
 
