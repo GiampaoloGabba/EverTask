@@ -5,6 +5,7 @@ public class QueuedTask
     public Guid            Id                    { get; set; }
     public DateTimeOffset  CreatedAtUtc          { get; set; }
     public DateTimeOffset? LastExecutionUtc      { get; set; }
+    public double          ExecutionTimeMs       { get; set; }
     public DateTimeOffset? ScheduledExecutionUtc { get; set; }
     public string          Type                  { get; set; } = "";
     public string          Request               { get; set; } = "";
@@ -45,11 +46,12 @@ public class StatusAudit
 
 public class RunsAudit
 {
-    public long             Id           { get; set; }
-    public Guid             QueuedTaskId { get; set; }
-    public DateTimeOffset   ExecutedAt   { get; set; }
-    public QueuedTaskStatus Status       { get; set; }
-    public string?          Exception    { get; set; }
+    public long             Id             { get; set; }
+    public Guid             QueuedTaskId   { get; set; }
+    public DateTimeOffset   ExecutedAt     { get; set; }
+    public double           ExecutionTimeMs { get; set; }
+    public QueuedTaskStatus Status         { get; set; }
+    public string?          Exception      { get; set; }
 
     public QueuedTask QueuedTask { get; set; } = null!;
 }

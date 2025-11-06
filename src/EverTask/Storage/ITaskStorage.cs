@@ -66,9 +66,10 @@ public interface ITaskStorage
     /// Sets a task's status to completed.
     /// </summary>
     /// <param name="taskId">The ID of the task.</param>
+    /// <param name="executionTimeMs">The execution time in milliseconds.</param>
     /// <param name="auditLevel">Audit level for this task.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    Task SetCompleted(Guid taskId, AuditLevel auditLevel);
+    Task SetCompleted(Guid taskId, double executionTimeMs, AuditLevel auditLevel);
 
     /// <summary>
     /// Sets a task's status to manually cancelled by the user.
@@ -94,10 +95,11 @@ public interface ITaskStorage
     /// <param name="status">The new status of the task.</param>
     /// <param name="exception">Optional exception related to the task status change.</param>
     /// <param name="auditLevel">Audit level for this task (determines if audit record should be created).</param>
+    /// <param name="executionTimeMs">Optional execution time in milliseconds (used when completing tasks).</param>
     /// <param name="ct">Optional cancellation token.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
     Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception, AuditLevel auditLevel,
-                       CancellationToken ct = default);
+                       double? executionTimeMs = null, CancellationToken ct = default);
 
     /// <summary>
     /// Get the current run counter for this task.
@@ -110,10 +112,11 @@ public interface ITaskStorage
     /// Add the current run to the run counter for this task.
     /// </summary>
     /// <param name="taskId">The ID of the task.</param>
+    /// <param name="executionTimeMs">The execution time in milliseconds.</param>
     /// <param name="nextRun">The next run date.</param>
     /// <param name="auditLevel">Audit level for this task (determines if audit record should be created).</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    Task UpdateCurrentRun(Guid taskId, DateTimeOffset? nextRun, AuditLevel auditLevel);
+    Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel);
 
     /// <summary>
     /// Retrieves a task by its unique task key.
