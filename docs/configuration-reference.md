@@ -871,6 +871,7 @@ AddMonitoringApi(Action<EverTaskApiOptions> configure)
 | `AllowAnonymousReadAccess` | `bool` | `false` | Allow read-only endpoints without authentication |
 | `EnableCors` | `bool` | `true` | Enable CORS for API endpoints |
 | `CorsAllowedOrigins` | `string[]` | `[]` | CORS allowed origins (empty = allow all) |
+| `AllowedIpAddresses` | `string[]` | `[]` | IP address whitelist (empty = allow all IPs). Supports IPv4, IPv6, and CIDR notation |
 
 #### BasePath
 
@@ -1021,6 +1022,55 @@ options.CorsAllowedOrigins = builder.Environment.IsDevelopment()
 - Empty array = allow all origins (convenient for development)
 - Always restrict origins in production
 - Use HTTPS origins in production
+
+#### AllowedIpAddresses
+
+Restricts monitoring access to specific IP addresses or CIDR ranges. Applies to both API endpoints and SignalR hub.
+
+**Examples:**
+```csharp
+// Allow all IPs (default)
+options.AllowedIpAddresses = Array.Empty<string>();
+
+// Restrict to specific IPs (production)
+options.AllowedIpAddresses = new[]
+{
+    "192.168.1.100",        // Specific admin workstation
+    "10.0.0.0/8",           // Internal network (CIDR notation)
+    "172.16.0.0/12",        // Another internal range
+    "::1"                   // IPv6 localhost
+};
+
+// Reverse proxy scenario (public IP ranges)
+options.AllowedIpAddresses = new[]
+{
+    "203.0.113.0/24"        // Office public IP range
+};
+```
+
+**Features:**
+- Supports **IPv4** and **IPv6** addresses
+- Supports **CIDR notation** (e.g., `192.168.0.0/24`)
+- Checks `X-Forwarded-For` header first (reverse proxy support)
+- Returns **403 Forbidden** if IP not in whitelist
+- IP check runs **before authentication** (more efficient)
+
+**Security Notes:**
+- Empty array = **allow all IPs** (default, suitable for internal networks)
+- Always configure in production when exposed to internet
+- Works with reverse proxies (nginx, IIS, etc.)
+- Protects both API and SignalR hub endpoints
+- More efficient than firewall rules at application level
+
+**Reverse Proxy Configuration:**
+When behind a reverse proxy, ensure `X-Forwarded-For` header is set:
+```nginx
+# Nginx example
+location /monitoring {
+    proxy_pass http://localhost:5000/monitoring;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+```
 
 ### API Endpoints
 

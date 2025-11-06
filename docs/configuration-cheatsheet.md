@@ -134,6 +134,11 @@ await dispatcher.Dispatch(task, recurring => ..., auditLevel: AuditLevel.Minimal
     opt.CorsAllowedOrigins = new[] {           // Default: empty (allow all)
         "https://myapp.com"
     };
+    opt.AllowedIpAddresses = new[] {           // Default: empty (allow all IPs)
+        "192.168.1.100",                       // Specific IP
+        "10.0.0.0/8",                          // CIDR notation (entire network)
+        "::1"                                  // IPv6 localhost
+    };
 })
 ```
 
@@ -169,6 +174,14 @@ await dispatcher.Dispatch(task, recurring => ..., auditLevel: AuditLevel.Minimal
     opt.EnableUI = false;
     opt.EnableCors = true;
     opt.CorsAllowedOrigins = new[] { "https://dashboard.myapp.com" };
+})
+
+// IP Whitelist (production security)
+.AddMonitoringApi(opt => {
+    opt.AllowedIpAddresses = new[] {
+        "10.0.0.0/8",              // Internal network only
+        "203.0.113.100"            // Specific admin IP
+    };
 })
 ```
 

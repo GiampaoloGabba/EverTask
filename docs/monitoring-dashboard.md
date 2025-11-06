@@ -18,6 +18,7 @@ EverTask provides a comprehensive monitoring dashboard with REST API endpoints a
 - [Dashboard Features](#dashboard-features)
 - [Authentication](#authentication)
 - [Advanced Scenarios](#advanced-scenarios)
+- [Swagger Integration](#swagger-integration)
 - [Real-Time Monitoring](#real-time-monitoring)
 - [Security Best Practices](#security-best-practices)
 - [Integration Examples](#integration-examples)
@@ -138,6 +139,7 @@ All configuration is done through the `EverTaskApiOptions` class passed to `AddM
 | `AllowAnonymousReadAccess` | bool | `false` | Allow read-only access without auth |
 | `EnableCors` | bool | `true` | Enable CORS |
 | `CorsAllowedOrigins` | string[] | `[]` | CORS allowed origins (empty = allow all) |
+| `AllowedIpAddresses` | string[] | `[]` | IP whitelist (empty = allow all IPs). Supports IPv4/IPv6 and CIDR notation |
 
 ## API Endpoints
 
@@ -672,6 +674,20 @@ builder.Services.AddEverTaskMonitoringApiStandalone(options =>
 builder.Services.AddSingleton<ITaskStorage, MyCustomStorage>();
 ```
 
+## Swagger Integration
+
+When your application uses Swagger/OpenAPI, add the monitoring API endpoint to SwaggerUI:
+
+```csharp
+app.UseSwaggerUI(c =>
+{
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "My Application API");
+    c.SwaggerEndpoint("/swagger/monitoring/swagger.json", "EverTask Monitoring API");
+});
+```
+
+Result: A dropdown appears in Swagger UI to switch between your application API and EverTask Monitoring API.
+
 ## Real-Time Monitoring
 
 The dashboard integrates seamlessly with EverTask's SignalR monitoring.
@@ -791,7 +807,41 @@ Never hardcode credentials:
 });
 ```
 
-### 5. Limit Network Access
+### 5. Configure IP Whitelist
+
+Restrict access to specific IP addresses or CIDR ranges. This protects both the API and SignalR hub:
+
+```csharp
+.AddMonitoringApi(options =>
+{
+    // Only allow access from specific IPs
+    options.AllowedIpAddresses = new[]
+    {
+        "192.168.1.100",           // Specific IP
+        "10.0.0.0/8",              // Private network (CIDR notation)
+        "172.16.0.0/12",           // Another private range
+        "::1"                      // IPv6 localhost
+    };
+});
+```
+
+**Important notes:**
+- When `AllowedIpAddresses` is empty (default), **all IPs are allowed**
+- Supports IPv4, IPv6, and CIDR notation (e.g., `192.168.0.0/24`)
+- Checks `X-Forwarded-For` header first (reverse proxy scenarios)
+- Returns **403 Forbidden** if IP is not in whitelist
+- IP check happens **before** authentication (more efficient)
+
+**Reverse proxy example:**
+```csharp
+// If behind nginx/IIS, client IP comes from X-Forwarded-For header
+options.AllowedIpAddresses = new[]
+{
+    "203.0.113.0/24"  // Allow only from specific public IP range
+};
+```
+
+### 6. Limit Network Access
 
 Use firewall rules or network policies to restrict access:
 
@@ -809,7 +859,7 @@ Use firewall rules or network policies to restrict access:
 }
 ```
 
-### 6. Disable in Production (Optional)
+### 7. Disable in Production (Optional)
 
 If monitoring is only needed for development:
 
