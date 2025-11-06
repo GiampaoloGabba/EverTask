@@ -123,8 +123,8 @@ await dispatcher.Dispatch(task, recurring => ..., auditLevel: AuditLevel.Minimal
 ```csharp
 .AddMonitoringApi(opt => {
     // Note: BasePath and SignalRHubPath are now fixed and cannot be changed
-    // BasePath: "/monitoring" (readonly)
-    // SignalRHubPath: "/monitoring/hub" (readonly)
+    // BasePath: "/evertask-monitoring" (readonly)
+    // SignalRHubPath: "/evertask-monitoring/hub" (readonly)
     opt.EnableUI = true;                       // Default: true
     opt.EnableSwagger = false;                 // Default: false
     opt.Username = "admin";                    // Default: "admin"

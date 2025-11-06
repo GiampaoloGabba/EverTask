@@ -70,7 +70,7 @@ builder.Services.AddEverTask(opt =>
 .AddSqlServerStorage(connectionString)
 .AddMonitoringApi(options =>
 {
-    options.BasePath = "/monitoring";
+    options.BasePath = "/evertask-monitoring";
     options.EnableUI = true;
     options.Username = "admin";
     options.Password = "admin";
@@ -86,8 +86,8 @@ app.Run();
 ```
 
 Access the dashboard:
-- **Dashboard UI**: `http://localhost:5000/monitoring`
-- **API Endpoints**: `http://localhost:5000/monitoring/api`
+- **Dashboard UI**: `http://localhost:5000/evertask-monitoring`
+- **API Endpoints**: `http://localhost:5000/evertask-monitoring/api`
 - **Credentials**: `admin` / `admin`
 
 ## Configuration
@@ -99,8 +99,8 @@ All configuration is done through the `EverTaskApiOptions` class passed to `AddM
 ```csharp
 .AddMonitoringApi(options =>
 {
-    // Base path for API and UI (default: "/monitoring")
-    options.BasePath = "/monitoring";
+    // Base path for API and UI (default: "/evertask-monitoring")
+    options.BasePath = "/evertask-monitoring";
 
     // Enable/disable embedded dashboard (default: true)
     options.EnableUI = true;
@@ -113,7 +113,7 @@ All configuration is done through the `EverTaskApiOptions` class passed to `AddM
     options.EnableAuthentication = true;          // Default: true
 
     // SignalR hub path for real-time updates (fixed path)
-    // Note: SignalRHubPath is now fixed to "/monitoring/hub" and cannot be changed
+    // Note: SignalRHubPath is now fixed to "/evertask-monitoring/hub" and cannot be changed
 
     // CORS settings
     options.EnableCors = true;                     // Default: true
@@ -127,7 +127,7 @@ All configuration is done through the `EverTaskApiOptions` class passed to `AddM
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `BasePath` | string | `"/monitoring"` | Base path for API and UI |
+| `BasePath` | string | `"/evertask-monitoring"` | Base path for API and UI |
 | `EnableUI` | bool | `true` | Enable embedded dashboard UI |
 | `EnableSwagger` | bool | `false` | Enable Swagger/OpenAPI documentation |
 | `ApiBasePath` | string | `"{BasePath}/api"` | API base path (readonly, derived) |
@@ -138,7 +138,7 @@ All configuration is done through the `EverTaskApiOptions` class passed to `AddM
 | `JwtIssuer` | string | `"EverTask.Monitor.Api"` | JWT token issuer |
 | `JwtAudience` | string | `"EverTask.Monitor.Api"` | JWT token audience |
 | `JwtExpirationHours` | int | `8` | JWT token expiration time in hours |
-| `SignalRHubPath` | string | `"/monitoring/hub"` | SignalR hub path (readonly, fixed) |
+| `SignalRHubPath` | string | `"/evertask-monitoring/hub"` | SignalR hub path (readonly, fixed) |
 | `EnableAuthentication` | bool | `true` | Enable JWT authentication |
 | `EnableCors` | bool | `true` | Enable CORS |
 | `CorsAllowedOrigins` | string[] | `[]` | CORS allowed origins (empty = allow all) |
@@ -146,7 +146,7 @@ All configuration is done through the `EverTaskApiOptions` class passed to `AddM
 
 ## API Endpoints
 
-All endpoints are relative to `{BasePath}/api` (default: `/monitoring/api`).
+All endpoints are relative to `{BasePath}/api` (default: `/evertask-monitoring/api`).
 
 ### Tasks Endpoints
 
@@ -415,9 +415,9 @@ Get runtime configuration (no authentication required - needed for dashboard ini
 **Response:**
 ```json
 {
-  "apiBasePath": "/monitoring/api",
-  "uiBasePath": "/monitoring",
-  "signalRHubPath": "/monitoring/hub",
+  "apiBasePath": "/evertask-monitoring/api",
+  "uiBasePath": "/evertask-monitoring",
+  "signalRHubPath": "/evertask-monitoring/hub",
   "requireAuthentication": true,
   "uiEnabled": true
 }
@@ -500,7 +500,7 @@ Password: admin
 
 ### Authentication Flow
 
-1. **Login**: POST credentials to `/monitoring/api/auth/login` to obtain a JWT token
+1. **Login**: POST credentials to `/evertask-monitoring/api/auth/login` to obtain a JWT token
 2. **Use Token**: Include the token in the `Authorization: Bearer {token}` header for all API requests
 3. **Token Expiration**: Tokens expire after 8 hours by default (configurable via `JwtExpirationHours`)
 
@@ -546,7 +546,7 @@ export JWT_SECRET=your-strong-random-secret-min-256-bits
 
 ### Login Endpoint
 
-POST to `/monitoring/api/auth/login` to obtain a JWT token:
+POST to `/evertask-monitoring/api/auth/login` to obtain a JWT token:
 
 **Request:**
 ```json
@@ -571,7 +571,7 @@ Include the token in the `Authorization` header for all API requests:
 
 ```bash
 curl -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
-     http://localhost:5000/monitoring/api/tasks
+     http://localhost:5000/evertask-monitoring/api/tasks
 ```
 
 ### Disable Authentication
@@ -657,7 +657,7 @@ builder.Services.AddEverTask(opt =>
 .AddSqlServerStorage(connectionString)
 .AddMonitoringApi(options =>
 {
-    options.BasePath = "/monitoring";
+    options.BasePath = "/evertask-monitoring";
     options.EnableUI = true;
 
     if (builder.Environment.IsDevelopment())
@@ -682,7 +682,7 @@ builder.Services.AddEverTask(opt =>
 
 ### SignalR Hub Path
 
-The SignalR hub path is fixed to `/monitoring/hub` and cannot be customized. This ensures consistent integration between the API and the embedded dashboard UI.
+The SignalR hub path is fixed to `/evertask-monitoring/hub` and cannot be customized. This ensures consistent integration between the API and the embedded dashboard UI.
 
 ### Standalone API Registration
 
@@ -692,7 +692,7 @@ Use the monitoring API without EverTask integration (for custom scenarios):
 // In Program.cs
 builder.Services.AddEverTaskMonitoringApiStandalone(options =>
 {
-    options.BasePath = "/monitoring";
+    options.BasePath = "/evertask-monitoring";
     options.EnableUI = false;
 });
 
@@ -740,7 +740,7 @@ app.UseSwaggerUI(c =>
 
 When `EnableSwagger = true`:
 - EverTask creates a separate Swagger document at `/swagger/evertask-monitoring/swagger.json`
-- The document includes **only** EverTask monitoring endpoints (`/monitoring/api/*`)
+- The document includes **only** EverTask monitoring endpoints (`/evertask-monitoring/api/*`)
 - Your application's Swagger document (`v1`) **excludes** EverTask endpoints automatically
 - No namespace filtering or custom predicates required in your application
 
@@ -753,7 +753,7 @@ The dashboard integrates seamlessly with EverTask's SignalR monitoring.
 ### Automatic Configuration
 
 SignalR monitoring is automatically configured when you add the monitoring API.
-The hub path is fixed to `/monitoring/hub` and cannot be changed.
+The hub path is fixed to `/evertask-monitoring/hub` and cannot be changed.
 
 If SignalR monitoring wasn't previously registered, it's added automatically.
 
@@ -773,7 +773,7 @@ builder.Services.AddEverTask(opt =>
 })
 .AddMonitoringApi(options =>
 {
-    options.BasePath = "/monitoring";
+    options.BasePath = "/evertask-monitoring";
 });
 ```
 
@@ -790,11 +790,23 @@ The dashboard receives real-time events for:
 
 Connect to the SignalR hub from your own application:
 
+**With JWT Authentication** (when `EnableAuthentication = true`):
 ```javascript
 import * as signalR from '@microsoft/signalr';
 
+// First, obtain JWT token via login
+const loginResponse = await fetch('/evertask-monitoring/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'admin' })
+});
+const { token } = await loginResponse.json();
+
+// Connect to SignalR hub with JWT token
 const connection = new signalR.HubConnectionBuilder()
-    .withUrl('/monitoring/hub')
+    .withUrl('/evertask-monitoring/hub', {
+        accessTokenFactory: () => token  // Pass JWT token for authentication
+    })
     .withAutomaticReconnect()
     .build();
 
@@ -805,6 +817,22 @@ connection.on('EverTaskEvent', (eventData) => {
 
 await connection.start();
 ```
+
+**Without Authentication** (when `EnableAuthentication = false` or IP whitelist only):
+```javascript
+const connection = new signalR.HubConnectionBuilder()
+    .withUrl('/evertask-monitoring/hub')
+    .withAutomaticReconnect()
+    .build();
+
+connection.on('EverTaskEvent', (eventData) => {
+    console.log('Task event:', eventData);
+});
+
+await connection.start();
+```
+
+**Note:** The embedded React dashboard automatically handles JWT authentication. This is only needed for custom client integrations.
 
 ## Security Best Practices
 
@@ -963,7 +991,7 @@ builder.Services.AddEverTask(opt =>
 .AddMemoryStorage()
 .AddMonitoringApi(options =>
 {
-    options.BasePath = "/monitoring";
+    options.BasePath = "/evertask-monitoring";
     options.Username = "admin";
     options.Password = "admin";
 });
@@ -972,7 +1000,7 @@ var app = builder.Build();
 app.MapEverTaskApi();
 await app.StartAsync();
 
-Console.WriteLine("Dashboard: http://localhost:5000/monitoring");
+Console.WriteLine("Dashboard: http://localhost:5000/evertask-monitoring");
 Console.WriteLine("Credentials: admin / admin");
 
 // Your application logic...
@@ -1021,7 +1049,7 @@ builder.Services.AddEverTask(opt =>
 .AddSqlServerStorage(builder.Configuration.GetConnectionString("EverTaskDb")!)
 .AddMonitoringApi(options =>
 {
-    options.BasePath = "/monitoring";
+    options.BasePath = "/evertask-monitoring";
 });
 
 // Add web server for monitoring
@@ -1049,7 +1077,7 @@ Use the REST API with your own frontend:
 // TypeScript example
 import axios from 'axios';
 
-const API_BASE = 'http://localhost:5000/monitoring/api';
+const API_BASE = 'http://localhost:5000/evertask-monitoring/api';
 
 // Login to get JWT token
 const loginResponse = await axios.post(`${API_BASE}/auth/login`, {

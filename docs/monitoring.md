@@ -224,7 +224,7 @@ app.Run();
 
     <script>
         const connection = new signalR.HubConnectionBuilder()
-            .withUrl("/evertask/monitoring")
+            .withUrl("/evertask-monitoring/hub")
             .withAutomaticReconnect()
             .build();
 
@@ -302,7 +302,7 @@ public class EverTaskMonitorClient
 }
 
 // Usage
-var client = new EverTaskMonitorClient("https://localhost:5001/evertask/monitoring", logger);
+var client = new EverTaskMonitorClient("https://localhost:5001/evertask-monitoring/hub", logger);
 await client.StartAsync();
 ```
 
@@ -740,7 +740,7 @@ builder.Services.AddEverTask(opt =>
 .AddSqlServerStorage(connectionString)
 .AddMonitoringApi(options =>
 {
-    options.BasePath = "/monitoring";
+    options.BasePath = "/evertask-monitoring";
     options.EnableUI = true;
     options.Username = "admin";
     options.Password = "admin";
@@ -749,7 +749,7 @@ builder.Services.AddEverTask(opt =>
 var app = builder.Build();
 app.MapEverTaskApi();
 
-// Dashboard: http://localhost:5000/monitoring
+// Dashboard: http://localhost:5000/evertask-monitoring
 ```
 
 ## Future Monitoring Options

@@ -799,8 +799,8 @@ AddMonitoringApi(Action<EverTaskApiOptions> configure)
 ```csharp
 .AddMonitoringApi()
 
-// Dashboard: http://localhost:5000/monitoring
-// API:       http://localhost:5000/monitoring/api
+// Dashboard: http://localhost:5000/evertask-monitoring
+// API:       http://localhost:5000/evertask-monitoring/api
 // Credentials: admin / admin
 ```
 
@@ -833,7 +833,7 @@ AddMonitoringApi(Action<EverTaskApiOptions> configure)
 ```csharp
 .AddMonitoringApi(options =>
 {
-    options.BasePath = "/monitoring";
+    options.BasePath = "/evertask-monitoring";
     options.EnableUI = true;
 
     if (builder.Environment.IsDevelopment())
@@ -859,14 +859,14 @@ AddMonitoringApi(Action<EverTaskApiOptions> configure)
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `BasePath` | `string` | `"/monitoring"` | Base path for API and UI endpoints |
+| `BasePath` | `string` | `"/evertask-monitoring"` | Base path for API and UI endpoints |
 | `EnableUI` | `bool` | `true` | Enable embedded React dashboard |
 | `EnableSwagger` | `bool` | `false` | Enable Swagger/OpenAPI documentation |
 | `ApiBasePath` | `string` | `"{BasePath}/api"` | API endpoint path (readonly, derived from BasePath) |
 | `UIBasePath` | `string` | `"{BasePath}"` | UI endpoint path (readonly, derived from BasePath) |
 | `Username` | `string` | `"admin"` | JWT Authentication username |
 | `Password` | `string` | `"admin"` | JWT Authentication password (CHANGE IN PRODUCTION!) |
-| `SignalRHubPath` | `string` | `"/monitoring/hub"` | SignalR hub path for real-time updates (readonly, fixed) |
+| `SignalRHubPath` | `string` | `"/evertask-monitoring/hub"` | SignalR hub path for real-time updates (readonly, fixed) |
 | `EnableAuthentication` | `bool` | `true` | Enable JWT Authentication |
 | `EnableCors` | `bool` | `true` | Enable CORS for API endpoints |
 | `CorsAllowedOrigins` | `string[]` | `[]` | CORS allowed origins (empty = allow all) |
@@ -878,7 +878,7 @@ Sets the base path for both API and dashboard endpoints.
 
 **Examples:**
 ```csharp
-options.BasePath = "/monitoring";     // Dashboard: /monitoring, API: /monitoring/api
+options.BasePath = "/evertask-monitoring";     // Dashboard: /evertask-monitoring, API: /evertask-monitoring/api
 options.BasePath = "/admin/tasks";    // Dashboard: /admin/tasks, API: /admin/tasks/api
 options.BasePath = "/evertask";       // Dashboard: /evertask, API: /evertask/api
 ```
@@ -929,7 +929,7 @@ app.UseSwaggerUI(c =>
 **How It Works:**
 - Swagger document name: `evertask-monitoring`
 - Swagger JSON endpoint: `/swagger/evertask-monitoring/swagger.json`
-- Includes only EverTask monitoring controllers (`/monitoring/api/*`)
+- Includes only EverTask monitoring controllers (`/evertask-monitoring/api/*`)
 - Your application's Swagger document automatically excludes EverTask endpoints
 - No manual filtering or namespace predicates required
 
@@ -966,7 +966,7 @@ options.Password = configuration["Monitoring:Password"];
 
 #### EnableAuthentication
 
-Controls whether JWT Authentication is required for API endpoints.
+Controls whether JWT Authentication is required for API endpoints and SignalR hub.
 
 **Examples:**
 ```csharp
@@ -980,17 +980,35 @@ options.EnableAuthentication = false;
 options.EnableAuthentication = !builder.Environment.IsDevelopment();
 ```
 
+**Protection Scope:**
+- **API endpoints**: All `/api/*` endpoints (except login and config)
+- **SignalR hub**: Real-time monitoring hub at `/hub`
+- **UI**: Not protected by JWT (only IP whitelist, see `AllowedIpAddresses`)
+
+**Always Accessible (No JWT Required):**
+- `/api/config` - Dashboard configuration endpoint
+- `/api/auth/login` - Login endpoint for obtaining JWT
+- `/api/auth/validate` - Token validation endpoint
+- UI static files (HTML, JS, CSS)
+
+**JWT Authentication Flow:**
+1. Client authenticates via `/api/auth/login` with username/password
+2. Server returns JWT token
+3. Client includes token in subsequent requests:
+   - **API**: `Authorization: Bearer <token>` header
+   - **SignalR**: `accessTokenFactory` option or `?access_token=<token>` query string
+
 **Notes:**
-- The `/config` endpoint is always accessible without authentication (dashboard needs it)
-- The `/api/auth/login` and `/api/auth/validate` endpoints are always accessible
-- When disabled, all endpoints are publicly accessible
+- When disabled, all API and hub endpoints are publicly accessible (only IP whitelist applies)
+- UI is always accessible (relies on IP whitelist for protection)
+- JWT tokens expire after 8 hours by default (see `JwtExpirationHours`)
 
 #### SignalRHubPath
 
-The SignalR hub path is now fixed to `/monitoring/hub` and cannot be changed.
+The SignalR hub path is now fixed to `/evertask-monitoring/hub` and cannot be changed.
 
 **Notes:**
-- The hub path is readonly and set to `/monitoring/hub`
+- The hub path is readonly and set to `/evertask-monitoring/hub`
 - SignalR monitoring is automatically configured if not already registered
 - Dashboard automatically uses this fixed path for real-time updates
 
@@ -1082,15 +1100,15 @@ options.AllowedIpAddresses = new[]
 When behind a reverse proxy, ensure `X-Forwarded-For` header is set:
 ```nginx
 # Nginx example
-location /monitoring {
-    proxy_pass http://localhost:5000/monitoring;
+location /evertask-monitoring {
+    proxy_pass http://localhost:5000/evertask-monitoring;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 }
 ```
 
 ### API Endpoints
 
-Once configured, the monitoring API provides REST endpoints for task querying, statistics, and analytics. All endpoints are relative to `{BasePath}/api` (default: `/monitoring/api`).
+Once configured, the monitoring API provides REST endpoints for task querying, statistics, and analytics. All endpoints are relative to `{BasePath}/api` (default: `/evertask-monitoring/api`).
 
 **Key Endpoints:**
 - `GET /tasks` - Paginated task list with filtering
@@ -1162,7 +1180,7 @@ The monitoring API automatically configures SignalR monitoring if it hasn't been
     opt.IncludeExecutionLogs = true;  // Include logs in SignalR events
 })
 .AddMonitoringApi()
-// Note: SignalRHubPath is now fixed to "/monitoring/hub" and cannot be changed
+// Note: SignalRHubPath is now fixed to "/evertask-monitoring/hub" and cannot be changed
 ```
 
 ### AddSignalRMonitoring
