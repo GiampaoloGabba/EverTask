@@ -38,13 +38,17 @@ public class MonitoringTestWebAppFactory : WebApplicationFactory<TestProgram>
         builder.ConfigureServices(services =>
         {
             // Add EverTask with memory storage
-            services.AddEverTask(cfg => cfg
+            var builder = services.AddEverTask(cfg => cfg
                 .RegisterTasksFromAssembly(typeof(SampleTask).Assembly)
                 .SetChannelOptions(10)
                 .SetMaxDegreeOfParallelism(5)
                 .SetDefaultRetryPolicy(new EverTask.Resilience.LinearRetryPolicy(1, TimeSpan.FromMilliseconds(1))))
                 .AddMemoryStorage()
                 .AddSignalRMonitoring(); // Add SignalR monitoring for real-time events
+
+            // Add empty queues for testing queues without tasks
+            builder.AddQueue("reports", queueCfg => queueCfg.MaxDegreeOfParallelism = 3);
+            builder.AddQueue("notifications", queueCfg => queueCfg.MaxDegreeOfParallelism = 2);
 
             // Remove WorkerService for API tests unless explicitly enabled
             // This prevents seeded tasks from being processed and changing state during tests

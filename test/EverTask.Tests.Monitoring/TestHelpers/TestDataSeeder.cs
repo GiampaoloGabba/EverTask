@@ -202,4 +202,73 @@ public class TestDataSeeder
             }).ToList()
         };
     }
+
+    /// <summary>
+    /// Create a task with execution logs for testing
+    /// </summary>
+    public async Task<Guid> CreateTaskWithLogsAsync(
+        int logCount = 10,
+        string level = "Information",
+        bool includeExceptions = false,
+        QueuedTaskStatus status = QueuedTaskStatus.Completed)
+    {
+        var taskId = Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow;
+
+        var task = new QueuedTask
+        {
+            Id = taskId,
+            Type = typeof(SampleTask).AssemblyQualifiedName!,
+            Handler = typeof(SampleTaskHandler).AssemblyQualifiedName!,
+            Request = "{\"Message\":\"Test task with logs\"}",
+            Status = status,
+            QueueName = "default",
+            CreatedAtUtc = now.AddMinutes(-5),
+            LastExecutionUtc = now.AddMinutes(-1),
+            StatusAudits = new List<StatusAudit>
+            {
+                new() { Id = 1, QueuedTaskId = taskId, NewStatus = QueuedTaskStatus.Queued, UpdatedAtUtc = now.AddMinutes(-5) },
+                new() { Id = 2, QueuedTaskId = taskId, NewStatus = QueuedTaskStatus.InProgress, UpdatedAtUtc = now.AddMinutes(-4) },
+                new() { Id = 3, QueuedTaskId = taskId, NewStatus = status, UpdatedAtUtc = now.AddMinutes(-1) }
+            },
+            RunsAudits = new List<RunsAudit>
+            {
+                new()
+                {
+                    Id = 1,
+                    QueuedTaskId = taskId,
+                    Status = status,
+                    ExecutedAt = now.AddMinutes(-1)
+                }
+            }
+        };
+
+        await _storage.Persist(task);
+
+        // Create execution logs
+        var logs = new List<TaskExecutionLog>();
+        for (int i = 0; i < logCount; i++)
+        {
+            var log = new TaskExecutionLog
+            {
+                Id = Guid.NewGuid(),
+                TaskId = taskId,
+                TimestampUtc = now.AddMinutes(-4).AddSeconds(i * 5),
+                Level = level,
+                Message = $"Test log message #{i + 1} at level {level}",
+                SequenceNumber = i
+            };
+
+            if (includeExceptions && i == logCount - 1)
+            {
+                log.ExceptionDetails = "System.InvalidOperationException: Test exception\n   at TestMethod()";
+            }
+
+            logs.Add(log);
+        }
+
+        await _storage.SaveExecutionLogsAsync(taskId, logs, CancellationToken.None);
+
+        return taskId;
+    }
 }
