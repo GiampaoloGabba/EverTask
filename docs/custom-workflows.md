@@ -1,8 +1,8 @@
 ---
 layout: default
 title: Custom Workflows
-parent: Advanced Features
-nav_order: 4
+parent: Task Orchestration
+nav_order: 2
 ---
 
 # Custom Workflows

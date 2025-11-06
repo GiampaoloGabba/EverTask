@@ -61,15 +61,16 @@ await _dispatcher.DispatchAsync(new SendEmailTask("user@example.com", "Hello!"))
 ### Advanced Topics
 - [Recurring Tasks](recurring-tasks.md) - Schedule jobs with the fluent API or cron expressions
 - [Resilience](resilience.md) - Handle failures with retry policies and timeouts
+- **[Scalability](scalability.md)** - Performance and scalability features
+  - [Multi-Queue Support](multi-queue.md) - Workload isolation by priority or domain
+  - [Sharded Scheduler](sharded-scheduler.md) - Extreme load support (>10k tasks/sec)
 - **[Monitoring](monitoring.md)** - Complete monitoring guide
   - [Custom Event Monitoring](monitoring-events.md) - Event system and integrations
   - [Monitoring Dashboard](monitoring-dashboard.md) - Web dashboard and REST API
   - [API Reference](monitoring-api-reference.md) - Complete API documentation
   - [Dashboard UI Guide](monitoring-dashboard-ui.md) - UI features and screenshots
   - [Task Execution Logs](monitoring-logs.md) - Log capture and persistence
-- **[Advanced Features](advanced-features.md)** - Scalability and orchestration
-  - [Multi-Queue Support](multi-queue.md) - Workload isolation by priority or domain
-  - [Sharded Scheduler](sharded-scheduler.md) - Extreme load support (>10k tasks/sec)
+- **[Task Orchestration](advanced-features.md)** - Coordinate complex workflows
   - [Task Orchestration](task-orchestration.md) - Continuations, cancellation, rescheduling
   - [Custom Workflows](custom-workflows.md) - Build complex task pipelines
 - [Architecture](architecture.md) - How EverTask works under the hood

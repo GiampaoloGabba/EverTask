@@ -1,66 +1,38 @@
 ---
 layout: default
-title: Advanced Features
-nav_order: 11
+title: Task Orchestration
+nav_order: 8
 has_children: true
 ---
 
-# Advanced Features
+# Task Orchestration
 
-This guide covers advanced EverTask features for complex scenarios, high-load systems, and sophisticated workflows.
+This guide covers techniques for coordinating and managing complex task execution workflows. Learn how to chain tasks, build multi-step processes, and orchestrate sophisticated business workflows.
 
 ## Overview
 
-EverTask provides powerful advanced capabilities for building resilient, scalable background task systems:
+EverTask provides powerful capabilities for building complex, multi-step workflows:
 
-- **[Multi-Queue Support](multi-queue.md)**: Isolate workloads and manage priorities with multiple execution queues
-- **[Sharded Scheduler](sharded-scheduler.md)**: Scale to extreme loads with parallel scheduling infrastructure
 - **[Task Orchestration](task-orchestration.md)**: Chain tasks, handle cancellation, and reschedule dynamically
 - **[Custom Workflows](custom-workflows.md)**: Build sophisticated business processes with state machines and sagas
 
-## When to Use Advanced Features
+## When to Use Task Orchestration
 
-Most applications do well with EverTask's default configuration. Consider these advanced features when you have specific needs:
+Most applications start with simple, independent tasks. Consider orchestration when you need to:
 
-### Multi-Queue Support
-Use when you need to:
-- Separate critical operations from background tasks
-- Control resource allocation per workload type
-- Optimize parallelism for different task characteristics (I/O vs CPU-bound)
+### Task Chaining
+- Execute multiple tasks in sequence
+- Pass data between related tasks
+- Branch workflows based on task results
+- Implement conditional task execution
 
-### Sharded Scheduler
-Use when you're experiencing:
-- 10,000+ schedule calls per second
-- Lock contention in profiling
-- 100,000+ concurrently scheduled tasks
-
-### Task Orchestration
-Use when you need to:
-- Chain multiple tasks in sequence
-- Cancel long-running operations
-- Implement complex multi-step workflows
-
-### Custom Workflows
-Use when building:
-- Multi-stage business processes
-- Saga patterns with compensation
+### Complex Workflows
+- Multi-stage business processes (order processing, payment flows)
+- Saga patterns with compensation and rollback
 - State machine-based workflows
+- Parallel task execution with coordination
 
 ## Best Practices
-
-### Multi-Queue
-
-1. **Profile Before Optimizing**: Stick with the default queue unless you have real performance needs
-2. **Separate by Characteristics**: Group tasks by I/O vs CPU, priority, or how critical they are
-3. **Monitor Queue Depths**: Watch how full your queues get and adjust capacities accordingly
-4. **Test Fallback Behavior**: Make sure queues degrade gracefully when full
-
-### Sharded Scheduler
-
-1. **Measure First**: Don't use this unless you've measured actual performance problems
-2. **Start Conservative**: Begin with 4-8 shards and increase only if needed
-3. **Monitor Metrics**: Keep an eye on scheduler throughput and lock contention
-4. **Consider CPU Count**: Shard count usually makes sense when aligned with CPU cores
 
 ### Continuations
 
@@ -78,7 +50,9 @@ Use when building:
 
 ## Next Steps
 
+- **[Task Orchestration](task-orchestration.md)** - Continuations, cancellation, and rescheduling
+- **[Custom Workflows](custom-workflows.md)** - Build sophisticated workflows
 - **[Resilience](resilience.md)** - Retry policies and error handling
+- **[Scalability](scalability.md)** - Multi-queue support and sharded scheduler
 - **[Monitoring](monitoring.md)** - Track task execution
 - **[Configuration Reference](configuration-reference.md)** - All configuration options
-- **[Architecture](architecture.md)** - How EverTask works internally

@@ -1,8 +1,8 @@
 ---
 layout: default
 title: Task Orchestration
-parent: Advanced Features
-nav_order: 3
+parent: Task Orchestration
+nav_order: 1
 ---
 
 # Task Orchestration

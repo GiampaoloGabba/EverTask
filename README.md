@@ -121,7 +121,8 @@ await _dispatcher.Dispatch(new SendWelcomeEmailTask(dto.Email, dto.Name));
 - **[Recurring Tasks](https://GiampaoloGabba.github.io/EverTask/recurring-tasks.html)** - Fluent scheduling API, cron expressions, idempotent registration
 - **[Resilience & Error Handling](https://GiampaoloGabba.github.io/EverTask/resilience.html)** - Retry policies, timeouts, CancellationToken usage
 - **[Monitoring](https://GiampaoloGabba.github.io/EverTask/monitoring.html)** - Complete monitoring guide (Dashboard, Events, and Logs)
-- **[Advanced Features](https://GiampaoloGabba.github.io/EverTask/advanced-features.html)** - Multi-queue, sharded scheduler, task orchestration, and custom workflows
+- **[Scalability](https://GiampaoloGabba.github.io/EverTask/scalability.html)** - Multi-queue support and sharded scheduler for high-load scenarios
+- **[Task Orchestration](https://GiampaoloGabba.github.io/EverTask/advanced-features.html)** - Chain tasks, build workflows, and coordinate complex processes
 - **[Storage Configuration](https://GiampaoloGabba.github.io/EverTask/storage.html)** - SQL Server, SQLite, In-Memory, custom implementations
 - **[Configuration](https://GiampaoloGabba.github.io/EverTask/configuration.html)** - Configure EverTask (Reference + Cheatsheet)
 - **[Architecture & Internals](https://GiampaoloGabba.github.io/EverTask/architecture.html)** - How EverTask works under the hood

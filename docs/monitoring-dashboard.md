@@ -41,11 +41,11 @@ The monitoring system can be used in two modes:
 - **Full Mode** (default): API + embedded dashboard UI
 - **API-Only Mode**: REST API only, for custom frontend integrations
 
-### Version 3.2 - Feature Complete (Read-Only Monitoring)
+### Version 3.3 - Feature Complete (Read-Only Monitoring)
 
-The dashboard and API are **feature complete for read-only monitoring** in version 3.2. This release provides comprehensive observability and analytics capabilities for complete visibility into your task execution pipeline.
+The dashboard and API are **feature complete for read-only monitoring** in version 3.3. This release provides comprehensive observability and analytics capabilities for complete visibility into your task execution pipeline.
 
-**Current Capabilities (v3.2):**
+**Current Capabilities (v3.3):**
 - ✅ Complete read-only monitoring and observability
 - ✅ Real-time task status updates via SignalR with event-driven cache invalidation
 - ✅ Comprehensive analytics (success rates, execution times, task distribution)

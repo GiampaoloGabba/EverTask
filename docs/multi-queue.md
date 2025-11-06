@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Multi-Queue Support
-parent: Advanced Features
+parent: Scalability
 nav_order: 1
 ---
 

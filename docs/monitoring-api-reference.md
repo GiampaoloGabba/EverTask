@@ -9,7 +9,7 @@ nav_order: 3
 
 Complete REST API documentation for the EverTask Monitoring Dashboard.
 
-> **Note**: All endpoints are **read-only** in v3.2. Task management endpoints (POST/PUT/DELETE operations for task control) will be added in future releases.
+> **Note**: All endpoints are **read-only** in v3.3. Task management endpoints (POST/PUT/DELETE operations for task control) will be added in future releases.
 
 ## Table of Contents
 

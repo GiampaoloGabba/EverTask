@@ -9,7 +9,7 @@ nav_order: 4
 
 The EverTask dashboard is a modern React interface that gives you complete visibility into your background tasks. Think of it as your mission control for monitoring task execution, debugging failures, and understanding performance patterns.
 
-> **Note**: The dashboard is currently **read-only** (v3.2). You can view, analyze, filter, and export all task data, but task management operations (stop, restart, cancel) will be added in future releases.
+> **Note**: The dashboard is currently **read-only** (v3.3). You can view, analyze, filter, and export all task data, but task management operations (stop, restart, cancel) will be added in future releases.
 
 **Quick Access:**
 ```

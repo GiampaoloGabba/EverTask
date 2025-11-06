@@ -339,4 +339,4 @@ else
 
 - [Full Configuration Reference](configuration-reference.md) - Detailed documentation
 - [Getting Started](getting-started.md) - Setup guide
-- [Advanced Features](advanced-features.md) - Multi-queue and sharded scheduler
+- [Scalability](scalability.md) - Multi-queue and sharded scheduler

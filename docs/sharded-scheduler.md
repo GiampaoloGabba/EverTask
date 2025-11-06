@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Sharded Scheduler
-parent: Advanced Features
+parent: Scalability
 nav_order: 2
 ---
 

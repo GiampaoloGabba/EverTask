@@ -377,7 +377,7 @@ await _dispatcher.Dispatch(
     taskKey: "daily-report"); // Prevents duplicate registration
 ```
 
-See [Recurring Tasks - Idempotent Registration](recurring-tasks.md#idempotent-task-registration) for more details.
+See [Idempotent Task Registration](recurring-tasks/idempotent-registration.md) for more details.
 
 ## Performance Considerations
 
@@ -425,6 +425,7 @@ Check out [Sharded Scheduler](sharded-scheduler.md) for the full details.
 ## Next Steps
 
 - **[Recurring Tasks](recurring-tasks.md)** - Schedule tasks to run repeatedly
-- **[Advanced Features](advanced-features.md)** - Multi-queue, continuations, sharded scheduler
+- **[Task Orchestration](advanced-features.md)** - Continuations and workflow patterns
+- **[Scalability](scalability.md)** - Multi-queue and sharded scheduler
 - **[Resilience](resilience.md)** - Configure retry policies and error handling
 - **[Monitoring](monitoring.md)** - Track task execution with events

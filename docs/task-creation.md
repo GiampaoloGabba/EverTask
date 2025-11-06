@@ -427,4 +427,5 @@ public override async Task Handle(BatchProcessTask task, CancellationToken cance
 - **[Task Dispatching](task-dispatching.md)** - Learn how to dispatch tasks
 - **[Recurring Tasks](recurring-tasks.md)** - Schedule recurring tasks
 - **[Resilience](resilience.md)** - Configure retry policies and timeouts
-- **[Advanced Features](advanced-features.md)** - Multi-queue, continuations, and more
+- **[Task Orchestration](advanced-features.md)** - Continuations and workflow patterns
+- **[Scalability](scalability.md)** - Multi-queue support

@@ -1,11 +1,11 @@
 ---
 layout: default
-title: Getting Started
+title: Task Operations
 nav_order: 2
 has_children: true
 ---
 
-# Getting Started with EverTask
+# Task Operations
 
 Let's get EverTask running in your .NET application.
 
@@ -198,7 +198,8 @@ Now that you've got EverTask running, dive into these topics:
 - **[Task Creation](task-creation.md)** - Lifecycle hooks, custom timeouts, and retry policies
 - **[Task Dispatching](task-dispatching.md)** - Delayed and scheduled execution
 - **[Recurring Tasks](recurring-tasks.md)** - Fluent scheduling API with cron support
-- **[Advanced Features](advanced-features.md)** - Multi-queue, sharded scheduler, and continuations
+- **[Task Orchestration](advanced-features.md)** - Continuations and workflow patterns
+- **[Scalability](scalability.md)** - Multi-queue and sharded scheduler
 - **[Monitoring](monitoring.md)** - Track task execution with events and SignalR integration
 - **[Storage Configuration](storage.md)** - SQL Server, SQLite, and custom storage implementations
 

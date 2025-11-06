@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Architecture
-nav_order: 15
+nav_order: 10
 ---
 
 # Architecture & Internals
@@ -620,6 +620,6 @@ Extension points let you adapt EverTask to your specific requirements without fo
 ## Next Steps
 
 - **[Configuration Reference](configuration-reference.md)** - Tune performance settings
-- **[Advanced Features](advanced-features.md)** - Multi-queue and sharded scheduler
+- **[Scalability](scalability.md)** - Multi-queue and sharded scheduler
 - **[Getting Started](getting-started.md)** - Setup guide
 - **[Resilience](resilience.md)** - Error handling and retries

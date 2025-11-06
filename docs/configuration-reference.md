@@ -188,7 +188,7 @@ opt.SetDefaultAuditLevel(AuditLevel.None)
 - For tasks running every 5 minutes: Full = ~2,304 records/day, Minimal = ~576 records/day
 - You can override this per task when dispatching
 - Use lower levels (Minimal/ErrorsOnly/None) for high-frequency recurring tasks
-- See [Audit Configuration](storage.md#audit-configuration) for detailed usage guide
+- See [Audit Configuration](storage/audit-configuration.md) for detailed usage guide
 
 ### SetAuditRetentionPolicy
 
@@ -1636,6 +1636,6 @@ opt.UseShardedScheduler(Environment.ProcessorCount)
 ## Next Steps
 
 - **[Getting Started](getting-started.md)** - Setup guide
-- **[Advanced Features](advanced-features.md)** - Multi-queue and sharded scheduler
+- **[Scalability](scalability.md)** - Multi-queue and sharded scheduler
 - **[Resilience](resilience.md)** - Retry policies and timeouts
 - **[Storage](storage.md)** - Storage options and configuration
