@@ -25,8 +25,8 @@ public class MonitoringTestWebAppFactory : WebApplicationFactory<TestProgram>
         Action<IServiceCollection>? configureServices = null)
     {
         _requireAuthentication = requireAuthentication;
-        _enableWorker = enableWorker;
-        _configureServices = configureServices;
+        _enableWorker          = enableWorker;
+        _configureServices     = configureServices;
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -39,15 +39,17 @@ public class MonitoringTestWebAppFactory : WebApplicationFactory<TestProgram>
         {
             // Add EverTask with memory storage
             var builder = services.AddEverTask(cfg => cfg
-                .RegisterTasksFromAssembly(typeof(SampleTask).Assembly)
-                .SetChannelOptions(10)
-                .SetMaxDegreeOfParallelism(5)
-                .SetDefaultRetryPolicy(new EverTask.Resilience.LinearRetryPolicy(1, TimeSpan.FromMilliseconds(1))))
-                .AddMemoryStorage()
-                .AddSignalRMonitoring(); // Add SignalR monitoring for real-time events
+                                                      .RegisterTasksFromAssembly(typeof(SampleTask).Assembly)
+                                                      .SetChannelOptions(10)
+                                                      .SetMaxDegreeOfParallelism(5)
+                                                      .SetDefaultRetryPolicy(
+                                                          new EverTask.Resilience.LinearRetryPolicy(1,
+                                                              TimeSpan.FromMilliseconds(1))))
+                                  .AddMemoryStorage()
+                                  .AddSignalRMonitoring(); // Add SignalR monitoring for real-time events
 
             // Add empty queues for testing queues without tasks
-            builder.AddQueue("reports", queueCfg => queueCfg.MaxDegreeOfParallelism = 3);
+            builder.AddQueue("reports", queueCfg => queueCfg.MaxDegreeOfParallelism       = 3);
             builder.AddQueue("notifications", queueCfg => queueCfg.MaxDegreeOfParallelism = 2);
 
             // Remove WorkerService for API tests unless explicitly enabled
@@ -71,11 +73,11 @@ public class MonitoringTestWebAppFactory : WebApplicationFactory<TestProgram>
             services.AddEverTaskMonitoringApiStandalone(options =>
             {
                 // BasePath and SignalRHubPath are now fixed to "/monitoring" and "/monitoring/hub"
-                options.EnableUI = false; // Disable UI for tests
-                options.RequireAuthentication = _requireAuthentication;
-                options.Username = "testuser";
-                options.Password = "testpass";
-                options.EnableCors = true;
+                options.EnableUI             = false; // Disable UI for tests
+                options.EnableAuthentication = _requireAuthentication;
+                options.Username             = "testuser";
+                options.Password             = "testpass";
+                options.EnableCors           = true;
             });
 
             // Allow custom service configuration
@@ -88,17 +90,13 @@ public class MonitoringTestWebAppFactory : WebApplicationFactory<TestProgram>
             using (var scope = app.ApplicationServices.CreateScope())
             {
                 var storage = scope.ServiceProvider.GetRequiredService<ITaskStorage>();
-                var seeder = new TestDataSeeder(storage);
+                var seeder  = new TestDataSeeder(storage);
                 seeder.SeedAsync().GetAwaiter().GetResult();
             }
 
             app.UseRouting();
 
-            // Add BasicAuthenticationMiddleware (handles both IP whitelist and authentication)
-            // Let the middleware resolve options from DI automatically
-            app.UseMiddleware<Monitor.Api.Middleware.BasicAuthenticationMiddleware>();
-
-            // Map EverTask API
+            // Map EverTask API (middleware is auto-registered via StartupFilter)
             app.UseEndpoints(endpoints =>
             {
                 endpoints.MapEverTaskApi();

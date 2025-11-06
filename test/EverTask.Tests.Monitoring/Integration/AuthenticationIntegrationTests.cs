@@ -1,3 +1,5 @@
+using System.Net.Http.Json;
+using EverTask.Monitor.Api.DTOs.Auth;
 using EverTask.Tests.Monitoring.TestHelpers;
 
 namespace EverTask.Tests.Monitoring.Integration;
@@ -46,9 +48,16 @@ public class AuthenticationIntegrationTests : IAsyncLifetime
     [Fact]
     public async Task Should_allow_access_with_valid_credentials()
     {
-        // Arrange
-        var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes("testuser:testpass"));
-        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", credentials);
+        // Arrange - First login to get JWT token
+        var loginRequest = new { username = "testuser", password = "testpass" };
+        var loginResponse = await _client.PostAsJsonAsync("/monitoring/api/auth/login", loginRequest);
+        loginResponse.EnsureSuccessStatusCode();
+
+        var loginResult = await DeserializeResponseAsync<LoginResponse>(loginResponse);
+        var token = loginResult!.Token;
+
+        // Set JWT token in Authorization header
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
         var endpoints = new[]
         {
@@ -69,9 +78,9 @@ public class AuthenticationIntegrationTests : IAsyncLifetime
     [Fact]
     public async Task Should_reject_invalid_credentials()
     {
-        // Arrange
-        var invalidCredentials = Convert.ToBase64String(Encoding.UTF8.GetBytes("wronguser:wrongpass"));
-        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", invalidCredentials);
+        // Arrange - Use an invalid/malformed JWT token
+        var invalidToken = "invalid.jwt.token.here";
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", invalidToken);
 
         // Act
         var response = await _client.GetAsync("/monitoring/api/dashboard/overview");
@@ -102,7 +111,7 @@ public class AuthenticationIntegrationTests : IAsyncLifetime
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
         response.Headers.WwwAuthenticate.ShouldNotBeEmpty();
-        response.Headers.WwwAuthenticate.ToString().ShouldContain("Basic");
+        response.Headers.WwwAuthenticate.ToString().ShouldContain("Bearer");
     }
 
     [Fact]
