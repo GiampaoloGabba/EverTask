@@ -5,6 +5,7 @@ import { configService } from './services/config';
 import { useConfigStore } from './stores/configStore';
 import { signalRService } from './services/signalr';
 import { useAuthStore } from './stores/authStore';
+import { useSignalRRefresh } from './hooks/useSignalRRefresh';
 import router from './router';
 import { Toaster } from '@/components/ui/toaster';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
@@ -19,10 +20,14 @@ const queryClient = new QueryClient({
   },
 });
 
-function App() {
+// AppContent must be inside QueryClientProvider to use useSignalRRefresh
+function AppContent() {
   const [isConfigLoaded, setIsConfigLoaded] = useState(false);
   const setConfig = useConfigStore((state) => state.setConfig);
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+
+  // Activate SignalR-based cache invalidation (requires QueryClientProvider)
+  useSignalRRefresh();
 
   useEffect(() => {
     // Fetch configuration on app startup
@@ -65,9 +70,17 @@ function App() {
   }
 
   return (
-    <QueryClientProvider client={queryClient}>
+    <>
       <RouterProvider router={router} />
       <Toaster />
+    </>
+  );
+}
+
+function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <AppContent />
     </QueryClientProvider>
   );
 }

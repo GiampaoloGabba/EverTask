@@ -14,21 +14,11 @@ import {
 } from '@/components/ui/select';
 import { TaskFilter, QueuedTaskStatus, PaginationParams } from '@/types/task.types';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { AlertCircle, Search, RefreshCw } from 'lucide-react';
+import { AlertCircle, Search } from 'lucide-react';
 
 type TaskTab = 'all' | 'standard' | 'recurring' | 'failed';
 
 const STORAGE_KEY_TAB = 'tasks-page-active-tab';
-const STORAGE_KEY_REFRESH_INTERVAL = 'tasks-page-refresh-interval';
-
-// Refresh interval options (in milliseconds, or false to disable)
-const REFRESH_INTERVALS = [
-  { value: '5000', label: '5 seconds' },
-  { value: '10000', label: '10 seconds' },
-  { value: '30000', label: '30 seconds' },
-  { value: '60000', label: '1 minute' },
-  { value: 'false', label: 'Disabled' },
-];
 
 // Status options for filter
 const STATUS_OPTIONS = [
@@ -54,22 +44,10 @@ export function TasksPage() {
   const [queueFilter, setQueueFilter] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState<string>('');
 
-  // Refresh interval state (load from localStorage, default to 10 seconds)
-  const [refreshInterval, setRefreshInterval] = useState<number | false>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY_REFRESH_INTERVAL);
-    if (saved === 'false') return false;
-    return saved ? parseInt(saved) : 10000;
-  });
-
   // Save to sessionStorage when changed
   useEffect(() => {
     sessionStorage.setItem(STORAGE_KEY_TAB, activeTab);
   }, [activeTab]);
-
-  // Save refresh interval to localStorage when changed
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_REFRESH_INTERVAL, String(refreshInterval));
-  }, [refreshInterval]);
 
   const [pagination, setPagination] = useState<PaginationParams>({
     page: 1,
@@ -120,10 +98,8 @@ export function TasksPage() {
   };
 
   const effectiveFilters = getEffectiveFilters();
-  const { data, isLoading, isError } = useTasks(effectiveFilters, pagination, {
-    refetchInterval: refreshInterval,
-  });
-  const { data: counts } = useTaskCounts({ refetchInterval: refreshInterval });
+  const { data, isLoading, isError } = useTasks(effectiveFilters, pagination);
+  const { data: counts } = useTaskCounts();
   const { data: queues } = useQueues();
 
   const handlePageChange = (newPage: number) => {
@@ -155,44 +131,14 @@ export function TasksPage() {
     setPagination((prev) => ({ ...prev, page: 1 }));
   };
 
-  const handleRefreshIntervalChange = (value: string) => {
-    if (value === 'false') {
-      setRefreshInterval(false);
-    } else {
-      setRefreshInterval(parseInt(value));
-    }
-  };
-
   return (
     <div className="space-y-6">
-      {/* Header with Refresh Control */}
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Tasks</h1>
-          <p className="text-muted-foreground">
-            View and manage all background tasks
-          </p>
-        </div>
-
-        {/* Auto-Refresh Interval */}
-        <div className="flex items-center gap-2 min-w-[200px]">
-          <span className="text-sm text-muted-foreground whitespace-nowrap">Auto-refresh:</span>
-          <Select value={String(refreshInterval)} onValueChange={handleRefreshIntervalChange}>
-            <SelectTrigger className="w-[150px] h-9">
-              <div className="flex items-center gap-1.5 whitespace-nowrap">
-                <RefreshCw className="h-3.5 w-3.5 flex-shrink-0" />
-                <SelectValue />
-              </div>
-            </SelectTrigger>
-            <SelectContent>
-              {REFRESH_INTERVALS.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+      {/* Header */}
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">Tasks</h1>
+        <p className="text-muted-foreground">
+          View and manage all background tasks
+        </p>
       </div>
 
       {isError && (

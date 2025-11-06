@@ -12,6 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { useAuthStore } from '@/stores/authStore';
 import { useRealtimeStore } from '@/stores/realtimeStore';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { RefreshControl } from './RefreshControl';
 import logoIcon from '@/assets/logo-icon.png';
 import logoFull from '@/assets/logo-full.png';
 
@@ -89,6 +90,8 @@ export function Header() {
         </div>
 
         <div className="ml-auto flex items-center gap-4">
+          <RefreshControl />
+
           {getConnectionBadge()}
 
           <DropdownMenu>

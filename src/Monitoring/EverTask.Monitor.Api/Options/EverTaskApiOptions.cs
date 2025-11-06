@@ -112,4 +112,25 @@ public class EverTaskApiOptions
     /// Example: new[] { "192.168.1.100", "10.0.0.0/8", "::1" }
     /// </summary>
     public string[] AllowedIpAddresses { get; set; } = [];
+
+    /// <summary>
+    /// Debounce time in milliseconds for SignalR event-driven cache invalidation in the frontend dashboard.
+    /// When multiple task events occur in rapid succession, the dashboard will wait this duration
+    /// before refreshing data to prevent excessive API calls during task bursts.
+    /// Default: 1000 (1 second).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This setting controls client-side behavior when using SignalR-based auto-refresh in the embedded dashboard.
+    /// Higher values reduce API load during task bursts but introduce slight UI update delays.
+    /// Lower values provide more responsive UI updates but may increase network traffic.
+    /// </para>
+    /// <para>
+    /// Recommended values:
+    /// - 300ms: Very responsive, suitable for low-volume environments
+    /// - 500ms: Balanced (moderate responsiveness, good efficiency)
+    /// - 1000ms: Conservative (default), best for high-volume task processing
+    /// </para>
+    /// </remarks>
+    public int EventDebounceMs { get; set; } = 1000;
 }

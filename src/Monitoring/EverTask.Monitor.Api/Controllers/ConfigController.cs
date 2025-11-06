@@ -27,9 +27,9 @@ public class ConfigController : ControllerBase
     /// </summary>
     /// <remarks>
     /// This endpoint must be accessible without authentication to allow clients to discover configuration before login.
-    /// Returns information about API paths, authentication requirements, and feature availability.
+    /// Returns information about API paths, authentication requirements, feature availability, and dashboard settings.
     /// </remarks>
-    /// <returns>Configuration object containing API paths and feature flags.</returns>
+    /// <returns>Configuration object containing API paths, feature flags, and dashboard configuration.</returns>
     /// <response code="200">Returns the API configuration.</response>
     [HttpGet]
     [AllowAnonymous]
@@ -42,7 +42,8 @@ public class ConfigController : ControllerBase
             uiBasePath            = _options.UIBasePath,
             signalRHubPath        = _options.SignalRHubPath,
             requireAuthentication = _options.EnableAuthentication,
-            uiEnabled             = _options.EnableUI
+            uiEnabled             = _options.EnableUI,
+            eventDebounceMs       = _options.EventDebounceMs
         });
     }
 }

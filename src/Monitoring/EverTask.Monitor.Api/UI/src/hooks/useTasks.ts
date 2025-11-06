@@ -47,7 +47,6 @@ export const useTaskCounts = (
       const response = await apiService.getTaskCounts();
       return response.data;
     },
-    refetchInterval: 10000, // Refresh every 10 seconds
     ...options,
   });
 };
