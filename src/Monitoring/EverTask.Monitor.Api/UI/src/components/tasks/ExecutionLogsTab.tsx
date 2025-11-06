@@ -17,7 +17,7 @@ export function ExecutionLogsTab({ taskId }: ExecutionLogsTabProps) {
   const [totalCount, setTotalCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [levelFilter, setLevelFilter] = useState<string>('');
+  const [levelFilter, setLevelFilter] = useState<string>('all');
   const [skip, setSkip] = useState(0);
   const [autoScroll, setAutoScroll] = useState(true);
   const logsEndRef = useRef<HTMLDivElement>(null);
@@ -41,7 +41,7 @@ export function ExecutionLogsTab({ taskId }: ExecutionLogsTabProps) {
         taskId,
         skip,
         take,
-        levelFilter || undefined
+        levelFilter === 'all' ? undefined : levelFilter
       );
       setLogs(response.data.logs);
       setTotalCount(response.data.totalCount);
@@ -107,36 +107,8 @@ export function ExecutionLogsTab({ taskId }: ExecutionLogsTabProps) {
   };
 
   const hasMore = skip + logs.length < totalCount;
-
-  if (isLoading && logs.length === 0) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <LoadingSpinner />
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <Alert variant="destructive">
-        <AlertCircle className="h-4 w-4" />
-        <AlertDescription>{error}</AlertDescription>
-      </Alert>
-    );
-  }
-
-  if (totalCount === 0) {
-    return (
-      <div className="text-center py-12">
-        <p className="text-sm text-muted-foreground">
-          No logs captured for this task.
-        </p>
-        <p className="text-xs text-muted-foreground mt-2">
-          Log capture may be disabled or no logs were written during execution.
-        </p>
-      </div>
-    );
-  }
+  const hasNoLogs = totalCount === 0 && !isLoading && !error;
+  const isFiltered = levelFilter !== 'all';
 
   return (
     <div className="space-y-4">
@@ -152,7 +124,7 @@ export function ExecutionLogsTab({ taskId }: ExecutionLogsTabProps) {
               <SelectValue placeholder="All levels" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">All levels</SelectItem>
+              <SelectItem value="all">All levels</SelectItem>
               <SelectItem value="Trace">Trace</SelectItem>
               <SelectItem value="Debug">Debug</SelectItem>
               <SelectItem value="Information">Information</SelectItem>
@@ -188,40 +160,75 @@ export function ExecutionLogsTab({ taskId }: ExecutionLogsTabProps) {
         </div>
       </div>
 
-      {/* Terminal Display */}
-      <div className="bg-gray-900 rounded-lg p-4 font-mono text-sm overflow-x-auto max-h-[600px] overflow-y-auto">
-        {logs.map((log, index) => (
-          <LogEntry key={`${log.id}-${index}`} log={log} getLevelColor={getLevelColor} />
-        ))}
-        <div ref={logsEndRef} />
-      </div>
-
-      {/* Pagination Info and Controls */}
-      <div className="flex items-center justify-between text-sm text-muted-foreground">
-        <span>
-          Showing {skip + 1} - {Math.min(skip + logs.length, totalCount)} of {totalCount} logs
-        </span>
-        <div className="flex gap-2">
-          {skip > 0 && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setSkip(Math.max(0, skip - take))}
-            >
-              Previous
-            </Button>
-          )}
-          {hasMore && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setSkip(skip + take)}
-            >
-              Load More
-            </Button>
-          )}
+      {/* Content Area */}
+      {error ? (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      ) : isLoading && logs.length === 0 ? (
+        <div className="flex items-center justify-center py-12">
+          <LoadingSpinner />
         </div>
-      </div>
+      ) : hasNoLogs ? (
+        <div className="text-center py-12">
+          <p className="text-sm text-muted-foreground">
+            {isFiltered
+              ? `No logs found for level "${levelFilter}".`
+              : 'No logs captured for this task.'}
+          </p>
+          <p className="text-xs text-muted-foreground mt-2">
+            {isFiltered
+              ? 'Try selecting a different log level or "All levels".'
+              : 'Log capture may be disabled or no logs were written during execution.'}
+          </p>
+        </div>
+      ) : (
+        <>
+          {/* Terminal Display */}
+          <div className="bg-gray-900 rounded-lg p-4 font-mono text-sm overflow-x-auto max-h-[600px] overflow-y-auto relative">
+            {isLoading && (
+              <div className="absolute top-2 right-2 bg-gray-800 rounded px-2 py-1 text-xs text-gray-400 flex items-center gap-1">
+                <LoadingSpinner className="w-3 h-3" />
+                Loading...
+              </div>
+            )}
+            {logs.map((log, index) => (
+              <LogEntry key={`${log.id}-${index}`} log={log} getLevelColor={getLevelColor} />
+            ))}
+            <div ref={logsEndRef} />
+          </div>
+
+          {/* Pagination Info and Controls */}
+          <div className="flex items-center justify-between text-sm text-muted-foreground">
+            <span>
+              Showing {skip + 1} - {Math.min(skip + logs.length, totalCount)} of {totalCount} logs
+            </span>
+            <div className="flex gap-2">
+              {skip > 0 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSkip(Math.max(0, skip - take))}
+                  disabled={isLoading}
+                >
+                  Previous
+                </Button>
+              )}
+              {hasMore && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSkip(skip + take)}
+                  disabled={isLoading}
+                >
+                  Load More
+                </Button>
+              )}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
