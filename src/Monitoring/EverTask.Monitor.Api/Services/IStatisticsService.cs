@@ -28,4 +28,9 @@ public interface IStatisticsService
     /// Get execution time trend over time.
     /// </summary>
     Task<List<ExecutionTimeDto>> GetExecutionTimesAsync(DateRange range, CancellationToken ct = default);
+
+    /// <summary>
+    /// Get complete configuration and metrics for all configured queues.
+    /// </summary>
+    Task<List<QueueConfigurationDto>> GetQueueConfigurationsAsync(CancellationToken ct = default);
 }

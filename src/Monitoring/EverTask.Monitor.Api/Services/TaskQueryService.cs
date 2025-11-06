@@ -81,6 +81,7 @@ public class TaskQueryService : ITaskQueryService
                 GetShortTypeName(t.Type),
                 t.Status,
                 t.QueueName,
+                t.TaskKey,
                 t.CreatedAtUtc,
                 t.LastExecutionUtc,
                 t.ScheduledExecutionUtc,
@@ -134,6 +135,7 @@ public class TaskQueryService : ITaskQueryService
             task.MaxRuns,
             task.RunUntil,
             task.NextRunUtc,
+            task.AuditLevel,
             statusAudits,
             runsAudits
         );
@@ -167,6 +169,51 @@ public class TaskQueryService : ITaskQueryService
             .OrderByDescending(a => a.ExecutedAt)
             .Select(a => new RunsAuditDto(a.Id, a.QueuedTaskId, a.ExecutedAt, a.Status, a.Exception))
             .ToList();
+    }
+
+    /// <inheritdoc />
+    public async Task<ExecutionLogsResponse> GetExecutionLogsAsync(Guid taskId, int skip = 0, int take = 100, string? levelFilter = null, CancellationToken ct = default)
+    {
+        // Get all logs for the task
+        var allLogs = await _storage.GetExecutionLogsAsync(taskId, ct);
+
+        // Apply level filter if specified
+        var filteredLogs = allLogs.AsEnumerable();
+        if (!string.IsNullOrWhiteSpace(levelFilter))
+        {
+            filteredLogs = filteredLogs.Where(l => l.Level.Equals(levelFilter, StringComparison.OrdinalIgnoreCase));
+        }
+
+        var totalCount = filteredLogs.Count();
+
+        // Apply pagination and map to DTOs
+        var logs = filteredLogs
+            .Skip(skip)
+            .Take(take)
+            .Select(l => new ExecutionLogDto(
+                l.Id,
+                l.TimestampUtc,
+                l.Level,
+                l.Message,
+                l.ExceptionDetails,
+                l.SequenceNumber
+            ))
+            .ToList();
+
+        return new ExecutionLogsResponse(logs, totalCount, skip, take);
+    }
+
+    /// <inheritdoc />
+    public async Task<TaskCountsDto> GetTaskCountsAsync(CancellationToken ct = default)
+    {
+        var allTasksList = (await _storage.GetAll(ct)).ToList();
+
+        var all = allTasksList.Count;
+        var standard = allTasksList.Count(t => !t.IsRecurring);
+        var recurring = allTasksList.Count(t => t.IsRecurring);
+        var failed = allTasksList.Count(t => t.Status == QueuedTaskStatus.Failed);
+
+        return new TaskCountsDto(all, standard, recurring, failed);
     }
 
     private static IQueryable<QueuedTask> ApplySorting(IQueryable<QueuedTask> query, string? sortBy, bool descending)

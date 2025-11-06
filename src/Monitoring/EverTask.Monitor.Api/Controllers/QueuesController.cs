@@ -37,6 +37,17 @@ public class QueuesController : ControllerBase
     }
 
     /// <summary>
+    /// Get complete configuration and metrics for all configured queues.
+    /// </summary>
+    [HttpGet("configurations")]
+    [ProducesResponseType(typeof(List<QueueConfigurationDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<List<QueueConfigurationDto>>> GetQueueConfigurations(CancellationToken ct)
+    {
+        var result = await _statisticsService.GetQueueConfigurationsAsync(ct);
+        return Ok(result);
+    }
+
+    /// <summary>
     /// Get tasks in a specific queue.
     /// </summary>
     [HttpGet("{name}/tasks")]

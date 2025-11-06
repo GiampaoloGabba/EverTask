@@ -1,7 +1,9 @@
+using EverTask.Configuration;
 using EverTask.Monitor.Api.DTOs.Dashboard;
 using EverTask.Monitor.Api.DTOs.Queues;
 using EverTask.Monitor.Api.DTOs.Statistics;
 using EverTask.Storage;
+using EverTask.Worker;
 
 namespace EverTask.Monitor.Api.Services;
 
@@ -11,13 +13,15 @@ namespace EverTask.Monitor.Api.Services;
 public class StatisticsService : IStatisticsService
 {
     private readonly ITaskStorage _storage;
+    private readonly IWorkerQueueManager? _queueManager;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="StatisticsService"/> class.
     /// </summary>
-    public StatisticsService(ITaskStorage storage)
+    public StatisticsService(ITaskStorage storage, IWorkerQueueManager? queueManager = null)
     {
         _storage = storage;
+        _queueManager = queueManager;
     }
 
     /// <inheritdoc />
@@ -72,7 +76,7 @@ public class StatisticsService : IStatisticsService
             {
                 var queueTasks = g.ToList();
                 var totalTasks = queueTasks.Count;
-                var pendingTasks = queueTasks.Count(t => t.Status == QueuedTaskStatus.WaitingQueue || t.Status == QueuedTaskStatus.Pending);
+                var pendingTasks = queueTasks.Count(t => t.Status == QueuedTaskStatus.WaitingQueue || t.Status == QueuedTaskStatus.Pending || t.Status == QueuedTaskStatus.Queued);
                 var inProgressTasks = queueTasks.Count(t => t.Status == QueuedTaskStatus.InProgress);
                 var completedTasks = queueTasks.Count(t => t.Status == QueuedTaskStatus.Completed);
                 var failedTasks = queueTasks.Count(t => t.Status == QueuedTaskStatus.Failed);
@@ -168,6 +172,86 @@ public class StatisticsService : IStatisticsService
         }
 
         return result;
+    }
+
+    /// <inheritdoc />
+    public async Task<List<QueueConfigurationDto>> GetQueueConfigurationsAsync(CancellationToken ct = default)
+    {
+        if (_queueManager == null)
+        {
+            // Fallback to old behavior if queue manager not available
+            var metrics = await GetQueueMetricsAsync(ct);
+            return metrics.Select(m => new QueueConfigurationDto(
+                m.QueueName ?? "default",
+                MaxDegreeOfParallelism: 1,
+                ChannelCapacity: 2000,
+                QueueFullBehavior: "Wait",
+                DefaultTimeout: null,
+                m.TotalTasks,
+                m.PendingTasks,
+                m.InProgressTasks,
+                m.CompletedTasks,
+                m.FailedTasks,
+                m.AvgExecutionTimeMs,
+                m.SuccessRate
+            )).ToList();
+        }
+
+        // Get all configured queues from queue manager
+        var allQueues = _queueManager.GetAllQueues().ToList();
+
+        // Get task metrics from storage
+        var allTasks = await _storage.GetAll(ct);
+        var tasksByQueue = allTasks.GroupBy(t => t.QueueName ?? "default")
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        // Build complete queue configurations
+        var result = new List<QueueConfigurationDto>();
+
+        foreach (var (queueName, workerQueue) in allQueues)
+        {
+            // Extract configuration from WorkerQueue
+            var config = workerQueue is WorkerQueue wq ? wq.Configuration : null;
+
+            // Get tasks for this queue
+            var queueTasks = tasksByQueue.GetValueOrDefault(queueName) ?? new List<QueuedTask>();
+
+            var totalTasks = queueTasks.Count;
+            var pendingTasks = queueTasks.Count(t => t.Status == QueuedTaskStatus.WaitingQueue || t.Status == QueuedTaskStatus.Pending || t.Status == QueuedTaskStatus.Queued);
+            var inProgressTasks = queueTasks.Count(t => t.Status == QueuedTaskStatus.InProgress);
+            var completedTasks = queueTasks.Count(t => t.Status == QueuedTaskStatus.Completed);
+            var failedTasks = queueTasks.Count(t => t.Status == QueuedTaskStatus.Failed);
+
+            // Calculate average execution time for completed tasks
+            var completedWithExecTime = queueTasks
+                .Where(t => t.Status == QueuedTaskStatus.Completed && t.LastExecutionUtc.HasValue)
+                .ToList();
+
+            var avgExecutionTimeMs = completedWithExecTime.Any()
+                ? completedWithExecTime.Average(t => (t.LastExecutionUtc!.Value - t.CreatedAtUtc).TotalMilliseconds)
+                : 0.0;
+
+            // Calculate success rate
+            var totalFinished = completedTasks + failedTasks;
+            var successRate = totalFinished > 0 ? (decimal)completedTasks / totalFinished * 100 : 0m;
+
+            result.Add(new QueueConfigurationDto(
+                QueueName: queueName,
+                MaxDegreeOfParallelism: config?.MaxDegreeOfParallelism ?? 1,
+                ChannelCapacity: config?.ChannelOptions?.Capacity ?? 2000,
+                QueueFullBehavior: config?.QueueFullBehavior.ToString() ?? "Wait",
+                DefaultTimeout: config?.DefaultTimeout,
+                TotalTasks: totalTasks,
+                PendingTasks: pendingTasks,
+                InProgressTasks: inProgressTasks,
+                CompletedTasks: completedTasks,
+                FailedTasks: failedTasks,
+                AvgExecutionTimeMs: Math.Round(avgExecutionTimeMs, 2),
+                SuccessRate: Math.Round(successRate, 2)
+            ));
+        }
+
+        return result.OrderBy(q => q.QueueName).ToList();
     }
 
     private static string GetShortTypeName(string fullTypeName)

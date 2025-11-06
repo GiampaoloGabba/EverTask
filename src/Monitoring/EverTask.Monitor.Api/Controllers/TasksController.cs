@@ -71,4 +71,31 @@ public class TasksController : ControllerBase
         var result = await _taskQueryService.GetRunsAuditAsync(id, ct);
         return Ok(result);
     }
+
+    /// <summary>
+    /// Get paginated execution logs for a task with optional level filtering.
+    /// </summary>
+    [HttpGet("{id:guid}/execution-logs")]
+    [ProducesResponseType(typeof(ExecutionLogsResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ExecutionLogsResponse>> GetExecutionLogs(
+        Guid id,
+        [FromQuery] int skip = 0,
+        [FromQuery] int take = 100,
+        [FromQuery] string? level = null,
+        CancellationToken ct = default)
+    {
+        var result = await _taskQueryService.GetExecutionLogsAsync(id, skip, take, level, ct);
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// Get task counts by category for dashboard badges.
+    /// </summary>
+    [HttpGet("counts")]
+    [ProducesResponseType(typeof(TaskCountsDto), StatusCodes.Status200OK)]
+    public async Task<ActionResult<TaskCountsDto>> GetTaskCounts(CancellationToken ct)
+    {
+        var result = await _taskQueryService.GetTaskCountsAsync(ct);
+        return Ok(result);
+    }
 }

@@ -26,4 +26,14 @@ public interface ITaskQueryService
     /// Get execution runs audit history for a task.
     /// </summary>
     Task<List<RunsAuditDto>> GetRunsAuditAsync(Guid id, CancellationToken ct = default);
+
+    /// <summary>
+    /// Get paginated execution logs for a task with optional level filtering.
+    /// </summary>
+    Task<ExecutionLogsResponse> GetExecutionLogsAsync(Guid taskId, int skip = 0, int take = 100, string? levelFilter = null, CancellationToken ct = default);
+
+    /// <summary>
+    /// Get task counts by category for dashboard badges.
+    /// </summary>
+    Task<TaskCountsDto> GetTaskCountsAsync(CancellationToken ct = default);
 }
