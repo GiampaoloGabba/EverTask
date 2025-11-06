@@ -46,7 +46,12 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(Microsoft.Extensions.Options.Options.Create(options));
 
         // Auto-register SignalR monitoring if not already registered
-        if (!services.Any(s => s.ServiceType.Name.Contains("SignalRTaskMonitor")))
+        // Check if SignalRTaskMonitor is already registered as ITaskMonitor
+        var hasSignalRMonitor = services.Any(s =>
+            s.ServiceType == typeof(ITaskMonitor) &&
+            s.ImplementationType?.Name == "SignalRTaskMonitor");
+
+        if (!hasSignalRMonitor)
         {
             builder.AddSignalRMonitoring();
         }

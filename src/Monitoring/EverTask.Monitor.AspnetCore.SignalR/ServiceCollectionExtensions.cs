@@ -1,6 +1,7 @@
 ﻿using EverTask.Monitor.AspnetCore.SignalR;
 using EverTask.Monitoring;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -16,7 +17,7 @@ public static class ServiceCollectionExtensions
         // Register default options
         builder.Services.Configure<SignalRMonitoringOptions>(options => { });
         builder.Services.AddSignalR();
-        builder.Services.AddSingleton<ITaskMonitor, SignalRTaskMonitor>();
+        builder.Services.TryAddSingleton<ITaskMonitor, SignalRTaskMonitor>();
 
         return builder;
     }
@@ -31,7 +32,7 @@ public static class ServiceCollectionExtensions
     {
         builder.Services.Configure(monitoringConfiguration);
         builder.Services.AddSignalR();
-        builder.Services.AddSingleton<ITaskMonitor, SignalRTaskMonitor>();
+        builder.Services.TryAddSingleton<ITaskMonitor, SignalRTaskMonitor>();
 
         return builder;
     }
@@ -48,7 +49,7 @@ public static class ServiceCollectionExtensions
         // Register default monitoring options
         builder.Services.Configure<SignalRMonitoringOptions>(options => { });
         builder.Services.AddSignalR(hubConfiguration);
-        builder.Services.AddSingleton<ITaskMonitor, SignalRTaskMonitor>();
+        builder.Services.TryAddSingleton<ITaskMonitor, SignalRTaskMonitor>();
 
         return builder;
     }
@@ -65,7 +66,7 @@ public static class ServiceCollectionExtensions
     {
         builder.Services.Configure(monitoringConfiguration);
         builder.Services.AddSignalR(hubConfiguration);
-        builder.Services.AddSingleton<ITaskMonitor, SignalRTaskMonitor>();
+        builder.Services.TryAddSingleton<ITaskMonitor, SignalRTaskMonitor>();
         return builder;
     }
 }

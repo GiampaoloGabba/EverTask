@@ -202,11 +202,9 @@ builder.Services.AddEverTask(opt =>
 
 var app = builder.Build();
 
-// Map the monitoring hub
-app.MapEverTaskMonitorHub(); // Default: /evertask/monitoring
-
-// Or with custom URL
-app.MapEverTaskMonitorHub("/task-monitoring");
+// Hub is automatically mapped when you call MapEverTaskApi()
+// No need to map it separately
+// Default hub path: /evertask-monitoring/hub
 
 app.Run();
 ```

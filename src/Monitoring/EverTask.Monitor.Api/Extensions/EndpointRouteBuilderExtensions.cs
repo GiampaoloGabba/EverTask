@@ -3,6 +3,7 @@ using EverTask.Monitor.Api.Middleware;
 using EverTask.Monitor.Api.Options;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.Extensions.DependencyInjection;
@@ -49,40 +50,30 @@ public static class EndpointRouteBuilderExtensions
         return app;
     }
     /// <summary>
-    /// Maps the EverTask SignalR monitoring hub with authentication configured based on EverTaskApiOptions.
-    /// This is a convenience method that automatically configures authentication when using the monitoring API.
-    /// Call this BEFORE MapEverTaskApi().
+    /// Maps EverTask Monitoring API endpoints, SignalR hub, and optionally serves the embedded dashboard UI.
+    /// Automatically configures hub authentication based on EnableAuthentication setting.
     /// </summary>
     /// <param name="endpoints">The endpoint route builder.</param>
+    /// <param name="configureHub">Optional callback to configure SignalR hub options.</param>
     /// <returns>The endpoint route builder for chaining.</returns>
-    public static IEndpointRouteBuilder MapEverTaskMonitoringHub(this IEndpointRouteBuilder endpoints)
+    public static IEndpointRouteBuilder MapEverTaskApi(
+        this IEndpointRouteBuilder endpoints,
+        Action<HttpConnectionDispatcherOptions>? configureHub = null)
     {
         var options = endpoints.ServiceProvider.GetRequiredService<EverTaskApiOptions>();
 
-        // Configure authentication if enabled
+        // Map SignalR hub with automatic authentication configuration + user custom options
         endpoints.MapEverTaskMonitorHub(options.SignalRHubPath, hubOptions =>
         {
+            // Apply default authentication configuration if enabled
             if (options.EnableAuthentication)
             {
                 hubOptions.AuthorizationData.Add(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute());
             }
+
+            // Apply user custom configuration
+            configureHub?.Invoke(hubOptions);
         });
-
-        return endpoints;
-    }
-
-    /// <summary>
-    /// Maps EverTask Monitoring API endpoints and optionally serves the embedded dashboard UI.
-    /// Note: You must call MapEverTaskMonitoringHub() or MapEverTaskMonitorHub() before calling this method.
-    /// </summary>
-    /// <param name="endpoints">The endpoint route builder.</param>
-    /// <returns>The endpoint route builder for chaining.</returns>
-    public static IEndpointRouteBuilder MapEverTaskApi(this IEndpointRouteBuilder endpoints)
-    {
-        var options = endpoints.ServiceProvider.GetRequiredService<EverTaskApiOptions>();
-
-        // NOTE: SignalR hub must be mapped separately by calling MapEverTaskMonitorHub()
-        // We don't map it here to avoid duplicate registrations
 
         // Map API controllers
         endpoints.MapControllers();

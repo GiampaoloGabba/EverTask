@@ -1121,18 +1121,32 @@ After configuring the monitoring API, map the endpoints in your application:
 ```csharp
 var app = builder.Build();
 
-// Map EverTask monitoring endpoints
+// Map EverTask monitoring endpoints (includes SignalR hub automatically)
 app.MapEverTaskApi();
 
 app.Run();
 ```
 
-This single call:
+`MapEverTaskApi()`:
+- Maps SignalR monitoring hub (at `/evertask-monitoring/hub`) with automatic JWT authentication
 - Maps all API controllers
-- Maps SignalR hub (if configured)
 - Serves embedded dashboard (if `EnableUI` is true)
 - Configures authentication middleware
 - Applies CORS policy (if enabled)
+
+**Important Notes:**
+- The monitoring API handles SignalR setup completely autonomously:
+  - `AddMonitoringApi()` automatically registers SignalR monitoring services (if not already registered)
+  - `MapEverTaskApi()` automatically maps the SignalR hub endpoint with authentication
+  - No additional SignalR configuration is required unless you want to customize hub options
+- To customize hub options, pass an `Action<HttpConnectionDispatcherOptions>` to `MapEverTaskApi()`:
+  ```csharp
+  app.MapEverTaskApi(hubOptions => {
+      // Custom SignalR hub configuration
+      hubOptions.TransportMaxBufferSize = 1024 * 1024; // 1MB buffer
+      hubOptions.ApplicationMaxBufferSize = 1024 * 1024;
+  });
+  ```
 
 ### Integration with SignalR
 
@@ -1186,7 +1200,7 @@ AddSignalRMonitoring(Action<SignalRMonitorOptions> configure)
 
 **Important Notes:**
 
-- **Hub Route**: Fixed at `/evertask/monitor` (configured separately via `MapEverTaskMonitorHub()`)
+- **Hub Route**: Fixed at `/evertask-monitoring/hub` (automatically mapped by `MapEverTaskApi()`)
 - **Log Streaming**: Execution logs are always available via ILogger and database persistence (if enabled)
 - **Performance Impact**: Enabling `IncludeExecutionLogs` significantly increases SignalR message size and network bandwidth
 - **Use Case**: Enable only when you need real-time log streaming to monitoring dashboards

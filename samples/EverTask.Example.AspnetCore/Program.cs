@@ -53,7 +53,6 @@ builder.Services.AddEverTask(opt =>
            .SetMaxDegreeOfParallelism(3)
            .SetChannelCapacity(75))
        .AddMemoryStorage()
-       .AddSignalRMonitoring()
        .AddSerilog(opt => opt.ReadFrom.Configuration(builder.Configuration, new ConfigurationReaderOptions { SectionName = "EverTaskSerilog" }))
        .AddMonitoringApi(options =>
        {
@@ -83,9 +82,7 @@ app.UseAuthorization();
 
 app.MapControllers();
 
-// Map EverTask monitoring hub with automatic authentication configuration
-app.MapEverTaskMonitoringHub();
-
+// Map EverTask monitoring API (automatically includes SignalR hub)
 app.MapEverTaskApi();
 
 // Dispatch sample tasks to demonstrate execution logs feature

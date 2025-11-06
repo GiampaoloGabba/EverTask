@@ -144,9 +144,9 @@ await dispatcher.Dispatch(task, recurring => ..., auditLevel: AuditLevel.Minimal
 
 - **Package:** `EverTask.Monitor.Api`
 - **Features:** REST API + embedded React dashboard
-- **Dashboard URL:** `/monitoring` (fixed)
-- **API URL:** `/monitoring/api` (fixed)
-- **SignalR Hub:** `/monitoring/hub` (fixed)
+- **Dashboard URL:** `/evertask-monitoring` (fixed)
+- **API URL:** `/evertask-monitoring/api` (fixed)
+- **SignalR Hub:** `/evertask-monitoring/hub` (fixed, automatically mapped)
 - **Auto-configures SignalR:** Automatically adds SignalR monitoring if not already registered
 
 **Common Patterns:**
@@ -203,7 +203,7 @@ app.UseSwaggerUI(c => {
 })
 ```
 - **Package:** `EverTask.Monitor.AspnetCore.SignalR`
-- **Hub Route:** `/evertask/monitor` (configured via `MapEverTaskMonitorHub()`)
+- **Hub Route:** `/evertask-monitoring/hub` (automatically mapped by `MapEverTaskApi()`)
 - **Events:** TaskStarted, TaskCompleted, TaskFailed, TaskCancelled, TaskTimeout
 - **Event Method:** `EverTaskEvent` (receives `EverTaskEventData`)
 
