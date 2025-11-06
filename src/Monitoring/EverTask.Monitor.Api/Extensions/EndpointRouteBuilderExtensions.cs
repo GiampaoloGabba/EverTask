@@ -62,18 +62,17 @@ public static class EndpointRouteBuilderExtensions
     {
         var options = endpoints.ServiceProvider.GetRequiredService<EverTaskApiOptions>();
 
-        // Map SignalR hub with automatic authentication configuration + user custom options
-        endpoints.MapEverTaskMonitorHub(options.SignalRHubPath, hubOptions =>
+        // Map SignalR hub
+        // Note: Authentication is handled by JwtAuthenticationMiddleware, not by [Authorize] attribute
+        // This allows proper JWT validation for both HTTP negotiation and WebSocket connections
+        if (configureHub != null)
         {
-            // Apply default authentication configuration if enabled
-            if (options.EnableAuthentication)
-            {
-                hubOptions.AuthorizationData.Add(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute());
-            }
-
-            // Apply user custom configuration
-            configureHub?.Invoke(hubOptions);
-        });
+            endpoints.MapEverTaskMonitorHub(options.SignalRHubPath, configureHub);
+        }
+        else
+        {
+            endpoints.MapEverTaskMonitorHub(options.SignalRHubPath);
+        }
 
         // Map API controllers
         endpoints.MapControllers();

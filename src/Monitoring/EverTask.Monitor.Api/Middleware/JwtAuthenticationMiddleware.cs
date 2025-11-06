@@ -26,18 +26,27 @@ public class JwtAuthenticationMiddleware
 
     /// <summary>
     /// Invokes the middleware.
+    /// Protection layers:
+    /// 1. IP whitelist (if configured) -> applies to ALL /evertask-monitoring paths
+    /// 2. JWT authentication (if enabled) -> applies only to /api and /hub paths
     /// </summary>
     public async Task InvokeAsync(HttpContext context)
     {
-        // Only protect API paths under ApiBasePath (not UI or SignalR hub)
         var path = context.Request.Path.Value ?? "";
-        if (!path.StartsWith(_options.ApiBasePath, StringComparison.OrdinalIgnoreCase))
+
+        // Determine path types
+        var isMonitoringPath = path.StartsWith(_options.BasePath, StringComparison.OrdinalIgnoreCase);
+        var isApiPath = path.StartsWith(_options.ApiBasePath, StringComparison.OrdinalIgnoreCase);
+        var isHubPath = path.StartsWith(_options.SignalRHubPath, StringComparison.OrdinalIgnoreCase);
+
+        // Skip if not a monitoring path
+        if (!isMonitoringPath)
         {
             await _next(context);
             return;
         }
 
-        // Check IP whitelist first (if configured)
+        // LAYER 1: IP WHITELIST - applies to ALL /evertask-monitoring paths (API + Hub + UI)
         if (_options.AllowedIpAddresses.Length > 0)
         {
             var clientIp = GetClientIpAddress(context);
@@ -45,12 +54,22 @@ public class JwtAuthenticationMiddleware
             if (clientIp == null || !IsIpAllowed(clientIp))
             {
                 context.Response.StatusCode = 403;
-                await context.Response.WriteAsync("Access denied: IP address not allowed");
+                await context.Response.WriteAsync("Access denied");
                 return;
             }
         }
 
-        // Skip auth if disabled
+        // LAYER 2: JWT AUTHENTICATION - only applies to API and Hub (not UI static files)
+        var requiresJwt = isApiPath || isHubPath;
+
+        if (!requiresJwt)
+        {
+            // UI path - no JWT required (only IP protection)
+            await _next(context);
+            return;
+        }
+
+        // Skip JWT auth if disabled
         if (!_options.EnableAuthentication)
         {
             await _next(context);
@@ -72,17 +91,28 @@ public class JwtAuthenticationMiddleware
             return;
         }
 
-        // JWT AUTHENTICATION (required if we reach here)
-        var authHeader = context.Request.Headers["Authorization"].FirstOrDefault();
+        // JWT AUTHENTICATION - required for API and Hub
+        string? token = null;
 
-        if (authHeader?.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) != true)
+        // Try Authorization header first
+        var authHeader = context.Request.Headers["Authorization"].FirstOrDefault();
+        if (authHeader?.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            token = authHeader.Substring("Bearer ".Length).Trim();
+        }
+        // For SignalR, also check query string (SignalR sends token as ?access_token=...)
+        else if (isHubPath && context.Request.Query.TryGetValue("access_token", out var accessToken))
+        {
+            token = accessToken.ToString();
+        }
+
+        if (string.IsNullOrEmpty(token))
         {
             // No Bearer token provided
             await ChallengeAsync(context);
             return;
         }
 
-        var token = authHeader.Substring("Bearer ".Length).Trim();
         var jwtService = context.RequestServices.GetRequiredService<IJwtTokenService>();
         var validation = jwtService.ValidateToken(token);
 

@@ -62,50 +62,11 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IStatisticsService, StatisticsService>();
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
 
-        // Configure JWT authentication (always enabled)
-        var jwtSecret = options.JwtSecret ?? GenerateRandomSecret();
-        var key = Encoding.UTF8.GetBytes(jwtSecret);
-
-        services.AddAuthentication(authOptions =>
-            {
-                authOptions.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-                authOptions.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-            })
-            .AddJwtBearer(jwtOptions =>
-            {
-                jwtOptions.RequireHttpsMetadata = false; // Allow HTTP for development
-                jwtOptions.SaveToken = true;
-                jwtOptions.TokenValidationParameters = new TokenValidationParameters
-                {
-                    ValidateIssuer = true,
-                    ValidateAudience = true,
-                    ValidateLifetime = true,
-                    ValidateIssuerSigningKey = true,
-                    ValidIssuer = options.JwtIssuer,
-                    ValidAudience = options.JwtAudience,
-                    IssuerSigningKey = new SymmetricSecurityKey(key),
-                    ClockSkew = TimeSpan.FromMinutes(5)
-                };
-
-                // Support SignalR authentication via query string
-                jwtOptions.Events = new JwtBearerEvents
-                {
-                    OnMessageReceived = context =>
-                    {
-                        var accessToken = context.Request.Query["access_token"];
-                        var path = context.HttpContext.Request.Path;
-
-                        // If the request is for SignalR hub and has a token
-                        if (!string.IsNullOrEmpty(accessToken) &&
-                            path.StartsWithSegments(options.SignalRHubPath))
-                        {
-                            context.Token = accessToken;
-                        }
-
-                        return Task.CompletedTask;
-                    }
-                };
-            });
+        // NOTE: JWT authentication is handled by JwtAuthenticationMiddleware (custom middleware)
+        // We do NOT use ASP.NET Core's .AddAuthentication().AddJwtBearer() because:
+        // 1. Our middleware supports IP whitelist protection on ALL paths (API + Hub + UI)
+        // 2. Our middleware handles JWT via both Authorization header AND query string (?access_token=...)
+        // 3. Our middleware applies layered protection (IP first, then JWT only for API/Hub)
 
 // TODO: Rate limiting - requires NuGet package or framework reference fix
         // Temporarily commented out to allow build to succeed
@@ -201,50 +162,11 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IStatisticsService, StatisticsService>();
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
 
-        // Configure JWT authentication (always enabled)
-        var jwtSecret = options.JwtSecret ?? GenerateRandomSecret();
-        var key = Encoding.UTF8.GetBytes(jwtSecret);
-
-        services.AddAuthentication(authOptions =>
-            {
-                authOptions.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-                authOptions.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-            })
-            .AddJwtBearer(jwtOptions =>
-            {
-                jwtOptions.RequireHttpsMetadata = false; // Allow HTTP for development
-                jwtOptions.SaveToken = true;
-                jwtOptions.TokenValidationParameters = new TokenValidationParameters
-                {
-                    ValidateIssuer = true,
-                    ValidateAudience = true,
-                    ValidateLifetime = true,
-                    ValidateIssuerSigningKey = true,
-                    ValidIssuer = options.JwtIssuer,
-                    ValidAudience = options.JwtAudience,
-                    IssuerSigningKey = new SymmetricSecurityKey(key),
-                    ClockSkew = TimeSpan.FromMinutes(5)
-                };
-
-                // Support SignalR authentication via query string
-                jwtOptions.Events = new JwtBearerEvents
-                {
-                    OnMessageReceived = context =>
-                    {
-                        var accessToken = context.Request.Query["access_token"];
-                        var path = context.HttpContext.Request.Path;
-
-                        // If the request is for SignalR hub and has a token
-                        if (!string.IsNullOrEmpty(accessToken) &&
-                            path.StartsWithSegments(options.SignalRHubPath))
-                        {
-                            context.Token = accessToken;
-                        }
-
-                        return Task.CompletedTask;
-                    }
-                };
-            });
+        // NOTE: JWT authentication is handled by JwtAuthenticationMiddleware (custom middleware)
+        // We do NOT use ASP.NET Core's .AddAuthentication().AddJwtBearer() because:
+        // 1. Our middleware supports IP whitelist protection on ALL paths (API + Hub + UI)
+        // 2. Our middleware handles JWT via both Authorization header AND query string (?access_token=...)
+        // 3. Our middleware applies layered protection (IP first, then JWT only for API/Hub)
 
 // TODO: Rate limiting - requires NuGet package or framework reference fix
         // Temporarily commented out to allow build to succeed

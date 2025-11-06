@@ -22,14 +22,9 @@ internal class EverTaskApiStartupFilter : IStartupFilter
     {
         return app =>
         {
-            // Register authentication middleware (if enabled)
-            if (_options.EnableAuthentication)
-            {
-                app.UseAuthentication();
-            }
-
-            // Always register JWT authentication middleware
-            // (it handles skip logic internally based on EnableAuthentication)
+            // Register custom JWT authentication middleware
+            // This middleware handles IP whitelist + JWT authentication for API/Hub
+            // (it applies skip logic internally based on EnableAuthentication and path)
             app.UseMiddleware<JwtAuthenticationMiddleware>();
 
             // Continue with the rest of the pipeline
