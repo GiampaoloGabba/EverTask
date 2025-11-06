@@ -56,7 +56,6 @@ builder.Services.AddEverTask(opt =>
        .AddSerilog(opt => opt.ReadFrom.Configuration(builder.Configuration, new ConfigurationReaderOptions { SectionName = "EverTaskSerilog" }))
        .AddMonitoringApi(options =>
        {
-           options.BasePath = "/monitoring";
            options.EnableUI = true;
            options.Username = "admin";
            options.Password = "admin";

@@ -21,7 +21,6 @@ builder.Services.AddEverTask(opt =>
 .AddMemoryStorage()
 .AddMonitoringApi(options =>
 {
-    options.BasePath = "/monitoring";
     options.EnableUI = true;
     options.Username = "admin";
     options.Password = "admin";
