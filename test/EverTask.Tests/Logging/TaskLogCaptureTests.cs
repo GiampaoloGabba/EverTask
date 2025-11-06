@@ -474,4 +474,169 @@ public class TaskLogCaptureTests
         var logs = capture.GetPersistedLogs();
         logs.ShouldBeEmpty();
     }
+
+    [Fact]
+    public void TaskLogCapture_ShouldSupportStructuredLoggingWithNumericPlaceholders()
+    {
+        // Arrange
+        var taskId = TestGuidGenerator.New();
+        var capture = new TaskLogCapture(
+            _mockLogger.Object,
+            taskId,
+            _mockGuidGenerator.Object,
+            persistLogs: true,
+            minPersistLevel: LogLevel.Trace,
+            maxPersistedLogs: 100);
+
+        // Act
+        capture.LogTrace("Processing step {0}/{1}", 1, 10);
+        capture.LogDebug("User {0} logged in at {1}", "john.doe", DateTime.Now);
+        capture.LogInformation("Processing {0} items", 42);
+
+        // Assert
+        var logs = capture.GetPersistedLogs();
+        logs.Count.ShouldBe(3);
+        logs[0].Message.ShouldContain("Processing step 1/10");
+        logs[1].Message.ShouldContain("User john.doe logged in");
+        logs[2].Message.ShouldContain("Processing 42 items");
+    }
+
+    [Fact]
+    public void TaskLogCapture_ShouldSupportStructuredLoggingWithNamedPlaceholders()
+    {
+        // Arrange
+        var taskId = TestGuidGenerator.New();
+        var capture = new TaskLogCapture(
+            _mockLogger.Object,
+            taskId,
+            _mockGuidGenerator.Object,
+            persistLogs: true,
+            minPersistLevel: LogLevel.Trace,
+            maxPersistedLogs: 100);
+
+        // Act
+        capture.LogTrace("Processing step {Step}/{Total}", 1, 10);
+        capture.LogDebug("User {UserId} logged in", "john.doe");
+        capture.LogInformation("Processing {Count} items", 42);
+
+        // Assert
+        var logs = capture.GetPersistedLogs();
+        logs.Count.ShouldBe(3);
+        logs[0].Message.ShouldContain("Processing step 1/10");
+        logs[1].Message.ShouldContain("User john.doe logged in");
+        logs[2].Message.ShouldContain("Processing 42 items");
+    }
+
+    [Fact]
+    public void TaskLogCapture_ShouldSupportExceptionWithStructuredLogging()
+    {
+        // Arrange
+        var taskId = TestGuidGenerator.New();
+        var capture = new TaskLogCapture(
+            _mockLogger.Object,
+            taskId,
+            _mockGuidGenerator.Object,
+            persistLogs: true,
+            minPersistLevel: LogLevel.Trace,
+            maxPersistedLogs: 100);
+        var exception = new InvalidOperationException("Test error");
+
+        // Act
+        capture.LogWarning(exception, "Failed to process user {UserId}", "john.doe");
+        capture.LogError(exception, "Error in step {Step}", 5);
+        capture.LogCritical(exception, "Critical failure for task {TaskId}", taskId);
+
+        // Assert
+        var logs = capture.GetPersistedLogs();
+        logs.Count.ShouldBe(3);
+
+        logs[0].Level.ShouldBe("Warning");
+        logs[0].Message.ShouldContain("Failed to process user john.doe");
+        logs[0].ExceptionDetails.ShouldNotBeNull();
+        logs[0].ExceptionDetails!.ShouldContain("Test error");
+
+        logs[1].Level.ShouldBe("Error");
+        logs[1].Message.ShouldContain("Error in step 5");
+        logs[1].ExceptionDetails.ShouldNotBeNull();
+
+        logs[2].Level.ShouldBe("Critical");
+        logs[2].Message.ShouldContain($"Critical failure for task {taskId}");
+        logs[2].ExceptionDetails.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void TaskLogCapture_ShouldHandleStructuredLoggingWithNullValues()
+    {
+        // Arrange
+        var taskId = TestGuidGenerator.New();
+        var capture = new TaskLogCapture(
+            _mockLogger.Object,
+            taskId,
+            _mockGuidGenerator.Object,
+            persistLogs: true,
+            minPersistLevel: LogLevel.Trace,
+            maxPersistedLogs: 100);
+
+        // Act
+        capture.LogInformation("Processing user {UserId} with result {Result}", null, null);
+
+        // Assert
+        var logs = capture.GetPersistedLogs();
+        logs.Count.ShouldBe(1);
+        logs[0].Message.ShouldContain("Processing user null with result null");
+    }
+
+    [Fact]
+    public void TaskLogCapture_ShouldForwardStructuredLoggingToILogger()
+    {
+        // Arrange
+        var taskId = TestGuidGenerator.New();
+        var capture = new TaskLogCapture(
+            _mockLogger.Object,
+            taskId,
+            _mockGuidGenerator.Object,
+            persistLogs: false,
+            minPersistLevel: LogLevel.Trace,
+            maxPersistedLogs: 100);
+
+        // Act
+        capture.LogTrace("Trace {Param}", "value");
+        capture.LogDebug("Debug {Param}", "value");
+        capture.LogInformation("Info {Param}", "value");
+        capture.LogWarning("Warning {Param}", "value");
+        capture.LogError("Error {Param}", "value");
+        capture.LogCritical("Critical {Param}", "value");
+
+        // Assert - verify ILogger.Log was called with parameters
+        _mockLogger.Verify(
+            x => x.Log(
+                It.IsAny<LogLevel>(),
+                It.IsAny<EventId>(),
+                It.IsAny<It.IsAnyType>(),
+                It.IsAny<Exception>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Exactly(6));
+    }
+
+    [Fact]
+    public void TaskLogCapture_ShouldHandleEmptyParametersArray()
+    {
+        // Arrange
+        var taskId = TestGuidGenerator.New();
+        var capture = new TaskLogCapture(
+            _mockLogger.Object,
+            taskId,
+            _mockGuidGenerator.Object,
+            persistLogs: true,
+            minPersistLevel: LogLevel.Trace,
+            maxPersistedLogs: 100);
+
+        // Act
+        capture.LogInformation("Simple message", Array.Empty<object>());
+
+        // Assert
+        var logs = capture.GetPersistedLogs();
+        logs.Count.ShouldBe(1);
+        logs[0].Message.ShouldBe("Simple message");
+    }
 }

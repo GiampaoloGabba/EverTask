@@ -26,4 +26,8 @@
     <ProjectReference Include="..\..\src\Storage\EverTask.Storage.SqlServer\EverTask.Storage.SqlServer.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
