@@ -13,7 +13,7 @@ public class DashboardControllerTests : MonitoringTestBase
     public async Task Should_get_overview_with_different_date_ranges(string range)
     {
         // Act
-        var response = await Client.GetAsync($"/evertask/api/dashboard/overview?range={range}");
+        var response = await Client.GetAsync($"/monitoring/api/dashboard/overview?range={range}");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -34,7 +34,7 @@ public class DashboardControllerTests : MonitoringTestBase
         const int limit = 10;
 
         // Act
-        var response = await Client.GetAsync($"/evertask/api/dashboard/recent-activity?limit={limit}");
+        var response = await Client.GetAsync($"/monitoring/api/dashboard/recent-activity?limit={limit}");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -56,7 +56,7 @@ public class DashboardControllerTests : MonitoringTestBase
     public async Task Should_get_recent_activity_with_default_limit()
     {
         // Act
-        var response = await Client.GetAsync("/evertask/api/dashboard/recent-activity");
+        var response = await Client.GetAsync("/monitoring/api/dashboard/recent-activity");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);

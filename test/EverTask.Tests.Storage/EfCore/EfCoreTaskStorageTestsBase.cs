@@ -180,7 +180,7 @@ public abstract class EfCoreTaskStorageTestsBase
         var result         = await _storage.Get(x => x.Id == queued.Id);
         var startingLength = _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == result[0].Id);
 
-        await _storage.SetCompleted(result[0].Id, AuditLevel.Full);
+        await _storage.SetCompleted(result[0].Id, 100.0, AuditLevel.Full);
 
         result = await _storage.Get(x => x.Id == queued.Id);
         result[0].Status.ShouldBe(QueuedTaskStatus.Completed);
@@ -188,6 +188,59 @@ public abstract class EfCoreTaskStorageTestsBase
         _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == result[0].Id).ShouldBe(startingLength + 1);
         _mockedDbContext.StatusAudit.OrderBy(x => x.Id).LastOrDefault(x => x.QueuedTaskId == result[0].Id)
                         ?.NewStatus.ShouldBe(QueuedTaskStatus.Completed);
+    }
+
+    [Fact]
+    public async Task Should_PersistExecutionTimeMs_When_SetCompleted()
+    {
+        // Arrange
+        var queued = QueuedTasks[0];
+        await _storage.Persist(queued);
+        var result = await _storage.Get(x => x.Id == queued.Id);
+        result.Length.ShouldBeGreaterThan(0, "Task should exist after persist");
+        const double expectedExecutionTime = 123.45;
+
+        // Act
+        await _storage.SetCompleted(result[0].Id, expectedExecutionTime, AuditLevel.Full);
+
+        // Assert
+        result = await _storage.Get(x => x.Id == queued.Id);
+        result.Length.ShouldBeGreaterThan(0, "Task should still exist after SetCompleted");
+        result[0].ExecutionTimeMs.ShouldBe(expectedExecutionTime, "ExecutionTimeMs should be persisted when setting task as completed");
+    }
+
+    [Fact]
+    public async Task Should_PersistExecutionTimeMs_When_UpdateCurrentRun()
+    {
+        // Arrange
+        var taskId = GetGuidForProvider();
+        var task = new QueuedTask
+        {
+            Id = taskId,
+            Type = "RecurringTask",
+            Request = "{}",
+            Handler = "RecurringHandler",
+            Status = QueuedTaskStatus.Completed,
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            IsRecurring = true,
+            CurrentRunCount = 0
+        };
+        await _storage.Persist(task);
+        const double expectedExecutionTime = 234.56;
+        var nextRun = DateTimeOffset.UtcNow.AddMinutes(5);
+
+        // Act
+        await _storage.UpdateCurrentRun(taskId, expectedExecutionTime, nextRun, AuditLevel.Full);
+
+        // Assert
+        var result = await _storage.Get(x => x.Id == taskId);
+        result.Length.ShouldBeGreaterThan(0, "Task should exist after UpdateCurrentRun");
+        result[0].ExecutionTimeMs.ShouldBe(expectedExecutionTime, "ExecutionTimeMs should be persisted when updating current run");
+
+        // Verify RunsAudit also has ExecutionTimeMs
+        var runsAudit = _mockedDbContext.RunsAudit.OrderBy(x => x.Id).LastOrDefault(x => x.QueuedTaskId == taskId);
+        runsAudit.ShouldNotBeNull("RunsAudit should be created");
+        runsAudit.ExecutionTimeMs.ShouldBe(expectedExecutionTime, "RunsAudit should have ExecutionTimeMs");
     }
 
     [Fact]
@@ -228,7 +281,7 @@ public abstract class EfCoreTaskStorageTestsBase
         var count = await _storage.GetCurrentRunCount(taskId);
         count.ShouldBe(0); // Inizialmente zero
 
-        await _storage.UpdateCurrentRun(taskId, null, AuditLevel.Full); // Aggiorna la corsa
+        await _storage.UpdateCurrentRun(taskId, 100.0, null, AuditLevel.Full); // Aggiorna la corsa
         count = await _storage.GetCurrentRunCount(taskId);
         count.ShouldBe(1); // Dovrebbe essere incrementato
     }
@@ -241,7 +294,7 @@ public abstract class EfCoreTaskStorageTestsBase
         var taskId  = queued.Id;
         var nextRun = DateTimeOffset.UtcNow.AddDays(1);
 
-        await _storage.UpdateCurrentRun(taskId, nextRun, AuditLevel.Full);
+        await _storage.UpdateCurrentRun(taskId, 100.0, nextRun, AuditLevel.Full);
 
         var task = await _storage.Get(x => x.Id == taskId);
         task[0].CurrentRunCount.ShouldBe(1);
@@ -1158,7 +1211,7 @@ public abstract class EfCoreTaskStorageTestsBase
         var nextRun           = DateTimeOffset.UtcNow.AddHours(1);
 
         // Act
-        await _storage.UpdateCurrentRun(taskId, nextRun, AuditLevel.Full);
+        await _storage.UpdateCurrentRun(taskId, 100.0, nextRun, AuditLevel.Full);
 
         // Assert
         var task = await _storage.Get(x => x.Id == taskId);
@@ -1190,7 +1243,7 @@ public abstract class EfCoreTaskStorageTestsBase
         var nextRun           = DateTimeOffset.UtcNow.AddHours(1);
 
         // Act
-        await _storage.UpdateCurrentRun(taskId, nextRun, AuditLevel.Minimal);
+        await _storage.UpdateCurrentRun(taskId, 100.0, nextRun, AuditLevel.Minimal);
 
         // Assert
         var task = await _storage.Get(x => x.Id == taskId);
@@ -1222,7 +1275,7 @@ public abstract class EfCoreTaskStorageTestsBase
         var nextRun           = DateTimeOffset.UtcNow.AddHours(1);
 
         // Act
-        await _storage.UpdateCurrentRun(taskId, nextRun, AuditLevel.ErrorsOnly);
+        await _storage.UpdateCurrentRun(taskId, 100.0, nextRun, AuditLevel.ErrorsOnly);
 
         // Assert
         var task = await _storage.Get(x => x.Id == taskId);
@@ -1256,7 +1309,7 @@ public abstract class EfCoreTaskStorageTestsBase
         var nextRun           = DateTimeOffset.UtcNow.AddHours(1);
 
         // Act
-        await _storage.UpdateCurrentRun(taskId, nextRun, AuditLevel.ErrorsOnly);
+        await _storage.UpdateCurrentRun(taskId, 100.0, nextRun, AuditLevel.ErrorsOnly);
 
         // Assert
         var task = await _storage.Get(x => x.Id == taskId);
@@ -1287,7 +1340,7 @@ public abstract class EfCoreTaskStorageTestsBase
         var nextRun           = DateTimeOffset.UtcNow.AddHours(1);
 
         // Act
-        await _storage.UpdateCurrentRun(taskId, nextRun, AuditLevel.None);
+        await _storage.UpdateCurrentRun(taskId, 100.0, nextRun, AuditLevel.None);
 
         // Assert
         var task = await _storage.Get(x => x.Id == taskId);

@@ -8,7 +8,7 @@ public class QueuesControllerTests : MonitoringTestBase
     public async Task Should_get_all_queues_metrics()
     {
         // Act
-        var response = await Client.GetAsync("/evertask/api/queues");
+        var response = await Client.GetAsync("/monitoring/api/queues");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -30,7 +30,7 @@ public class QueuesControllerTests : MonitoringTestBase
         const int pageSize = 10;
 
         // Act
-        var response = await Client.GetAsync($"/evertask/api/queues/{queueName}/tasks?page=1&pageSize={pageSize}");
+        var response = await Client.GetAsync($"/monitoring/api/queues/{queueName}/tasks?page=1&pageSize={pageSize}");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -49,7 +49,7 @@ public class QueuesControllerTests : MonitoringTestBase
     public async Task Should_get_queue_configurations_with_all_configured_queues()
     {
         // Act
-        var response = await Client.GetAsync("/evertask/api/queues/configurations");
+        var response = await Client.GetAsync("/monitoring/api/queues/configurations");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -70,7 +70,7 @@ public class QueuesControllerTests : MonitoringTestBase
     public async Task Should_include_queues_without_tasks()
     {
         // Act
-        var response = await Client.GetAsync("/evertask/api/queues/configurations");
+        var response = await Client.GetAsync("/monitoring/api/queues/configurations");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -95,7 +95,7 @@ public class QueuesControllerTests : MonitoringTestBase
     public async Task Should_merge_configuration_with_metrics()
     {
         // Act
-        var response = await Client.GetAsync("/evertask/api/queues/configurations");
+        var response = await Client.GetAsync("/monitoring/api/queues/configurations");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);

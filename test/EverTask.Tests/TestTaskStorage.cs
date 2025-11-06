@@ -43,7 +43,7 @@ public class TestTaskStorage : ITaskStorage
         return Task.CompletedTask;
     }
 
-    public Task SetCompleted(Guid taskId, AuditLevel auditLevel)
+    public Task SetCompleted(Guid taskId, double executionTimeMs, AuditLevel auditLevel)
     {
         return Task.CompletedTask;
     }
@@ -58,7 +58,7 @@ public class TestTaskStorage : ITaskStorage
         return Task.CompletedTask;
     }
 
-    public Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception, AuditLevel auditLevel, CancellationToken ct = default)
+    public Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception, AuditLevel auditLevel, double? executionTimeMs = null, CancellationToken ct = default)
     {
         return Task.CompletedTask;
     }
@@ -68,7 +68,7 @@ public class TestTaskStorage : ITaskStorage
         return Task.FromResult(0);
     }
 
-    public Task UpdateCurrentRun(Guid taskId, DateTimeOffset? nextRun, AuditLevel auditLevel)
+    public Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel)
     {
         return Task.CompletedTask;
     }

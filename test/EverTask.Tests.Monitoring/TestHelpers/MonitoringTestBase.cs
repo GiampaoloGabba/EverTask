@@ -41,7 +41,7 @@ public abstract class MonitoringTestBase : IAsyncLifetime
     protected SignalRTestClient CreateSignalRClient(string? hubPath = null)
     {
         var baseUrl = Client.BaseAddress!.ToString().TrimEnd('/');
-        var path = hubPath ?? "/evertask/monitor";
+        var path = hubPath ?? "/monitoring/hub";
         var url = $"{baseUrl}{path}";
 
         return new SignalRTestClient(url, builder =>

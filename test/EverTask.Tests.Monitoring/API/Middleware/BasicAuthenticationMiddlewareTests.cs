@@ -25,7 +25,7 @@ public class BasicAuthenticationMiddlewareTests : IAsyncLifetime
     public async Task Should_allow_anonymous_access_to_config_endpoint()
     {
         // Act - No auth header
-        var response = await _client.GetAsync("/evertask/api/config");
+        var response = await _client.GetAsync("/monitoring/api/config");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -35,7 +35,7 @@ public class BasicAuthenticationMiddlewareTests : IAsyncLifetime
     public async Task Should_require_auth_header_for_protected_endpoints()
     {
         // Act - No auth header
-        var response = await _client.GetAsync("/evertask/api/dashboard/overview");
+        var response = await _client.GetAsync("/monitoring/api/dashboard/overview");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
@@ -50,7 +50,7 @@ public class BasicAuthenticationMiddlewareTests : IAsyncLifetime
         _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", credentials);
 
         // Act
-        var response = await _client.GetAsync("/evertask/api/dashboard/overview");
+        var response = await _client.GetAsync("/monitoring/api/dashboard/overview");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
@@ -60,7 +60,7 @@ public class BasicAuthenticationMiddlewareTests : IAsyncLifetime
     public async Task Should_return_401_without_auth_header()
     {
         // Act
-        var response = await _client.GetAsync("/evertask/api/tasks");
+        var response = await _client.GetAsync("/monitoring/api/tasks");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
@@ -75,7 +75,7 @@ public class BasicAuthenticationMiddlewareTests : IAsyncLifetime
         _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", credentials);
 
         // Act
-        var response = await _client.GetAsync("/evertask/api/dashboard/overview");
+        var response = await _client.GetAsync("/monitoring/api/dashboard/overview");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -91,11 +91,11 @@ public class BasicAuthenticationMiddlewareTests : IAsyncLifetime
         // Act - Test multiple endpoints
         var endpoints = new[]
         {
-            "/evertask/api/tasks?page=1&pageSize=10",
-            "/evertask/api/dashboard/overview",
-            "/evertask/api/dashboard/recent-activity",
-            "/evertask/api/queues",
-            "/evertask/api/statistics/success-rate-trend"
+            "/monitoring/api/tasks?page=1&pageSize=10",
+            "/monitoring/api/dashboard/overview",
+            "/monitoring/api/dashboard/recent-activity",
+            "/monitoring/api/queues",
+            "/monitoring/api/statistics/success-rate-trend"
         };
 
         foreach (var endpoint in endpoints)

@@ -70,12 +70,11 @@ public class MonitoringTestWebAppFactory : WebApplicationFactory<TestProgram>
             // Add EverTask Monitoring API
             services.AddEverTaskMonitoringApiStandalone(options =>
             {
-                options.BasePath = "/evertask";
+                // BasePath and SignalRHubPath are now fixed to "/monitoring" and "/monitoring/hub"
                 options.EnableUI = false; // Disable UI for tests
                 options.RequireAuthentication = _requireAuthentication;
                 options.Username = "testuser";
                 options.Password = "testpass";
-                options.SignalRHubPath = "/evertask/monitor";
                 options.EnableCors = true;
             });
 

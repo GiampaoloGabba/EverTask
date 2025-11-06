@@ -136,9 +136,9 @@ public class MemoryTaskStorageConcurrencyTests
         // Act - Update status concurrently
         await Parallel.ForEachAsync(tasks, async (task, ct) =>
         {
-            await _storage.SetStatus(task.Id, QueuedTaskStatus.Queued, null, AuditLevel.Full, ct);
-            await _storage.SetStatus(task.Id, QueuedTaskStatus.InProgress, null, AuditLevel.Full, ct);
-            await _storage.SetStatus(task.Id, QueuedTaskStatus.Completed, null, AuditLevel.Full, ct);
+            await _storage.SetStatus(task.Id, QueuedTaskStatus.Queued, null, AuditLevel.Full, 100, ct);
+            await _storage.SetStatus(task.Id, QueuedTaskStatus.InProgress, null, AuditLevel.Full, 100, ct);
+            await _storage.SetStatus(task.Id, QueuedTaskStatus.Completed, null, AuditLevel.Full, 100, ct);
         });
 
         // Assert - All tasks should be in Completed status
@@ -183,7 +183,7 @@ public class MemoryTaskStorageConcurrencyTests
             if (item.index % 2 == 0)
             {
                 // Update status
-                await _storage.SetStatus(item.task.Id, QueuedTaskStatus.InProgress, null, AuditLevel.Full, ct);
+                await _storage.SetStatus(item.task.Id, QueuedTaskStatus.InProgress, null, AuditLevel.Full, 100, ct);
             }
             else
             {
@@ -277,7 +277,7 @@ public class MemoryTaskStorageConcurrencyTests
             for (int run = 0; run < runsPerTask; run++)
             {
                 var nextRun = DateTimeOffset.UtcNow.AddMinutes(run + 1);
-                await _storage.UpdateCurrentRun(task.Id, nextRun, AuditLevel.Full);
+                await _storage.UpdateCurrentRun(task.Id, 100.0, nextRun, AuditLevel.Full);
             }
         });
 

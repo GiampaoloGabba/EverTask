@@ -51,7 +51,7 @@ public class EndToEndTests : MonitoringTestBase
         await WaitForTaskCompletionAsync(taskId);
 
         // Query task via API
-        var response = await Client.GetAsync($"/evertask/api/tasks/{taskId}");
+        var response = await Client.GetAsync($"/monitoring/api/tasks/{taskId}");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -89,7 +89,7 @@ public class EndToEndTests : MonitoringTestBase
         await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Failed);
 
         // Query task via API
-        var response = await Client.GetAsync($"/evertask/api/tasks/{taskId}");
+        var response = await Client.GetAsync($"/monitoring/api/tasks/{taskId}");
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
 
         var taskDetail = await DeserializeResponseAsync<TaskDetailDto>(response);
@@ -105,7 +105,7 @@ public class EndToEndTests : MonitoringTestBase
         var dispatcher = Factory.Services.GetRequiredService<ITaskDispatcher>();
 
         // Get initial overview
-        var initialResponse = await Client.GetAsync("/evertask/api/dashboard/overview?range=Today");
+        var initialResponse = await Client.GetAsync("/monitoring/api/dashboard/overview?range=Today");
         var initialOverview = await DeserializeResponseAsync<OverviewDto>(initialResponse);
         var initialTotal = initialOverview!.TotalTasksToday;
 
@@ -115,7 +115,7 @@ public class EndToEndTests : MonitoringTestBase
         await Task.Delay(1000); // Give time for task to be processed
 
         // Query dashboard again
-        var updatedResponse = await Client.GetAsync("/evertask/api/dashboard/overview?range=Today");
+        var updatedResponse = await Client.GetAsync("/monitoring/api/dashboard/overview?range=Today");
         var updatedOverview = await DeserializeResponseAsync<OverviewDto>(updatedResponse);
 
         // Assert
