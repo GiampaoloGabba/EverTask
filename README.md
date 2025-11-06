@@ -327,7 +327,7 @@ builder.Services.AddEverTask(opt =>
     options.EnableUI = true;
     options.Username = "admin";
     options.Password = "admin";
-    options.RequireAuthentication = true;
+    options.EnableAuthentication = true;
 });
 
 var app = builder.Build();

@@ -33,7 +33,7 @@ The EverTask Monitoring API provides:
 - **Task History** with detailed execution logs and status changes
 - **Analytics** including success rate trends, execution times, and task distribution
 - **Queue Metrics** for multi-queue monitoring
-- **Basic Authentication** for secure access
+- **JWT Authentication** for secure access
 
 The monitoring system can be used in two modes:
 - **Full Mode** (default): API + embedded dashboard UI
@@ -74,7 +74,7 @@ builder.Services.AddEverTask(opt =>
     options.EnableUI = true;
     options.Username = "admin";
     options.Password = "admin";
-    options.RequireAuthentication = true;
+    options.EnableAuthentication = true;
 });
 
 var app = builder.Build();
@@ -105,13 +105,12 @@ All configuration is done through the `EverTaskApiOptions` class passed to `AddM
     // Enable/disable embedded dashboard (default: true)
     options.EnableUI = true;
 
-    // Basic Authentication credentials
+    // JWT Authentication credentials
     options.Username = "admin";         // Default: "admin"
     options.Password = "admin";         // Default: "admin"
 
     // Authentication settings
-    options.RequireAuthentication = true;          // Default: true
-    options.AllowAnonymousReadAccess = false;      // Default: false
+    options.EnableAuthentication = true;          // Default: true
 
     // SignalR hub path for real-time updates (fixed path)
     // Note: SignalRHubPath is now fixed to "/monitoring/hub" and cannot be changed
@@ -130,13 +129,17 @@ All configuration is done through the `EverTaskApiOptions` class passed to `AddM
 |----------|------|---------|-------------|
 | `BasePath` | string | `"/monitoring"` | Base path for API and UI |
 | `EnableUI` | bool | `true` | Enable embedded dashboard UI |
+| `EnableSwagger` | bool | `false` | Enable Swagger/OpenAPI documentation |
 | `ApiBasePath` | string | `"{BasePath}/api"` | API base path (readonly, derived) |
 | `UIBasePath` | string | `"{BasePath}"` | UI base path (readonly, derived) |
-| `Username` | string | `"admin"` | Basic Auth username |
-| `Password` | string | `"admin"` | Basic Auth password |
+| `Username` | string | `"admin"` | JWT authentication username |
+| `Password` | string | `"admin"` | JWT authentication password |
+| `JwtSecret` | string? | auto-generated | Secret key for signing JWT tokens (min 256 bits recommended) |
+| `JwtIssuer` | string | `"EverTask.Monitor.Api"` | JWT token issuer |
+| `JwtAudience` | string | `"EverTask.Monitor.Api"` | JWT token audience |
+| `JwtExpirationHours` | int | `8` | JWT token expiration time in hours |
 | `SignalRHubPath` | string | `"/monitoring/hub"` | SignalR hub path (readonly, fixed) |
-| `RequireAuthentication` | bool | `true` | Enable Basic Auth |
-| `AllowAnonymousReadAccess` | bool | `false` | Allow read-only access without auth |
+| `EnableAuthentication` | bool | `true` | Enable JWT authentication |
 | `EnableCors` | bool | `true` | Enable CORS |
 | `CorsAllowedOrigins` | string[] | `[]` | CORS allowed origins (empty = allow all) |
 | `AllowedIpAddresses` | string[] | `[]` | IP whitelist (empty = allow all IPs). Supports IPv4/IPv6 and CIDR notation |
@@ -484,7 +487,7 @@ Updates are pushed via SignalR with no page refresh required.
 
 ## Authentication
 
-The monitoring API uses Basic Authentication for security.
+The monitoring API uses JWT (JSON Web Token) authentication for secure access.
 
 ### Default Credentials
 
@@ -495,32 +498,42 @@ Password: admin
 
 > **Warning:** Always change the default credentials in production!
 
+### Authentication Flow
+
+1. **Login**: POST credentials to `/monitoring/api/auth/login` to obtain a JWT token
+2. **Use Token**: Include the token in the `Authorization: Bearer {token}` header for all API requests
+3. **Token Expiration**: Tokens expire after 8 hours by default (configurable via `JwtExpirationHours`)
+
 ### Configuration
 
 ```csharp
 .AddMonitoringApi(options =>
 {
     // Enable authentication (default: true)
-    options.RequireAuthentication = true;
+    options.EnableAuthentication = true;
 
     // Set custom credentials
     options.Username = "monitor_user";
     options.Password = "secure_password_123";
 
-    // Allow read-only access without authentication (optional)
-    options.AllowAnonymousReadAccess = false;
+    // JWT configuration
+    options.JwtSecret = "your-256-bit-secret-key-here";  // Auto-generated if not provided
+    options.JwtExpirationHours = 8;                       // Default: 8 hours
+    options.JwtIssuer = "MyApp";                          // Default: "EverTask.Monitor.Api"
+    options.JwtAudience = "MyApp";                        // Default: "EverTask.Monitor.Api"
 });
 ```
 
 ### Environment Variables
 
-Store credentials securely using environment variables:
+Store credentials and secrets securely using environment variables:
 
 ```csharp
 .AddMonitoringApi(options =>
 {
     options.Username = Environment.GetEnvironmentVariable("MONITOR_USERNAME") ?? "admin";
     options.Password = Environment.GetEnvironmentVariable("MONITOR_PASSWORD") ?? "admin";
+    options.JwtSecret = Environment.GetEnvironmentVariable("JWT_SECRET");  // Auto-generated if null
 });
 ```
 
@@ -528,18 +541,37 @@ Store credentials securely using environment variables:
 # Set environment variables
 export MONITOR_USERNAME=admin
 export MONITOR_PASSWORD=my_secure_password
+export JWT_SECRET=your-strong-random-secret-min-256-bits
 ```
 
-### Anonymous Read Access
+### Login Endpoint
 
-Allow reading task data without authentication (write operations still require auth):
+POST to `/monitoring/api/auth/login` to obtain a JWT token:
 
-```csharp
-.AddMonitoringApi(options =>
+**Request:**
+```json
 {
-    options.RequireAuthentication = true;
-    options.AllowAnonymousReadAccess = true;  // GET/HEAD requests don't need auth
-});
+  "username": "admin",
+  "password": "admin"
+}
+```
+
+**Response:**
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "expiresAt": "2025-01-16T02:00:00Z",
+  "username": "admin"
+}
+```
+
+### Using the Token
+
+Include the token in the `Authorization` header for all API requests:
+
+```bash
+curl -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
+     http://localhost:5000/monitoring/api/tasks
 ```
 
 ### Disable Authentication
@@ -549,7 +581,7 @@ For development environments only:
 ```csharp
 .AddMonitoringApi(options =>
 {
-    options.RequireAuthentication = false;  // No authentication required
+    options.EnableAuthentication = false;  // No authentication required
 });
 ```
 
@@ -631,32 +663,26 @@ builder.Services.AddEverTask(opt =>
     if (builder.Environment.IsDevelopment())
     {
         // Development: Disable authentication
-        options.RequireAuthentication = false;
+        options.EnableAuthentication = false;
         options.EnableCors = true;
         options.CorsAllowedOrigins = Array.Empty<string>();
     }
     else
     {
         // Production: Strict security
-        options.RequireAuthentication = true;
+        options.EnableAuthentication = true;
         options.Username = Environment.GetEnvironmentVariable("MONITOR_USERNAME") ?? "admin";
         options.Password = Environment.GetEnvironmentVariable("MONITOR_PASSWORD") ?? throw new InvalidOperationException("MONITOR_PASSWORD not set");
+        options.JwtSecret = Environment.GetEnvironmentVariable("JWT_SECRET") ?? throw new InvalidOperationException("JWT_SECRET not set");
         options.EnableCors = true;
         options.CorsAllowedOrigins = new[] { "https://myapp.com" };
     }
 });
 ```
 
-### Custom SignalR Hub Path
+### SignalR Hub Path
 
-Configure a custom SignalR hub path:
-
-```csharp
-.AddMonitoringApi(options =>
-{
-    options.SignalRHubPath = "/realtime/tasks";
-});
-```
+The SignalR hub path is fixed to `/monitoring/hub` and cannot be customized. This ensures consistent integration between the API and the embedded dashboard UI.
 
 ### Standalone API Registration
 
@@ -967,7 +993,7 @@ builder.Services.AddEverTask(opt =>
 .AddMonitoringApi(options =>
 {
     options.BasePath = "/admin/tasks";
-    options.RequireAuthentication = !builder.Environment.IsDevelopment();
+    options.EnableAuthentication = !builder.Environment.IsDevelopment();
 });
 
 var app = builder.Build();
@@ -1024,11 +1050,26 @@ Use the REST API with your own frontend:
 import axios from 'axios';
 
 const API_BASE = 'http://localhost:5000/monitoring/api';
-const AUTH = { username: 'admin', password: 'admin' };
+
+// Login to get JWT token
+const loginResponse = await axios.post(`${API_BASE}/auth/login`, {
+    username: 'admin',
+    password: 'admin'
+});
+
+const token = loginResponse.data.token;
+console.log('Token expires at:', loginResponse.data.expiresAt);
+
+// Create axios instance with JWT token
+const api = axios.create({
+    baseURL: API_BASE,
+    headers: {
+        'Authorization': `Bearer ${token}`
+    }
+});
 
 // Get tasks
-const response = await axios.get(`${API_BASE}/tasks`, {
-    auth: AUTH,
+const response = await api.get('/tasks', {
     params: {
         status: 'Completed',
         page: 1,
@@ -1040,12 +1081,11 @@ console.log('Tasks:', response.data.tasks);
 console.log('Total:', response.data.totalCount);
 
 // Get task details
-const task = await axios.get(`${API_BASE}/tasks/${taskId}`, { auth: AUTH });
+const task = await api.get(`/tasks/${taskId}`);
 console.log('Task:', task.data);
 
 // Get dashboard overview
-const overview = await axios.get(`${API_BASE}/dashboard/overview`, {
-    auth: AUTH,
+const overview = await api.get('/dashboard/overview', {
     params: { range: 'Today' }
 });
 

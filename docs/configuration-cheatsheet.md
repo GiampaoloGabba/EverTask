@@ -129,8 +129,7 @@ await dispatcher.Dispatch(task, recurring => ..., auditLevel: AuditLevel.Minimal
     opt.EnableSwagger = false;                 // Default: false
     opt.Username = "admin";                    // Default: "admin"
     opt.Password = "admin";                    // Default: "admin" (CHANGE IN PRODUCTION!)
-    opt.RequireAuthentication = true;          // Default: true
-    opt.AllowAnonymousReadAccess = false;      // Default: false
+    opt.EnableAuthentication = true;           // Default: true
     opt.EnableCors = true;                     // Default: true
     opt.CorsAllowedOrigins = new[] {           // Default: empty (allow all)
         "https://myapp.com"
@@ -155,7 +154,7 @@ await dispatcher.Dispatch(task, recurring => ..., auditLevel: AuditLevel.Minimal
 ```csharp
 // Development: No authentication
 .AddMonitoringApi(opt => {
-    opt.RequireAuthentication = false;
+    opt.EnableAuthentication = false;
 })
 
 // Production: Environment variables

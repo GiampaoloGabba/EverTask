@@ -57,11 +57,11 @@ builder.Services.AddEverTask(opt =>
        .AddSerilog(opt => opt.ReadFrom.Configuration(builder.Configuration, new ConfigurationReaderOptions { SectionName = "EverTaskSerilog" }))
        .AddMonitoringApi(options =>
        {
-           options.EnableUI = true;
-           options.EnableSwagger = true; // Enable separate Swagger document for monitoring API
-           options.Username = "admin";
-           options.Password = "admin";
-           options.RequireAuthentication = false; // Disable auth for demo
+           options.EnableUI             = true;
+           options.EnableSwagger        = true; // Enable separate Swagger document for monitoring API
+           options.Username             = "admin";
+           options.Password             = "admin";
+           options.EnableAuthentication = true; // Disable auth for demo
        });
 
 var app = builder.Build();

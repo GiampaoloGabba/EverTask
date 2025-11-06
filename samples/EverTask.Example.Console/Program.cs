@@ -21,10 +21,10 @@ builder.Services.AddEverTask(opt =>
 .AddMemoryStorage()
 .AddMonitoringApi(options =>
 {
-    options.EnableUI = true;
-    options.Username = "admin";
-    options.Password = "admin";
-    options.RequireAuthentication = true;
+    options.EnableUI             = true;
+    options.Username             = "admin";
+    options.Password             = "admin";
+    options.EnableAuthentication = true;
 });
 
 var app = builder.Build();

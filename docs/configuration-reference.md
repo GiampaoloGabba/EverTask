@@ -812,8 +812,7 @@ AddMonitoringApi(Action<EverTaskApiOptions> configure)
     options.EnableUI = true;
     options.Username = "monitor_user";
     options.Password = "secure_password_123";
-    options.RequireAuthentication = true;
-    options.AllowAnonymousReadAccess = false;
+    options.EnableAuthentication = true;
     options.SignalRHubPath = "/realtime/monitor";
     options.EnableCors = true;
     options.CorsAllowedOrigins = new[] { "https://myapp.com" };
@@ -826,7 +825,7 @@ AddMonitoringApi(Action<EverTaskApiOptions> configure)
 {
     options.BasePath = "/api/evertask";
     options.EnableUI = false;  // Disable embedded dashboard
-    options.RequireAuthentication = false;  // Open API for custom frontend
+    options.EnableAuthentication = false;  // Open API for custom frontend
 })
 ```
 
@@ -840,12 +839,12 @@ AddMonitoringApi(Action<EverTaskApiOptions> configure)
     if (builder.Environment.IsDevelopment())
     {
         // Development: No authentication
-        options.RequireAuthentication = false;
+        options.EnableAuthentication = false;
     }
     else
     {
         // Production: Secure credentials from environment
-        options.RequireAuthentication = true;
+        options.EnableAuthentication = true;
         options.Username = Environment.GetEnvironmentVariable("MONITOR_USERNAME")
             ?? throw new InvalidOperationException("MONITOR_USERNAME not set");
         options.Password = Environment.GetEnvironmentVariable("MONITOR_PASSWORD")
@@ -865,11 +864,10 @@ AddMonitoringApi(Action<EverTaskApiOptions> configure)
 | `EnableSwagger` | `bool` | `false` | Enable Swagger/OpenAPI documentation |
 | `ApiBasePath` | `string` | `"{BasePath}/api"` | API endpoint path (readonly, derived from BasePath) |
 | `UIBasePath` | `string` | `"{BasePath}"` | UI endpoint path (readonly, derived from BasePath) |
-| `Username` | `string` | `"admin"` | Basic Authentication username |
-| `Password` | `string` | `"admin"` | Basic Authentication password (CHANGE IN PRODUCTION!) |
+| `Username` | `string` | `"admin"` | JWT Authentication username |
+| `Password` | `string` | `"admin"` | JWT Authentication password (CHANGE IN PRODUCTION!) |
 | `SignalRHubPath` | `string` | `"/monitoring/hub"` | SignalR hub path for real-time updates (readonly, fixed) |
-| `RequireAuthentication` | `bool` | `true` | Enable Basic Authentication |
-| `AllowAnonymousReadAccess` | `bool` | `false` | Allow read-only endpoints without authentication |
+| `EnableAuthentication` | `bool` | `true` | Enable JWT Authentication |
 | `EnableCors` | `bool` | `true` | Enable CORS for API endpoints |
 | `CorsAllowedOrigins` | `string[]` | `[]` | CORS allowed origins (empty = allow all) |
 | `AllowedIpAddresses` | `string[]` | `[]` | IP address whitelist (empty = allow all IPs). Supports IPv4, IPv6, and CIDR notation |
@@ -943,7 +941,7 @@ app.UseSwaggerUI(c =>
 
 #### Username / Password
 
-Basic Authentication credentials for accessing the monitoring dashboard and API.
+JWT Authentication credentials for accessing the monitoring dashboard and API.
 
 **Examples:**
 ```csharp
@@ -966,46 +964,26 @@ options.Password = configuration["Monitoring:Password"];
 - Always use HTTPS when authentication is enabled
 - Consider using anonymous read access for internal networks
 
-#### RequireAuthentication
+#### EnableAuthentication
 
-Controls whether Basic Authentication is required for API endpoints.
+Controls whether JWT Authentication is required for API endpoints.
 
 **Examples:**
 ```csharp
 // Require authentication (default, recommended for production)
-options.RequireAuthentication = true;
+options.EnableAuthentication = true;
 
 // No authentication (development only)
-options.RequireAuthentication = false;
+options.EnableAuthentication = false;
 
 // Environment-specific
-options.RequireAuthentication = !builder.Environment.IsDevelopment();
+options.EnableAuthentication = !builder.Environment.IsDevelopment();
 ```
 
 **Notes:**
 - The `/config` endpoint is always accessible without authentication (dashboard needs it)
+- The `/api/auth/login` and `/api/auth/validate` endpoints are always accessible
 - When disabled, all endpoints are publicly accessible
-- Combine with `AllowAnonymousReadAccess` for granular control
-
-#### AllowAnonymousReadAccess
-
-Allows read-only endpoints (GET, HEAD) to be accessed without authentication while still requiring authentication for write operations (future).
-
-**Examples:**
-```csharp
-// Require authentication for everything (default)
-options.RequireAuthentication = true;
-options.AllowAnonymousReadAccess = false;
-
-// Allow reading task data without authentication
-options.RequireAuthentication = true;
-options.AllowAnonymousReadAccess = true;  // GET/HEAD don't need auth
-```
-
-**Use Cases:**
-- Internal monitoring dashboards on secure networks
-- Public status pages showing task statistics
-- Integration with external monitoring tools
 
 #### SignalRHubPath
 

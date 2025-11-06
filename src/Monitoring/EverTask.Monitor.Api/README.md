@@ -42,10 +42,11 @@ builder.Services.AddEverTask(opt => opt.RegisterTasksFromAssembly(typeof(Program
 
 builder.Services.AddEverTaskApi(options =>
 {
-    // Note: BasePath is now fixed to "/monitoring" and cannot be changed
+    // Note: BasePath is fixed to "/monitoring" and cannot be changed
     // SignalRHubPath is fixed to "/monitoring/hub"
     options.Username = "admin";
     options.Password = "secret";
+    options.EnableAuthentication = true;  // Default: true
     options.EnableUI = true;  // Default: true
 });
 
@@ -68,7 +69,7 @@ builder.Services.AddEverTaskApi(options =>
 {
     // BasePath is fixed to "/monitoring", so API will be at /monitoring/api
     options.EnableUI = false;  // Disable embedded UI
-    options.RequireAuthentication = true;
+    options.EnableAuthentication = true;
 });
 
 var app = builder.Build();
@@ -84,7 +85,7 @@ app.Run();
 ```csharp
 builder.Services.AddEverTaskApi(options =>
 {
-    options.RequireAuthentication = false;  // Open access for development
+    options.EnableAuthentication = false;  // Open access for development
     options.EnableCors = true;  // Allow cross-origin requests
     options.EnableUI = true;  // Keep UI enabled
 });
@@ -101,8 +102,7 @@ builder.Services.AddEverTaskApi(options =>
     options.EnableUI = true;  // Enable embedded dashboard UI
     options.Username = "api_user";
     options.Password = Environment.GetEnvironmentVariable("API_PASSWORD") ?? "changeme";
-    options.RequireAuthentication = true;
-    options.AllowAnonymousReadAccess = false;
+    options.EnableAuthentication = true;
     options.EnableCors = true;
     options.CorsAllowedOrigins = new[] { "https://myapp.com", "http://localhost:3000" };
 });
@@ -183,7 +183,7 @@ The monitoring API exposes sensitive information:
 builder.Services.AddEverTaskApi(options =>
 {
     options.EnableUI = false;  // No public dashboard
-    options.RequireAuthentication = true;
+    options.EnableAuthentication = true;
     // Use strong credentials from secrets/environment
     options.Username = builder.Configuration["Monitoring:Username"];
     options.Password = builder.Configuration["Monitoring:Password"];
@@ -218,7 +218,7 @@ builder.WebHost.ConfigureKestrel(options =>
 builder.Services.AddEverTaskApi(options =>
 {
     options.EnableUI = true;
-    options.RequireAuthentication = false;  // Safe on localhost
+    options.EnableAuthentication = false;  // Safe on localhost
 });
 ```
 
@@ -250,24 +250,24 @@ app.Run("http://internal-monitor.local:5000");
 
 ### Authentication Considerations
 
-**Basic Auth is NOT sufficient for public internet exposure:**
-- Credentials transmitted in base64 (easily decoded)
-- No rate limiting or brute-force protection
-- No session management or token expiration
+**JWT Authentication provides:**
+- Token-based authentication with expiration (default: 8 hours)
+- Stateless authentication (no server-side sessions)
+- Support for Bearer token scheme
 
-**For public exposure, consider:**
-- Running behind a reverse proxy with OAuth2/OIDC
-- Using API Gateway with proper authentication
-- **Best option: Don't expose publicly at all**
+**However, for public internet exposure:**
+- Use HTTPS in production (JWT tokens are credentials)
+- Consider additional security layers (rate limiting, IP whitelisting)
+- **Best option: Don't expose publicly at all** - use VPN or internal network
 
 ### Summary
 
 | Environment | Recommended Configuration |
 |-------------|--------------------------|
-| **Development** | `RequireAuthentication = false`, `EnableUI = true` |
-| **Staging (internal)** | Basic Auth, IP whitelisting |
+| **Development** | `EnableAuthentication = false`, `EnableUI = true` |
+| **Staging (internal)** | JWT Auth, IP whitelisting |
 | **Production (public app)** | `EnableUI = false`, reverse proxy + IP whitelist, or VPN-only |
-| **Production (internal)** | Basic Auth or no auth if network-isolated |
+| **Production (internal)** | JWT Auth or no auth if network-isolated |
 
 ## API Endpoints
 
@@ -325,18 +325,15 @@ public class EverTaskApiOptions
     // UI base path (fixed: "/monitoring", readonly, only used when EnableUI is true)
     public string UIBasePath => BasePath;
 
-    // Basic Authentication credentials (default: "admin"/"admin")
+    // JWT Authentication credentials (default: "admin"/"admin")
     public string Username { get; set; } = "admin";
     public string Password { get; set; } = "admin";
 
     // SignalR hub path (fixed: "/monitoring/hub", readonly)
     public string SignalRHubPath => "/monitoring/hub";
 
-    // Enable Basic Authentication (default: true)
-    public bool RequireAuthentication { get; set; } = true;
-
-    // Allow anonymous read access (default: false)
-    public bool AllowAnonymousReadAccess { get; set; } = false;
+    // Enable JWT Authentication (default: true)
+    public bool EnableAuthentication { get; set; } = true;
 
     // Enable CORS (default: true)
     public bool EnableCors { get; set; } = true;
@@ -348,20 +345,47 @@ public class EverTaskApiOptions
 
 ## Authentication
 
-The API uses HTTP Basic Authentication by default. To authenticate:
+The API uses JWT Authentication. To authenticate:
 
-### Using cURL
+### Step 1: Login to Get JWT Token
 
 ```bash
-curl -u admin:admin https://yourapp.com/evertask/api/tasks
+curl -X POST https://yourapp.com/monitoring/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"admin"}'
+```
+
+Response:
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "username": "admin",
+  "expiresAt": "2025-01-07T10:00:00Z"
+}
+```
+
+### Step 2: Use Token in Requests
+
+```bash
+curl -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  https://yourapp.com/monitoring/api/tasks
 ```
 
 ### Using JavaScript/Fetch
 
 ```javascript
-const response = await fetch('https://yourapp.com/evertask/api/tasks', {
+// Login
+const loginResponse = await fetch('https://yourapp.com/monitoring/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'admin' })
+});
+const { token } = await loginResponse.json();
+
+// Use token for API calls
+const response = await fetch('https://yourapp.com/monitoring/api/tasks', {
     headers: {
-        'Authorization': 'Basic ' + btoa('admin:admin')
+        'Authorization': `Bearer ${token}`
     }
 });
 const tasks = await response.json();
@@ -372,7 +396,7 @@ const tasks = await response.json();
 ```csharp
 builder.Services.AddEverTaskApi(options =>
 {
-    options.RequireAuthentication = false;
+    options.EnableAuthentication = false;
 });
 ```
 
