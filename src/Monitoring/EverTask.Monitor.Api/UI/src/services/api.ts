@@ -23,6 +23,11 @@ import {
   type SuccessRateTrendDto,
   type ExecutionTimeDto
 } from '@/types/statistics.types';
+import type {
+  LoginRequest,
+  LoginResponse,
+  TokenValidationResponse
+} from '@/types/auth.types';
 
 class ApiService {
   private client: AxiosInstance;
@@ -42,12 +47,11 @@ class ApiService {
   }
 
   private setupInterceptors() {
-    // Add Basic Auth header
+    // Add JWT Bearer token header
     this.client.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-      const { username, password } = useAuthStore.getState();
-      if (username && password) {
-        const encoded = btoa(`${username}:${password}`);
-        config.headers.Authorization = `Basic ${encoded}`;
+      const { token } = useAuthStore.getState();
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
       }
       return config;
     });
@@ -118,6 +122,17 @@ class ApiService {
         this.convertStatusStringsToNumbers(obj[key]);
       }
     });
+  }
+
+  // Auth API
+  async login(credentials: LoginRequest) {
+    await this.initialize();
+    return this.client.post<LoginResponse>('/auth/login', credentials);
+  }
+
+  async validateToken(token?: string) {
+    await this.initialize();
+    return this.client.post<TokenValidationResponse>('/auth/validate', token);
   }
 
   // Tasks API

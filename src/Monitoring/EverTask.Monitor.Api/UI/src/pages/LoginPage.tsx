@@ -6,7 +6,9 @@ import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useAuthStore } from '@/stores/authStore';
+import { apiService } from '@/services/api';
 import { Activity, AlertCircle } from 'lucide-react';
+import { AxiosError } from 'axios';
 
 export function LoginPage() {
   const [username, setUsername] = useState('');
@@ -14,7 +16,7 @@ export function LoginPage() {
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  const login = useAuthStore((state) => state.login);
+  const setAuthData = useAuthStore((state) => state.setAuthData);
   const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -23,18 +25,30 @@ export function LoginPage() {
     setIsLoading(true);
 
     try {
-      // In a real app, this would validate against the backend
-      // For now, just store credentials (basic auth will be sent with API requests)
       if (!username || !password) {
         setError('Please enter both username and password');
         setIsLoading(false);
         return;
       }
 
-      login(username, password);
+      // Call login API to get JWT token
+      const response = await apiService.login({ username, password });
+      const { token, username: responseUsername, expiresAt } = response.data;
+
+      // Store JWT token in auth store
+      setAuthData(token, responseUsername, expiresAt);
+
+      // Navigate to dashboard
       navigate('/');
     } catch (err) {
-      setError('Login failed. Please check your credentials.');
+      const axiosError = err as AxiosError<{ message?: string }>;
+      if (axiosError.response?.status === 401) {
+        setError('Invalid username or password');
+      } else if (axiosError.response?.data?.message) {
+        setError(axiosError.response.data.message);
+      } else {
+        setError('Login failed. Please try again.');
+      }
       setIsLoading(false);
     }
   };
