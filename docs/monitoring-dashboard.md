@@ -676,17 +676,49 @@ builder.Services.AddSingleton<ITaskStorage, MyCustomStorage>();
 
 ## Swagger Integration
 
-When your application uses Swagger/OpenAPI, add the monitoring API endpoint to SwaggerUI:
+EverTask Monitoring API provides automatic Swagger/OpenAPI documentation generation with complete separation from your application's API documentation.
+
+### Enable Swagger Documentation
+
+Enable Swagger for the monitoring API in your configuration:
 
 ```csharp
-app.UseSwaggerUI(c =>
+.AddMonitoringApi(options =>
 {
-    c.SwaggerEndpoint("/swagger/v1/swagger.json", "My Application API");
-    c.SwaggerEndpoint("/swagger/monitoring/swagger.json", "EverTask Monitoring API");
+    options.EnableUI = true;
+    options.EnableSwagger = true;  // Enable separate Swagger document
+    // ... other options
 });
 ```
 
-Result: A dropdown appears in Swagger UI to switch between your application API and EverTask Monitoring API.
+### Configure SwaggerUI
+
+Add both endpoints to your SwaggerUI configuration:
+
+```csharp
+// Configure your application's Swagger document
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new() { Title = "My Application API", Version = "v1" });
+});
+
+// In the pipeline
+app.UseSwaggerUI(c =>
+{
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "My Application API");
+    c.SwaggerEndpoint("/swagger/evertask-monitoring/swagger.json", "EverTask Monitoring API");
+});
+```
+
+### How It Works
+
+When `EnableSwagger = true`:
+- EverTask creates a separate Swagger document at `/swagger/evertask-monitoring/swagger.json`
+- The document includes **only** EverTask monitoring endpoints (`/monitoring/api/*`)
+- Your application's Swagger document (`v1`) **excludes** EverTask endpoints automatically
+- No namespace filtering or custom predicates required in your application
+
+Result: A dropdown appears in Swagger UI to switch between your application API and EverTask Monitoring API, with complete separation of endpoints.
 
 ## Real-Time Monitoring
 

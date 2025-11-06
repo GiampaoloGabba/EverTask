@@ -23,6 +23,13 @@ public class EverTaskApiOptions
     public bool EnableUI { get; set; } = true;
 
     /// <summary>
+    /// Enable Swagger/OpenAPI documentation for monitoring API (default: false)
+    /// Creates a separate Swagger document at /swagger/evertask-monitoring/swagger.json
+    /// The document is automatically filtered to include only EverTask monitoring endpoints
+    /// </summary>
+    public bool EnableSwagger { get; set; } = false;
+
+    /// <summary>
     /// API base path (derived from BasePath)
     /// API is always accessible at /monitoring/api regardless of EnableUI setting
     /// </summary>

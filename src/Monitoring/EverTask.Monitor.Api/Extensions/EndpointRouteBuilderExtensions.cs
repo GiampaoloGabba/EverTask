@@ -25,6 +25,13 @@ public static class EndpointRouteBuilderExtensions
     {
         var options = endpoints.ServiceProvider.GetRequiredService<EverTaskApiOptions>();
 
+        // Enable Swagger JSON generation if configured
+        if (options.EnableSwagger)
+        {
+            var app = (IApplicationBuilder)endpoints;
+            app.UseSwagger();
+        }
+
         // Map SignalR hub using the existing extension method from SignalR monitoring package
         endpoints.MapEverTaskMonitorHub(options.SignalRHubPath);
 

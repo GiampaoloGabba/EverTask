@@ -126,6 +126,7 @@ await dispatcher.Dispatch(task, recurring => ..., auditLevel: AuditLevel.Minimal
     // BasePath: "/monitoring" (readonly)
     // SignalRHubPath: "/monitoring/hub" (readonly)
     opt.EnableUI = true;                       // Default: true
+    opt.EnableSwagger = false;                 // Default: false
     opt.Username = "admin";                    // Default: "admin"
     opt.Password = "admin";                    // Default: "admin" (CHANGE IN PRODUCTION!)
     opt.RequireAuthentication = true;          // Default: true
@@ -183,6 +184,17 @@ await dispatcher.Dispatch(task, recurring => ..., auditLevel: AuditLevel.Minimal
         "203.0.113.100"            // Specific admin IP
     };
 })
+
+// Swagger/OpenAPI documentation
+.AddMonitoringApi(opt => {
+    opt.EnableSwagger = true;      // Creates separate Swagger document
+})
+
+// In SwaggerUI configuration:
+app.UseSwaggerUI(c => {
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "My Application API");
+    c.SwaggerEndpoint("/swagger/evertask-monitoring/swagger.json", "EverTask Monitoring API");
+});
 ```
 
 ### SignalR

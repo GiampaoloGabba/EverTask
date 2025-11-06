@@ -16,6 +16,7 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
     c.EnableAnnotations();
+    c.SwaggerDoc("v1", new() { Title = "My Application API", Version = "v1" });
 });
 
 builder.Services.AddSignalR();
@@ -57,6 +58,7 @@ builder.Services.AddEverTask(opt =>
        .AddMonitoringApi(options =>
        {
            options.EnableUI = true;
+           options.EnableSwagger = true; // Enable separate Swagger document for monitoring API
            options.Username = "admin";
            options.Password = "admin";
            options.RequireAuthentication = false; // Disable auth for demo
@@ -71,7 +73,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI(c =>
     {
         c.SwaggerEndpoint("/swagger/v1/swagger.json", "My Application API");
-        c.SwaggerEndpoint("/swagger/monitoring/swagger.json", "EverTask Monitoring API");
+        c.SwaggerEndpoint("/swagger/evertask-monitoring/swagger.json", "EverTask Monitoring API");
     });
 }
 

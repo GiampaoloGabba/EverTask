@@ -862,6 +862,7 @@ AddMonitoringApi(Action<EverTaskApiOptions> configure)
 |----------|------|---------|-------------|
 | `BasePath` | `string` | `"/monitoring"` | Base path for API and UI endpoints |
 | `EnableUI` | `bool` | `true` | Enable embedded React dashboard |
+| `EnableSwagger` | `bool` | `false` | Enable Swagger/OpenAPI documentation |
 | `ApiBasePath` | `string` | `"{BasePath}/api"` | API endpoint path (readonly, derived from BasePath) |
 | `UIBasePath` | `string` | `"{BasePath}"` | UI endpoint path (readonly, derived from BasePath) |
 | `Username` | `string` | `"admin"` | Basic Authentication username |
@@ -902,6 +903,43 @@ options.EnableUI = false;
 - Mobile app integration
 - Third-party monitoring system integration
 - Headless server environments
+
+#### EnableSwagger
+
+Controls whether Swagger/OpenAPI documentation is generated for the monitoring API.
+
+When enabled, EverTask creates a **separate Swagger document** that includes only monitoring endpoints and automatically excludes them from your application's Swagger document.
+
+**Examples:**
+```csharp
+// Enable Swagger for monitoring API
+options.EnableSwagger = true;
+
+// Configure SwaggerUI in your application
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new() { Title = "My Application API", Version = "v1" });
+});
+
+app.UseSwaggerUI(c =>
+{
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "My Application API");
+    c.SwaggerEndpoint("/swagger/evertask-monitoring/swagger.json", "EverTask Monitoring API");
+});
+```
+
+**How It Works:**
+- Swagger document name: `evertask-monitoring`
+- Swagger JSON endpoint: `/swagger/evertask-monitoring/swagger.json`
+- Includes only EverTask monitoring controllers (`/monitoring/api/*`)
+- Your application's Swagger document automatically excludes EverTask endpoints
+- No manual filtering or namespace predicates required
+
+**Use Cases:**
+- API documentation and exploration
+- Integration with API clients and code generators
+- Testing monitoring endpoints with Swagger UI
+- API versioning and contract validation
 
 #### Username / Password
 

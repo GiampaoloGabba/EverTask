@@ -100,6 +100,7 @@
     <PackageVersion Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageVersion Include="Respawn" Version="6.2.1" />
     <PackageVersion Include="Serilog.Sinks.Console" Version="6.1.1" />
+    <PackageVersion Include="Swashbuckle.AspNetCore" Version="6.5.0" />
     <PackageVersion Include="UUIDNext" Version="4.2.2" />
   </ItemGroup>
   <ItemGroup>
