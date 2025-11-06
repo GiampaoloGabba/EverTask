@@ -57,10 +57,9 @@ builder.Services.AddEverTask(opt =>
        .AddMonitoringApi(options =>
        {
            options.EnableUI             = true;
-           options.EnableSwagger        = true; // Enable separate Swagger document for monitoring API
+           options.EnableSwagger        = true;
            options.Username             = "admin";
            options.Password             = "admin";
-           options.EnableAuthentication = true; // Disable auth for demo
        });
 
 var app = builder.Build();
