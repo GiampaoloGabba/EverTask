@@ -43,13 +43,13 @@ public class ShardedScheduler : IScheduler, IDisposable
             IEverTaskLogger<ShardedScheduler> logger,
             ITaskStorage? taskStorage)
         {
-            _shardId = shardId;
-            _queue = new();
+            _shardId      = shardId;
+            _queue        = new();
             _wakeUpSignal = new(0, 1);
-            _cts = new();
+            _cts          = new();
             _queueManager = queueManager;
-            _logger = logger;
-            _taskStorage = taskStorage;
+            _logger       = logger;
+            _taskStorage  = taskStorage;
 
             // Avvia background loop per questo shard
             _ = ProcessScheduledTasksAsync(_cts.Token);
@@ -150,7 +150,7 @@ public class ShardedScheduler : IScheduler, IDisposable
             try
             {
                 string queueName = item.QueueName ??
-                    (item.RecurringTask != null ? QueueNames.Recurring : QueueNames.Default);
+                                   (item.RecurringTask != null ? QueueNames.Recurring : QueueNames.Default);
 
                 _logger.LogDebug("Shard {ShardId}: Dispatching task {TaskId} to queue '{QueueName}'",
                     _shardId, item.PersistenceId, queueName);
@@ -169,6 +169,7 @@ public class ShardedScheduler : IScheduler, IDisposable
                         QueuedTaskStatus.Failed,
                         ex,
                         item.AuditLevel,
+                        100,
                         CancellationToken.None
                     ).ConfigureAwait(false);
                 }
@@ -213,14 +214,14 @@ public class ShardedScheduler : IScheduler, IDisposable
         ITaskStorage? taskStorage = null,
         int shardCount = 0)
     {
-        _logger = logger;
+        _logger     = logger;
         _shardCount = shardCount > 0 ? shardCount : Math.Max(4, Environment.ProcessorCount);
 
         _logger.LogInformation("Initializing ShardedScheduler with {ShardCount} shards", _shardCount);
 
         _shards = Enumerable.Range(0, _shardCount)
-            .Select(i => new Shard(i, queueManager, logger, taskStorage))
-            .ToArray();
+                            .Select(i => new Shard(i, queueManager, logger, taskStorage))
+                            .ToArray();
     }
 
     /// <summary>

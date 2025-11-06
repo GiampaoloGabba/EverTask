@@ -45,6 +45,9 @@ public class WorkerExecutor(
         // Resolve handler (lazy or eager mode)
         object? handler = null!; // Will be assigned in both if and else branches
 
+        // Track execution time (initialized to 0, updated if task completes successfully)
+        double executionTime = 0.0;
+
         try
         {
             serviceToken.ThrowIfCancellationRequested();
@@ -74,6 +77,7 @@ public class WorkerExecutor(
                             QueuedTaskStatus.Failed,
                             ex,
                             task.AuditLevel,
+                            executionTime,
                             serviceToken
                         ).ConfigureAwait(false);
                     }
@@ -114,10 +118,10 @@ public class WorkerExecutor(
 
             await ExecuteCallback(GetStartedCallback(task, handler), task, "Started").ConfigureAwait(false);
 
-            var executionTime = await ExecuteTask(task, handler, scope.ServiceProvider, serviceToken, taskStorage);
+            executionTime = await ExecuteTask(task, handler, scope.ServiceProvider, serviceToken, taskStorage);
 
             if (taskStorage != null)
-                await taskStorage.SetCompleted(task.PersistenceId, task.AuditLevel).ConfigureAwait(false);
+                await taskStorage.SetCompleted(task.PersistenceId, executionTime, task.AuditLevel).ConfigureAwait(false);
 
             await ExecuteCallback(GetCompletedCallback(task, handler), task, "Completed").ConfigureAwait(false);
 
@@ -165,7 +169,7 @@ public class WorkerExecutor(
             }
 
             cancellationSourceProvider.Delete(task.PersistenceId);
-            await QueueNextOccourrence(task, taskStorage);
+            await QueueNextOccourrence(task, executionTime, taskStorage);
         }
     }
 
@@ -490,7 +494,7 @@ public class WorkerExecutor(
         {
             // Logica per le altre eccezioni
             if (taskStorage != null)
-                await taskStorage.SetStatus(task.PersistenceId, QueuedTaskStatus.Failed, ex, task.AuditLevel, serviceToken)
+                await taskStorage.SetStatus(task.PersistenceId, QueuedTaskStatus.Failed, ex, task.AuditLevel, null, serviceToken)
                                  .ConfigureAwait(false);
 
             await ExecuteCallback(GetErrorCallback(task, handler), task, ex,
@@ -500,7 +504,7 @@ public class WorkerExecutor(
         }
     }
 
-    private async Task QueueNextOccourrence(TaskHandlerExecutor task, ITaskStorage? taskStorage)
+    private async Task QueueNextOccourrence(TaskHandlerExecutor task, double executionTimeMs, ITaskStorage? taskStorage)
     {
         if (task.RecurringTask == null) return;
 
@@ -557,7 +561,7 @@ public class WorkerExecutor(
                     CancellationToken.None).ConfigureAwait(false);
             }
 
-            await taskStorage.UpdateCurrentRun(task.PersistenceId, result.NextRun, task.AuditLevel)
+            await taskStorage.UpdateCurrentRun(task.PersistenceId, executionTimeMs, result.NextRun, task.AuditLevel)
                              .ConfigureAwait(false);
 
             if (result.NextRun.HasValue)

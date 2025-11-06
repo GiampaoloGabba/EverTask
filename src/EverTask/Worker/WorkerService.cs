@@ -226,7 +226,7 @@ public class WorkerService(
 
                     if (itemStorage != null)
                     {
-                        await itemStorage.SetStatus(taskInfo.Id, QueuedTaskStatus.Failed, ex, auditLevel, token)
+                        await itemStorage.SetStatus(taskInfo.Id, QueuedTaskStatus.Failed, ex, auditLevel, null,  token)
                             .ConfigureAwait(false);
                     }
 
@@ -246,6 +246,7 @@ public class WorkerService(
                         QueuedTaskStatus.Failed,
                         new Exception("Unable to create the IBackground task from the specified properties"),
                         auditLevel,
+                        null,
                         token).ConfigureAwait(false);
                 }
             }
