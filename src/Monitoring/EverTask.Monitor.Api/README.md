@@ -42,7 +42,8 @@ builder.Services.AddEverTask(opt => opt.RegisterTasksFromAssembly(typeof(Program
 
 builder.Services.AddEverTaskApi(options =>
 {
-    options.BasePath = "/monitoring";  // UI at /monitoring, API at /monitoring/api
+    // Note: BasePath is now fixed to "/monitoring" and cannot be changed
+    // SignalRHubPath is fixed to "/monitoring/hub"
     options.Username = "admin";
     options.Password = "secret";
     options.EnableUI = true;  // Default: true
@@ -58,14 +59,14 @@ app.Run();
 
 - **Dashboard UI**: `http://localhost:5000/monitoring`
 - **API Endpoints**: `http://localhost:5000/monitoring/api/*`
-- **SignalR Hub**: `http://localhost:5000/monitoring/monitor` (default)
+- **SignalR Hub**: `http://localhost:5000/monitoring/hub` (fixed)
 
 ### Mode 2: API-Only (No UI)
 
 ```csharp
 builder.Services.AddEverTaskApi(options =>
 {
-    options.BasePath = "/api/monitoring";
+    // BasePath is fixed to "/monitoring", so API will be at /monitoring/api
     options.EnableUI = false;  // Disable embedded UI
     options.RequireAuthentication = true;
 });
@@ -75,7 +76,7 @@ app.MapEverTaskApi();
 app.Run();
 ```
 
-- **API Endpoints**: `http://localhost:5000/api/monitoring/*`
+- **API Endpoints**: `http://localhost:5000/monitoring/api/*`
 - **No UI served** - build your own frontend or use as a standalone API
 
 ### Mode 3: Development Mode (No Authentication)
@@ -94,11 +95,12 @@ builder.Services.AddEverTaskApi(options =>
 ```csharp
 builder.Services.AddEverTaskApi(options =>
 {
-    options.BasePath = "/evertask";  // Base path for both UI and API
+    // Note: BasePath and SignalRHubPath are now fixed:
+    // - BasePath: "/monitoring" (cannot be changed)
+    // - SignalRHubPath: "/monitoring/hub" (cannot be changed)
     options.EnableUI = true;  // Enable embedded dashboard UI
     options.Username = "api_user";
     options.Password = Environment.GetEnvironmentVariable("API_PASSWORD") ?? "changeme";
-    options.SignalRHubPath = "/realtime/tasks";
     options.RequireAuthentication = true;
     options.AllowAnonymousReadAccess = false;
     options.EnableCors = true;
@@ -106,15 +108,14 @@ builder.Services.AddEverTaskApi(options =>
 });
 ```
 
-**Path Structure:**
-- When `EnableUI = true`: UI at `{BasePath}/`, API at `{BasePath}/api/*`
-- When `EnableUI = false`: API at `{BasePath}/*`
+**Fixed Path Structure:**
+- UI: `/monitoring` (when EnableUI = true)
+- API: `/monitoring/api/*`
+- SignalR Hub: `/monitoring/hub`
 
 ## API Endpoints
 
-All endpoints are prefixed with `{ApiBasePath}`:
-- When `EnableUI = true`: `{BasePath}/api` (e.g., `/evertask/api`)
-- When `EnableUI = false`: `{BasePath}` (e.g., `/api/monitoring`)
+All endpoints are prefixed with `/monitoring/api` (fixed)
 
 ### Tasks
 
@@ -147,7 +148,7 @@ All endpoints are prefixed with `{ApiBasePath}`:
 
 ### SignalR Hub
 
-- `{SignalRHubPath}` (default: `/evertask/monitor`)
+- `/monitoring/hub` (fixed)
   - Event: `EverTaskEvent` - Real-time task events
 
 ## Configuration Options
@@ -155,27 +156,25 @@ All endpoints are prefixed with `{ApiBasePath}`:
 ```csharp
 public class EverTaskApiOptions
 {
-    // Base path for API and UI (default: "/evertask")
-    // When EnableUI is true: UI at {BasePath}/, API at {BasePath}/api/*
-    // When EnableUI is false: API at {BasePath}/*
-    public string BasePath { get; set; } = "/evertask";
+    // Base path for API and UI (fixed: "/monitoring", readonly)
+    public string BasePath => "/monitoring";
 
     // Enable embedded dashboard UI (default: true)
     // Set to false for API-only mode
     public bool EnableUI { get; set; } = true;
 
-    // API base path (derived from BasePath and EnableUI)
-    public string ApiBasePath => EnableUI ? $"{BasePath}/api" : BasePath;
+    // API base path (fixed: "/monitoring/api", readonly, derived)
+    public string ApiBasePath => $"{BasePath}/api";
 
-    // UI base path (only used when EnableUI is true)
+    // UI base path (fixed: "/monitoring", readonly, only used when EnableUI is true)
     public string UIBasePath => BasePath;
 
     // Basic Authentication credentials (default: "admin"/"admin")
     public string Username { get; set; } = "admin";
     public string Password { get; set; } = "admin";
 
-    // SignalR hub path (default: "/evertask/monitor")
-    public string SignalRHubPath { get; set; } = "/evertask/monitor";
+    // SignalR hub path (fixed: "/monitoring/hub", readonly)
+    public string SignalRHubPath => "/monitoring/hub";
 
     // Enable Basic Authentication (default: true)
     public bool RequireAuthentication { get; set; } = true;
@@ -290,7 +289,7 @@ function TaskMonitor() {
 import * as signalR from '@microsoft/signalr';
 
 const connection = new signalR.HubConnectionBuilder()
-    .withUrl('https://yourapp.com/evertask/monitor')
+    .withUrl('https://yourapp.com/monitoring/hub')
     .build();
 
 connection.on('EverTaskEvent', (event) => {

@@ -866,7 +866,7 @@ AddMonitoringApi(Action<EverTaskApiOptions> configure)
 | `UIBasePath` | `string` | `"{BasePath}"` | UI endpoint path (readonly, derived from BasePath) |
 | `Username` | `string` | `"admin"` | Basic Authentication username |
 | `Password` | `string` | `"admin"` | Basic Authentication password (CHANGE IN PRODUCTION!) |
-| `SignalRHubPath` | `string` | `"/monitoring/monitor"` | SignalR hub path for real-time updates |
+| `SignalRHubPath` | `string` | `"/monitoring/hub"` | SignalR hub path for real-time updates (readonly, fixed) |
 | `RequireAuthentication` | `bool` | `true` | Enable Basic Authentication |
 | `AllowAnonymousReadAccess` | `bool` | `false` | Allow read-only endpoints without authentication |
 | `EnableCors` | `bool` | `true` | Enable CORS for API endpoints |
@@ -970,22 +970,12 @@ options.AllowAnonymousReadAccess = true;  // GET/HEAD don't need auth
 
 #### SignalRHubPath
 
-Sets the SignalR hub path for real-time monitoring updates.
-
-**Examples:**
-```csharp
-// Default path
-options.SignalRHubPath = "/monitoring/monitor";
-
-// Custom path
-options.SignalRHubPath = "/realtime/tasks";
-options.SignalRHubPath = "/hub/evertask";
-```
+The SignalR hub path is now fixed to `/monitoring/hub` and cannot be changed.
 
 **Notes:**
-- Must match the path used by SignalR clients
+- The hub path is readonly and set to `/monitoring/hub`
 - SignalR monitoring is automatically configured if not already registered
-- Dashboard automatically uses this path for real-time updates
+- Dashboard automatically uses this fixed path for real-time updates
 
 #### EnableCors
 
@@ -1091,10 +1081,8 @@ The monitoring API automatically configures SignalR monitoring if it hasn't been
 {
     opt.IncludeExecutionLogs = true;  // Include logs in SignalR events
 })
-.AddMonitoringApi(options =>
-{
-    options.SignalRHubPath = "/monitoring/monitor";  // Must match SignalR path
-})
+.AddMonitoringApi()
+// Note: SignalRHubPath is now fixed to "/monitoring/hub" and cannot be changed
 ```
 
 ### AddSignalRMonitoring

@@ -112,8 +112,8 @@ All configuration is done through the `EverTaskApiOptions` class passed to `AddM
     options.RequireAuthentication = true;          // Default: true
     options.AllowAnonymousReadAccess = false;      // Default: false
 
-    // SignalR hub path for real-time updates
-    options.SignalRHubPath = "/monitoring/monitor"; // Default
+    // SignalR hub path for real-time updates (fixed path)
+    // Note: SignalRHubPath is now fixed to "/monitoring/hub" and cannot be changed
 
     // CORS settings
     options.EnableCors = true;                     // Default: true
@@ -133,7 +133,7 @@ All configuration is done through the `EverTaskApiOptions` class passed to `AddM
 | `UIBasePath` | string | `"{BasePath}"` | UI base path (readonly, derived) |
 | `Username` | string | `"admin"` | Basic Auth username |
 | `Password` | string | `"admin"` | Basic Auth password |
-| `SignalRHubPath` | string | `"/monitoring/monitor"` | SignalR hub path |
+| `SignalRHubPath` | string | `"/monitoring/hub"` | SignalR hub path (readonly, fixed) |
 | `RequireAuthentication` | bool | `true` | Enable Basic Auth |
 | `AllowAnonymousReadAccess` | bool | `false` | Allow read-only access without auth |
 | `EnableCors` | bool | `true` | Enable CORS |
@@ -412,7 +412,7 @@ Get runtime configuration (no authentication required - needed for dashboard ini
 {
   "apiBasePath": "/monitoring/api",
   "uiBasePath": "/monitoring",
-  "signalRHubPath": "/monitoring/monitor",
+  "signalRHubPath": "/monitoring/hub",
   "requireAuthentication": true,
   "uiEnabled": true
 }
@@ -678,14 +678,8 @@ The dashboard integrates seamlessly with EverTask's SignalR monitoring.
 
 ### Automatic Configuration
 
-SignalR monitoring is automatically configured when you add the monitoring API:
-
-```csharp
-.AddMonitoringApi(options =>
-{
-    options.SignalRHubPath = "/monitoring/monitor";
-});
-```
+SignalR monitoring is automatically configured when you add the monitoring API.
+The hub path is fixed to `/monitoring/hub` and cannot be changed.
 
 If SignalR monitoring wasn't previously registered, it's added automatically.
 
@@ -726,7 +720,7 @@ Connect to the SignalR hub from your own application:
 import * as signalR from '@microsoft/signalr';
 
 const connection = new signalR.HubConnectionBuilder()
-    .withUrl('/monitoring/monitor')
+    .withUrl('/monitoring/hub')
     .withAutomaticReconnect()
     .build();
 

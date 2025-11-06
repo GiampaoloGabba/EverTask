@@ -122,13 +122,14 @@ await dispatcher.Dispatch(task, recurring => ..., auditLevel: AuditLevel.Minimal
 
 ```csharp
 .AddMonitoringApi(opt => {
-    opt.BasePath = "/monitoring";              // Default: "/monitoring"
+    // Note: BasePath and SignalRHubPath are now fixed and cannot be changed
+    // BasePath: "/monitoring" (readonly)
+    // SignalRHubPath: "/monitoring/hub" (readonly)
     opt.EnableUI = true;                       // Default: true
     opt.Username = "admin";                    // Default: "admin"
     opt.Password = "admin";                    // Default: "admin" (CHANGE IN PRODUCTION!)
     opt.RequireAuthentication = true;          // Default: true
     opt.AllowAnonymousReadAccess = false;      // Default: false
-    opt.SignalRHubPath = "/monitoring/monitor"; // Default: "/monitoring/monitor"
     opt.EnableCors = true;                     // Default: true
     opt.CorsAllowedOrigins = new[] {           // Default: empty (allow all)
         "https://myapp.com"
@@ -138,8 +139,9 @@ await dispatcher.Dispatch(task, recurring => ..., auditLevel: AuditLevel.Minimal
 
 - **Package:** `EverTask.Monitor.Api`
 - **Features:** REST API + embedded React dashboard
-- **Dashboard URL:** `{BasePath}` (default: `/monitoring`)
-- **API URL:** `{BasePath}/api` (default: `/monitoring/api`)
+- **Dashboard URL:** `/monitoring` (fixed)
+- **API URL:** `/monitoring/api` (fixed)
+- **SignalR Hub:** `/monitoring/hub` (fixed)
 - **Auto-configures SignalR:** Automatically adds SignalR monitoring if not already registered
 
 **Common Patterns:**
