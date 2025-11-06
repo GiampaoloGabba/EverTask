@@ -24,6 +24,7 @@ public record TaskDetailDto(
     int? MaxRuns,
     DateTimeOffset? RunUntil,
     DateTimeOffset? NextRunUtc,
+    int? AuditLevel,                      // Audit retention policy level
     List<StatusAuditDto> StatusAudits,
     List<RunsAuditDto> RunsAudits
 );

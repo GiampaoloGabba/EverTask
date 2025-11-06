@@ -10,6 +10,7 @@ public record TaskListDto(
     string Type,                          // Short type name (not assembly qualified)
     QueuedTaskStatus Status,
     string? QueueName,
+    string? TaskKey,                      // Optional unique identifier for task deduplication
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset? LastExecutionUtc,
     DateTimeOffset? ScheduledExecutionUtc,
