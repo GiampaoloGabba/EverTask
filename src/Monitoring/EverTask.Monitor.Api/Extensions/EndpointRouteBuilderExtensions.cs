@@ -49,15 +49,16 @@ public static class EndpointRouteBuilderExtensions
         return app;
     }
     /// <summary>
-    /// Maps EverTask Monitoring API endpoints and optionally serves the embedded dashboard UI.
+    /// Maps the EverTask SignalR monitoring hub with authentication configured based on EverTaskApiOptions.
+    /// This is a convenience method that automatically configures authentication when using the monitoring API.
+    /// Call this BEFORE MapEverTaskApi().
     /// </summary>
     /// <param name="endpoints">The endpoint route builder.</param>
     /// <returns>The endpoint route builder for chaining.</returns>
-    public static IEndpointRouteBuilder MapEverTaskApi(this IEndpointRouteBuilder endpoints)
+    public static IEndpointRouteBuilder MapEverTaskMonitoringHub(this IEndpointRouteBuilder endpoints)
     {
         var options = endpoints.ServiceProvider.GetRequiredService<EverTaskApiOptions>();
 
-        // Map SignalR hub using the existing extension method from SignalR monitoring package
         // Configure authentication if enabled
         endpoints.MapEverTaskMonitorHub(options.SignalRHubPath, hubOptions =>
         {
@@ -66,6 +67,22 @@ public static class EndpointRouteBuilderExtensions
                 hubOptions.AuthorizationData.Add(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute());
             }
         });
+
+        return endpoints;
+    }
+
+    /// <summary>
+    /// Maps EverTask Monitoring API endpoints and optionally serves the embedded dashboard UI.
+    /// Note: You must call MapEverTaskMonitoringHub() or MapEverTaskMonitorHub() before calling this method.
+    /// </summary>
+    /// <param name="endpoints">The endpoint route builder.</param>
+    /// <returns>The endpoint route builder for chaining.</returns>
+    public static IEndpointRouteBuilder MapEverTaskApi(this IEndpointRouteBuilder endpoints)
+    {
+        var options = endpoints.ServiceProvider.GetRequiredService<EverTaskApiOptions>();
+
+        // NOTE: SignalR hub must be mapped separately by calling MapEverTaskMonitorHub()
+        // We don't map it here to avoid duplicate registrations
 
         // Map API controllers
         endpoints.MapControllers();

@@ -83,7 +83,8 @@ app.UseAuthorization();
 
 app.MapControllers();
 
-app.MapEverTaskMonitorHub();
+// Map EverTask monitoring hub with automatic authentication configuration
+app.MapEverTaskMonitoringHub();
 
 app.MapEverTaskApi();
 
