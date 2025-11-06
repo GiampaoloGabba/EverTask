@@ -94,12 +94,9 @@ public class MonitoringTestWebAppFactory : WebApplicationFactory<TestProgram>
 
             app.UseRouting();
 
-            // Add Basic Authentication middleware if required
-            if (_requireAuthentication)
-            {
-                var options = app.ApplicationServices.GetRequiredService<EverTaskApiOptions>();
-                app.UseMiddleware<Monitor.Api.Middleware.BasicAuthenticationMiddleware>(options);
-            }
+            // Add BasicAuthenticationMiddleware (handles both IP whitelist and authentication)
+            // Let the middleware resolve options from DI automatically
+            app.UseMiddleware<Monitor.Api.Middleware.BasicAuthenticationMiddleware>();
 
             // Map EverTask API
             app.UseEndpoints(endpoints =>

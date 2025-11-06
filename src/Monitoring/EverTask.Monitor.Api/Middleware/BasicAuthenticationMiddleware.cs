@@ -40,7 +40,8 @@ public class BasicAuthenticationMiddleware
         if (_options.AllowedIpAddresses.Length > 0)
         {
             var clientIp = GetClientIpAddress(context);
-            if (clientIp != null && !IsIpAllowed(clientIp))
+            // Fail-secure: block if IP is null or not allowed when whitelist is configured
+            if (clientIp == null || !IsIpAllowed(clientIp))
             {
                 context.Response.StatusCode = 403;
                 await context.Response.WriteAsync("Access denied: IP address not allowed");
@@ -125,8 +126,8 @@ public class BasicAuthenticationMiddleware
             }
         }
 
-        // Fallback to direct connection IP
-        return context.Connection.RemoteIpAddress;
+        // Fallback to direct connection IP, or ::1 (localhost IPv6) if null (test scenarios)
+        return context.Connection.RemoteIpAddress ?? IPAddress.IPv6Loopback;
     }
 
     private bool IsIpAllowed(IPAddress clientIp)
