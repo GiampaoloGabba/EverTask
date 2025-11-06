@@ -83,11 +83,11 @@ public class StatisticsService : IStatisticsService
 
                 // Calculate average execution time for completed tasks
                 var completedWithExecTime = queueTasks
-                    .Where(t => t.Status == QueuedTaskStatus.Completed && t.LastExecutionUtc.HasValue)
+                    .Where(t => t.Status == QueuedTaskStatus.Completed && t.ExecutionTimeMs > 0)
                     .ToList();
 
                 var avgExecutionTimeMs = completedWithExecTime.Any()
-                    ? completedWithExecTime.Average(t => (t.LastExecutionUtc!.Value - t.CreatedAtUtc).TotalMilliseconds)
+                    ? completedWithExecTime.Average(t => t.ExecutionTimeMs)
                     : 0.0;
 
                 // Calculate success rate
@@ -149,7 +149,7 @@ public class StatisticsService : IStatisticsService
 
         var completedTasks = allTasks
             .Where(t => t.Status == QueuedTaskStatus.Completed &&
-                       t.LastExecutionUtc.HasValue &&
+                       t.ExecutionTimeMs > 0 &&
                        t.CreatedAtUtc >= startDate)
             .ToList();
 
@@ -164,7 +164,7 @@ public class StatisticsService : IStatisticsService
                 .ToList();
 
             var avgExecutionTimeMs = bucketTasks.Any()
-                ? bucketTasks.Average(t => (t.LastExecutionUtc!.Value - t.CreatedAtUtc).TotalMilliseconds)
+                ? bucketTasks.Average(t => t.ExecutionTimeMs)
                 : 0.0;
 
             result.Add(new ExecutionTimeDto(current, Math.Round(avgExecutionTimeMs, 2)));
@@ -224,11 +224,11 @@ public class StatisticsService : IStatisticsService
 
             // Calculate average execution time for completed tasks
             var completedWithExecTime = queueTasks
-                .Where(t => t.Status == QueuedTaskStatus.Completed && t.LastExecutionUtc.HasValue)
+                .Where(t => t.Status == QueuedTaskStatus.Completed && t.ExecutionTimeMs > 0)
                 .ToList();
 
             var avgExecutionTimeMs = completedWithExecTime.Any()
-                ? completedWithExecTime.Average(t => (t.LastExecutionUtc!.Value - t.CreatedAtUtc).TotalMilliseconds)
+                ? completedWithExecTime.Average(t => t.ExecutionTimeMs)
                 : 0.0;
 
             // Calculate success rate

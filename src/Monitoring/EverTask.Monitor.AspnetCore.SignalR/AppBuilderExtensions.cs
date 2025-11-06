@@ -9,7 +9,7 @@ namespace EverTask.Monitor.AspnetCore.SignalR;
 
 public static class AppBuilderExtensions
 {
-    public static IEndpointRouteBuilder MapEverTaskMonitorHub(this IEndpointRouteBuilder app, string pattern = "/evertask/monitor")
+    public static IEndpointRouteBuilder MapEverTaskMonitorHub(this IEndpointRouteBuilder app, string pattern = "/monitoring/hub")
     {
         app.MapHub<TaskMonitorHub>(pattern);
 

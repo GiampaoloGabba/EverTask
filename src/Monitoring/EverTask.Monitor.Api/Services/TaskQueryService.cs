@@ -88,7 +88,8 @@ public class TaskQueryService : ITaskQueryService
                 t.IsRecurring,
                 t.RecurringInfo,
                 t.CurrentRunCount,
-                t.MaxRuns
+                t.MaxRuns,
+                t.ExecutionTimeMs
             ))
             .ToList();
 
@@ -113,7 +114,7 @@ public class TaskQueryService : ITaskQueryService
 
         var runsAudits = task.RunsAudits
             .OrderByDescending(a => a.ExecutedAt)
-            .Select(a => new RunsAuditDto(a.Id, a.QueuedTaskId, a.ExecutedAt, a.Status, a.Exception))
+            .Select(a => new RunsAuditDto(a.Id, a.QueuedTaskId, a.ExecutedAt, a.ExecutionTimeMs, a.Status, a.Exception))
             .ToList();
 
         return new TaskDetailDto(
@@ -136,6 +137,7 @@ public class TaskQueryService : ITaskQueryService
             task.RunUntil,
             task.NextRunUtc,
             task.AuditLevel,
+            task.ExecutionTimeMs,
             statusAudits,
             runsAudits
         );
@@ -167,7 +169,7 @@ public class TaskQueryService : ITaskQueryService
 
         return task.RunsAudits
             .OrderByDescending(a => a.ExecutedAt)
-            .Select(a => new RunsAuditDto(a.Id, a.QueuedTaskId, a.ExecutedAt, a.Status, a.Exception))
+            .Select(a => new RunsAuditDto(a.Id, a.QueuedTaskId, a.ExecutedAt, a.ExecutionTimeMs, a.Status, a.Exception))
             .ToList();
     }
 

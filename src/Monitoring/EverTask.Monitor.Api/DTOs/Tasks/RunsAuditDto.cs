@@ -9,6 +9,7 @@ public record RunsAuditDto(
     long Id,
     Guid QueuedTaskId,
     DateTimeOffset ExecutedAt,
+    double ExecutionTimeMs,               // Execution time in milliseconds
     QueuedTaskStatus Status,
     string? Exception
 );

@@ -25,6 +25,7 @@ public record TaskDetailDto(
     DateTimeOffset? RunUntil,
     DateTimeOffset? NextRunUtc,
     int? AuditLevel,                      // Audit retention policy level
+    double ExecutionTimeMs,               // Last execution time in milliseconds
     List<StatusAuditDto> StatusAudits,
     List<RunsAuditDto> RunsAudits
 );

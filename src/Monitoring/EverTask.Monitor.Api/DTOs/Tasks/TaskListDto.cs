@@ -17,5 +17,6 @@ public record TaskListDto(
     bool IsRecurring,
     string? RecurringInfo,                // Human-readable schedule (e.g., "Every 5 minutes")
     int? CurrentRunCount,
-    int? MaxRuns
+    int? MaxRuns,
+    double ExecutionTimeMs                // Last execution time in milliseconds
 );
