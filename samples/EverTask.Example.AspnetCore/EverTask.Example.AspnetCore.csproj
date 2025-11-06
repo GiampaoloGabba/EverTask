@@ -25,6 +25,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\EverTask\EverTask.csproj"/>
     <ProjectReference Include="..\..\src\Logging\EverTask.Logging.Serilog\EverTask.Logging.Serilog.csproj" />
+    <ProjectReference Include="..\..\src\Monitoring\EverTask.Monitor.Api\EverTask.Monitor.Api.csproj" />
     <ProjectReference Include="..\..\src\Monitoring\EverTask.Monitor.AspnetCore.SignalR\EverTask.Monitor.AspnetCore.SignalR.csproj" />
   </ItemGroup>
 
