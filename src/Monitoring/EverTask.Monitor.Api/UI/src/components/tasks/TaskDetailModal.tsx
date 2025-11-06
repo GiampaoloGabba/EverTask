@@ -4,13 +4,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { TaskStatusBadge } from '@/components/common/TaskStatusBadge';
 import { JsonViewer } from '@/components/common/JsonViewer';
 import { Timeline } from '@/components/common/Timeline';
+import { ExceptionViewer } from '@/components/common/ExceptionViewer';
 import { ExecutionLogsTab } from '@/components/tasks/ExecutionLogsTab';
 import { TaskDetailDto, AuditLevel } from '@/types/task.types';
 import { format } from 'date-fns';
-import { Copy, AlertCircle, RefreshCw, Calendar, Clock } from 'lucide-react';
+import { Copy, RefreshCw, Calendar, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useState } from 'react';
-import { Alert, AlertDescription } from '@/components/ui/alert';
 
 interface TaskDetailModalProps {
   task: TaskDetailDto;
@@ -262,17 +262,7 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
 
       {/* Exception (if present) */}
       {task.exception && (
-        <Alert variant="destructive">
-          <AlertCircle className="h-4 w-4" />
-          <AlertDescription>
-            <div className="space-y-2">
-              <p className="font-medium">Task Exception</p>
-              <pre className="text-xs whitespace-pre-wrap break-words mt-2">
-                {task.exception}
-              </pre>
-            </div>
-          </AlertDescription>
-        </Alert>
+        <ExceptionViewer exception={task.exception} previewLines={3} variant="alert" />
       )}
 
       {/* Tabs for History */}
