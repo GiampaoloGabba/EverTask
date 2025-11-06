@@ -113,6 +113,162 @@ builder.Services.AddEverTaskApi(options =>
 - API: `/monitoring/api/*`
 - SignalR Hub: `/monitoring/hub`
 
+## Swagger Integration
+
+If your application already uses Swagger/OpenAPI, you should configure **separate Swagger documents** to avoid mixing your application's endpoints with EverTask monitoring endpoints.
+
+```csharp
+builder.Services.AddSwaggerGen(c =>
+{
+    c.EnableAnnotations();
+
+    // Create separate Swagger documents
+    c.SwaggerDoc("v1", new() { Title = "My Application API", Version = "v1" });
+    c.SwaggerDoc("monitoring", new() { Title = "EverTask Monitoring API", Version = "v1" });
+
+    // Filter controllers by namespace
+    c.DocInclusionPredicate((docName, apiDesc) =>
+    {
+        if (apiDesc.ActionDescriptor is not Microsoft.AspNetCore.Mvc.Controllers.ControllerActionDescriptor controllerActionDescriptor)
+            return false;
+
+        var controllerNamespace = controllerActionDescriptor.ControllerTypeInfo.Namespace ?? string.Empty;
+
+        return docName switch
+        {
+            "v1" => !controllerNamespace.StartsWith("EverTask.Monitor.Api"),
+            "monitoring" => controllerNamespace.StartsWith("EverTask.Monitor.Api"),
+            _ => false
+        };
+    });
+});
+
+// Configure SwaggerUI with both documents
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI(c =>
+    {
+        c.SwaggerEndpoint("/swagger/v1/swagger.json", "My Application API");
+        c.SwaggerEndpoint("/swagger/monitoring/swagger.json", "EverTask Monitoring API");
+    });
+}
+```
+
+Now you'll see a **dropdown in Swagger UI** to switch between your application API and EverTask Monitoring API.
+
+## ⚠️ Security Considerations
+
+**CRITICAL: EverTask Monitor API runs on the SAME Kestrel server as your host application.**
+
+This means:
+- ✅ Shares the same **IP address and port** as your application
+- ✅ No separate server/process created
+- ⚠️ **If your application is public, the monitoring dashboard is also public!**
+
+### Production Security Best Practices
+
+**DO NOT expose the monitoring dashboard on the public internet without proper security measures.**
+
+The monitoring API exposes sensitive information:
+- Task details, parameters, and payloads
+- Exception stack traces with internal code paths
+- Queue names and infrastructure details
+- Execution statistics and patterns
+
+**Recommended production configurations:**
+
+#### 1. Disable UI in Production (API-only)
+```csharp
+builder.Services.AddEverTaskApi(options =>
+{
+    options.EnableUI = false;  // No public dashboard
+    options.RequireAuthentication = true;
+    // Use strong credentials from secrets/environment
+    options.Username = builder.Configuration["Monitoring:Username"];
+    options.Password = builder.Configuration["Monitoring:Password"];
+});
+```
+
+#### 2. Use Reverse Proxy with IP Whitelisting (Recommended)
+
+**Nginx example** - Allow only internal IPs:
+```nginx
+location /monitoring {
+    # Only allow access from internal network
+    allow 10.0.0.0/8;
+    allow 172.16.0.0/12;
+    allow 192.168.0.0/16;
+    deny all;
+
+    proxy_pass http://localhost:5000/monitoring;
+}
+```
+
+#### 3. Bind Kestrel to Multiple Endpoints
+
+**Public app on 5000, monitoring on localhost:5001:**
+```csharp
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.ListenAnyIP(5000);        // Public application
+    options.ListenLocalhost(5001);    // Monitoring (localhost only)
+});
+
+builder.Services.AddEverTaskApi(options =>
+{
+    options.EnableUI = true;
+    options.RequireAuthentication = false;  // Safe on localhost
+});
+```
+
+Access monitoring via SSH tunnel:
+```bash
+ssh -L 5001:localhost:5001 user@yourserver.com
+# Then visit http://localhost:5001/monitoring
+```
+
+#### 4. VPN-Only Access
+
+Deploy your application normally, but require VPN connection to access monitoring endpoints.
+
+#### 5. Separate Deployment (Most Secure)
+
+Create a dedicated monitoring application on an internal network:
+```csharp
+// monitoring-app/Program.cs (internal network only)
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services
+    .AddEverTaskMonitoringApiStandalone(options => { /* ... */ })
+    .AddSqlServerStorage(connectionString);  // Same database
+
+var app = builder.Build();
+app.MapEverTaskApi();
+app.Run("http://internal-monitor.local:5000");
+```
+
+### Authentication Considerations
+
+**Basic Auth is NOT sufficient for public internet exposure:**
+- Credentials transmitted in base64 (easily decoded)
+- No rate limiting or brute-force protection
+- No session management or token expiration
+
+**For public exposure, consider:**
+- Running behind a reverse proxy with OAuth2/OIDC
+- Using API Gateway with proper authentication
+- **Best option: Don't expose publicly at all**
+
+### Summary
+
+| Environment | Recommended Configuration |
+|-------------|--------------------------|
+| **Development** | `RequireAuthentication = false`, `EnableUI = true` |
+| **Staging (internal)** | Basic Auth, IP whitelisting |
+| **Production (public app)** | `EnableUI = false`, reverse proxy + IP whitelist, or VPN-only |
+| **Production (internal)** | Basic Auth or no auth if network-isolated |
+
 ## API Endpoints
 
 All endpoints are prefixed with `/monitoring/api` (fixed)

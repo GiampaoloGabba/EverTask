@@ -16,6 +16,26 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
     c.EnableAnnotations();
+
+    // Create separate Swagger documents
+    c.SwaggerDoc("v1", new() { Title = "EverTask Example API", Version = "v1" });
+    c.SwaggerDoc("monitoring", new() { Title = "EverTask Monitoring API", Version = "v1" });
+
+    // Filter controllers by namespace
+    c.DocInclusionPredicate((docName, apiDesc) =>
+    {
+        if (apiDesc.ActionDescriptor is not Microsoft.AspNetCore.Mvc.Controllers.ControllerActionDescriptor controllerActionDescriptor)
+            return false;
+
+        var controllerNamespace = controllerActionDescriptor.ControllerTypeInfo.Namespace ?? string.Empty;
+
+        return docName switch
+        {
+            "v1" => !controllerNamespace.StartsWith("EverTask.Monitor.Api"),
+            "monitoring" => controllerNamespace.StartsWith("EverTask.Monitor.Api"),
+            _ => false
+        };
+    });
 });
 
 builder.Services.AddSignalR();
@@ -68,7 +88,11 @@ var app = builder.Build();
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
-    app.UseSwaggerUI();
+    app.UseSwaggerUI(c =>
+    {
+        c.SwaggerEndpoint("/swagger/v1/swagger.json", "EverTask Example API");
+        c.SwaggerEndpoint("/swagger/monitoring/swagger.json", "EverTask Monitoring API");
+    });
 }
 
 app.UseHttpsRedirection();
