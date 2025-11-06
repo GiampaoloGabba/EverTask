@@ -63,19 +63,19 @@ export function Header() {
           <img
             src={logoIcon}
             alt="EverTask"
-            className="h-8 w-8 md:hidden"
+            className="h-10 w-10 md:hidden"
           />
           <img
             src={logoFull}
             alt="EverTask Monitor"
-            className="hidden md:block h-8"
+            className="hidden md:block h-10"
           />
           <span className="hidden sm:inline md:hidden font-semibold text-lg">Monitor</span>
 
           {/* Back button for task detail page - after logo */}
           {isTaskDetailPage && (
             <>
-              <div className="h-6 w-px bg-gray-300 hidden md:block" />
+              <div className="h-6 w-px bg-gray-300 hidden md:block ml-2" />
               <Button
                 variant="ghost"
                 onClick={() => navigate('/tasks')}

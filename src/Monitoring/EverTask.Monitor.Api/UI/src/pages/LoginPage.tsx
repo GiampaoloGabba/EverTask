@@ -7,8 +7,9 @@ import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useAuthStore } from '@/stores/authStore';
 import { apiService } from '@/services/api';
-import { Activity, AlertCircle } from 'lucide-react';
+import { AlertCircle } from 'lucide-react';
 import { AxiosError } from 'axios';
+import logoIcon from '@/assets/logo-icon.png';
 
 export function LoginPage() {
   const [username, setUsername] = useState('');
@@ -58,9 +59,11 @@ export function LoginPage() {
       <Card className="w-full max-w-md">
         <CardHeader className="space-y-1">
           <div className="flex items-center justify-center mb-4">
-            <div className="w-12 h-12 rounded-full bg-blue-600 flex items-center justify-center">
-              <Activity className="w-6 h-6 text-white" />
-            </div>
+            <img
+              src={logoIcon}
+              alt="EverTask"
+              className="w-16 h-16"
+            />
           </div>
           <CardTitle className="text-2xl text-center">EverTask Monitor</CardTitle>
           <CardDescription className="text-center">
