@@ -81,6 +81,25 @@ public static class ServiceCollectionExtensions
                     IssuerSigningKey = new SymmetricSecurityKey(key),
                     ClockSkew = TimeSpan.FromMinutes(5)
                 };
+
+                // Support SignalR authentication via query string
+                jwtOptions.Events = new JwtBearerEvents
+                {
+                    OnMessageReceived = context =>
+                    {
+                        var accessToken = context.Request.Query["access_token"];
+                        var path = context.HttpContext.Request.Path;
+
+                        // If the request is for SignalR hub and has a token
+                        if (!string.IsNullOrEmpty(accessToken) &&
+                            path.StartsWithSegments(options.SignalRHubPath))
+                        {
+                            context.Token = accessToken;
+                        }
+
+                        return Task.CompletedTask;
+                    }
+                };
             });
 
 // TODO: Rate limiting - requires NuGet package or framework reference fix
@@ -200,6 +219,25 @@ public static class ServiceCollectionExtensions
                     ValidAudience = options.JwtAudience,
                     IssuerSigningKey = new SymmetricSecurityKey(key),
                     ClockSkew = TimeSpan.FromMinutes(5)
+                };
+
+                // Support SignalR authentication via query string
+                jwtOptions.Events = new JwtBearerEvents
+                {
+                    OnMessageReceived = context =>
+                    {
+                        var accessToken = context.Request.Query["access_token"];
+                        var path = context.HttpContext.Request.Path;
+
+                        // If the request is for SignalR hub and has a token
+                        if (!string.IsNullOrEmpty(accessToken) &&
+                            path.StartsWithSegments(options.SignalRHubPath))
+                        {
+                            context.Token = accessToken;
+                        }
+
+                        return Task.CompletedTask;
+                    }
                 };
             });
 

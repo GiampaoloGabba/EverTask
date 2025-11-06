@@ -58,7 +58,14 @@ public static class EndpointRouteBuilderExtensions
         var options = endpoints.ServiceProvider.GetRequiredService<EverTaskApiOptions>();
 
         // Map SignalR hub using the existing extension method from SignalR monitoring package
-        endpoints.MapEverTaskMonitorHub(options.SignalRHubPath);
+        // Configure authentication if enabled
+        endpoints.MapEverTaskMonitorHub(options.SignalRHubPath, hubOptions =>
+        {
+            if (options.EnableAuthentication)
+            {
+                hubOptions.AuthorizationData.Add(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute());
+            }
+        });
 
         // Map API controllers
         endpoints.MapControllers();

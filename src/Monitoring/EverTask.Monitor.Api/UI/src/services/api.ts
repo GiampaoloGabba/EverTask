@@ -69,7 +69,7 @@ class ApiService {
         if (error.response?.status === 401) {
           useAuthStore.getState().logout();
           // Redirect to login page
-          window.location.href = '/evertask-dashboard/login';
+          window.location.href = '/evertask-monitoring/login';
         }
         return Promise.reject(error);
       }

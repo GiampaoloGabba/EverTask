@@ -29,9 +29,9 @@ public class JwtAuthenticationMiddleware
     /// </summary>
     public async Task InvokeAsync(HttpContext context)
     {
-        // Only protect API paths under BasePath
+        // Only protect API paths under ApiBasePath (not UI or SignalR hub)
         var path = context.Request.Path.Value ?? "";
-        if (!path.StartsWith(_options.BasePath, StringComparison.OrdinalIgnoreCase))
+        if (!path.StartsWith(_options.ApiBasePath, StringComparison.OrdinalIgnoreCase))
         {
             await _next(context);
             return;
