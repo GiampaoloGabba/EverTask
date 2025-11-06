@@ -422,3 +422,280 @@ public class IpWhitelistMiddlewareTests : IAsyncLifetime
         response.StatusCode.ShouldBe(HttpStatusCode.Forbidden);
     }
 }
+
+public class UiAndHubProtectionTests : IAsyncLifetime
+{
+    private MonitoringTestWebAppFactory _factory = null!;
+    private HttpClient _client = null!;
+
+    public async Task InitializeAsync()
+    {
+        await Task.CompletedTask;
+    }
+
+    public async Task DisposeAsync()
+    {
+        _client?.Dispose();
+        if (_factory != null)
+            await _factory.DisposeAsync();
+    }
+
+    private async Task<string> GetJwtTokenAsync()
+    {
+        var loginRequest = new LoginRequest("testuser", "testpass");
+        var response = await _client.PostAsJsonAsync("/evertask-monitoring/api/auth/login", loginRequest);
+        response.EnsureSuccessStatusCode();
+
+        var loginResponse = await response.Content.ReadFromJsonAsync<LoginResponse>();
+        return loginResponse!.Token;
+    }
+
+    [Fact]
+    public async Task Should_protect_ui_root_with_ip_whitelist()
+    {
+        // Arrange - Configure IP whitelist
+        _factory = new MonitoringTestWebAppFactory(
+            requireAuthentication: false,
+            configureServices: services =>
+            {
+                var descriptor = services.FirstOrDefault(d => d.ServiceType == typeof(EverTaskApiOptions));
+                if (descriptor != null)
+                    services.Remove(descriptor);
+
+                services.AddSingleton(new EverTaskApiOptions
+                {
+                    EnableAuthentication = false,
+                    EnableUI             = true,
+                    Username             = "testuser",
+                    Password             = "testpass",
+                    AllowedIpAddresses   = new[] { "192.168.1.100" } // Wrong IP
+                });
+            });
+        _client = _factory.CreateClient();
+
+        // Act - Try to access UI root
+        var response = await _client.GetAsync("/evertask-monitoring");
+
+        // Assert - Should be blocked by IP whitelist
+        response.StatusCode.ShouldBe(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
+    public async Task Should_allow_ui_root_with_valid_ip_no_jwt_required()
+    {
+        // Arrange - Configure IP whitelist with valid IP
+        _factory = new MonitoringTestWebAppFactory(
+            requireAuthentication: true, // JWT enabled but NOT required for UI
+            configureServices: services =>
+            {
+                var descriptor = services.FirstOrDefault(d => d.ServiceType == typeof(EverTaskApiOptions));
+                if (descriptor != null)
+                    services.Remove(descriptor);
+
+                services.AddSingleton(new EverTaskApiOptions
+                {
+                    EnableAuthentication = true,
+                    EnableUI             = true,
+                    Username             = "testuser",
+                    Password             = "testpass",
+                    AllowedIpAddresses   = new[] { "127.0.0.1", "::1" } // Valid IP
+                });
+            });
+        _client = _factory.CreateClient();
+
+        // Act - Access UI without JWT token (only IP check)
+        var response = await _client.GetAsync("/evertask-monitoring");
+
+        // Assert - Should succeed (UI doesn't require JWT, only IP)
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task Should_protect_signalr_hub_with_ip_whitelist()
+    {
+        // Arrange - Configure IP whitelist
+        _factory = new MonitoringTestWebAppFactory(
+            requireAuthentication: false,
+            configureServices: services =>
+            {
+                var descriptor = services.FirstOrDefault(d => d.ServiceType == typeof(EverTaskApiOptions));
+                if (descriptor != null)
+                    services.Remove(descriptor);
+
+                services.AddSingleton(new EverTaskApiOptions
+                {
+                    EnableAuthentication = false,
+                    Username             = "testuser",
+                    Password             = "testpass",
+                    AllowedIpAddresses   = new[] { "192.168.1.100" } // Wrong IP
+                });
+            });
+        _client = _factory.CreateClient();
+
+        // Act - Try to access SignalR hub negotiation endpoint
+        var response = await _client.PostAsync("/evertask-monitoring/hub/negotiate?negotiateVersion=1", null);
+
+        // Assert - Should be blocked by IP whitelist
+        response.StatusCode.ShouldBe(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
+    public async Task Should_protect_signalr_hub_with_jwt_when_enabled()
+    {
+        // Arrange - JWT enabled
+        _factory = new MonitoringTestWebAppFactory(
+            requireAuthentication: true,
+            configureServices: services =>
+            {
+                var descriptor = services.FirstOrDefault(d => d.ServiceType == typeof(EverTaskApiOptions));
+                if (descriptor != null)
+                    services.Remove(descriptor);
+
+                services.AddSingleton(new EverTaskApiOptions
+                {
+                    EnableAuthentication = true,
+                    Username             = "testuser",
+                    Password             = "testpass",
+                    AllowedIpAddresses   = new[] { "127.0.0.1", "::1" } // Valid IP
+                });
+            });
+        _client = _factory.CreateClient();
+
+        // Act - Try to access SignalR hub without JWT
+        var response = await _client.PostAsync("/evertask-monitoring/hub/negotiate?negotiateVersion=1", null);
+
+        // Assert - Should require JWT (401)
+        response.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task Should_allow_signalr_hub_with_jwt_via_authorization_header()
+    {
+        // Arrange - JWT enabled
+        _factory = new MonitoringTestWebAppFactory(
+            requireAuthentication: true,
+            configureServices: services =>
+            {
+                var descriptor = services.FirstOrDefault(d => d.ServiceType == typeof(EverTaskApiOptions));
+                if (descriptor != null)
+                    services.Remove(descriptor);
+
+                services.AddSingleton(new EverTaskApiOptions
+                {
+                    EnableAuthentication = true,
+                    Username             = "testuser",
+                    Password             = "testpass",
+                    AllowedIpAddresses   = new[] { "127.0.0.1", "::1" }
+                });
+            });
+        _client = _factory.CreateClient();
+
+        // Get JWT token
+        var token = await GetJwtTokenAsync();
+
+        // Act - Access SignalR hub with Bearer token in header
+        var request = new HttpRequestMessage(HttpMethod.Post, "/evertask-monitoring/hub/negotiate?negotiateVersion=1");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        var response = await _client.SendAsync(request);
+
+        // Assert - Should succeed
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task Should_allow_signalr_hub_with_jwt_via_query_string()
+    {
+        // Arrange - JWT enabled
+        _factory = new MonitoringTestWebAppFactory(
+            requireAuthentication: true,
+            configureServices: services =>
+            {
+                var descriptor = services.FirstOrDefault(d => d.ServiceType == typeof(EverTaskApiOptions));
+                if (descriptor != null)
+                    services.Remove(descriptor);
+
+                services.AddSingleton(new EverTaskApiOptions
+                {
+                    EnableAuthentication = true,
+                    Username             = "testuser",
+                    Password             = "testpass",
+                    AllowedIpAddresses   = new[] { "127.0.0.1", "::1" }
+                });
+            });
+        _client = _factory.CreateClient();
+
+        // Get JWT token
+        var token = await GetJwtTokenAsync();
+
+        // Act - Access SignalR hub with token in query string (SignalR fallback method)
+        var response = await _client.PostAsync(
+            $"/evertask-monitoring/hub/negotiate?negotiateVersion=1&access_token={token}",
+            null);
+
+        // Assert - Should succeed
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task Should_block_signalr_hub_with_invalid_query_string_token()
+    {
+        // Arrange - JWT enabled
+        _factory = new MonitoringTestWebAppFactory(
+            requireAuthentication: true,
+            configureServices: services =>
+            {
+                var descriptor = services.FirstOrDefault(d => d.ServiceType == typeof(EverTaskApiOptions));
+                if (descriptor != null)
+                    services.Remove(descriptor);
+
+                services.AddSingleton(new EverTaskApiOptions
+                {
+                    EnableAuthentication = true,
+                    Username             = "testuser",
+                    Password             = "testpass",
+                    AllowedIpAddresses   = new[] { "127.0.0.1", "::1" }
+                });
+            });
+        _client = _factory.CreateClient();
+
+        // Act - Access SignalR hub with invalid token in query string
+        var response = await _client.PostAsync(
+            "/evertask-monitoring/hub/negotiate?negotiateVersion=1&access_token=invalid.token.here",
+            null);
+
+        // Assert - Should return 401
+        response.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task Should_prioritize_ip_check_over_jwt_for_hub()
+    {
+        // Arrange - IP whitelist + JWT enabled, but wrong IP
+        _factory = new MonitoringTestWebAppFactory(
+            requireAuthentication: true,
+            configureServices: services =>
+            {
+                var descriptor = services.FirstOrDefault(d => d.ServiceType == typeof(EverTaskApiOptions));
+                if (descriptor != null)
+                    services.Remove(descriptor);
+
+                services.AddSingleton(new EverTaskApiOptions
+                {
+                    EnableAuthentication = true,
+                    Username             = "testuser",
+                    Password             = "testpass",
+                    AllowedIpAddresses   = new[] { "192.168.1.100" } // Wrong IP
+                });
+            });
+        _client = _factory.CreateClient();
+
+        // Act - Even if we had a valid token, IP check should fail first
+        // (We can't get a token because /auth/login is also blocked by IP)
+        var response = await _client.PostAsync(
+            "/evertask-monitoring/hub/negotiate?negotiateVersion=1&access_token=some.token",
+            null);
+
+        // Assert - Should return 403 (IP check) NOT 401 (auth check)
+        response.StatusCode.ShouldBe(HttpStatusCode.Forbidden);
+    }
+}
