@@ -676,6 +676,42 @@ public class ProcessOrderHandler : EverTaskHandler<ProcessOrderTask>
 
 **Key Point**: Logs are ALWAYS written to ILogger (console, file, etc.) regardless of persistence settings. This ensures you never lose visibility into task execution.
 
+### Structured Logging Support
+
+The `Logger` property fully supports **structured logging** with message templates and parameters, just like standard `ILogger`:
+
+```csharp
+public class DataProcessingHandler : EverTaskHandler<DataProcessingTask>
+{
+    public override async Task Handle(DataProcessingTask task, CancellationToken ct)
+    {
+        // Structured logging with parameters
+        Logger.LogTrace("Processing step {Step}/{Total}", 1, task.TotalSteps);
+        Logger.LogDebug("User {UserId} initiated processing at {Timestamp}", task.UserId, DateTimeOffset.UtcNow);
+        Logger.LogInformation("Processing {Count} items from source {Source}", task.ItemCount, task.Source);
+
+        try
+        {
+            await ProcessData(task);
+        }
+        catch (Exception ex)
+        {
+            // Exception overload - exception as first parameter
+            Logger.LogError(ex, "Failed to process task {TaskId} at step {Step}", task.Id, currentStep);
+            throw;
+        }
+    }
+}
+```
+
+**Supported Overloads:**
+- Simple messages: `Logger.LogInformation("message")`
+- Structured parameters: `Logger.LogInformation("User {UserId} logged in", userId)`
+- With exception: `Logger.LogError(exception, "Failed processing {TaskId}", taskId)`
+- All log levels: `LogTrace`, `LogDebug`, `LogInformation`, `LogWarning`, `LogError`, `LogCritical`
+
+**Important**: When persisted to the database, structured parameters are formatted into the final message (e.g., `"User john.doe logged in"`), while the original structured template and parameters are preserved in the ILogger infrastructure for Serilog, Application Insights, etc.
+
 ### Configuration
 
 #### Enable Database Persistence (Optional)

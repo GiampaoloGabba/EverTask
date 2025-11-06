@@ -110,7 +110,11 @@ await dispatcher.Dispatch(task, recurring => ..., auditLevel: AuditLevel.Minimal
 | `SetMinimumLevel` | `LogLevel` | `Information` | Min level to persist (not ILogger) |
 | `SetMaxLogsPerTask` | `int?` | `1000` | Max logs per task. `null` = unlimited |
 
-**Key Point:** Logs are ALWAYS forwarded to ILogger (console, file, Serilog, etc.) regardless of persistence settings.
+**Key Points:**
+- Logs are ALWAYS forwarded to ILogger (console, file, Serilog, etc.) regardless of persistence settings
+- **Full structured logging support**: `Logger.LogInformation("User {UserId} logged in", userId)`
+- **Exception overloads**: `Logger.LogError(exception, "Failed {TaskId}", taskId)`
+- Access via `Logger` property in handlers (no need to inject `ILogger<T>`)
 
 ## Monitoring Configuration
 

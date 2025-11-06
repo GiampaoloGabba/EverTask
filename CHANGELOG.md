@@ -5,6 +5,47 @@ All notable changes to EverTask will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+#### Monitoring Dashboard Enhancements
+- **Execution Logs Terminal UI**: New tab in task detail modal displaying captured execution logs with terminal-like UI
+  - Monospace font with color-coded log levels (Trace=gray, Debug=cyan, Info=blue, Warning=yellow, Error=red, Critical=red bold)
+  - Dark background for optimal readability
+  - Expandable exception details for error logs
+  - Auto-scroll toggle for following log stream
+  - Pagination support (100 logs per page)
+  - **Log level filtering**: Dropdown to filter logs by severity level (All/Trace/Debug/Information/Warning/Error/Critical)
+  - **Export functionality**: Export logs as JSON or plain text format
+  - Empty state handling when log capture is disabled or no logs exist
+
+- **Audit Level Visibility**: Task detail modal now displays the audit level configuration
+  - Badge with color coding: Full (default), Minimal (secondary), ErrorsOnly (secondary), None (outline)
+  - Tooltip description explaining what each audit level means
+  - Helps users understand incomplete audit trails (e.g., Minimal only shows errors)
+
+#### Backend API Enhancements
+- **New Execution Logs Endpoint**: `GET /api/tasks/{id}/execution-logs`
+  - Query parameters: `skip` (default 0), `take` (default 100), `level` (optional filter)
+  - Returns `ExecutionLogsResponse` with logs array, total count, and pagination metadata
+  - Supports filtering by log level for targeted log retrieval
+  - Integrates with existing `ITaskStorage.GetExecutionLogsAsync()` method
+
+- **Audit Level DTO Exposure**: `TaskDetailDto` now includes `auditLevel` property
+  - Exposes database audit configuration to frontend
+  - Nullable integer matching `AuditLevel` enum values (0=Full, 1=Minimal, 2=ErrorsOnly, 3=None)
+
+#### Type Definitions
+- **New TypeScript types** in monitoring UI:
+  - `ExecutionLogDto`: Single log entry (id, timestampUtc, level, message, exceptionDetails, sequenceNumber)
+  - `ExecutionLogsResponse`: Paginated logs response (logs[], totalCount, skip, take)
+  - `AuditLevel` enum: TypeScript enum matching backend values
+
+### Changed
+- Monitoring dashboard "History" section renamed to "History & Logs" to reflect new execution logs tab
+- Task detail tabs layout changed from 2-column to 3-column grid (Status History | Runs History | Execution Logs)
+
 ## [3.2.0] - 2025-11-04
 
 ### Added
