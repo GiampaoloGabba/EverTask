@@ -1,4 +1,5 @@
 import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios';
+import qs from 'qs';
 import { useAuthStore } from '@/stores/authStore';
 import { configService } from './config';
 import type {
@@ -123,7 +124,8 @@ class ApiService {
   async getTasks(filter: TaskFilter, pagination: PaginationParams) {
     await this.initialize();
     return this.client.get<TasksPagedResponse>('/tasks', {
-      params: { ...filter, ...pagination }
+      params: { ...filter, ...pagination },
+      paramsSerializer: (params) => qs.stringify(params, { arrayFormat: 'repeat' })
     });
   }
 
