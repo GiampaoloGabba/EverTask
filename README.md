@@ -12,7 +12,9 @@
 
 **EverTask** is a high-performance .NET library for background task execution. It handles everything from simple fire-and-forget operations to complex recurring schedules, with persistence that survives application restarts.
 
-If you've used MediatR, you'll feel right at home with the request/handler pattern. But unlike traditional in-memory task queues, EverTask persists tasks to storage, supports multi-queue workload isolation, and scales to extreme loads when needed.
+Supports **CPU-intensive, I/O-bound, long-running and short-running tasks**. No external schedulers or Windows Services required — everything runs in-process with your application.
+
+If you've used MediatR, you'll feel right at home with the request/handler pattern — but with built-in persistence, multi-queue isolation, and the ability to scale to high load.
 
 Works great with ASP.NET Core, Windows Services, or any .NET project that needs reliable background processing.
 
@@ -27,7 +29,7 @@ Works great with ASP.NET Core, Windows Services, or any .NET project that needs 
 ### Performance & Scalability
 - **Multi-Queue Support** — Isolate workloads by priority, resource type, or business domain
 - **High-Performance Scheduler** — Minimal lock contention and zero CPU when idle
-- **Extreme Load Support** — Optional sharded scheduler for high-traffic scheduling scenarios
+- **High Load Support** — Optional sharded scheduler for high-loading scheduling scenarios
 - **Optimized Performance** — Reflection caching, lazy serialization, optimized database operations
 
 ### Monitoring & Observability
