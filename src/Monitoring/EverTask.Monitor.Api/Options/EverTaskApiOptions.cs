@@ -73,4 +73,12 @@ public class EverTaskApiOptions
     /// Only used if EnableCors is true
     /// </summary>
     public string[] CorsAllowedOrigins { get; set; } = Array.Empty<string>();
+
+    /// <summary>
+    /// IP address whitelist for monitoring access (default: empty = allow all IPs)
+    /// When configured, only requests from these IPs will be allowed
+    /// Supports IPv4 and IPv6 addresses
+    /// Example: new[] { "192.168.1.100", "10.0.0.0/8", "::1" }
+    /// </summary>
+    public string[] AllowedIpAddresses { get; set; } = Array.Empty<string>();
 }

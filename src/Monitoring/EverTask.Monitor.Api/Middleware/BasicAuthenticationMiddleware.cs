@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text;
 using EverTask.Monitor.Api.Options;
 using Microsoft.AspNetCore.Http;
@@ -27,16 +28,28 @@ public class BasicAuthenticationMiddleware
     /// </summary>
     public async Task InvokeAsync(HttpContext context)
     {
-        // Skip auth if disabled
-        if (!_options.RequireAuthentication)
+        // Only protect API paths under BasePath
+        var path = context.Request.Path.Value ?? "";
+        if (!path.StartsWith(_options.BasePath, StringComparison.OrdinalIgnoreCase))
         {
             await _next(context);
             return;
         }
 
-        // Only protect API paths under BasePath
-        var path = context.Request.Path.Value ?? "";
-        if (!path.StartsWith(_options.BasePath, StringComparison.OrdinalIgnoreCase))
+        // Check IP whitelist first (if configured)
+        if (_options.AllowedIpAddresses.Length > 0)
+        {
+            var clientIp = GetClientIpAddress(context);
+            if (clientIp != null && !IsIpAllowed(clientIp))
+            {
+                context.Response.StatusCode = 403;
+                await context.Response.WriteAsync("Access denied: IP address not allowed");
+                return;
+            }
+        }
+
+        // Skip auth if disabled
+        if (!_options.RequireAuthentication)
         {
             await _next(context);
             return;
@@ -97,5 +110,91 @@ public class BasicAuthenticationMiddleware
         context.Response.StatusCode = 401;
         context.Response.Headers.Append("WWW-Authenticate", "Basic realm=\"EverTask Monitoring API\"");
         return Task.CompletedTask;
+    }
+
+    private static IPAddress? GetClientIpAddress(HttpContext context)
+    {
+        // Check X-Forwarded-For header first (reverse proxy scenario)
+        var forwardedFor = context.Request.Headers["X-Forwarded-For"].FirstOrDefault();
+        if (!string.IsNullOrEmpty(forwardedFor))
+        {
+            var ips = forwardedFor.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (ips.Length > 0 && IPAddress.TryParse(ips[0], out var forwardedIp))
+            {
+                return forwardedIp;
+            }
+        }
+
+        // Fallback to direct connection IP
+        return context.Connection.RemoteIpAddress;
+    }
+
+    private bool IsIpAllowed(IPAddress clientIp)
+    {
+        foreach (var allowedEntry in _options.AllowedIpAddresses)
+        {
+            // Check for CIDR notation (e.g., "192.168.0.0/24")
+            if (allowedEntry.Contains('/'))
+            {
+                if (IsIpInCidrRange(clientIp, allowedEntry))
+                {
+                    return true;
+                }
+            }
+            // Check for exact IP match
+            else if (IPAddress.TryParse(allowedEntry, out var allowedIp) && clientIp.Equals(allowedIp))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsIpInCidrRange(IPAddress clientIp, string cidr)
+    {
+        try
+        {
+            var parts = cidr.Split('/');
+            if (parts.Length != 2)
+                return false;
+
+            if (!IPAddress.TryParse(parts[0], out var networkIp))
+                return false;
+
+            if (!int.TryParse(parts[1], out var prefixLength))
+                return false;
+
+            // Convert IPs to bytes
+            var clientBytes = clientIp.GetAddressBytes();
+            var networkBytes = networkIp.GetAddressBytes();
+
+            // Must be same address family (IPv4/IPv6)
+            if (clientBytes.Length != networkBytes.Length)
+                return false;
+
+            // Calculate mask
+            var maskBytes = new byte[networkBytes.Length];
+            for (var i = 0; i < maskBytes.Length; i++)
+            {
+                var bitsInByte = Math.Min(8, Math.Max(0, prefixLength - (i * 8)));
+                maskBytes[i] = (byte)(0xFF << (8 - bitsInByte));
+            }
+
+            // Compare masked addresses
+            for (var i = 0; i < clientBytes.Length; i++)
+            {
+                if ((clientBytes[i] & maskBytes[i]) != (networkBytes[i] & maskBytes[i]))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }
