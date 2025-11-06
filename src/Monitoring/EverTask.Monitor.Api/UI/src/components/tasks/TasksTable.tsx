@@ -86,7 +86,6 @@ export function TasksTable({
               <TableHead>Queue</TableHead>
               <TableHead>Created At</TableHead>
               <TableHead>Last Execution</TableHead>
-              <TableHead>Duration</TableHead>
               <TableHead>Scheduled</TableHead>
               <TableHead>Info</TableHead>
             </TableRow>
@@ -99,7 +98,14 @@ export function TasksTable({
                 onClick={() => navigate(`/tasks/${task.id}`)}
               >
                 <TableCell>
-                  <TaskStatusBadge status={task.status} />
+                  <div className="flex items-center gap-2">
+                    <TaskStatusBadge status={task.status} />
+                    {task.executionTimeMs > 0 && (
+                      <Badge variant="outline" className="text-xs bg-gray-50 text-gray-600 border-gray-300 font-mono">
+                        {formatExecutionTime(task.executionTimeMs)}
+                      </Badge>
+                    )}
+                  </div>
                 </TableCell>
                 <TableCell>
                   <div className="max-w-[200px]">
@@ -118,11 +124,6 @@ export function TasksTable({
                 </TableCell>
                 <TableCell>
                   <span className="text-sm">{formatDate(task.lastExecutionUtc)}</span>
-                </TableCell>
-                <TableCell>
-                  <span className="text-sm font-mono text-gray-700">
-                    {formatExecutionTime(task.executionTimeMs)}
-                  </span>
                 </TableCell>
                 <TableCell>
                   {task.scheduledExecutionUtc ? (
