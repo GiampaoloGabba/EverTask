@@ -220,7 +220,7 @@ Monitor your tasks with a feature-complete web dashboard providing real-time ins
 </tr>
 </table>
 
-📸 **[View all 10 screenshots in the documentation](https://GiampaoloGabba.github.io/EverTask/monitoring-dashboard.html#screenshots)**
+📸 **[View all 10 screenshots in the documentation](https://GiampaoloGabba.github.io/EverTask/monitoring-dashboard-ui#screenshots)**
 
 </div>
 

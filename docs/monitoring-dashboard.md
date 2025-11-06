@@ -9,7 +9,7 @@ nav_order: 2
 
 EverTask provides a comprehensive monitoring dashboard with REST API endpoints and an embedded React UI for real-time task monitoring, analytics, and management.
 
-![Dashboard Overview](../assets/screenshots/1.png)
+![Dashboard Overview]({{ '/assets/screenshots/1.png' | relative_url }})
 
 ## Table of Contents
 

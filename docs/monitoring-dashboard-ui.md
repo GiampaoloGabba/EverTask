@@ -94,55 +94,55 @@ This architecture reduces network traffic dramatically while keeping the UI feel
 See the dashboard in action with these 10 screenshots showing all major features:
 
 <div align="center">
-
-![Dashboard Overview](../assets/screenshots/1.png)
-*Overview dashboard with real-time metrics and activity charts*
-
----
-
-![Task List](../assets/screenshots/2.png)
-*Task list with advanced filtering and search*
-
----
-
-![Task Details](../assets/screenshots/3.png)
-*Task detail modal with parameters and execution info*
-
----
-
-![Execution Logs](../assets/screenshots/4.png)
-*Terminal-style execution logs with color-coded severity*
-
----
-
-![Status History](../assets/screenshots/5.png)
-*Complete audit trail of status transitions*
-
----
-
-![Queue Metrics](../assets/screenshots/6.png)
-*Multi-queue monitoring with success rates*
-
----
-
-![Statistics](../assets/screenshots/7.png)
-*Performance analytics and trends over time*
-
----
-
-![Task Filters](../assets/screenshots/8.png)
-*Advanced filtering by status, queue, type, and date*
-
----
-
-![Real-Time Updates](../assets/screenshots/9.png)
-*Live updates with SignalR integration*
-
----
-
-![Runs History](../assets/screenshots/10.png)
-*Execution history for recurring tasks*
-
+<p>
+<img src="{{ '/assets/screenshots/1.png' | relative_url }}" alt="Dashboard Overview" style="max-width:100%"><br>
+<em>Overview dashboard with real-time metrics and activity charts</em>
+</p>
+<hr>
+<p>
+<img src="{{ '/assets/screenshots/2.png' | relative_url }}" alt="Task List" style="max-width:100%"><br>
+<em>Task list with advanced filtering and search</em>
+</p>
+<hr>
+<p>
+<img src="{{ '/assets/screenshots/3.png' | relative_url }}" alt="Task Details" style="max-width:100%"><br>
+<em>Task detail modal with parameters and execution info</em>
+</p>
+<hr>
+<p>
+<img src="{{ '/assets/screenshots/4.png' | relative_url }}" alt="Execution Logs" style="max-width:100%"><br>
+<em>Terminal-style execution logs with color-coded severity</em>
+</p>
+<hr>
+<p>
+<img src="{{ '/assets/screenshots/5.png' | relative_url }}" alt="Status History" style="max-width:100%"><br>
+<em>Complete audit trail of status transitions</em>
+</p>
+<hr>
+<p>
+<img src="{{ '/assets/screenshots/6.png' | relative_url }}" alt="Queue Metrics" style="max-width:100%"><br>
+<em>Multi-queue monitoring with success rates</em>
+</p>
+<hr>
+<p>
+<img src="{{ '/assets/screenshots/7.png' | relative_url }}" alt="Statistics" style="max-width:100%"><br>
+<em>Performance analytics and trends over time</em>
+</p>
+<hr>
+<p>
+<img src="{{ '/assets/screenshots/8.png' | relative_url }}" alt="Task Filters" style="max-width:100%"><br>
+<em>Advanced filtering by status, queue, type, and date</em>
+</p>
+<hr>
+<p>
+<img src="{{ '/assets/screenshots/9.png' | relative_url }}" alt="Real-Time Updates" style="max-width:100%"><br>
+<em>Live updates with SignalR integration</em>
+</p>
+<hr>
+<p>
+<img src="{{ '/assets/screenshots/10.png' | relative_url }}" alt="Runs History" style="max-width:100%"><br>
+<em>Execution history for recurring tasks</em>
+</p>
 </div>
 
 ## Coming in Future Releases

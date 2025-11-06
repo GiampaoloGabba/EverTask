@@ -25,6 +25,7 @@ Quick reference for all EverTask configuration options.
 ## Audit Configuration
 
 ### Audit Levels
+
 | Level | StatusAudit | RunsAudit | Records/Day* | Use Case |
 |-------|-------------|-----------|--------------|----------|
 | `Full` (default) | All transitions | All executions | ~2,304 | Critical tasks |
