@@ -12,6 +12,13 @@ export enum QueuedTaskStatus {
   ServiceStopped = 7
 }
 
+export enum AuditLevel {
+  Full = 0,
+  Minimal = 1,
+  ErrorsOnly = 2,
+  None = 3
+}
+
 // String to enum mapping (for JSON deserialization from API)
 export const QueuedTaskStatusFromString: Record<string, QueuedTaskStatus> = {
   'WaitingQueue': QueuedTaskStatus.WaitingQueue,
@@ -29,6 +36,7 @@ export interface TaskListDto {
   type: string;
   status: QueuedTaskStatus;
   queueName: string | null;
+  taskKey: string | null;
   createdAtUtc: string;
   lastExecutionUtc: string | null;
   scheduledExecutionUtc: string | null;
@@ -46,6 +54,7 @@ export interface TaskDetailDto extends TaskListDto {
   recurringTask: string | null; // JSON string
   runUntil: string | null;
   nextRunUtc: string | null;
+  auditLevel: number | null; // AuditLevel enum value
   statusAudits: StatusAuditDto[];
   runsAudits: RunsAuditDto[];
 }
@@ -89,4 +98,27 @@ export interface TasksPagedResponse {
   page: number;
   pageSize: number;
   totalPages: number;
+}
+
+export interface ExecutionLogDto {
+  id: string;
+  timestampUtc: string;
+  level: string; // "Trace", "Debug", "Information", "Warning", "Error", "Critical"
+  message: string;
+  exceptionDetails: string | null;
+  sequenceNumber: number;
+}
+
+export interface ExecutionLogsResponse {
+  logs: ExecutionLogDto[];
+  totalCount: number;
+  skip: number;
+  take: number;
+}
+
+export interface TaskCountsDto {
+  all: number;
+  standard: number;
+  recurring: number;
+  failed: number;
 }

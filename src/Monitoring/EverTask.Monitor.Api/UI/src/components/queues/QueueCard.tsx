@@ -1,12 +1,12 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { QueueMetricsDto } from '@/types/queue.types';
+import { QueueConfigurationDto } from '@/types/queue.types';
 import { formatNumber, formatPercentage, formatTime } from '@/utils/formatters';
 import { useNavigate } from 'react-router-dom';
-import { Layers, TrendingUp, Clock } from 'lucide-react';
+import { Layers, TrendingUp, Clock, Settings, Users, Database } from 'lucide-react';
 
 interface QueueCardProps {
-  queue: QueueMetricsDto;
+  queue: QueueConfigurationDto;
 }
 
 export function QueueCard({ queue }: QueueCardProps) {
@@ -35,6 +35,39 @@ export function QueueCard({ queue }: QueueCardProps) {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
+        {/* Configuration Section */}
+        <div className="rounded-lg bg-muted/50 p-3 space-y-2">
+          <div className="flex items-center gap-1 text-xs font-semibold text-muted-foreground mb-2">
+            <Settings className="h-3 w-3" />
+            <span>Configuration</span>
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <div className="flex items-center gap-1">
+              <Users className="h-3 w-3 text-muted-foreground" />
+              <span className="text-muted-foreground">Workers:</span>
+              <span className="font-medium">{queue.maxDegreeOfParallelism}</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <Database className="h-3 w-3 text-muted-foreground" />
+              <span className="text-muted-foreground">Capacity:</span>
+              <span className="font-medium">{formatNumber(queue.channelCapacity)}</span>
+            </div>
+            <div className="col-span-2 flex items-center gap-1">
+              <span className="text-muted-foreground">Behavior:</span>
+              <Badge variant="outline" className="text-xs">
+                {queue.queueFullBehavior}
+              </Badge>
+            </div>
+            {queue.defaultTimeout && (
+              <div className="col-span-2 flex items-center gap-1">
+                <Clock className="h-3 w-3 text-muted-foreground" />
+                <span className="text-muted-foreground">Timeout:</span>
+                <span className="font-medium">{queue.defaultTimeout}</span>
+              </div>
+            )}
+          </div>
+        </div>
+
         {/* Total Tasks */}
         <div className="flex items-center justify-between">
           <span className="text-sm text-muted-foreground">Total Tasks</span>

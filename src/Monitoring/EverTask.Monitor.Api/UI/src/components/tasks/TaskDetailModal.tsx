@@ -4,7 +4,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { TaskStatusBadge } from '@/components/common/TaskStatusBadge';
 import { JsonViewer } from '@/components/common/JsonViewer';
 import { Timeline } from '@/components/common/Timeline';
-import { TaskDetailDto } from '@/types/task.types';
+import { ExecutionLogsTab } from '@/components/tasks/ExecutionLogsTab';
+import { TaskDetailDto, AuditLevel } from '@/types/task.types';
 import { format } from 'date-fns';
 import { Copy, AlertCircle, RefreshCw, Calendar, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -38,6 +39,39 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
     navigator.clipboard.writeText(task.id);
     setCopiedId(true);
     setTimeout(() => setCopiedId(false), 2000);
+  };
+
+  const getAuditLevelInfo = (level: number | null) => {
+    if (level === null || level === undefined) return null;
+
+    switch (level) {
+      case AuditLevel.Full:
+        return {
+          label: 'Full',
+          variant: 'default' as const,
+          description: 'Complete audit trail with all status and execution history'
+        };
+      case AuditLevel.Minimal:
+        return {
+          label: 'Minimal',
+          variant: 'secondary' as const,
+          description: 'Minimal audit trail - errors only + last execution timestamp'
+        };
+      case AuditLevel.ErrorsOnly:
+        return {
+          label: 'Errors Only',
+          variant: 'secondary' as const,
+          description: 'Only failed executions are audited'
+        };
+      case AuditLevel.None:
+        return {
+          label: 'None',
+          variant: 'outline' as const,
+          description: 'No audit trail - task data only'
+        };
+      default:
+        return null;
+    }
   };
 
   const handlerInfo = formatHandler(task.handler);
@@ -132,6 +166,25 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
             </div>
 
             <div className="space-y-4">
+              {task.auditLevel !== null && task.auditLevel !== undefined && (
+                <div>
+                  <span className="text-sm text-muted-foreground">Audit Level</span>
+                  <div className="mt-1">
+                    {(() => {
+                      const auditInfo = getAuditLevelInfo(task.auditLevel);
+                      return auditInfo ? (
+                        <div>
+                          <Badge variant={auditInfo.variant}>{auditInfo.label}</Badge>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            {auditInfo.description}
+                          </p>
+                        </div>
+                      ) : null;
+                    })()}
+                  </div>
+                </div>
+              )}
+
               <div>
                 <span className="text-sm text-muted-foreground">Is Recurring</span>
                 <div className="mt-1">
@@ -214,16 +267,19 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
       {/* Tabs for History */}
       <Card>
         <CardHeader>
-          <CardTitle>History</CardTitle>
+          <CardTitle>History & Logs</CardTitle>
         </CardHeader>
         <CardContent>
           <Tabs defaultValue="status" className="w-full">
-            <TabsList className="grid w-full grid-cols-2">
+            <TabsList className="grid w-full grid-cols-3">
               <TabsTrigger value="status">
                 Status History ({statusAudits.length})
               </TabsTrigger>
               <TabsTrigger value="runs">
                 Runs History ({runsAudits.length})
+              </TabsTrigger>
+              <TabsTrigger value="logs">
+                Execution Logs
               </TabsTrigger>
             </TabsList>
             <TabsContent value="status" className="mt-4">
@@ -243,6 +299,9 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
                   No runs history available
                 </p>
               )}
+            </TabsContent>
+            <TabsContent value="logs" className="mt-4">
+              <ExecutionLogsTab taskId={task.id} />
             </TabsContent>
           </Tabs>
         </CardContent>

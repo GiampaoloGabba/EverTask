@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react';
-import { useTasks } from '@/hooks/useTasks';
+import { useTasks, useTaskCounts } from '@/hooks/useTasks';
 import { TasksTable } from '@/components/tasks/TasksTable';
 import { TaskFilters } from '@/components/tasks/TaskFilters';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Badge } from '@/components/ui/badge';
 import { TaskFilter, QueuedTaskStatus, PaginationParams } from '@/types/task.types';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { AlertCircle } from 'lucide-react';
 
-type TaskTab = 'all' | 'standard' | 'delayed' | 'recurring' | 'failed';
+type TaskTab = 'all' | 'standard' | 'recurring' | 'failed';
 
 const STORAGE_KEY_TAB = 'tasks-page-active-tab';
 const STORAGE_KEY_FILTERS = 'tasks-page-filters';
@@ -48,20 +49,18 @@ export function TasksPage() {
         tabFilters.isRecurring = false;
         delete tabFilters.statuses;
         break;
-      case 'delayed':
-        tabFilters.isRecurring = false;
-        // Note: We can't directly filter by scheduledExecutionUtc != null in the filter,
-        // but the backend should handle this based on the context
-        break;
       case 'recurring':
         tabFilters.isRecurring = true;
+        delete tabFilters.statuses;
         break;
       case 'failed':
         tabFilters.statuses = [QueuedTaskStatus.Failed];
+        delete tabFilters.isRecurring;
         break;
       case 'all':
       default:
-        // No additional filters
+        delete tabFilters.isRecurring;
+        delete tabFilters.statuses;
         break;
     }
 
@@ -70,6 +69,7 @@ export function TasksPage() {
 
   const effectiveFilters = getEffectiveFilters();
   const { data, isLoading, isError } = useTasks(effectiveFilters, pagination);
+  const { data: counts } = useTaskCounts();
 
   const handlePageChange = (newPage: number) => {
     setPagination((prev) => ({ ...prev, page: newPage }));
@@ -111,11 +111,38 @@ export function TasksPage() {
 
       <Tabs value={activeTab} onValueChange={handleTabChange}>
         <TabsList>
-          <TabsTrigger value="all">All Tasks</TabsTrigger>
-          <TabsTrigger value="standard">Standard</TabsTrigger>
-          <TabsTrigger value="delayed">Delayed</TabsTrigger>
-          <TabsTrigger value="recurring">Recurring</TabsTrigger>
-          <TabsTrigger value="failed">Failed</TabsTrigger>
+          <TabsTrigger value="all">
+            All Tasks
+            {counts && counts.all > 0 && (
+              <Badge variant="secondary" className="ml-2">
+                {counts.all}
+              </Badge>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="standard">
+            Standard
+            {counts && counts.standard > 0 && (
+              <Badge variant="secondary" className="ml-2">
+                {counts.standard}
+              </Badge>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="recurring">
+            Recurring
+            {counts && counts.recurring > 0 && (
+              <Badge variant="secondary" className="ml-2">
+                {counts.recurring}
+              </Badge>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="failed">
+            Failed
+            {counts && counts.failed > 0 && (
+              <Badge variant="destructive" className="ml-2">
+                {counts.failed}
+              </Badge>
+            )}
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value={activeTab} className="mt-6">

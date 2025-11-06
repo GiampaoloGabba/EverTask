@@ -129,6 +129,11 @@ export function TasksTable({
                         Recurring
                       </Badge>
                     )}
+                    {task.taskKey && (
+                      <Badge variant="outline" className="text-xs bg-blue-50 text-blue-700 border-blue-200" title={task.taskKey}>
+                        Key: {task.taskKey.length > 10 ? `${task.taskKey.substring(0, 10)}...` : task.taskKey}
+                      </Badge>
+                    )}
                     {task.maxRuns && task.currentRunCount !== null && (
                       <Badge variant="outline" className="text-xs">
                         {task.currentRunCount} / {task.maxRuns}

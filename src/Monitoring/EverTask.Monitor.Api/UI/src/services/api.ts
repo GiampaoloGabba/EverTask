@@ -7,14 +7,16 @@ import type {
   TasksPagedResponse,
   TaskDetailDto,
   StatusAuditDto,
-  RunsAuditDto
+  RunsAuditDto,
+  ExecutionLogsResponse,
+  TaskCountsDto
 } from '@/types/task.types';
 import {
   DateRange,
   type OverviewDto,
   type RecentActivityDto
 } from '@/types/dashboard.types';
-import type { QueueMetricsDto } from '@/types/queue.types';
+import type { QueueConfigurationDto } from '@/types/queue.types';
 import {
   TimePeriod,
   type SuccessRateTrendDto,
@@ -140,6 +142,18 @@ class ApiService {
     return this.client.get<RunsAuditDto[]>(`/tasks/${id}/runs-audit`);
   }
 
+  async getExecutionLogs(id: string, skip: number = 0, take: number = 100, level?: string) {
+    await this.initialize();
+    return this.client.get<ExecutionLogsResponse>(`/tasks/${id}/execution-logs`, {
+      params: { skip, take, level }
+    });
+  }
+
+  async getTaskCounts() {
+    await this.initialize();
+    return this.client.get<TaskCountsDto>('/tasks/counts');
+  }
+
   // Dashboard API
   async getOverview(range: DateRange = DateRange.Today) {
     await this.initialize();
@@ -158,7 +172,7 @@ class ApiService {
   // Queues API
   async getQueues() {
     await this.initialize();
-    return this.client.get<QueueMetricsDto[]>('/queues');
+    return this.client.get<QueueConfigurationDto[]>('/queues/configurations');
   }
 
   async getQueueTasks(name: string, pagination: PaginationParams) {

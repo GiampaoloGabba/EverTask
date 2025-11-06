@@ -4,7 +4,8 @@ import {
   TaskFilter,
   PaginationParams,
   TasksPagedResponse,
-  TaskDetailDto
+  TaskDetailDto,
+  TaskCountsDto
 } from '@/types/task.types';
 
 export const useTasks = (
@@ -33,6 +34,20 @@ export const useTaskDetail = (
       return response.data;
     },
     enabled: !!id,
+    ...options,
+  });
+};
+
+export const useTaskCounts = (
+  options?: Omit<UseQueryOptions<TaskCountsDto>, 'queryKey' | 'queryFn'>
+) => {
+  return useQuery({
+    queryKey: ['taskCounts'],
+    queryFn: async () => {
+      const response = await apiService.getTaskCounts();
+      return response.data;
+    },
+    refetchInterval: 30000, // Refresh every 30 seconds
     ...options,
   });
 };
