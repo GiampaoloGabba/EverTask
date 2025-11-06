@@ -9,7 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-#### Monitoring Dashboard Enhancements
+#### Monitoring Dashboard v3.2 - Feature Complete (Read-Only Mode)
+
+The EverTask monitoring dashboard is now **feature complete** in version 3.2. The current release provides comprehensive **read-only monitoring capabilities** for complete visibility into your task execution pipeline.
+
+**Dashboard Features:**
 - **Execution Logs Terminal UI**: New tab in task detail modal displaying captured execution logs with terminal-like UI
   - Monospace font with color-coded log levels (Trace=gray, Debug=cyan, Info=blue, Warning=yellow, Error=red, Critical=red bold)
   - Dark background for optimal readability
@@ -25,7 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Tooltip description explaining what each audit level means
   - Helps users understand incomplete audit trails (e.g., Minimal only shows errors)
 
-#### Backend API Enhancements
+- **Real-Time Updates**: SignalR-based event-driven cache invalidation with intelligent throttling
+  - Immediate first update for responsive UI feedback
+  - Regular updates at configurable intervals (default: 1000ms) during continuous task activity
+  - Prevents API request bursts during task completion
+  - Configurable via `EventDebounceMs` property in `EverTaskApiOptions`
+
+**Backend API Enhancements:**
 - **New Execution Logs Endpoint**: `GET /api/tasks/{id}/execution-logs`
   - Query parameters: `skip` (default 0), `take` (default 100), `level` (optional filter)
   - Returns `ExecutionLogsResponse` with logs array, total count, and pagination metadata
@@ -36,15 +46,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Exposes database audit configuration to frontend
   - Nullable integer matching `AuditLevel` enum values (0=Full, 1=Minimal, 2=ErrorsOnly, 3=None)
 
-#### Type Definitions
+**Type Definitions:**
 - **New TypeScript types** in monitoring UI:
   - `ExecutionLogDto`: Single log entry (id, timestampUtc, level, message, exceptionDetails, sequenceNumber)
   - `ExecutionLogsResponse`: Paginated logs response (logs[], totalCount, skip, take)
   - `AuditLevel` enum: TypeScript enum matching backend values
 
+**Current State (v3.2):**
+- ✅ Complete read-only monitoring and observability
+- ✅ Real-time task status updates via SignalR
+- ✅ Comprehensive analytics and performance metrics
+- ✅ Detailed execution logs and audit trail visualization
+- ✅ Multi-queue monitoring and task filtering
+
+**Future Releases:**
+- ⏳ Task management operations (stop, restart, cancel tasks)
+- ⏳ Runtime parameter modification for queued/scheduled tasks
+- ⏳ Queue management (pause/resume queues)
+
+> **Note**: Both the REST API and dashboard operate in read-only mode. Future releases will introduce task management capabilities.
+
 ### Changed
 - Monitoring dashboard "History" section renamed to "History & Logs" to reflect new execution logs tab
 - Task detail tabs layout changed from 2-column to 3-column grid (Status History | Runs History | Execution Logs)
+- SignalR auto-refresh implementation changed from debounce to throttle pattern for predictable update intervals
 
 ## [3.2.0] - 2025-11-04
 
