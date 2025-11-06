@@ -3,6 +3,7 @@ remote_theme: just-the-docs/just-the-docs
 
 title: EverTask Documentation
 description: Persistent, resilient task execution for .NET
+logo: "/assets/logo-full.png"
 
 # URL configuration
 url: https://GiampaoloGabba.github.io

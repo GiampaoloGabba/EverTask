@@ -2,6 +2,7 @@
 layout: default
 title: Getting Started
 nav_order: 2
+has_children: true
 ---
 
 # Getting Started with EverTask
@@ -222,5 +223,5 @@ Now that you've got EverTask running, dive into these topics:
 - For I/O-bound tasks (like API calls or file operations), increase `MaxDegreeOfParallelism`
 - For CPU-intensive tasks, decrease it to avoid overloading your cores
 - If your queue is constantly full, bump up `ChannelCapacity`
-- Consider [multi-queue configuration](advanced-features.md#multi-queue) to isolate different workloads
-- For very high loads (>10k tasks/sec), enable the [sharded scheduler](advanced-features.md#sharded-scheduler)
+- Consider [multi-queue configuration](multi-queue.md) to isolate different workloads
+- For very high loads (>10k tasks/sec), enable the [sharded scheduler](sharded-scheduler.md)

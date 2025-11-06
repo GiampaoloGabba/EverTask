@@ -7,385 +7,151 @@ nav_order: 4
 
 # Dashboard UI Guide
 
-Visual interface guide for the EverTask Monitoring Dashboard with comprehensive screenshots and feature walkthrough.
+The EverTask dashboard is a modern React interface that gives you complete visibility into your background tasks. Think of it as your mission control for monitoring task execution, debugging failures, and understanding performance patterns.
 
-> **Note**: The dashboard is currently **read-only** (v3.2). You can view, analyze, filter, and export all task data, but cannot perform management operations like stopping, restarting, or cancelling tasks through the UI. Task management features will be added in future releases.
+> **Note**: The dashboard is currently **read-only** (v3.2). You can view, analyze, filter, and export all task data, but task management operations (stop, restart, cancel) will be added in future releases.
 
-## Table of Contents
-
-- [Overview](#overview)
-- [Dashboard Features](#dashboard-features)
-  - [Overview Page](#overview-page)
-  - [Task List View](#task-list-view)
-  - [Task Detail View](#task-detail-view)
-  - [Queue Metrics](#queue-metrics)
-  - [Statistics & Analytics](#statistics--analytics)
-- [Real-Time Updates](#real-time-updates)
-- [Screenshot Gallery](#screenshot-gallery)
-
-## Overview
-
-The embedded React dashboard provides a modern, responsive interface for comprehensive read-only monitoring of your tasks.
-
-**Key Capabilities:**
-- ✅ Real-time task monitoring with SignalR integration
-- ✅ Advanced filtering and search
-- ✅ Detailed execution logs and audit trails
-- ✅ Performance analytics and trends
-- ✅ Multi-queue monitoring
-- ✅ Terminal-style log viewer with color-coded severity levels
-
-**Access the Dashboard:**
+**Quick Access:**
 ```
 URL: http://localhost:5000/evertask-monitoring
 Default Credentials: admin / admin
 ```
 
-## Dashboard Features
+## What You Can Do
 
-### Overview Page
+The dashboard helps you answer critical questions about your background tasks:
 
-The main dashboard shows:
+- **"What's happening right now?"** - See tasks in progress, recent completions, and failures in real-time
+- **"Why did this task fail?"** - Drill into execution logs with full stack traces and structured logging
+- **"Is my system healthy?"** - Monitor success rates, execution times, and queue metrics at a glance
+- **"Which tasks are slow?"** - Analyze performance trends and identify bottlenecks
+- **"How reliable are my recurring tasks?"** - Track execution history across all attempts
 
-**Key Metrics:**
-- **Total Tasks** - Complete count with breakdown by status (Queued, In Progress, Completed, Failed, Cancelled)
-- **Success Rate** - Percentage with visual indicator and color coding (green >90%, yellow 70-90%, red <70%)
-- **Active Queues** - Number of queues currently processing tasks
-- **Average Execution Time** - Mean duration in milliseconds across all completed tasks
-- **Recurring Tasks** - Count of scheduled recurring tasks
+## Main Views
 
-**Visual Analytics:**
-- **Tasks Over Time** - Line chart showing completed vs failed tasks with hourly/daily aggregation
-- **Queue Summaries** - Card-based view with status breakdown per queue
-- **Recent Activity** - Live feed of latest task updates (last 50 events)
+### Overview Dashboard
 
-**Time Range Filters:**
-Select different time ranges for metrics:
-- Today (default)
-- Week (last 7 days)
-- Month (last 30 days)
-- All time
+Your starting point shows the big picture: total tasks, success rates, active queues, and average execution times. Time-based charts help you spot trends (hourly spikes, daily patterns, weekly anomalies). Queue cards give you instant health checks with color-coded success rates (green = healthy, yellow = watch, red = investigate).
 
-### Task List View
+The Recent Activity feed shows the last 50 events as they happen, so you can watch tasks flow through the system in real-time.
 
-Browse and filter tasks with powerful search capabilities:
+### Task List & Filtering
 
-**Status Filters:**
-Quick-access filters for common statuses:
-- 🟡 **Queued** - Tasks waiting to execute
-- 🔵 **In Progress** - Currently executing tasks
-- 🟢 **Completed** - Successfully finished tasks
-- 🔴 **Failed** - Tasks that encountered errors
-- ⚫ **Cancelled** - Manually cancelled tasks
+Find any task quickly with powerful filtering: status (Queued, In Progress, Completed, Failed, Cancelled), queue name, task type, or date range. Combine filters to narrow down exactly what you need: "Show me all failed payment tasks from yesterday in the critical queue."
 
-**Advanced Filtering:**
-- **Queue Filter** - Filter by specific queue name
-- **Task Type Filter** - Search by task type (supports partial matching)
-- **Recurring Filter** - Toggle to show only recurring tasks
-- **Date Range Filter** - Filter by creation date with date picker
+Search is instant and works across task IDs, types, and parameters. Pagination keeps things fast even with millions of tasks in storage.
 
-**Sorting:**
-- Sort by any column (Created Date, Last Execution, Status, Type)
-- Toggle ascending/descending order
-- Default: Most recent first
+### Task Details
 
-**Pagination:**
-- Configurable page size (10, 20, 50, 100 items)
-- Navigate through large datasets efficiently
-- Total count and page info displayed
+Click any task to see everything about its lifecycle. The modal view has three tabs:
 
-**Table Columns:**
-- Task ID (clickable for details)
-- Task Type (fully qualified name)
-- Handler Type
-- Status (color-coded badge)
-- Queue Name
-- Created Date (relative time + tooltip with absolute time)
-- Last Execution Date
-- Next Run (for recurring tasks)
+**Status History** shows every state transition (Queued → InProgress → Completed/Failed) with timestamps. Perfect for understanding "when did this task actually start?" or "how long was it queued?"
 
-### Task Detail View
+**Execution History** is especially valuable for recurring tasks. See all execution attempts, their durations, and outcomes. Quickly spot if a recurring task that usually takes 2 seconds suddenly took 30 seconds on the last run.
 
-Click any task to view comprehensive details in a modal overlay:
-
-**Task Information:**
-- **Task ID** - Unique identifier (GUID)
-- **Task Type** - Fully qualified type name
-- **Handler Type** - Handler class name
-- **Status** - Current status with color indicator
-- **Queue Name** - Assigned queue
-- **Parameters** - JSON-formatted task parameters with syntax highlighting
-
-**Timing Information:**
-- **Created At** - When the task was created
-- **Scheduled At** - When the task was scheduled to run (if applicable)
-- **Last Execution** - Most recent execution timestamp
-- **Completed At** - When the task finished (if completed)
-
-**Recurring Information** (for recurring tasks):
-- **Schedule** - Cron expression or interval
-- **Max Runs** - Maximum execution limit (if set)
-- **Current Run Count** - Number of times executed
-- **Next Run** - Next scheduled execution time
-- **Run Until** - Expiration date (if set)
-
-**Tabs:**
-
-1. **Status History** - Complete audit trail:
-   - All status transitions (Queued → InProgress → Completed)
-   - Timestamps for each change
-   - Error details for failed transitions
-   - Visual timeline view
-
-2. **Execution History** - All execution attempts:
-   - Execution start/completion times
-   - Duration calculation
-   - Status outcome (Completed/Failed)
-   - Error details for failed runs
-   - Especially useful for recurring tasks to track reliability
-
-3. **Execution Logs** - Terminal-style log viewer:
-   - Color-coded severity levels (Info, Warning, Error)
-   - Structured log data with timestamps
-   - Search and filter capabilities
-   - Export to JSON/CSV
-   - Syntax highlighting for stack traces
-
-**Error Details:**
-- Full exception message
-- Stack trace with syntax highlighting
-- Inner exception details (if present)
-- Copy to clipboard functionality
-
-**Actions:**
-- Copy Task ID
-- Copy Parameters (JSON)
-- Export task details (JSON)
-- Refresh task data
+**Execution Logs** is your debugging powerhouse. If you enabled persistent logging, you'll see a terminal-style viewer with color-coded log levels (Info in blue, Warnings in yellow, Errors in red). Stack traces get syntax highlighting, and you can export logs to JSON/CSV for deeper analysis.
 
 ### Queue Metrics
 
-Monitor queue health and performance:
+Each queue gets its own card showing task distribution (how many queued, running, completed, failed). Success rate percentages with color indicators help you spot troubled queues instantly. Click a queue card to filter the task list to that queue's tasks.
 
-**Queue Cards:**
-Each queue displays:
-- **Queue Name** - Identifier
-- **Task Distribution** - Breakdown by status:
-  - Queued (waiting)
-  - In Progress (executing)
-  - Completed (successful)
-  - Failed (errors)
-  - Cancelled (terminated)
-- **Success Rate** - Percentage with color indicator
-- **Active Tasks** - Currently executing count
-- **Total Tasks** - Historical count
+Multi-queue systems shine here: you can see at a glance if your "critical" queue is healthy while your "background" queue has some failures that need investigation.
 
-**Visual Indicators:**
-- 🟢 Green - Success rate >90%
-- 🟡 Yellow - Success rate 70-90%
-- 🔴 Red - Success rate <70%
-- Progress bars for task distribution
-- Real-time updates via SignalR
+### Analytics & Trends
 
-**Actions:**
-- Click queue card to filter task list by queue
-- View queue-specific analytics
-- Monitor queue capacity and throughput
+The Statistics page helps you understand patterns over time. Success rate trends show if your system is getting more stable or degrading. Task type distribution reveals which handlers run most frequently (maybe you didn't realize your health check runs 10,000 times a day).
 
-### Statistics & Analytics
-
-Analyze performance trends and identify bottlenecks:
-
-**Success Rate Trends:**
-- Line chart showing historical success rate
-- Time periods:
-  - Last 7 Days (default)
-  - Last 30 Days
-  - Last 90 Days
-- Data points include:
-  - Success rate percentage
-  - Total tasks executed
-  - Successful vs failed count
-- Hover tooltips with detailed breakdown
-
-**Task Type Distribution:**
-- Pie chart or bar chart showing task frequency
-- See which tasks run most frequently
-- Identify hotspot task types
-- Filter by time range (Today, Week, Month, All)
-- Click segments to filter task list
-
-**Execution Time Analysis:**
-- Table showing execution time statistics by task type
-- Columns:
-  - Task Type
-  - Average Execution Time (ms)
-  - Min Execution Time (ms)
-  - Max Execution Time (ms)
-  - Task Count (sample size)
-- Sort by any metric
-- Identify slow tasks and performance bottlenecks
-- Color-coded performance indicators:
-  - 🟢 Fast (<1s average)
-  - 🟡 Moderate (1-5s average)
-  - 🔴 Slow (>5s average)
-
-**Time Range Filters:**
-All statistics support time range filtering:
-- Today - Current day only
-- Week - Last 7 days
-- Month - Last 30 days
-- All - Complete history
+Execution time analysis is where you find performance bottlenecks. A sortable table shows average, min, and max execution times per task type. Color-coded indicators highlight slow tasks (>5s average = red flag). This helps you prioritize optimization efforts: "Our email task averages 8 seconds, but our payment task averages 50ms – let's optimize emails."
 
 ## Real-Time Updates
 
-The dashboard uses SignalR for real-time event-driven cache invalidation with intelligent debouncing.
+The dashboard uses SignalR for intelligent real-time updates. Instead of polling every few seconds (which wastes bandwidth and hammers your API), the dashboard only refreshes when something actually changes.
 
 **How It Works:**
-1. SignalR events trigger cache invalidation instead of periodic polling
-2. Multiple rapid events are debounced to prevent excessive API calls during task bursts
-3. Dashboard automatically updates when:
-   - Tasks are dispatched
-   - Tasks start executing
-   - Tasks complete or fail
-   - Status changes occur
 
-**Configuration:**
-Control responsiveness via `EventDebounceMs` option:
+When a task completes, fails, or changes status, EverTask broadcasts a SignalR event. The dashboard receives the event and invalidates its cache, triggering a fresh data fetch. Multiple rapid events (like during a task burst) are debounced to prevent API spam – if 100 tasks complete in 2 seconds, you get one refresh, not 100.
+
+**Configure Responsiveness:**
 
 ```csharp
 .AddMonitoringApi(options =>
 {
     options.EventDebounceMs = 1000;  // Wait 1 second before refreshing (default)
-    // Recommended values:
-    // - 300ms: Very responsive (low-volume environments)
-    // - 500ms: Balanced (moderate responsiveness, good efficiency)
-    // - 1000ms: Conservative (best for high-volume task processing)
+    // 300ms: Very responsive (low-volume)
+    // 500ms: Balanced (moderate responsiveness)
+    // 1000ms: Conservative (high-volume, best performance)
 });
 ```
 
-**Benefits:**
-- ✅ **Reduced Network Traffic** - Batches multiple rapid events into single API calls
-- ✅ **Better Performance** - Prevents UI thrashing during task bursts
-- ✅ **Seamless Fallback** - Automatically switches to polling when SignalR disconnects
+**Connection Status:**
 
-**Visual Indicators:**
-- 🟢 Connected - SignalR active, real-time updates enabled
-- 🟡 Connecting - Attempting to establish connection
-- 🔴 Disconnected - Fallback to polling mode (30s interval)
-- Refresh icon spins during data fetch
-- Last updated timestamp shown
+The header shows your SignalR connection status with color-coded indicators (green = connected, yellow = connecting, red = disconnected). If SignalR drops, the dashboard automatically falls back to polling every 30 seconds. You can force a refresh anytime with the refresh button.
 
-**Manual Refresh:**
-- Refresh button available in the header
-- Force-refresh any view on demand
-- Bypasses debounce for immediate update
+This architecture reduces network traffic dramatically while keeping the UI feeling instant. No more stale data, no more excessive polling.
 
-## Screenshot Gallery
+## Screenshots
 
-Explore the dashboard interface with these annotated screenshots:
+See the dashboard in action with these 10 screenshots showing all major features:
 
 <div align="center">
 
-### Overview Dashboard
 ![Dashboard Overview](../assets/screenshots/1.png)
-*Real-time overview with task statistics, success rates, and activity charts*
+*Overview dashboard with real-time metrics and activity charts*
 
 ---
 
-### Task List View
 ![Task List](../assets/screenshots/2.png)
-*Comprehensive task list with filtering, sorting, and pagination*
+*Task list with advanced filtering and search*
 
 ---
 
-### Task Detail Modal
 ![Task Details](../assets/screenshots/3.png)
-*Detailed task information with parameters, status, and execution history*
+*Task detail modal with parameters and execution info*
 
 ---
 
-### Execution Logs Viewer
 ![Execution Logs](../assets/screenshots/4.png)
-*Terminal-style execution logs with color-coded severity levels*
+*Terminal-style execution logs with color-coded severity*
 
 ---
 
-### Status History
 ![Status History](../assets/screenshots/5.png)
-*Complete audit trail of task status transitions*
+*Complete audit trail of status transitions*
 
 ---
 
-### Queue Metrics
 ![Queue Metrics](../assets/screenshots/6.png)
-*Multi-queue monitoring with task distribution and success rates*
+*Multi-queue monitoring with success rates*
 
 ---
 
-### Statistics & Analytics
 ![Statistics](../assets/screenshots/7.png)
-*Performance analytics and success rate trends over time*
+*Performance analytics and trends over time*
 
 ---
 
-### Task Filtering
 ![Task Filters](../assets/screenshots/8.png)
-*Advanced filtering by status, queue, type, and date range*
+*Advanced filtering by status, queue, type, and date*
 
 ---
 
-### Real-Time Updates
 ![Real-Time Updates](../assets/screenshots/9.png)
-*Live task updates with SignalR integration and refresh controls*
+*Live updates with SignalR integration*
 
 ---
 
-### Execution Runs History
 ![Runs History](../assets/screenshots/10.png)
-*Detailed execution history for recurring tasks with timing information*
+*Execution history for recurring tasks*
 
 </div>
 
-## Navigation Tips
+## Coming in Future Releases
 
-**Keyboard Shortcuts:**
-- `Esc` - Close modal overlays
-- `Ctrl+F` / `Cmd+F` - Focus search box (browser default)
-- `Enter` - Apply filters
-- `Ctrl+R` / `Cmd+R` - Refresh current view
-
-**Mouse Actions:**
-- Click task row → Open detail modal
-- Click queue card → Filter by queue
-- Click chart segment → Filter by that data point
-- Hover metrics → Show detailed tooltips
-- Double-click task ID → Copy to clipboard
-
-**Responsive Design:**
-- Desktop (>1200px) - Full multi-column layout
-- Tablet (768-1200px) - Stacked layout with collapsible sidebar
-- Mobile (<768px) - Single column with hamburger menu
-
-**Browser Support:**
-- Chrome 90+ ✅
-- Firefox 88+ ✅
-- Edge 90+ ✅
-- Safari 14+ ✅
-
-## Accessibility
-
-The dashboard follows WCAG 2.1 Level AA guidelines:
-
-- **Keyboard Navigation** - Full keyboard support for all interactive elements
-- **Screen Reader** - ARIA labels and semantic HTML
-- **Color Contrast** - Meets AA standards (4.5:1 for normal text)
-- **Focus Indicators** - Clear visual focus states
-- **Alternative Text** - Images and icons have descriptive alt text
+Task management operations (stop, restart, cancel tasks), runtime parameter editing, and queue management (pause/resume) are planned for future versions.
 
 ## Next Steps
 
-- **[Monitoring Dashboard](monitoring-dashboard.md)** - Setup, configuration, and security
-- **[API Reference](monitoring-api-reference.md)** - Complete REST API documentation
-- **[Custom Event Monitoring](monitoring-events.md)** - Event-based monitoring and integrations
-- **[Configuration Reference](configuration-reference.md)** - All configuration options
+- **[Monitoring Dashboard](monitoring-dashboard.md)** - Setup and configuration
+- **[API Reference](monitoring-api-reference.md)** - REST API documentation
+- **[Custom Event Monitoring](monitoring-events.md)** - Event-based integrations
+- **[Task Execution Logs](monitoring-logs.md)** - Log capture configuration

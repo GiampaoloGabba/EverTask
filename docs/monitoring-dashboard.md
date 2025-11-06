@@ -1,12 +1,15 @@
 ---
 layout: default
 title: Monitoring Dashboard
-nav_order: 11
+parent: Monitoring
+nav_order: 2
 ---
 
 # Monitoring Dashboard
 
 EverTask provides a comprehensive monitoring dashboard with REST API endpoints and an embedded React UI for real-time task monitoring, analytics, and management.
+
+![Dashboard Overview](../assets/screenshots/1.png)
 
 ## Table of Contents
 
@@ -14,14 +17,13 @@ EverTask provides a comprehensive monitoring dashboard with REST API endpoints a
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Configuration](#configuration)
-- [API Endpoints](#api-endpoints)
-- [Dashboard Features](#dashboard-features)
 - [Authentication](#authentication)
 - [Advanced Scenarios](#advanced-scenarios)
 - [Swagger Integration](#swagger-integration)
 - [Real-Time Monitoring](#real-time-monitoring)
 - [Security Best Practices](#security-best-practices)
 - [Integration Examples](#integration-examples)
+- [Documentation Resources](#documentation-resources)
 
 ## Overview
 
@@ -29,7 +31,7 @@ The EverTask Monitoring API provides:
 
 - **REST API** for querying tasks, viewing statistics, and analyzing performance
 - **Embedded React Dashboard** with modern UI for visual monitoring
-- **Real-Time Updates** via SignalR integration
+- **Real-Time Updates** via SignalR integration with intelligent throttling
 - **Task History** with detailed execution logs and status changes
 - **Analytics** including success rate trends, execution times, and task distribution
 - **Queue Metrics** for multi-queue monitoring
@@ -38,6 +40,28 @@ The EverTask Monitoring API provides:
 The monitoring system can be used in two modes:
 - **Full Mode** (default): API + embedded dashboard UI
 - **API-Only Mode**: REST API only, for custom frontend integrations
+
+### Version 3.2 - Feature Complete (Read-Only Monitoring)
+
+The dashboard and API are **feature complete for read-only monitoring** in version 3.2. This release provides comprehensive observability and analytics capabilities for complete visibility into your task execution pipeline.
+
+**Current Capabilities (v3.2):**
+- ✅ Complete read-only monitoring and observability
+- ✅ Real-time task status updates via SignalR with event-driven cache invalidation
+- ✅ Comprehensive analytics (success rates, execution times, task distribution)
+- ✅ Detailed execution logs visualization with filtering and export
+- ✅ Multi-queue monitoring and advanced task filtering
+- ✅ Audit trail visualization (status history, execution runs)
+- ✅ Terminal-style log viewer with color-coded severity levels
+
+**Future Releases:**
+- ⏳ Task management operations (stop, restart, cancel running tasks)
+- ⏳ Runtime parameter modification for queued/scheduled tasks
+- ⏳ Queue management operations (pause/resume queues)
+- ⏳ Task retry/requeue functionality
+- ⏳ Bulk task operations
+
+> **Note**: Both the REST API and embedded dashboard currently operate in **read-only mode**. You can view, analyze, and export all task data, but cannot modify task execution or queue behavior through the UI or API. Task management capabilities will be introduced in future releases.
 
 ## Installation
 
@@ -115,6 +139,9 @@ All configuration is done through the `EverTaskApiOptions` class passed to `AddM
     // SignalR hub path for real-time updates (fixed path)
     // Note: SignalRHubPath is now fixed to "/evertask-monitoring/hub" and cannot be changed
 
+    // Dashboard auto-refresh debounce (milliseconds)
+    options.EventDebounceMs = 1000;                // Default: 1000 (1 second)
+
     // CORS settings
     options.EnableCors = true;                     // Default: true
     options.CorsAllowedOrigins = new[] {           // Default: empty (allow all)
@@ -143,347 +170,7 @@ All configuration is done through the `EverTaskApiOptions` class passed to `AddM
 | `EnableCors` | bool | `true` | Enable CORS |
 | `CorsAllowedOrigins` | string[] | `[]` | CORS allowed origins (empty = allow all) |
 | `AllowedIpAddresses` | string[] | `[]` | IP whitelist (empty = allow all IPs). Supports IPv4/IPv6 and CIDR notation |
-
-## API Endpoints
-
-All endpoints are relative to `{BasePath}/api` (default: `/evertask-monitoring/api`).
-
-### Tasks Endpoints
-
-#### GET /tasks
-
-Get paginated list of tasks with filtering and sorting.
-
-**Query Parameters:**
-- `status` (optional): Filter by status (`Queued`, `InProgress`, `Completed`, `Failed`, `Cancelled`)
-- `queueName` (optional): Filter by queue name
-- `taskType` (optional): Filter by task type (partial match)
-- `isRecurring` (optional): Filter recurring tasks (`true`/`false`)
-- `createdFrom` (optional): Filter by creation date (from)
-- `createdTo` (optional): Filter by creation date (to)
-- `sortBy` (optional): Sort field (default: `CreatedAtUtc`)
-- `sortDescending` (optional): Sort direction (default: `true`)
-- `page` (optional): Page number (default: `1`)
-- `pageSize` (optional): Page size (default: `20`, max: `100`)
-
-**Response:**
-```json
-{
-  "tasks": [
-    {
-      "id": "dc49351d-476d-49f0-a1e8-3e2a39182d22",
-      "taskType": "SendEmailTask",
-      "handlerType": "SendEmailHandler",
-      "status": "Completed",
-      "queueName": "default",
-      "createdAtUtc": "2025-01-15T10:00:00Z",
-      "lastExecutionUtc": "2025-01-15T10:00:05Z",
-      "isRecurring": false,
-      "nextRunUtc": null
-    }
-  ],
-  "totalCount": 150,
-  "page": 1,
-  "pageSize": 20,
-  "totalPages": 8
-}
-```
-
-#### GET /tasks/{id}
-
-Get detailed information about a specific task.
-
-**Response:**
-```json
-{
-  "id": "dc49351d-476d-49f0-a1e8-3e2a39182d22",
-  "taskType": "MyApp.Tasks.SendEmailTask",
-  "handlerType": "MyApp.Handlers.SendEmailHandler",
-  "status": "Completed",
-  "queueName": "default",
-  "parameters": "{\"Email\":\"user@example.com\",\"Subject\":\"Welcome\"}",
-  "errorDetails": null,
-  "createdAtUtc": "2025-01-15T10:00:00Z",
-  "scheduledAtUtc": null,
-  "lastExecutionUtc": "2025-01-15T10:00:05Z",
-  "completedAtUtc": "2025-01-15T10:00:05Z",
-  "isRecurring": false,
-  "recurringInfo": null,
-  "maxRuns": null,
-  "currentRunCount": null,
-  "nextRunUtc": null,
-  "runUntil": null
-}
-```
-
-#### GET /tasks/{id}/status-audit
-
-Get status change history for a task.
-
-**Response:**
-```json
-[
-  {
-    "id": 1,
-    "taskId": "dc49351d-476d-49f0-a1e8-3e2a39182d22",
-    "oldStatus": "Queued",
-    "newStatus": "InProgress",
-    "changedAtUtc": "2025-01-15T10:00:00Z",
-    "errorDetails": null
-  },
-  {
-    "id": 2,
-    "taskId": "dc49351d-476d-49f0-a1e8-3e2a39182d22",
-    "oldStatus": "InProgress",
-    "newStatus": "Completed",
-    "changedAtUtc": "2025-01-15T10:00:05Z",
-    "errorDetails": null
-  }
-]
-```
-
-#### GET /tasks/{id}/runs-audit
-
-Get execution history for a task (especially useful for recurring tasks).
-
-**Response:**
-```json
-[
-  {
-    "id": 1,
-    "taskId": "dc49351d-476d-49f0-a1e8-3e2a39182d22",
-    "executionStartedUtc": "2025-01-15T10:00:00Z",
-    "executionCompletedUtc": "2025-01-15T10:00:05Z",
-    "status": "Completed",
-    "errorDetails": null
-  }
-]
-```
-
-### Dashboard Endpoints
-
-#### GET /dashboard/overview
-
-Get overview statistics for the dashboard.
-
-**Query Parameters:**
-- `range` (optional): Time range (`Today`, `Week`, `Month`, `All`) - default: `Today`
-
-**Response:**
-```json
-{
-  "totalTasks": 1234,
-  "completedTasks": 1150,
-  "failedTasks": 45,
-  "activeTasks": 39,
-  "successRate": 96.2,
-  "averageExecutionTime": 1234.56,
-  "activeQueues": 3,
-  "recurringTasks": 12,
-  "tasksOverTime": [
-    {
-      "timestamp": "2025-01-15T00:00:00Z",
-      "completed": 100,
-      "failed": 5
-    }
-  ],
-  "queueSummaries": [
-    {
-      "queueName": "default",
-      "totalTasks": 800,
-      "activeTasks": 20,
-      "completedTasks": 750,
-      "failedTasks": 30
-    }
-  ]
-}
-```
-
-#### GET /dashboard/recent-activity
-
-Get recent task activity.
-
-**Query Parameters:**
-- `limit` (optional): Maximum number of activities to return (default: `50`, max: `100`)
-
-**Response:**
-```json
-[
-  {
-    "taskId": "dc49351d-476d-49f0-a1e8-3e2a39182d22",
-    "taskType": "SendEmailTask",
-    "status": "Completed",
-    "timestamp": "2025-01-15T10:00:05Z",
-    "message": "Task completed successfully"
-  }
-]
-```
-
-### Queue Endpoints
-
-#### GET /queues
-
-Get metrics for all queues.
-
-**Response:**
-```json
-[
-  {
-    "queueName": "default",
-    "totalTasks": 800,
-    "queuedTasks": 10,
-    "inProgressTasks": 5,
-    "completedTasks": 750,
-    "failedTasks": 30,
-    "cancelledTasks": 5,
-    "successRate": 96.2
-  }
-]
-```
-
-#### GET /queues/{name}/tasks
-
-Get tasks for a specific queue (same response format as `GET /tasks`).
-
-### Statistics Endpoints
-
-#### GET /statistics/success-rate-trend
-
-Get success rate trend over time.
-
-**Query Parameters:**
-- `period` (optional): Time period (`Last7Days`, `Last30Days`, `Last90Days`) - default: `Last7Days`
-
-**Response:**
-```json
-{
-  "period": "Last7Days",
-  "dataPoints": [
-    {
-      "timestamp": "2025-01-15T00:00:00Z",
-      "successRate": 96.5,
-      "totalTasks": 120,
-      "successfulTasks": 116,
-      "failedTasks": 4
-    }
-  ]
-}
-```
-
-#### GET /statistics/task-types
-
-Get task distribution by type.
-
-**Query Parameters:**
-- `range` (optional): Time range (`Today`, `Week`, `Month`, `All`) - default: `Today`
-
-**Response:**
-```json
-{
-  "SendEmailTask": 450,
-  "ProcessPaymentTask": 320,
-  "GenerateReportTask": 150
-}
-```
-
-#### GET /statistics/execution-times
-
-Get execution time statistics by task type.
-
-**Query Parameters:**
-- `range` (optional): Time range (`Today`, `Week`, `Month`, `All`) - default: `Today`
-
-**Response:**
-```json
-[
-  {
-    "taskType": "SendEmailTask",
-    "averageExecutionTime": 1234.56,
-    "minExecutionTime": 500.0,
-    "maxExecutionTime": 3000.0,
-    "taskCount": 450
-  }
-]
-```
-
-### Configuration Endpoint
-
-#### GET /config
-
-Get runtime configuration (no authentication required - needed for dashboard initialization).
-
-**Response:**
-```json
-{
-  "apiBasePath": "/evertask-monitoring/api",
-  "uiBasePath": "/evertask-monitoring",
-  "signalRHubPath": "/evertask-monitoring/hub",
-  "requireAuthentication": true,
-  "uiEnabled": true
-}
-```
-
-## Dashboard Features
-
-The embedded React dashboard provides a modern, responsive interface for monitoring your tasks.
-
-### Overview Page
-
-The main dashboard shows:
-- **Total Tasks** count with breakdown by status
-- **Success Rate** percentage with visual indicator
-- **Active Queues** count
-- **Average Execution Time** in milliseconds
-- **Tasks Over Time** chart showing completed vs failed tasks
-- **Queue Summaries** with status breakdown per queue
-- **Recent Activity** feed with latest task updates
-
-### Task List View
-
-Browse and filter tasks with:
-- **Status Filters**: Quick filters for Queued, In Progress, Completed, Failed, Cancelled
-- **Queue Filter**: Filter by queue name
-- **Task Type Filter**: Search by task type
-- **Recurring Filter**: Show only recurring tasks
-- **Date Range Filter**: Filter by creation date
-- **Sorting**: Sort by any column
-- **Pagination**: Navigate through large datasets
-
-### Task Detail View
-
-Click any task to view:
-- **Task Information**: Type, handler, status, queue, parameters
-- **Timing Information**: Created, scheduled, last execution, completed timestamps
-- **Recurring Information**: Schedule, max runs, current run count, next run time
-- **Status History**: Complete audit trail of status changes
-- **Execution History**: All execution attempts with timestamps and outcomes
-- **Error Details**: Full stack traces for failed tasks
-
-### Queue Metrics
-
-Monitor queue health with:
-- **Task Distribution**: Breakdown by status per queue
-- **Success Rate**: Per-queue success percentage
-- **Active Tasks**: Currently executing tasks
-- **Queue Capacity**: Visual indicators
-
-### Statistics & Analytics
-
-Analyze performance with:
-- **Success Rate Trends**: Historical success rate over 7/30/90 days
-- **Task Type Distribution**: See which tasks run most frequently
-- **Execution Time Analysis**: Identify slow tasks and performance bottlenecks
-- **Time Range Filters**: Analyze Today, Week, Month, or All time
-
-### Real-Time Updates
-
-The dashboard automatically updates when:
-- Tasks are dispatched
-- Tasks start executing
-- Tasks complete or fail
-- Status changes occur
-
-Updates are pushed via SignalR with no page refresh required.
+| `EventDebounceMs` | int | `1000` | Debounce time in milliseconds for SignalR event-driven cache invalidation in the dashboard. Higher values reduce API load during task bursts but introduce slight UI update delays |
 
 ## Authentication
 
@@ -790,7 +477,7 @@ The dashboard receives real-time events for:
 
 Connect to the SignalR hub from your own application:
 
-**With JWT Authentication** (when `EnableAuthentication = true`):
+**With JWT Authentication** (when `EnableAuthentication = true`):\
 ```javascript
 import * as signalR from '@microsoft/signalr';
 
@@ -957,7 +644,7 @@ if (builder.Environment.IsDevelopment())
 }
 ```
 
-### 7. Rate Limiting
+### 8. Rate Limiting
 
 Consider adding rate limiting to monitoring endpoints:
 
@@ -1121,9 +808,42 @@ console.log('Total tasks:', overview.data.totalTasks);
 console.log('Success rate:', overview.data.successRate);
 ```
 
+## Documentation Resources
+
+The monitoring documentation is organized into specialized guides:
+
+### 📊 [API Reference](monitoring-api-reference.md)
+
+Complete REST API documentation with all endpoints:
+- Tasks endpoints (list, details, history)
+- Dashboard endpoints (overview, activity)
+- Queue endpoints (metrics, health)
+- Statistics endpoints (trends, analytics)
+- Request/response examples and query parameters
+
+### 🎨 [Dashboard UI Guide](monitoring-dashboard-ui.md)
+
+Visual interface documentation with screenshots:
+- Overview page (metrics, charts, activity feed)
+- Task list view (filtering, sorting, pagination)
+- Task detail view (parameters, history, logs)
+- Queue metrics (distribution, success rates)
+- Statistics & analytics (trends, performance)
+- Complete screenshot gallery
+
+### 🔌 [Custom Event Monitoring](monitoring-events.md)
+
+Build custom integrations using the event system:
+- Task lifecycle events
+- DIY SignalR integration
+- Third-party monitoring (Application Insights, Prometheus)
+- Custom alerts (Slack, email, PagerDuty)
+- Serilog integration
+
 ## Next Steps
 
-- **[Monitoring Events](monitoring.md)** - Event-based monitoring and custom integrations
-- **[Configuration Reference](configuration-reference.md)** - Complete configuration documentation
-- **[Advanced Features](advanced-features.md)** - Multi-queue and advanced scenarios
+- **[API Reference](monitoring-api-reference.md)** - Complete REST API documentation
+- **[Dashboard UI Guide](monitoring-dashboard-ui.md)** - UI features and screenshots
+- **[Custom Event Monitoring](monitoring-events.md)** - Event-based monitoring and custom integrations
+- **[Configuration Reference](configuration-reference.md)** - All configuration options
 - **[Architecture](architecture.md)** - How monitoring works internally

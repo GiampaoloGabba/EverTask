@@ -1,7 +1,8 @@
 ---
 layout: default
 title: Task Dispatching
-nav_order: 4
+parent: Getting Started
+nav_order: 2
 ---
 
 # Task Dispatching
@@ -289,7 +290,7 @@ public override async ValueTask OnCompleted(Guid taskId)
 }
 ```
 
-See [Advanced Features - Continuations](advanced-features.md#continuations) for more details.
+See [Task Continuations](task-orchestration.md) for more details.
 
 ### Error Recovery
 
@@ -376,7 +377,7 @@ await _dispatcher.Dispatch(
     taskKey: "daily-report"); // Prevents duplicate registration
 ```
 
-See [Recurring Tasks - Idempotent Registration](recurring-tasks.md#idempotent-registration) for more details.
+See [Recurring Tasks - Idempotent Registration](recurring-tasks.md#idempotent-task-registration) for more details.
 
 ## Performance Considerations
 
@@ -419,7 +420,7 @@ builder.Services.AddEverTask(opt =>
 });
 ```
 
-Check out [Advanced Features - Sharded Scheduler](advanced-features.md#sharded-scheduler) for the full details.
+Check out [Sharded Scheduler](sharded-scheduler.md) for the full details.
 
 ## Next Steps
 

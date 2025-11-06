@@ -1,7 +1,8 @@
 ---
 layout: default
 title: Configuration Cheatsheet
-nav_order: 8
+parent: Configuration
+nav_order: 2
 ---
 
 # Configuration Cheatsheet
@@ -130,6 +131,7 @@ await dispatcher.Dispatch(task, recurring => ..., auditLevel: AuditLevel.Minimal
     opt.Username = "admin";                    // Default: "admin"
     opt.Password = "admin";                    // Default: "admin" (CHANGE IN PRODUCTION!)
     opt.EnableAuthentication = true;           // Default: true
+    opt.EventDebounceMs = 1000;                // Default: 1000ms (dashboard auto-refresh debounce)
     opt.EnableCors = true;                     // Default: true
     opt.CorsAllowedOrigins = new[] {           // Default: empty (allow all)
         "https://myapp.com"

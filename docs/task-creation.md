@@ -1,7 +1,8 @@
 ---
 layout: default
 title: Task Creation
-nav_order: 3
+parent: Getting Started
+nav_order: 1
 ---
 
 # Task Creation
@@ -317,7 +318,7 @@ public class HighPriorityHandler : EverTaskHandler<HighPriorityTask>
 }
 ```
 
-See [Advanced Features - Multi-Queue](advanced-features.md#multi-queue) for more details.
+See [Multi-Queue Support](multi-queue.md) for more details.
 
 ### Combined Configuration
 

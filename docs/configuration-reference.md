@@ -1,7 +1,8 @@
 ---
 layout: default
 title: Configuration Reference
-nav_order: 7
+parent: Configuration
+nav_order: 1
 ---
 
 # Configuration Reference
@@ -871,6 +872,7 @@ AddMonitoringApi(Action<EverTaskApiOptions> configure)
 | `EnableCors` | `bool` | `true` | Enable CORS for API endpoints |
 | `CorsAllowedOrigins` | `string[]` | `[]` | CORS allowed origins (empty = allow all) |
 | `AllowedIpAddresses` | `string[]` | `[]` | IP address whitelist (empty = allow all IPs). Supports IPv4, IPv6, and CIDR notation |
+| `EventDebounceMs` | `int` | `1000` | Debounce time in milliseconds for SignalR event-driven cache invalidation in the dashboard. Higher values reduce API load during task bursts but introduce slight UI update delays. Recommended: 300ms (very responsive), 500ms (balanced), 1000ms (conservative for high-volume) |
 
 #### BasePath
 

@@ -1,12 +1,13 @@
 ---
 layout: default
-title: Monitoring Events
-nav_order: 10
+title: Custom Event Monitoring
+parent: Monitoring
+nav_order: 1
 ---
 
-# Monitoring Events
+# Custom Event Monitoring
 
-> **New in v3.0:** Looking for the web dashboard? Check out the [Monitoring Dashboard](monitoring-dashboard.md) guide for REST API endpoints, embedded React UI, and real-time monitoring features.
+> **Looking for the complete monitoring solution?** Check out the [Monitoring Dashboard](monitoring-dashboard.md) for a ready-to-use web dashboard with REST API, embedded React UI, and real-time monitoring. This page covers custom event-based monitoring and DIY integrations.
 
 EverTask gives you visibility into your background tasks through a flexible event system that tracks execution, failures, and performance. This page covers the event-based monitoring system and custom integrations. For a complete monitoring solution with web dashboard, see the [Monitoring Dashboard](monitoring-dashboard.md) guide.
 

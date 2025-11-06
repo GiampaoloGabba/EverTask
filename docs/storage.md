@@ -2,6 +2,7 @@
 layout: default
 title: Storage
 nav_order: 6
+has_children: true
 ---
 
 # Storage Configuration
