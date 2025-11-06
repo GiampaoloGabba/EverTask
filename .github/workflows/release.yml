@@ -32,6 +32,19 @@ jobs:
         with:
           dotnet-version: '9.0.x'
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: src/Monitoring/EverTask.Monitor.Api/UI/package-lock.json
+
+      - name: Build React UI
+        run: |
+          cd src/Monitoring/EverTask.Monitor.Api/UI
+          npm ci
+          npm run build
+
       - name: Restore dependencies
         run: dotnet restore EverTask.sln
 
@@ -47,6 +60,7 @@ jobs:
           dotnet pack src/Storage/EverTask.Storage.Sqlite/EverTask.Storage.Sqlite.csproj --no-build -o nupkg
           dotnet pack src/Logging/EverTask.Logging.Serilog/EverTask.Logging.Serilog.csproj --no-build -o nupkg
           dotnet pack src/Monitoring/EverTask.Monitor.AspnetCore.SignalR/EverTask.Monitor.AspnetCore.SignalR.csproj --no-build -o nupkg
+          dotnet pack src/Monitoring/EverTask.Monitor.Api/EverTask.Monitor.Api.csproj --no-build -o nupkg
           dotnet nuget push "nupkg/*.nupkg" --source "https://api.nuget.org/v3/index.json" --api-key ${{ secrets.NUGET_API_KEY }} --skip-duplicate
         env:
           ASPNETCORE_ENVIRONMENT: release
