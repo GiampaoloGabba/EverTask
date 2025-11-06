@@ -19,13 +19,13 @@ class SignalRService {
       await this.disconnect();
     }
 
-    const { username, password } = useAuthStore.getState();
+    const { token } = useAuthStore.getState();
 
     this.connection = new signalR.HubConnectionBuilder()
       .withUrl(this.hubPath, {
         accessTokenFactory: () => {
-          // Basic Auth token for SignalR
-          return btoa(`${username}:${password}`);
+          // JWT token for SignalR
+          return token || '';
         }
       })
       .withAutomaticReconnect()
