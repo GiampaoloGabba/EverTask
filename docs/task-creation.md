@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Task Creation
-parent: Getting Started
+parent: Task Operations
 nav_order: 1
 ---
 

@@ -70,7 +70,7 @@ await _dispatcher.DispatchAsync(new SendEmailTask("user@example.com", "Hello!"))
   - [API Reference](monitoring-api-reference.md) - Complete API documentation
   - [Dashboard UI Guide](monitoring-dashboard-ui.md) - UI features and screenshots
   - [Task Execution Logs](monitoring-logs.md) - Log capture and persistence
-- **[Task Orchestration](advanced-features.md)** - Coordinate complex workflows
+- **[Workflows](advanced-features.md)** - Coordinate complex workflows
   - [Task Orchestration](task-orchestration.md) - Continuations, cancellation, rescheduling
   - [Custom Workflows](custom-workflows.md) - Build complex task pipelines
 - [Architecture](architecture.md) - How EverTask works under the hood

@@ -1,11 +1,11 @@
 ---
 layout: default
-title: Task Orchestration
+title: Workflows
 nav_order: 8
 has_children: true
 ---
 
-# Task Orchestration
+# Workflows
 
 This guide covers techniques for coordinating and managing complex task execution workflows. Learn how to chain tasks, build multi-step processes, and orchestrate sophisticated business workflows.
 

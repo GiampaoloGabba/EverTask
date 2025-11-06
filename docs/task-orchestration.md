@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Task Orchestration
-parent: Task Orchestration
+parent: Workflows
 nav_order: 1
 ---
 
