@@ -35,6 +35,9 @@ namespace EverTask.Storage.Sqlite.Migrations
                     b.Property<string>("Exception")
                         .HasColumnType("TEXT");
 
+                    b.Property<double>("ExecutionTimeMs")
+                        .HasColumnType("REAL");
+
                     b.Property<string>("Handler")
                         .IsRequired()
                         .HasMaxLength(500)
@@ -106,6 +109,9 @@ namespace EverTask.Storage.Sqlite.Migrations
 
                     b.Property<DateTimeOffset>("ExecutedAt")
                         .HasColumnType("TEXT");
+
+                    b.Property<double>("ExecutionTimeMs")
+                        .HasColumnType("REAL");
 
                     b.Property<Guid>("QueuedTaskId")
                         .HasColumnType("TEXT");

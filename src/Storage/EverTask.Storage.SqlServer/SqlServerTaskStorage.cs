@@ -31,7 +31,7 @@ public class SqlServerTaskStorage : EfCoreTaskStorage
     /// Performs audit insert (if required by AuditLevel) + task update in a single atomic database roundtrip.
     /// </summary>
     public override async Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception, AuditLevel auditLevel,
-                                            CancellationToken ct = default)
+                                            double? executionTimeMs = null, CancellationToken ct = default)
     {
         _logger.LogInformation("Set Task {TaskId} with Status {Status} using SQL Server stored procedure", taskId, status);
 
@@ -43,7 +43,7 @@ public class SqlServerTaskStorage : EfCoreTaskStorage
         {
             // Cast to DbContext to access Database property
             // Build SQL command with schema name (sanitized from configuration)
-            var sql = $"EXEC [{_schema}].[usp_SetTaskStatus] @TaskId, @Status, @Exception, @AuditLevel";
+            var sql = $"EXEC [{_schema}].[usp_SetTaskStatus] @TaskId, @Status, @Exception, @AuditLevel, @ExecutionTimeMs";
 
             await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(
                 sql,
@@ -51,7 +51,8 @@ public class SqlServerTaskStorage : EfCoreTaskStorage
                     new SqlParameter("@TaskId", taskId),
                     new SqlParameter("@Status", status.ToString()),
                     new SqlParameter("@Exception", (object?)exString ?? DBNull.Value),
-                    new SqlParameter("@AuditLevel", (int)auditLevel)
+                    new SqlParameter("@AuditLevel", (int)auditLevel),
+                    new SqlParameter("@ExecutionTimeMs", (object?)executionTimeMs ?? DBNull.Value)
                 ],
                 ct
             ).ConfigureAwait(false);

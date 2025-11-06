@@ -41,6 +41,9 @@ namespace EverTask.Storage.SqlServer.Migrations
                     b.Property<string>("Exception")
                         .HasColumnType("nvarchar(max)");
 
+                    b.Property<double>("ExecutionTimeMs")
+                        .HasColumnType("float");
+
                     b.Property<string>("Handler")
                         .IsRequired()
                         .HasMaxLength(500)
@@ -115,6 +118,9 @@ namespace EverTask.Storage.SqlServer.Migrations
 
                     b.Property<DateTimeOffset>("ExecutedAt")
                         .HasColumnType("datetimeoffset");
+
+                    b.Property<double>("ExecutionTimeMs")
+                        .HasColumnType("float");
 
                     b.Property<Guid>("QueuedTaskId")
                         .HasColumnType("uniqueidentifier");

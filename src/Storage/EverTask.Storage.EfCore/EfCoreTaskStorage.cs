@@ -82,13 +82,13 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     }
 
     public async Task SetQueued(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default) =>
-        await SetStatus(taskId, QueuedTaskStatus.Queued, null, auditLevel, ct).ConfigureAwait(false);
+        await SetStatus(taskId, QueuedTaskStatus.Queued, null, auditLevel, null, ct).ConfigureAwait(false);
 
     public async Task SetInProgress(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default) =>
-        await SetStatus(taskId, QueuedTaskStatus.InProgress, null, auditLevel, ct).ConfigureAwait(false);
+        await SetStatus(taskId, QueuedTaskStatus.InProgress, null, auditLevel, null, ct).ConfigureAwait(false);
 
-    public async Task SetCompleted(Guid taskId, AuditLevel auditLevel) =>
-        await SetStatus(taskId, QueuedTaskStatus.Completed, null, auditLevel).ConfigureAwait(false);
+    public async Task SetCompleted(Guid taskId, double executionTimeMs, AuditLevel auditLevel) =>
+        await SetStatus(taskId, QueuedTaskStatus.Completed, null, auditLevel, executionTimeMs).ConfigureAwait(false);
 
     public async Task SetCancelledByUser(Guid taskId, AuditLevel auditLevel) =>
         await SetStatus(taskId, QueuedTaskStatus.Cancelled, null, auditLevel).ConfigureAwait(false);
@@ -98,6 +98,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
     public virtual async Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception,
                                         AuditLevel auditLevel,
+                                        double? executionTimeMs = null,
                                         CancellationToken ct = default)
     {
         logger.LogInformation("Set Task {taskId} with Status {status}", taskId, status);
@@ -137,14 +138,30 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
         try
         {
-            var rowsAffected = await dbContext.QueuedTasks
-                                              .Where(x => x.Id == taskId)
-                                              .ExecuteUpdateAsync(setters => setters
-                                                                             .SetProperty(t => t.Status, status)
-                                                                             .SetProperty(t => t.LastExecutionUtc,
-                                                                                 lastExecutionUtc)
-                                                                             .SetProperty(t => t.Exception, ex), ct)
-                                              .ConfigureAwait(false);
+            int rowsAffected;
+
+            // Include ExecutionTimeMs in update if provided
+            if (executionTimeMs.HasValue)
+            {
+                rowsAffected = await dbContext.QueuedTasks
+                                               .Where(x => x.Id == taskId)
+                                               .ExecuteUpdateAsync(setters => setters
+                                                                              .SetProperty(t => t.Status, status)
+                                                                              .SetProperty(t => t.LastExecutionUtc, lastExecutionUtc)
+                                                                              .SetProperty(t => t.Exception, ex)
+                                                                              .SetProperty(t => t.ExecutionTimeMs, executionTimeMs.Value), ct)
+                                               .ConfigureAwait(false);
+            }
+            else
+            {
+                rowsAffected = await dbContext.QueuedTasks
+                                               .Where(x => x.Id == taskId)
+                                               .ExecuteUpdateAsync(setters => setters
+                                                                              .SetProperty(t => t.Status, status)
+                                                                              .SetProperty(t => t.LastExecutionUtc, lastExecutionUtc)
+                                                                              .SetProperty(t => t.Exception, ex), ct)
+                                               .ConfigureAwait(false);
+            }
 
             if (rowsAffected == 0)
             {
@@ -203,7 +220,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         return task?.CurrentRunCount ?? 0;
     }
 
-    public async Task UpdateCurrentRun(Guid taskId, DateTimeOffset? nextRun, AuditLevel auditLevel)
+    public async Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel)
     {
         logger.LogInformation("Update the current run counter for Task {taskId}", taskId);
 
@@ -234,12 +251,14 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             {
                 task.RunsAudits.Add(new RunsAudit
                 {
-                    QueuedTaskId = taskId,
-                    ExecutedAt   = DateTimeOffset.UtcNow,
-                    Status       = task.Status,
-                    Exception    = task.Exception
+                    QueuedTaskId    = taskId,
+                    ExecutedAt      = DateTimeOffset.UtcNow,
+                    ExecutionTimeMs = executionTimeMs,
+                    Status          = task.Status,
+                    Exception       = task.Exception
                 });
 
+                task.ExecutionTimeMs = executionTimeMs;
                 task.NextRunUtc      = nextRun;
                 task.CurrentRunCount = (task.CurrentRunCount ?? 0) + 1;
 
@@ -263,6 +282,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                 await dbContext.QueuedTasks
                                .Where(x => x.Id == taskId)
                                .ExecuteUpdateAsync(setters => setters
+                                                              .SetProperty(t => t.ExecutionTimeMs, executionTimeMs)
                                                               .SetProperty(t => t.NextRunUtc, nextRun)
                                                               .SetProperty(t => t.CurrentRunCount, newRunCount))
                                .ConfigureAwait(false);
