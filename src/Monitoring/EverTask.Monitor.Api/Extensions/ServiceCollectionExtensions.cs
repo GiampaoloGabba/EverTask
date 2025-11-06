@@ -260,6 +260,41 @@ public static class ServiceCollectionExtensions
                 Description = "Background task monitoring and analytics endpoints"
             });
 
+            // Add JWT Bearer authentication
+            options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+            {
+                Description = "JWT Authorization header using the Bearer scheme. Enter your token in the text input below.",
+                Name = "Authorization",
+                In = ParameterLocation.Header,
+                Type = SecuritySchemeType.Http,
+                Scheme = "bearer",
+                BearerFormat = "JWT"
+            });
+
+            // Apply security requirement globally to all endpoints
+            options.AddSecurityRequirement(new OpenApiSecurityRequirement
+            {
+                {
+                    new OpenApiSecurityScheme
+                    {
+                        Reference = new OpenApiReference
+                        {
+                            Type = ReferenceType.SecurityScheme,
+                            Id = "Bearer"
+                        }
+                    },
+                    Array.Empty<string>()
+                }
+            });
+
+            // Include XML comments for documentation
+            var xmlFile = $"{typeof(ServiceCollectionExtensions).Assembly.GetName().Name}.xml";
+            var xmlPath = System.IO.Path.Combine(AppContext.BaseDirectory, xmlFile);
+            if (System.IO.File.Exists(xmlPath))
+            {
+                options.IncludeXmlComments(xmlPath);
+            }
+
             // Filter controllers in a cooperative way
             // - EverTask controllers → ONLY in "evertask-monitoring" document
             // - Other controllers → EXCLUDED from "evertask-monitoring" document

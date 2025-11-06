@@ -3,8 +3,9 @@
     <!-- Enable embedded files manifest generation -->
     <GenerateEmbeddedFilesManifest>true</GenerateEmbeddedFilesManifest>
 
-    <!-- Disable automatic OpenAPI document generation (class library, not executable) -->
-    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- Enable XML documentation for Swagger -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
 
     <!-- Disable ApiDescription.Server (class library has no entry point) -->
     <IsApiDescriptionServerEnabled>false</IsApiDescriptionServerEnabled>

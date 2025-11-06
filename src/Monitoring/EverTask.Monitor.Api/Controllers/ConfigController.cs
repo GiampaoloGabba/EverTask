@@ -24,8 +24,13 @@ public class ConfigController : ControllerBase
 
     /// <summary>
     /// Get monitoring API configuration.
-    /// This endpoint must be accessible without authentication.
     /// </summary>
+    /// <remarks>
+    /// This endpoint must be accessible without authentication to allow clients to discover configuration before login.
+    /// Returns information about API paths, authentication requirements, and feature availability.
+    /// </remarks>
+    /// <returns>Configuration object containing API paths and feature flags.</returns>
+    /// <response code="200">Returns the API configuration.</response>
     [HttpGet]
     [AllowAnonymous]
     [ProducesResponseType(StatusCodes.Status200OK)]
