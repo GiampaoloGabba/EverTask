@@ -33,11 +33,11 @@ public class ConfigController : ControllerBase
     {
         return Ok(new
         {
-            apiBasePath = _options.ApiBasePath,
-            uiBasePath = _options.UIBasePath,
-            signalRHubPath = _options.SignalRHubPath,
-            requireAuthentication = _options.RequireAuthentication,
-            uiEnabled = _options.EnableUI
+            apiBasePath           = _options.ApiBasePath,
+            uiBasePath            = _options.UIBasePath,
+            signalRHubPath        = _options.SignalRHubPath,
+            requireAuthentication = _options.EnableAuthentication,
+            uiEnabled             = _options.EnableUI
         });
     }
 }

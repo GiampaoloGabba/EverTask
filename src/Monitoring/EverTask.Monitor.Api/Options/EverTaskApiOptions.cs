@@ -41,12 +41,14 @@ public class EverTaskApiOptions
     public string UIBasePath => BasePath;
 
     /// <summary>
-    /// Username for Basic Authentication (default: "admin")
+    /// Username for JWT authentication (default: "admin")
+    /// Used to validate login credentials via /api/auth/login endpoint
     /// </summary>
     public string Username { get; set; } = "admin";
 
     /// <summary>
-    /// Password for Basic Authentication (default: "admin")
+    /// Password for JWT authentication (default: "admin")
+    /// Used to validate login credentials via /api/auth/login endpoint
     /// WARNING: Change this in production!
     /// </summary>
     public string Password { get; set; } = "admin";
@@ -58,16 +60,38 @@ public class EverTaskApiOptions
     public string SignalRHubPath => "/monitoring/hub";
 
     /// <summary>
-    /// Enable Basic Authentication (default: true)
-    /// Set to false for development environments
+    /// Enable JWT authentication for monitoring API (default: true)
+    /// When true, clients must authenticate via /api/auth/login to obtain a JWT token
+    /// When false, API is open without authentication (use only in development environments)
+    /// Note: /api/config and /api/auth/* endpoints are always accessible without authentication
+    /// JWT is the only supported authentication method
     /// </summary>
-    public bool RequireAuthentication { get; set; } = true;
+    public bool EnableAuthentication { get; set; } = true;
 
     /// <summary>
-    /// Allow anonymous access to read-only endpoints (default: false)
-    /// When true, authentication is still required for write operations (future)
+    /// Secret key for signing JWT tokens
+    /// IMPORTANT: Use a strong, randomly generated secret in production (min 256 bits / 32 bytes)
+    /// If not provided, a random secret will be generated (not recommended for multi-instance deployments)
     /// </summary>
-    public bool AllowAnonymousReadAccess { get; set; } = false;
+    public string? JwtSecret { get; set; }
+
+    /// <summary>
+    /// JWT token issuer (default: "EverTask.Monitor.Api")
+    /// Typically the name of your application or service
+    /// </summary>
+    public string JwtIssuer { get; set; } = "EverTask.Monitor.Api";
+
+    /// <summary>
+    /// JWT token audience (default: "EverTask.Monitor.Api")
+    /// Typically the name of your application or the expected consumers
+    /// </summary>
+    public string JwtAudience { get; set; } = "EverTask.Monitor.Api";
+
+    /// <summary>
+    /// JWT token expiration time in hours (default: 8 hours)
+    /// Tokens will automatically expire after this duration
+    /// </summary>
+    public int JwtExpirationHours { get; set; } = 8;
 
     /// <summary>
     /// Enable CORS for monitoring API (default: true)
@@ -79,7 +103,7 @@ public class EverTaskApiOptions
     /// CORS allowed origins (default: allow all)
     /// Only used if EnableCors is true
     /// </summary>
-    public string[] CorsAllowedOrigins { get; set; } = Array.Empty<string>();
+    public string[] CorsAllowedOrigins { get; set; } = [];
 
     /// <summary>
     /// IP address whitelist for monitoring access (default: empty = allow all IPs)
@@ -87,5 +111,5 @@ public class EverTaskApiOptions
     /// Supports IPv4 and IPv6 addresses
     /// Example: new[] { "192.168.1.100", "10.0.0.0/8", "::1" }
     /// </summary>
-    public string[] AllowedIpAddresses { get; set; } = Array.Empty<string>();
+    public string[] AllowedIpAddresses { get; set; } = [];
 }

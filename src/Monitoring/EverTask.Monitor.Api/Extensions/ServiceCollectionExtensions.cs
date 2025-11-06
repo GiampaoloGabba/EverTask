@@ -1,13 +1,21 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using EverTask.Monitor.Api.Infrastructure;
 using EverTask.Monitor.Api.Options;
 using EverTask.Monitor.Api.Services;
 using EverTask.Monitoring;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using Swashbuckle.AspNetCore.SwaggerGen;
+#if NET8_0_OR_GREATER
+using Microsoft.AspNetCore.RateLimiting;
+#endif
 
 namespace EverTask.Monitor.Api.Extensions;
 
@@ -31,7 +39,11 @@ public static class ServiceCollectionExtensions
         // Configure options
         var options = new EverTaskApiOptions();
         configure?.Invoke(options);
+
+        // Register options both as singleton instance AND as IOptions<T> wrapper
+        // This allows injection of both EverTaskApiOptions and IOptions<EverTaskApiOptions>
         services.AddSingleton(options);
+        services.AddSingleton(Microsoft.Extensions.Options.Options.Create(options));
 
         // Auto-register SignalR monitoring if not already registered
         if (!services.Any(s => s.ServiceType.Name.Contains("SignalRTaskMonitor")))
@@ -43,6 +55,50 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ITaskQueryService, TaskQueryService>();
         services.AddScoped<IDashboardService, DashboardService>();
         services.AddScoped<IStatisticsService, StatisticsService>();
+        services.AddSingleton<IJwtTokenService, JwtTokenService>();
+
+        // Configure JWT authentication (always enabled)
+        var jwtSecret = options.JwtSecret ?? GenerateRandomSecret();
+        var key = Encoding.UTF8.GetBytes(jwtSecret);
+
+        services.AddAuthentication(authOptions =>
+            {
+                authOptions.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+                authOptions.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+            })
+            .AddJwtBearer(jwtOptions =>
+            {
+                jwtOptions.RequireHttpsMetadata = false; // Allow HTTP for development
+                jwtOptions.SaveToken = true;
+                jwtOptions.TokenValidationParameters = new TokenValidationParameters
+                {
+                    ValidateIssuer = true,
+                    ValidateAudience = true,
+                    ValidateLifetime = true,
+                    ValidateIssuerSigningKey = true,
+                    ValidIssuer = options.JwtIssuer,
+                    ValidAudience = options.JwtAudience,
+                    IssuerSigningKey = new SymmetricSecurityKey(key),
+                    ClockSkew = TimeSpan.FromMinutes(5)
+                };
+            });
+
+// TODO: Rate limiting - requires NuGet package or framework reference fix
+        // Temporarily commented out to allow build to succeed
+        /*
+#if NET8_0_OR_GREATER
+        services.AddRateLimiter(rateLimiterOptions =>
+        {
+            rateLimiterOptions.AddFixedWindowLimiter("login", limiterOptions =>
+            {
+                limiterOptions.Window = TimeSpan.FromMinutes(15);
+                limiterOptions.PermitLimit = 5;
+                limiterOptions.QueueProcessingOrder = System.Threading.RateLimiting.QueueProcessingOrder.OldestFirst;
+                limiterOptions.QueueLimit = 0;
+            });
+        });
+#endif
+        */
 
         // Add controllers with this assembly and route prefix convention
         services.AddControllers(mvcOptions =>
@@ -86,6 +142,10 @@ public static class ServiceCollectionExtensions
         {
             services.ConfigureOptions<MonitoringSwaggerConfiguration>();
         }
+
+        // Register startup filter to automatically configure middleware pipeline
+        services.AddSingleton<IStartupFilter>(sp =>
+            new EverTaskApiStartupFilter(sp.GetRequiredService<EverTaskApiOptions>()));
 
         return builder;
     }
@@ -105,12 +165,60 @@ public static class ServiceCollectionExtensions
         // Configure options
         var options = new EverTaskApiOptions();
         configure?.Invoke(options);
+
+        // Register options both as singleton instance AND as IOptions<T> wrapper
+        // This allows injection of both EverTaskApiOptions and IOptions<EverTaskApiOptions>
         services.AddSingleton(options);
+        services.AddSingleton(Microsoft.Extensions.Options.Options.Create(options));
 
         // Register monitoring services
         services.AddScoped<ITaskQueryService, TaskQueryService>();
         services.AddScoped<IDashboardService, DashboardService>();
         services.AddScoped<IStatisticsService, StatisticsService>();
+        services.AddSingleton<IJwtTokenService, JwtTokenService>();
+
+        // Configure JWT authentication (always enabled)
+        var jwtSecret = options.JwtSecret ?? GenerateRandomSecret();
+        var key = Encoding.UTF8.GetBytes(jwtSecret);
+
+        services.AddAuthentication(authOptions =>
+            {
+                authOptions.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+                authOptions.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+            })
+            .AddJwtBearer(jwtOptions =>
+            {
+                jwtOptions.RequireHttpsMetadata = false; // Allow HTTP for development
+                jwtOptions.SaveToken = true;
+                jwtOptions.TokenValidationParameters = new TokenValidationParameters
+                {
+                    ValidateIssuer = true,
+                    ValidateAudience = true,
+                    ValidateLifetime = true,
+                    ValidateIssuerSigningKey = true,
+                    ValidIssuer = options.JwtIssuer,
+                    ValidAudience = options.JwtAudience,
+                    IssuerSigningKey = new SymmetricSecurityKey(key),
+                    ClockSkew = TimeSpan.FromMinutes(5)
+                };
+            });
+
+// TODO: Rate limiting - requires NuGet package or framework reference fix
+        // Temporarily commented out to allow build to succeed
+        /*
+#if NET8_0_OR_GREATER
+        services.AddRateLimiter(rateLimiterOptions =>
+        {
+            rateLimiterOptions.AddFixedWindowLimiter("login", limiterOptions =>
+            {
+                limiterOptions.Window = TimeSpan.FromMinutes(15);
+                limiterOptions.PermitLimit = 5;
+                limiterOptions.QueueProcessingOrder = System.Threading.RateLimiting.QueueProcessingOrder.OldestFirst;
+                limiterOptions.QueueLimit = 0;
+            });
+        });
+#endif
+        */
 
         // Add controllers with this assembly and route prefix convention
         services.AddControllers(mvcOptions =>
@@ -155,7 +263,20 @@ public static class ServiceCollectionExtensions
             services.ConfigureOptions<MonitoringSwaggerConfiguration>();
         }
 
+        // Register startup filter to automatically configure middleware pipeline
+        services.AddSingleton<IStartupFilter>(sp =>
+            new EverTaskApiStartupFilter(sp.GetRequiredService<EverTaskApiOptions>()));
+
         return services;
+    }
+
+    private static string GenerateRandomSecret()
+    {
+        // Generate 32 bytes (256 bits) random secret
+        var bytes = new byte[32];
+        using var rng = System.Security.Cryptography.RandomNumberGenerator.Create();
+        rng.GetBytes(bytes);
+        return Convert.ToBase64String(bytes);
     }
 
     /// <summary>

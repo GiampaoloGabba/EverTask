@@ -1,23 +1,24 @@
 using System.Net;
-using System.Text;
 using EverTask.Monitor.Api.Options;
+using EverTask.Monitor.Api.Services;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace EverTask.Monitor.Api.Middleware;
 
 /// <summary>
-/// Middleware for HTTP Basic Authentication.
+/// Middleware for JWT authentication.
 /// Protects API endpoints based on EverTaskApiOptions.
 /// </summary>
-public class BasicAuthenticationMiddleware
+public class JwtAuthenticationMiddleware
 {
     private readonly RequestDelegate _next;
     private readonly EverTaskApiOptions _options;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="BasicAuthenticationMiddleware"/> class.
+    /// Initializes a new instance of the <see cref="JwtAuthenticationMiddleware"/> class.
     /// </summary>
-    public BasicAuthenticationMiddleware(RequestDelegate next, EverTaskApiOptions options)
+    public JwtAuthenticationMiddleware(RequestDelegate next, EverTaskApiOptions options)
     {
         _next = next;
         _options = options;
@@ -50,7 +51,7 @@ public class BasicAuthenticationMiddleware
         }
 
         // Skip auth if disabled
-        if (!_options.RequireAuthentication)
+        if (!_options.EnableAuthentication)
         {
             await _next(context);
             return;
@@ -63,42 +64,37 @@ public class BasicAuthenticationMiddleware
             return;
         }
 
-        // Allow anonymous read access if configured
-        if (_options.AllowAnonymousReadAccess && IsReadOnlyRequest(context.Request))
+        // Allow anonymous access to auth endpoints (login/validate)
+        if (path.Equals($"{_options.ApiBasePath}/auth/login", StringComparison.OrdinalIgnoreCase) ||
+            path.Equals($"{_options.ApiBasePath}/auth/validate", StringComparison.OrdinalIgnoreCase))
         {
             await _next(context);
             return;
         }
 
-        // Check for Authorization header
+        // JWT AUTHENTICATION (required if we reach here)
         var authHeader = context.Request.Headers["Authorization"].FirstOrDefault();
-        if (authHeader == null || !authHeader.StartsWith("Basic ", StringComparison.OrdinalIgnoreCase))
+
+        if (authHeader?.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) != true)
         {
+            // No Bearer token provided
             await ChallengeAsync(context);
             return;
         }
 
-        // Decode and validate credentials
-        try
-        {
-            var encodedCredentials = authHeader.Substring("Basic ".Length).Trim();
-            var decodedCredentials = Encoding.UTF8.GetString(Convert.FromBase64String(encodedCredentials));
-            var credentials = decodedCredentials.Split(':', 2);
+        var token = authHeader.Substring("Bearer ".Length).Trim();
+        var jwtService = context.RequestServices.GetRequiredService<IJwtTokenService>();
+        var validation = jwtService.ValidateToken(token);
 
-            if (credentials.Length == 2 &&
-                credentials[0] == _options.Username &&
-                credentials[1] == _options.Password)
-            {
-                await _next(context);
-                return;
-            }
-        }
-        catch
+        if (!validation.IsValid)
         {
-            // Invalid base64 or malformed header
+            // Invalid JWT token
+            await ChallengeAsync(context);
+            return;
         }
 
-        await ChallengeAsync(context);
+        // JWT token is valid, proceed
+        await _next(context);
     }
 
     private static bool IsReadOnlyRequest(HttpRequest request)
@@ -109,7 +105,7 @@ public class BasicAuthenticationMiddleware
     private static Task ChallengeAsync(HttpContext context)
     {
         context.Response.StatusCode = 401;
-        context.Response.Headers.Append("WWW-Authenticate", "Basic realm=\"EverTask Monitoring API\"");
+        context.Response.Headers.Append("WWW-Authenticate", "Bearer realm=\"EverTask Monitoring API\"");
         return Task.CompletedTask;
     }
 

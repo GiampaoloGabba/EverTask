@@ -11,11 +11,43 @@ using Microsoft.Extensions.FileProviders;
 namespace EverTask.Monitor.Api.Extensions;
 
 /// <summary>
-/// Extension methods for mapping EverTask Monitoring API endpoints.
-/// This API can be used standalone or with the embedded dashboard UI.
+/// Extension methods for configuring EverTask Monitoring API middleware and endpoints.
 /// </summary>
 public static class EndpointRouteBuilderExtensions
 {
+    /// <summary>
+    /// Adds EverTask Monitoring API middleware to the application pipeline.
+    /// This must be called after UseRouting() and before MapEverTaskApi().
+    /// </summary>
+    /// <param name="app">The application builder.</param>
+    /// <returns>The application builder for chaining.</returns>
+    [Obsolete("This method is no longer required. The middleware is now automatically registered when calling AddMonitoringApi(). You can safely remove this call from your code.", false)]
+    public static IApplicationBuilder UseEverTaskApiMiddleware(this IApplicationBuilder app)
+    {
+        var options = app.ApplicationServices.GetRequiredService<EverTaskApiOptions>();
+
+        // TODO: Rate limiting middleware - temporarily commented out
+        /*
+#if NET8_0_OR_GREATER
+        // Enable rate limiting for login endpoint (NET8+ only)
+        if (options.EnableJwt)
+        {
+            app.UseRateLimiter();
+        }
+#endif
+        */
+
+        // Enable JWT authentication if configured
+        if (options.EnableAuthentication)
+        {
+            app.UseAuthentication();
+        }
+
+        // Register JWT authentication middleware (always registered, handles skip logic internally)
+        app.UseMiddleware<JwtAuthenticationMiddleware>();
+
+        return app;
+    }
     /// <summary>
     /// Maps EverTask Monitoring API endpoints and optionally serves the embedded dashboard UI.
     /// </summary>
@@ -24,13 +56,6 @@ public static class EndpointRouteBuilderExtensions
     public static IEndpointRouteBuilder MapEverTaskApi(this IEndpointRouteBuilder endpoints)
     {
         var options = endpoints.ServiceProvider.GetRequiredService<EverTaskApiOptions>();
-
-        // Enable Swagger JSON generation if configured
-        if (options.EnableSwagger)
-        {
-            var app = (IApplicationBuilder)endpoints;
-            app.UseSwagger();
-        }
 
         // Map SignalR hub using the existing extension method from SignalR monitoring package
         endpoints.MapEverTaskMonitorHub(options.SignalRHubPath);

@@ -2,6 +2,12 @@
   <PropertyGroup>
     <!-- Enable embedded files manifest generation -->
     <GenerateEmbeddedFilesManifest>true</GenerateEmbeddedFilesManifest>
+
+    <!-- Disable automatic OpenAPI document generation (class library, not executable) -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+
+    <!-- Disable ApiDescription.Server (class library has no entry point) -->
+    <IsApiDescriptionServerEnabled>false</IsApiDescriptionServerEnabled>
   </PropertyGroup>
 
   <ItemGroup>
@@ -9,8 +15,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
     <PackageReference Include="Microsoft.Extensions.FileProviders.Embedded" />
-    <PackageReference Include="Swashbuckle.AspNetCore" />
+    <PackageReference Include="Swashbuckle.AspNetCore">
+      <!-- Exclude build assets to prevent OpenAPI document generation (class library has no entry point) -->
+      <ExcludeAssets>build</ExcludeAssets>
+    </PackageReference>
+    <PackageReference Include="System.IdentityModel.Tokens.Jwt" />
   </ItemGroup>
 
   <ItemGroup>
@@ -30,4 +41,7 @@
     <None Include="README.md" Pack="true" PackagePath="" />
     <None Remove="Services\StatisticsService_Extended.cs.txt" />
   </ItemGroup>
+
+  <!-- Disable OpenAPI document generation for class library -->
+  <Target Name="GenerateOpenApiDocuments" BeforeTargets="Build" />
 </Project>
