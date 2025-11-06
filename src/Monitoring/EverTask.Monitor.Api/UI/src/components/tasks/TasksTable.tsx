@@ -49,6 +49,12 @@ export function TasksTable({
     }
   };
 
+  const formatExecutionTime = (ms: number) => {
+    if (ms === 0) return '-';
+    if (ms < 1000) return `${ms.toFixed(0)}ms`;
+    return `${(ms / 1000).toFixed(2)}s`;
+  };
+
   if (isLoading) {
     return (
       <div className="space-y-3">
@@ -80,6 +86,7 @@ export function TasksTable({
               <TableHead>Queue</TableHead>
               <TableHead>Created At</TableHead>
               <TableHead>Last Execution</TableHead>
+              <TableHead>Duration</TableHead>
               <TableHead>Scheduled</TableHead>
               <TableHead>Info</TableHead>
             </TableRow>
@@ -111,6 +118,11 @@ export function TasksTable({
                 </TableCell>
                 <TableCell>
                   <span className="text-sm">{formatDate(task.lastExecutionUtc)}</span>
+                </TableCell>
+                <TableCell>
+                  <span className="text-sm font-mono text-gray-700">
+                    {formatExecutionTime(task.executionTimeMs)}
+                  </span>
                 </TableCell>
                 <TableCell>
                   {task.scheduledExecutionUtc ? (

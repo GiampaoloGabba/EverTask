@@ -11,6 +11,7 @@ interface TimelineItem {
   status: QueuedTaskStatus;
   message?: string;
   exception?: string | null;
+  executionTimeMs?: number;
 }
 
 interface TimelineProps {
@@ -21,6 +22,11 @@ interface TimelineProps {
 function TimelineItemComponent({ item, isLast }: { item: TimelineItem; isLast: boolean }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const hasException = item.exception && item.exception.trim() !== '';
+
+  const formatExecutionTime = (ms: number) => {
+    if (ms < 1000) return `${ms.toFixed(0)}ms`;
+    return `${(ms / 1000).toFixed(2)}s`;
+  };
 
   return (
     <div className={cn('relative pl-8', !isLast && 'pb-6')}>
@@ -39,6 +45,11 @@ function TimelineItemComponent({ item, isLast }: { item: TimelineItem; isLast: b
           <span className="text-sm text-muted-foreground">
             {formatDistanceToNow(new Date(item.timestamp), { addSuffix: true })}
           </span>
+          {item.executionTimeMs !== undefined && item.executionTimeMs > 0 && (
+            <span className="text-sm font-mono text-gray-600">
+              {formatExecutionTime(item.executionTimeMs)}
+            </span>
+          )}
         </div>
 
         {item.message && (

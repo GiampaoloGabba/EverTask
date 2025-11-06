@@ -28,6 +28,12 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
     }
   };
 
+  const formatExecutionTime = (ms: number) => {
+    if (ms === 0) return '-';
+    if (ms < 1000) return `${ms.toFixed(0)}ms`;
+    return `${(ms / 1000).toFixed(2)}s`;
+  };
+
   const formatHandler = (handler: string) => {
     // Extract short name
     const parts = handler.split(',')[0].split('.');
@@ -87,6 +93,7 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
     timestamp: audit.executedAt,
     status: audit.status,
     exception: audit.exception,
+    executionTimeMs: audit.executionTimeMs,
   }));
 
   return (
@@ -115,7 +122,7 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
           </div>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <div>
               <span className="text-sm text-muted-foreground">Created At</span>
               <p className="text-sm font-medium">{formatDate(task.createdAtUtc)}</p>
@@ -123,6 +130,10 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
             <div>
               <span className="text-sm text-muted-foreground">Last Execution</span>
               <p className="text-sm font-medium">{formatDate(task.lastExecutionUtc)}</p>
+            </div>
+            <div>
+              <span className="text-sm text-muted-foreground">Duration</span>
+              <p className="text-sm font-medium font-mono">{formatExecutionTime(task.executionTimeMs)}</p>
             </div>
             <div>
               <span className="text-sm text-muted-foreground">Scheduled Execution</span>

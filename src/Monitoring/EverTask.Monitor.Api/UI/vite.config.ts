@@ -32,7 +32,7 @@ export default defineConfig({
         target: 'http://localhost:5000', // Development backend
         changeOrigin: true,
       },
-      '/monitoring/monitor': {
+      '/monitoring/hub': {
         target: 'http://localhost:5000',
         changeOrigin: true,
         ws: true, // WebSocket support for SignalR

@@ -44,6 +44,7 @@ export interface TaskListDto {
   recurringInfo: string | null;
   currentRunCount: number | null;
   maxRuns: number | null;
+  executionTimeMs: number; // Last execution time in milliseconds
 }
 
 export interface TaskDetailDto extends TaskListDto {
@@ -71,6 +72,7 @@ export interface RunsAuditDto {
   id: number;
   queuedTaskId: string;
   executedAt: string;
+  executionTimeMs: number; // Execution time in milliseconds
   status: QueuedTaskStatus;
   exception: string | null;
 }
