@@ -1,4 +1,4 @@
-import { LogOut, User } from 'lucide-react';
+import { LogOut, User, ArrowLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -11,7 +11,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { useAuthStore } from '@/stores/authStore';
 import { useRealtimeStore } from '@/stores/realtimeStore';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import logoIcon from '@/assets/logo-icon.png';
 import logoFull from '@/assets/logo-full.png';
 
@@ -19,11 +19,15 @@ export function Header() {
   const { username, logout } = useAuthStore();
   const connectionStatus = useRealtimeStore((state) => state.connectionStatus);
   const navigate = useNavigate();
+  const location = useLocation();
 
   const handleLogout = () => {
     logout();
     navigate('/login');
   };
+
+  // Detect if we're in task detail page
+  const isTaskDetailPage = location.pathname.startsWith('/tasks/');
 
   const getConnectionBadge = () => {
     switch (connectionStatus) {
@@ -54,7 +58,7 @@ export function Header() {
   return (
     <header className="border-b bg-white sticky top-0 z-50">
       <div className="flex h-16 items-center px-4 md:px-6">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-4">
           {/* Logo icon for mobile, full logo for desktop */}
           <img
             src={logoIcon}
@@ -67,6 +71,21 @@ export function Header() {
             className="hidden md:block h-8"
           />
           <span className="hidden sm:inline md:hidden font-semibold text-lg">Monitor</span>
+
+          {/* Back button for task detail page - after logo */}
+          {isTaskDetailPage && (
+            <>
+              <div className="h-6 w-px bg-gray-300 hidden md:block" />
+              <Button
+                variant="ghost"
+                onClick={() => navigate('/tasks')}
+                className="gap-2"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                <span className="hidden sm:inline">Back</span>
+              </Button>
+            </>
+          )}
         </div>
 
         <div className="ml-auto flex items-center gap-4">

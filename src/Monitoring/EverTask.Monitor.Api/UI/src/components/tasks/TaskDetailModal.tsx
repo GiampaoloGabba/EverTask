@@ -8,8 +8,9 @@ import { ExceptionViewer } from '@/components/common/ExceptionViewer';
 import { ExecutionLogsTab } from '@/components/tasks/ExecutionLogsTab';
 import { TaskDetailDto, AuditLevel } from '@/types/task.types';
 import { format } from 'date-fns';
-import { Copy, RefreshCw, Calendar, Clock } from 'lucide-react';
+import { Copy, RefreshCw, Calendar, Clock, Timer, CalendarClock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Breadcrumb } from '@/components/common/Breadcrumb';
 import { useState } from 'react';
 
 interface TaskDetailModalProps {
@@ -54,25 +55,25 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
       case AuditLevel.Full:
         return {
           label: 'Full',
-          variant: 'default' as const,
+          className: 'border-green-300 text-green-700 bg-green-50',
           description: 'Complete audit trail with all status and execution history'
         };
       case AuditLevel.Minimal:
         return {
           label: 'Minimal',
-          variant: 'secondary' as const,
+          className: 'border-yellow-300 text-yellow-700 bg-yellow-50',
           description: 'Minimal audit trail - errors only + last execution timestamp'
         };
       case AuditLevel.ErrorsOnly:
         return {
           label: 'Errors Only',
-          variant: 'secondary' as const,
+          className: 'border-red-300 text-red-700 bg-red-50',
           description: 'Only failed executions are audited'
         };
       case AuditLevel.None:
         return {
           label: 'None',
-          variant: 'outline' as const,
+          className: 'border-gray-300 text-gray-700 bg-gray-50',
           description: 'No audit trail - task data only'
         };
       default:
@@ -96,8 +97,16 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
     executionTimeMs: audit.executionTimeMs,
   }));
 
+  const breadcrumbItems = [
+    { label: 'Tasks', path: '/tasks' },
+    { label: handlerInfo.shortName },
+  ];
+
   return (
     <div className="space-y-6">
+      {/* Breadcrumb */}
+      <Breadcrumb items={breadcrumbItems} />
+
       {/* Header */}
       <Card>
         <CardHeader>
@@ -118,27 +127,63 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
                 </Button>
               </div>
             </div>
-            <TaskStatusBadge status={task.status} />
+            <div className="flex items-center gap-2 flex-wrap justify-end">
+              {task.isRecurring && (
+                <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-200">
+                  <RefreshCw className="h-3 w-3 mr-1" />
+                  Recurring
+                </Badge>
+              )}
+              <Badge variant="outline" className="bg-gray-50 text-gray-700 border-gray-300">
+                Queue: {task.queueName || 'Default'}
+              </Badge>
+              <TaskStatusBadge status={task.status} />
+            </div>
           </div>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <div>
-              <span className="text-sm text-muted-foreground">Created At</span>
-              <p className="text-sm font-medium">{formatDate(task.createdAtUtc)}</p>
+              <span className="text-xs uppercase tracking-wide text-gray-600 font-medium">Created At</span>
+              <div className="flex items-center gap-1 text-sm font-medium mt-1">
+                <Calendar className="h-3 w-3 text-gray-600" />
+                {formatDate(task.createdAtUtc)}
+              </div>
             </div>
             <div>
-              <span className="text-sm text-muted-foreground">Last Execution</span>
-              <p className="text-sm font-medium">{formatDate(task.lastExecutionUtc)}</p>
+              <span className="text-xs uppercase tracking-wide text-gray-600 font-medium">Last Execution</span>
+              <div className="flex items-center gap-1 text-sm font-medium mt-1">
+                <Clock className="h-3 w-3 text-blue-600" />
+                {formatDate(task.lastExecutionUtc)}
+              </div>
             </div>
             <div>
-              <span className="text-sm text-muted-foreground">Duration</span>
-              <p className="text-sm font-medium font-mono">{formatExecutionTime(task.executionTimeMs)}</p>
+              <span className="text-xs uppercase tracking-wide text-gray-600 font-medium">Duration</span>
+              <div className="flex items-center gap-1 text-sm font-medium font-mono mt-1">
+                <Timer className="h-3 w-3 text-green-600" />
+                {formatExecutionTime(task.executionTimeMs)}
+              </div>
             </div>
-            <div>
-              <span className="text-sm text-muted-foreground">Scheduled Execution</span>
-              <p className="text-sm font-medium">{formatDate(task.scheduledExecutionUtc)}</p>
-            </div>
+            {/* Quarta colonna dinamica */}
+            {!task.lastExecutionUtc && task.scheduledExecutionUtc ? (
+              // Task mai eseguito → mostra quando è schedulato
+              <div>
+                <span className="text-xs uppercase tracking-wide text-gray-600 font-medium">Scheduled For</span>
+                <div className="flex items-center gap-1 text-sm font-medium mt-1">
+                  <CalendarClock className="h-3 w-3 text-purple-600" />
+                  {formatDate(task.scheduledExecutionUtc)}
+                </div>
+              </div>
+            ) : task.isRecurring && task.nextRunUtc ? (
+              // Recurring già avviato → mostra prossimo run
+              <div>
+                <span className="text-xs uppercase tracking-wide text-gray-600 font-medium">Next Run</span>
+                <div className="flex items-center gap-1 text-sm font-medium mt-1">
+                  <Clock className="h-3 w-3 text-purple-600" />
+                  {formatDate(task.nextRunUtc)}
+                </div>
+              </div>
+            ) : null}
           </div>
         </CardContent>
       </Card>
@@ -150,42 +195,37 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Colonna sinistra: Handler + Request Parameters */}
             <div className="space-y-4">
               <div>
-                <span className="text-sm text-muted-foreground">Type</span>
-                <p className="text-sm font-medium break-all">{task.type}</p>
-              </div>
-              <div>
-                <span className="text-sm text-muted-foreground">Handler</span>
-                <p className="text-sm font-medium" title={handlerInfo.fullName}>
+                <span className="text-xs uppercase tracking-wide text-gray-600 font-medium">Handler</span>
+                <p className="text-sm font-medium mt-1" title={handlerInfo.fullName}>
                   {handlerInfo.shortName}
                 </p>
                 <p className="text-xs text-muted-foreground break-all mt-1">
                   {handlerInfo.fullName}
                 </p>
               </div>
+
               <div>
-                <span className="text-sm text-muted-foreground">Queue Name</span>
-                <p className="text-sm font-medium">{task.queueName || 'Default Queue'}</p>
-              </div>
-              {task.taskKey && (
-                <div>
-                  <span className="text-sm text-muted-foreground">Task Key</span>
-                  <p className="text-sm font-medium break-all">{task.taskKey}</p>
+                <span className="text-xs uppercase tracking-wide text-gray-600 font-medium">Request Parameters</span>
+                <div className="mt-2">
+                  <JsonViewer jsonString={task.request} />
                 </div>
-              )}
+              </div>
             </div>
 
+            {/* Colonna destra: altri dettagli */}
             <div className="space-y-4">
               {task.auditLevel !== null && task.auditLevel !== undefined && (
                 <div>
-                  <span className="text-sm text-muted-foreground">Audit Level</span>
+                  <span className="text-xs uppercase tracking-wide text-gray-600 font-medium">Audit Level</span>
                   <div className="mt-1">
                     {(() => {
                       const auditInfo = getAuditLevelInfo(task.auditLevel);
                       return auditInfo ? (
                         <div>
-                          <Badge variant={auditInfo.variant}>{auditInfo.label}</Badge>
+                          <Badge variant="outline" className={auditInfo.className}>{auditInfo.label}</Badge>
                           <p className="text-xs text-muted-foreground mt-1">
                             {auditInfo.description}
                           </p>
@@ -196,31 +236,34 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
                 </div>
               )}
 
-              <div>
-                <span className="text-sm text-muted-foreground">Is Recurring</span>
-                <div className="mt-1">
-                  {task.isRecurring ? (
-                    <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-200">
-                      <RefreshCw className="h-3 w-3 mr-1" />
-                      Recurring Task
-                    </Badge>
-                  ) : (
-                    <Badge variant="outline">Standard Task</Badge>
-                  )}
+              {task.taskKey && (
+                <div>
+                  <span className="text-xs uppercase tracking-wide text-gray-600 font-medium">Task Key</span>
+                  <p className="text-sm font-medium break-all mt-1">{task.taskKey}</p>
                 </div>
-              </div>
+              )}
+
+              {task.scheduledExecutionUtc && (
+                <div>
+                  <span className="text-xs uppercase tracking-wide text-gray-600 font-medium">Scheduled Execution</span>
+                  <div className="flex items-center gap-1 text-sm font-medium mt-1">
+                    <CalendarClock className="h-3 w-3" />
+                    {formatDate(task.scheduledExecutionUtc)}
+                  </div>
+                </div>
+              )}
 
               {task.isRecurring && task.recurringInfo && (
                 <div>
-                  <span className="text-sm text-muted-foreground">Recurring Schedule</span>
-                  <p className="text-sm font-medium">{task.recurringInfo}</p>
+                  <span className="text-xs uppercase tracking-wide text-gray-600 font-medium">Recurring Schedule</span>
+                  <p className="text-sm font-medium mt-1">{task.recurringInfo}</p>
                 </div>
               )}
 
               {task.isRecurring && task.currentRunCount !== null && (
                 <div>
-                  <span className="text-sm text-muted-foreground">Run Progress</span>
-                  <p className="text-sm font-medium">
+                  <span className="text-xs uppercase tracking-wide text-gray-600 font-medium">Run Progress</span>
+                  <p className="text-sm font-medium mt-1">
                     {task.currentRunCount} {task.maxRuns ? `/ ${task.maxRuns}` : ''} runs
                   </p>
                 </div>
@@ -228,7 +271,7 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
 
               {task.isRecurring && task.runUntil && (
                 <div>
-                  <span className="text-sm text-muted-foreground">Runs Until</span>
+                  <span className="text-xs uppercase tracking-wide text-gray-600 font-medium">Runs Until</span>
                   <div className="flex items-center gap-1 text-sm font-medium mt-1">
                     <Calendar className="h-3 w-3" />
                     {formatDate(task.runUntil)}
@@ -238,7 +281,7 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
 
               {task.isRecurring && task.nextRunUtc && (
                 <div>
-                  <span className="text-sm text-muted-foreground">Next Run</span>
+                  <span className="text-xs uppercase tracking-wide text-gray-600 font-medium">Next Run</span>
                   <div className="flex items-center gap-1 text-sm font-medium mt-1">
                     <Clock className="h-3 w-3 text-purple-600" />
                     {formatDate(task.nextRunUtc)}
@@ -247,16 +290,6 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
               )}
             </div>
           </div>
-        </CardContent>
-      </Card>
-
-      {/* Request Parameters */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Request Parameters</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <JsonViewer jsonString={task.request} />
         </CardContent>
       </Card>
 
