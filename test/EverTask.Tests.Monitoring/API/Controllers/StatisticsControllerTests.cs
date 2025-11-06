@@ -12,7 +12,7 @@ public class StatisticsControllerTests : MonitoringTestBase
     public async Task Should_get_success_rate_trend(string period)
     {
         // Act
-        var response = await Client.GetAsync($"/monitoring/api/statistics/success-rate-trend?period={period}");
+        var response = await Client.GetAsync($"/evertask-monitoring/api/statistics/success-rate-trend?period={period}");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -31,7 +31,7 @@ public class StatisticsControllerTests : MonitoringTestBase
     public async Task Should_get_task_type_distribution(string range)
     {
         // Act
-        var response = await Client.GetAsync($"/monitoring/api/statistics/task-types?range={range}");
+        var response = await Client.GetAsync($"/evertask-monitoring/api/statistics/task-types?range={range}");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -48,7 +48,7 @@ public class StatisticsControllerTests : MonitoringTestBase
     public async Task Should_get_execution_times(string range)
     {
         // Act
-        var response = await Client.GetAsync($"/monitoring/api/statistics/execution-times?range={range}");
+        var response = await Client.GetAsync($"/evertask-monitoring/api/statistics/execution-times?range={range}");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);

@@ -18,7 +18,7 @@ public class AuthControllerTests : MonitoringTestBase
         var loginRequest = new LoginRequest("testuser", "testpass");
 
         // Act
-        var response = await Client.PostAsJsonAsync("/monitoring/api/auth/login", loginRequest);
+        var response = await Client.PostAsJsonAsync("/evertask-monitoring/api/auth/login", loginRequest);
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -37,7 +37,7 @@ public class AuthControllerTests : MonitoringTestBase
         var loginRequest = new LoginRequest("wronguser", "testpass");
 
         // Act
-        var response = await Client.PostAsJsonAsync("/monitoring/api/auth/login", loginRequest);
+        var response = await Client.PostAsJsonAsync("/evertask-monitoring/api/auth/login", loginRequest);
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
@@ -50,7 +50,7 @@ public class AuthControllerTests : MonitoringTestBase
         var loginRequest = new LoginRequest("testuser", "wrongpass");
 
         // Act
-        var response = await Client.PostAsJsonAsync("/monitoring/api/auth/login", loginRequest);
+        var response = await Client.PostAsJsonAsync("/evertask-monitoring/api/auth/login", loginRequest);
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
@@ -63,7 +63,7 @@ public class AuthControllerTests : MonitoringTestBase
         var invalidRequest = new { username = "", password = "" };
 
         // Act
-        var response = await Client.PostAsJsonAsync("/monitoring/api/auth/login", invalidRequest);
+        var response = await Client.PostAsJsonAsync("/evertask-monitoring/api/auth/login", invalidRequest);
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
@@ -74,7 +74,7 @@ public class AuthControllerTests : MonitoringTestBase
     {
         // Arrange - First login to get a valid token
         var loginRequest = new LoginRequest("testuser", "testpass");
-        var loginResponse = await Client.PostAsJsonAsync("/monitoring/api/auth/login", loginRequest);
+        var loginResponse = await Client.PostAsJsonAsync("/evertask-monitoring/api/auth/login", loginRequest);
         loginResponse.EnsureSuccessStatusCode();
 
         var loginResult = await DeserializeResponseAsync<LoginResponse>(loginResponse);
@@ -82,7 +82,7 @@ public class AuthControllerTests : MonitoringTestBase
 
         // Act - Validate the token via POST body
         var validateRequest = new TokenValidationRequest(token);
-        var validateResponse = await Client.PostAsJsonAsync("/monitoring/api/auth/validate", validateRequest);
+        var validateResponse = await Client.PostAsJsonAsync("/evertask-monitoring/api/auth/validate", validateRequest);
 
         // Assert
         validateResponse.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -99,14 +99,14 @@ public class AuthControllerTests : MonitoringTestBase
     {
         // Arrange - First login to get a valid token
         var loginRequest = new LoginRequest("testuser", "testpass");
-        var loginResponse = await Client.PostAsJsonAsync("/monitoring/api/auth/login", loginRequest);
+        var loginResponse = await Client.PostAsJsonAsync("/evertask-monitoring/api/auth/login", loginRequest);
         loginResponse.EnsureSuccessStatusCode();
 
         var loginResult = await DeserializeResponseAsync<LoginResponse>(loginResponse);
         var token = loginResult!.Token;
 
         // Create a new request with Authorization header and empty body
-        var request = new HttpRequestMessage(HttpMethod.Post, "/monitoring/api/auth/validate");
+        var request = new HttpRequestMessage(HttpMethod.Post, "/evertask-monitoring/api/auth/validate");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         request.Content = JsonContent.Create(new TokenValidationRequest(null)); // Empty token in body, will use Authorization header
 
@@ -131,7 +131,7 @@ public class AuthControllerTests : MonitoringTestBase
         var validateRequest = new TokenValidationRequest(invalidToken);
 
         // Act
-        var validateResponse = await Client.PostAsJsonAsync("/monitoring/api/auth/validate", validateRequest);
+        var validateResponse = await Client.PostAsJsonAsync("/evertask-monitoring/api/auth/validate", validateRequest);
 
         // Assert
         validateResponse.StatusCode.ShouldBe(HttpStatusCode.OK); // Endpoint returns 200 with IsValid=false

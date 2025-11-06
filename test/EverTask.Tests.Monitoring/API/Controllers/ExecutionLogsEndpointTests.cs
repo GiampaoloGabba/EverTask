@@ -14,7 +14,7 @@ public class ExecutionLogsEndpointTests : MonitoringTestBase
         var taskId = await Seeder.CreateTaskWithLogsAsync(logCount: 10, level: "Information");
 
         // Act
-        var response = await Client.GetAsync($"/monitoring/api/tasks/{taskId}/execution-logs");
+        var response = await Client.GetAsync($"/evertask-monitoring/api/tasks/{taskId}/execution-logs");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -44,7 +44,7 @@ public class ExecutionLogsEndpointTests : MonitoringTestBase
         await Storage.Persist(task);
 
         // Act
-        var response = await Client.GetAsync($"/monitoring/api/tasks/{taskId}/execution-logs");
+        var response = await Client.GetAsync($"/evertask-monitoring/api/tasks/{taskId}/execution-logs");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -62,7 +62,7 @@ public class ExecutionLogsEndpointTests : MonitoringTestBase
         var nonExistentId = Guid.NewGuid();
 
         // Act
-        var response = await Client.GetAsync($"/monitoring/api/tasks/{nonExistentId}/execution-logs");
+        var response = await Client.GetAsync($"/evertask-monitoring/api/tasks/{nonExistentId}/execution-logs");
 
         // Assert
         // Note: Current implementation returns 200 with empty logs rather than 404
@@ -82,7 +82,7 @@ public class ExecutionLogsEndpointTests : MonitoringTestBase
         var taskId = await Seeder.CreateTaskWithLogsAsync(logCount: 250, level: "Debug");
 
         // Act: Skip first 100, take next 100
-        var response = await Client.GetAsync($"/monitoring/api/tasks/{taskId}/execution-logs?skip=100&take=100");
+        var response = await Client.GetAsync($"/evertask-monitoring/api/tasks/{taskId}/execution-logs?skip=100&take=100");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -126,7 +126,7 @@ public class ExecutionLogsEndpointTests : MonitoringTestBase
         await Storage.SaveExecutionLogsAsync(taskId, logs, CancellationToken.None);
 
         // Act: Filter by Error level
-        var response = await Client.GetAsync($"/monitoring/api/tasks/{taskId}/execution-logs?level=Error");
+        var response = await Client.GetAsync($"/evertask-monitoring/api/tasks/{taskId}/execution-logs?level=Error");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -172,7 +172,7 @@ public class ExecutionLogsEndpointTests : MonitoringTestBase
         await Storage.SaveExecutionLogsAsync(taskId, logs, CancellationToken.None);
 
         // Act: Filter by specified level
-        var response = await Client.GetAsync($"/monitoring/api/tasks/{taskId}/execution-logs?level={level}");
+        var response = await Client.GetAsync($"/evertask-monitoring/api/tasks/{taskId}/execution-logs?level={level}");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -211,7 +211,7 @@ public class ExecutionLogsEndpointTests : MonitoringTestBase
         await Storage.SaveExecutionLogsAsync(taskId, logs, CancellationToken.None);
 
         // Act
-        var response = await Client.GetAsync($"/monitoring/api/tasks/{taskId}/execution-logs");
+        var response = await Client.GetAsync($"/evertask-monitoring/api/tasks/{taskId}/execution-logs");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -239,7 +239,7 @@ public class ExecutionLogsEndpointTests : MonitoringTestBase
         );
 
         // Act
-        var response = await Client.GetAsync($"/monitoring/api/tasks/{taskId}/execution-logs");
+        var response = await Client.GetAsync($"/evertask-monitoring/api/tasks/{taskId}/execution-logs");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -262,7 +262,7 @@ public class ExecutionLogsEndpointTests : MonitoringTestBase
         var taskId = await Seeder.CreateTaskWithLogsAsync(logCount: 5);
 
         // Act
-        var response = await Client.GetAsync($"/monitoring/api/tasks/{taskId}/execution-logs");
+        var response = await Client.GetAsync($"/evertask-monitoring/api/tasks/{taskId}/execution-logs");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -293,7 +293,7 @@ public class ExecutionLogsEndpointTests : MonitoringTestBase
         var taskId = await Seeder.CreateTaskWithLogsAsync(logCount: 100);
 
         // Act 1: Get all logs (default take = 100)
-        var response1 = await Client.GetAsync($"/monitoring/api/tasks/{taskId}/execution-logs");
+        var response1 = await Client.GetAsync($"/evertask-monitoring/api/tasks/{taskId}/execution-logs");
         var result1 = await DeserializeResponseAsync<ExecutionLogsResponse>(response1);
 
         // Assert 1: Should return all 100 logs
@@ -301,7 +301,7 @@ public class ExecutionLogsEndpointTests : MonitoringTestBase
         result1.TotalCount.ShouldBe(100);
 
         // Act 2: Try to get beyond available logs
-        var response2 = await Client.GetAsync($"/monitoring/api/tasks/{taskId}/execution-logs?skip=100&take=50");
+        var response2 = await Client.GetAsync($"/evertask-monitoring/api/tasks/{taskId}/execution-logs?skip=100&take=50");
         var result2 = await DeserializeResponseAsync<ExecutionLogsResponse>(response2);
 
         // Assert 2: Should return empty array (no more logs)
@@ -317,7 +317,7 @@ public class ExecutionLogsEndpointTests : MonitoringTestBase
         var taskId = await Seeder.CreateTaskWithLogsAsync(logCount: 3, level: "Error");
 
         // Act: Use lowercase "error" (case-insensitive)
-        var response = await Client.GetAsync($"/monitoring/api/tasks/{taskId}/execution-logs?level=error");
+        var response = await Client.GetAsync($"/evertask-monitoring/api/tasks/{taskId}/execution-logs?level=error");
 
         // Assert: Should still find logs with "Error" level
         response.StatusCode.ShouldBe(HttpStatusCode.OK);

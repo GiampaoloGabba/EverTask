@@ -33,7 +33,7 @@ public class JwtAuthenticationMiddlewareTests : IAsyncLifetime
     private async Task<string> GetJwtTokenAsync(string username = "testuser", string password = "testpass")
     {
         var loginRequest = new LoginRequest(username, password);
-        var response = await _client.PostAsJsonAsync("/monitoring/api/auth/login", loginRequest);
+        var response = await _client.PostAsJsonAsync("/evertask-monitoring/api/auth/login", loginRequest);
         response.EnsureSuccessStatusCode();
 
         var loginResponse = await response.Content.ReadFromJsonAsync<LoginResponse>();
@@ -44,7 +44,7 @@ public class JwtAuthenticationMiddlewareTests : IAsyncLifetime
     public async Task Should_allow_anonymous_access_to_config_endpoint()
     {
         // Act - No auth header
-        var response = await _client.GetAsync("/monitoring/api/config");
+        var response = await _client.GetAsync("/evertask-monitoring/api/config");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -55,7 +55,7 @@ public class JwtAuthenticationMiddlewareTests : IAsyncLifetime
     {
         // Act - No auth header
         var loginRequest = new LoginRequest("testuser", "testpass");
-        var response = await _client.PostAsJsonAsync("/monitoring/api/auth/login", loginRequest);
+        var response = await _client.PostAsJsonAsync("/evertask-monitoring/api/auth/login", loginRequest);
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -69,7 +69,7 @@ public class JwtAuthenticationMiddlewareTests : IAsyncLifetime
         var validateRequest = new TokenValidationRequest(token);
 
         // Act - Call validate without authentication
-        var response = await _client.PostAsJsonAsync("/monitoring/api/auth/validate", validateRequest);
+        var response = await _client.PostAsJsonAsync("/evertask-monitoring/api/auth/validate", validateRequest);
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -79,7 +79,7 @@ public class JwtAuthenticationMiddlewareTests : IAsyncLifetime
     public async Task Should_require_auth_header_for_protected_endpoints()
     {
         // Act - No auth header
-        var response = await _client.GetAsync("/monitoring/api/dashboard/overview");
+        var response = await _client.GetAsync("/evertask-monitoring/api/dashboard/overview");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
@@ -94,7 +94,7 @@ public class JwtAuthenticationMiddlewareTests : IAsyncLifetime
         _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "invalid.jwt.token");
 
         // Act
-        var response = await _client.GetAsync("/monitoring/api/dashboard/overview");
+        var response = await _client.GetAsync("/evertask-monitoring/api/dashboard/overview");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
@@ -104,7 +104,7 @@ public class JwtAuthenticationMiddlewareTests : IAsyncLifetime
     public async Task Should_return_401_without_auth_header()
     {
         // Act
-        var response = await _client.GetAsync("/monitoring/api/tasks");
+        var response = await _client.GetAsync("/evertask-monitoring/api/tasks");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
@@ -120,7 +120,7 @@ public class JwtAuthenticationMiddlewareTests : IAsyncLifetime
         _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", expiredToken);
 
         // Act
-        var response = await _client.GetAsync("/monitoring/api/dashboard/overview");
+        var response = await _client.GetAsync("/evertask-monitoring/api/dashboard/overview");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
@@ -134,7 +134,7 @@ public class JwtAuthenticationMiddlewareTests : IAsyncLifetime
         _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
         // Act
-        var response = await _client.GetAsync("/monitoring/api/dashboard/overview");
+        var response = await _client.GetAsync("/evertask-monitoring/api/dashboard/overview");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -150,11 +150,11 @@ public class JwtAuthenticationMiddlewareTests : IAsyncLifetime
         // Act - Test multiple endpoints
         var endpoints = new[]
         {
-            "/monitoring/api/tasks?page=1&pageSize=10",
-            "/monitoring/api/dashboard/overview",
-            "/monitoring/api/dashboard/recent-activity",
-            "/monitoring/api/queues",
-            "/monitoring/api/statistics/success-rate-trend"
+            "/evertask-monitoring/api/tasks?page=1&pageSize=10",
+            "/evertask-monitoring/api/dashboard/overview",
+            "/evertask-monitoring/api/dashboard/recent-activity",
+            "/evertask-monitoring/api/queues",
+            "/evertask-monitoring/api/statistics/success-rate-trend"
         };
 
         foreach (var endpoint in endpoints)
@@ -169,7 +169,7 @@ public class JwtAuthenticationMiddlewareTests : IAsyncLifetime
     {
         // Act
         var loginRequest = new LoginRequest("wronguser", "wrongpass");
-        var response = await _client.PostAsJsonAsync("/monitoring/api/auth/login", loginRequest);
+        var response = await _client.PostAsJsonAsync("/evertask-monitoring/api/auth/login", loginRequest);
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
@@ -201,7 +201,7 @@ public class IpWhitelistMiddlewareTests : IAsyncLifetime
         _client = _factory.CreateClient();
 
         // Act
-        var response = await _client.GetAsync("/monitoring/api/config");
+        var response = await _client.GetAsync("/evertask-monitoring/api/config");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -231,7 +231,7 @@ public class IpWhitelistMiddlewareTests : IAsyncLifetime
         _client = _factory.CreateClient();
 
         // Act
-        var response = await _client.GetAsync("/monitoring/api/config");
+        var response = await _client.GetAsync("/evertask-monitoring/api/config");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.Forbidden);
@@ -260,7 +260,7 @@ public class IpWhitelistMiddlewareTests : IAsyncLifetime
         _client = _factory.CreateClient();
 
         // Act
-        var response = await _client.GetAsync("/monitoring/api/config");
+        var response = await _client.GetAsync("/evertask-monitoring/api/config");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -289,7 +289,7 @@ public class IpWhitelistMiddlewareTests : IAsyncLifetime
         _client = _factory.CreateClient();
 
         // Act
-        var response = await _client.GetAsync("/monitoring/api/config");
+        var response = await _client.GetAsync("/evertask-monitoring/api/config");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -318,7 +318,7 @@ public class IpWhitelistMiddlewareTests : IAsyncLifetime
         _client = _factory.CreateClient();
 
         // Act
-        var response = await _client.GetAsync("/monitoring/api/config");
+        var response = await _client.GetAsync("/evertask-monitoring/api/config");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -350,7 +350,7 @@ public class IpWhitelistMiddlewareTests : IAsyncLifetime
         // (We can't get a token because /auth/login is also blocked by IP whitelist)
 
         // Act
-        var response = await _client.GetAsync("/monitoring/api/dashboard/overview");
+        var response = await _client.GetAsync("/evertask-monitoring/api/dashboard/overview");
 
         // Assert - Should return 403 (IP check) NOT 401 (auth check)
         response.StatusCode.ShouldBe(HttpStatusCode.Forbidden);
@@ -380,14 +380,14 @@ public class IpWhitelistMiddlewareTests : IAsyncLifetime
 
         // Get JWT token
         var loginRequest = new LoginRequest("testuser", "testpass");
-        var loginResponse = await _client.PostAsJsonAsync("/monitoring/api/auth/login", loginRequest);
+        var loginResponse = await _client.PostAsJsonAsync("/evertask-monitoring/api/auth/login", loginRequest);
         loginResponse.EnsureSuccessStatusCode();
         var login = await loginResponse.Content.ReadFromJsonAsync<LoginResponse>();
 
         _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", login!.Token);
 
         // Act
-        var response = await _client.GetAsync("/monitoring/api/dashboard/overview");
+        var response = await _client.GetAsync("/evertask-monitoring/api/dashboard/overview");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -416,7 +416,7 @@ public class IpWhitelistMiddlewareTests : IAsyncLifetime
         _client = _factory.CreateClient();
 
         // Act
-        var response = await _client.GetAsync("/monitoring/api/config");
+        var response = await _client.GetAsync("/evertask-monitoring/api/config");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.Forbidden);

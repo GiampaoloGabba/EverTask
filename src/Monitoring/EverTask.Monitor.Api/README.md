@@ -42,8 +42,8 @@ builder.Services.AddEverTask(opt => opt.RegisterTasksFromAssembly(typeof(Program
 
 builder.Services.AddEverTaskApi(options =>
 {
-    // Note: BasePath is fixed to "/monitoring" and cannot be changed
-    // SignalRHubPath is fixed to "/monitoring/hub"
+    // Note: BasePath is fixed to "/evertask-monitoring" and cannot be changed
+    // SignalRHubPath is fixed to "/evertask-monitoring/hub"
     options.Username = "admin";
     options.Password = "secret";
     options.EnableAuthentication = true;  // Default: true
@@ -58,16 +58,16 @@ app.MapEverTaskApi();
 app.Run();
 ```
 
-- **Dashboard UI**: `http://localhost:5000/monitoring`
-- **API Endpoints**: `http://localhost:5000/monitoring/api/*`
-- **SignalR Hub**: `http://localhost:5000/monitoring/hub` (fixed)
+- **Dashboard UI**: `http://localhost:5000/evertask-monitoring`
+- **API Endpoints**: `http://localhost:5000/evertask-monitoring/api/*`
+- **SignalR Hub**: `http://localhost:5000/evertask-monitoring/hub` (fixed)
 
 ### Mode 2: API-Only (No UI)
 
 ```csharp
 builder.Services.AddEverTaskApi(options =>
 {
-    // BasePath is fixed to "/monitoring", so API will be at /monitoring/api
+    // BasePath is fixed to "/evertask-monitoring", so API will be at /evertask-monitoring/api
     options.EnableUI = false;  // Disable embedded UI
     options.EnableAuthentication = true;
 });
@@ -77,7 +77,7 @@ app.MapEverTaskApi();
 app.Run();
 ```
 
-- **API Endpoints**: `http://localhost:5000/monitoring/api/*`
+- **API Endpoints**: `http://localhost:5000/evertask-monitoring/api/*`
 - **No UI served** - build your own frontend or use as a standalone API
 
 ### Mode 3: Development Mode (No Authentication)
@@ -97,8 +97,8 @@ builder.Services.AddEverTaskApi(options =>
 builder.Services.AddEverTaskApi(options =>
 {
     // Note: BasePath and SignalRHubPath are now fixed:
-    // - BasePath: "/monitoring" (cannot be changed)
-    // - SignalRHubPath: "/monitoring/hub" (cannot be changed)
+    // - BasePath: "/evertask-monitoring" (cannot be changed)
+    // - SignalRHubPath: "/evertask-monitoring/hub" (cannot be changed)
     options.EnableUI = true;  // Enable embedded dashboard UI
     options.Username = "api_user";
     options.Password = Environment.GetEnvironmentVariable("API_PASSWORD") ?? "changeme";
@@ -109,9 +109,9 @@ builder.Services.AddEverTaskApi(options =>
 ```
 
 **Fixed Path Structure:**
-- UI: `/monitoring` (when EnableUI = true)
-- API: `/monitoring/api/*`
-- SignalR Hub: `/monitoring/hub`
+- UI: `/evertask-monitoring` (when EnableUI = true)
+- API: `/evertask-monitoring/api/*`
+- SignalR Hub: `/evertask-monitoring/hub`
 
 ## Swagger Integration
 
@@ -150,7 +150,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI(c =>
     {
         c.SwaggerEndpoint("/swagger/v1/swagger.json", "My Application API");
-        c.SwaggerEndpoint("/swagger/monitoring/swagger.json", "EverTask Monitoring API");
+        c.SwaggerEndpoint("/swagger/evertask-monitoring/swagger.json", "EverTask Monitoring API");
     });
 }
 ```
@@ -194,14 +194,14 @@ builder.Services.AddEverTaskApi(options =>
 
 **Nginx example** - Allow only internal IPs:
 ```nginx
-location /monitoring {
+location /evertask-monitoring {
     # Only allow access from internal network
     allow 10.0.0.0/8;
     allow 172.16.0.0/12;
     allow 192.168.0.0/16;
     deny all;
 
-    proxy_pass http://localhost:5000/monitoring;
+    proxy_pass http://localhost:5000/evertask-monitoring;
 }
 ```
 
@@ -225,7 +225,7 @@ builder.Services.AddEverTaskApi(options =>
 Access monitoring via SSH tunnel:
 ```bash
 ssh -L 5001:localhost:5001 user@yourserver.com
-# Then visit http://localhost:5001/monitoring
+# Then visit http://localhost:5001/evertask-monitoring
 ```
 
 #### 4. VPN-Only Access
@@ -271,7 +271,7 @@ app.Run("http://internal-monitor.local:5000");
 
 ## API Endpoints
 
-All endpoints are prefixed with `/monitoring/api` (fixed)
+All endpoints are prefixed with `/evertask-monitoring/api` (fixed)
 
 ### Tasks
 
@@ -304,7 +304,7 @@ All endpoints are prefixed with `/monitoring/api` (fixed)
 
 ### SignalR Hub
 
-- `/monitoring/hub` (fixed)
+- `/evertask-monitoring/hub` (fixed)
   - Event: `EverTaskEvent` - Real-time task events
 
 ## Configuration Options
@@ -312,25 +312,25 @@ All endpoints are prefixed with `/monitoring/api` (fixed)
 ```csharp
 public class EverTaskApiOptions
 {
-    // Base path for API and UI (fixed: "/monitoring", readonly)
-    public string BasePath => "/monitoring";
+    // Base path for API and UI (fixed: "/evertask-monitoring", readonly)
+    public string BasePath => "/evertask-monitoring";
 
     // Enable embedded dashboard UI (default: true)
     // Set to false for API-only mode
     public bool EnableUI { get; set; } = true;
 
-    // API base path (fixed: "/monitoring/api", readonly, derived)
+    // API base path (fixed: "/evertask-monitoring/api", readonly, derived)
     public string ApiBasePath => $"{BasePath}/api";
 
-    // UI base path (fixed: "/monitoring", readonly, only used when EnableUI is true)
+    // UI base path (fixed: "/evertask-monitoring", readonly, only used when EnableUI is true)
     public string UIBasePath => BasePath;
 
     // JWT Authentication credentials (default: "admin"/"admin")
     public string Username { get; set; } = "admin";
     public string Password { get; set; } = "admin";
 
-    // SignalR hub path (fixed: "/monitoring/hub", readonly)
-    public string SignalRHubPath => "/monitoring/hub";
+    // SignalR hub path (fixed: "/evertask-monitoring/hub", readonly)
+    public string SignalRHubPath => "/evertask-monitoring/hub";
 
     // Enable JWT Authentication (default: true)
     public bool EnableAuthentication { get; set; } = true;
@@ -350,7 +350,7 @@ The API uses JWT Authentication. To authenticate:
 ### Step 1: Login to Get JWT Token
 
 ```bash
-curl -X POST https://yourapp.com/monitoring/api/auth/login \
+curl -X POST https://yourapp.com/evertask-monitoring/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"admin"}'
 ```
@@ -368,14 +368,14 @@ Response:
 
 ```bash
 curl -H "Authorization: Bearer YOUR_JWT_TOKEN" \
-  https://yourapp.com/monitoring/api/tasks
+  https://yourapp.com/evertask-monitoring/api/tasks
 ```
 
 ### Using JavaScript/Fetch
 
 ```javascript
 // Login
-const loginResponse = await fetch('https://yourapp.com/monitoring/api/auth/login', {
+const loginResponse = await fetch('https://yourapp.com/evertask-monitoring/api/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username: 'admin', password: 'admin' })
@@ -383,7 +383,7 @@ const loginResponse = await fetch('https://yourapp.com/monitoring/api/auth/login
 const { token } = await loginResponse.json();
 
 // Use token for API calls
-const response = await fetch('https://yourapp.com/monitoring/api/tasks', {
+const response = await fetch('https://yourapp.com/evertask-monitoring/api/tasks', {
     headers: {
         'Authorization': `Bearer ${token}`
     }
@@ -469,7 +469,7 @@ function TaskMonitor() {
 import * as signalR from '@microsoft/signalr';
 
 const connection = new signalR.HubConnectionBuilder()
-    .withUrl('https://yourapp.com/monitoring/hub')
+    .withUrl('https://yourapp.com/evertask-monitoring/hub')
     .build();
 
 connection.on('EverTaskEvent', (event) => {

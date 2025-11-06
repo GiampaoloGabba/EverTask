@@ -28,13 +28,13 @@ public class AuthenticationIntegrationTests : IAsyncLifetime
         // Arrange - No auth header
         var protectedEndpoints = new[]
         {
-            "/monitoring/api/tasks",
-            "/monitoring/api/dashboard/overview",
-            "/monitoring/api/dashboard/recent-activity",
-            "/monitoring/api/queues",
-            "/monitoring/api/statistics/success-rate-trend",
-            "/monitoring/api/statistics/task-types",
-            "/monitoring/api/statistics/execution-times"
+            "/evertask-monitoring/api/tasks",
+            "/evertask-monitoring/api/dashboard/overview",
+            "/evertask-monitoring/api/dashboard/recent-activity",
+            "/evertask-monitoring/api/queues",
+            "/evertask-monitoring/api/statistics/success-rate-trend",
+            "/evertask-monitoring/api/statistics/task-types",
+            "/evertask-monitoring/api/statistics/execution-times"
         };
 
         // Act & Assert - All should return 401
@@ -50,7 +50,7 @@ public class AuthenticationIntegrationTests : IAsyncLifetime
     {
         // Arrange - First login to get JWT token
         var loginRequest = new { username = "testuser", password = "testpass" };
-        var loginResponse = await _client.PostAsJsonAsync("/monitoring/api/auth/login", loginRequest);
+        var loginResponse = await _client.PostAsJsonAsync("/evertask-monitoring/api/auth/login", loginRequest);
         loginResponse.EnsureSuccessStatusCode();
 
         var loginResult = await DeserializeResponseAsync<LoginResponse>(loginResponse);
@@ -61,10 +61,10 @@ public class AuthenticationIntegrationTests : IAsyncLifetime
 
         var endpoints = new[]
         {
-            "/monitoring/api/tasks?page=1&pageSize=10",
-            "/monitoring/api/dashboard/overview",
-            "/monitoring/api/queues",
-            "/monitoring/api/config"
+            "/evertask-monitoring/api/tasks?page=1&pageSize=10",
+            "/evertask-monitoring/api/dashboard/overview",
+            "/evertask-monitoring/api/queues",
+            "/evertask-monitoring/api/config"
         };
 
         // Act & Assert
@@ -83,7 +83,7 @@ public class AuthenticationIntegrationTests : IAsyncLifetime
         _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", invalidToken);
 
         // Act
-        var response = await _client.GetAsync("/monitoring/api/dashboard/overview");
+        var response = await _client.GetAsync("/evertask-monitoring/api/dashboard/overview");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
@@ -96,7 +96,7 @@ public class AuthenticationIntegrationTests : IAsyncLifetime
         _client.DefaultRequestHeaders.Add("Authorization", "Invalid Header Format");
 
         // Act
-        var response = await _client.GetAsync("/monitoring/api/dashboard/overview");
+        var response = await _client.GetAsync("/evertask-monitoring/api/dashboard/overview");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
@@ -106,7 +106,7 @@ public class AuthenticationIntegrationTests : IAsyncLifetime
     public async Task Should_include_www_authenticate_header_in_401_response()
     {
         // Act
-        var response = await _client.GetAsync("/monitoring/api/tasks");
+        var response = await _client.GetAsync("/evertask-monitoring/api/tasks");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
@@ -118,7 +118,7 @@ public class AuthenticationIntegrationTests : IAsyncLifetime
     public async Task Should_allow_config_endpoint_without_authentication()
     {
         // Act - No auth header
-        var response = await _client.GetAsync("/monitoring/api/config");
+        var response = await _client.GetAsync("/evertask-monitoring/api/config");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);

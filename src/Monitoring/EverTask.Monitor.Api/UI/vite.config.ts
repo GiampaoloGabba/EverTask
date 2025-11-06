@@ -5,7 +5,7 @@ import path from 'path'
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
-  base: '/monitoring/', // Absolute base path to fix asset loading on reload
+  base: '/evertask-monitoring/', // Absolute base path to fix asset loading on reload
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
@@ -28,11 +28,11 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/monitoring/api': {
+      '/evertask-monitoring/api': {
         target: 'http://localhost:5000', // Development backend
         changeOrigin: true,
       },
-      '/monitoring/hub': {
+      '/evertask-monitoring/hub': {
         target: 'http://localhost:5000',
         changeOrigin: true,
         ws: true, // WebSocket support for SignalR

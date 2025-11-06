@@ -8,9 +8,9 @@ export class ConfigService {
       return this.config;
     }
 
-    // Fetch from backend /monitoring/api/config endpoint (no auth required)
-    // Base path is fixed to /monitoring (not configurable)
-    const response = await fetch('/monitoring/api/config');
+    // Fetch from backend /evertask-monitoring/api/config endpoint (no auth required)
+    // Base path is fixed to /evertask-monitoring (not configurable)
+    const response = await fetch('/evertask-monitoring/api/config');
     if (!response.ok) {
       throw new Error('Failed to fetch runtime configuration');
     }

@@ -28,7 +28,7 @@ cd UI && npm run build  # → ../wwwroot/
 - `Username/Password` (string, default: "admin"/"admin") - JWT login credentials
 - `JwtSecret` (string?, auto-generated if null) - Signing key (256-bit min recommended)
 - `JwtExpirationHours` (int, default: 8) - Token TTL
-- `SignalRHubPath` (readonly: "/monitoring/hub") - Fixed, cannot change
+- `SignalRHubPath` (readonly: "/evertask-monitoring/hub") - Fixed, cannot change
 - `AllowedIpAddresses` (string[], default: empty = allow all) - IP whitelist (CIDR supported)
 
 ## Architecture
@@ -53,7 +53,7 @@ cd UI && npm run build  # → ../wwwroot/
 ## Key Gotchas
 
 1. **JWT Only**: No Basic Auth. Deleted `BasicAuthenticationMiddleware` in favor of `JwtAuthenticationMiddleware`.
-2. **Fixed Paths**: `SignalRHubPath` is readonly `/monitoring/hub` (cannot be changed).
+2. **Fixed Paths**: `SignalRHubPath` is readonly `/evertask-monitoring/hub` (cannot be changed).
 3. **UI Embed**: `wwwroot/` files are `<EmbeddedResource>` in `.csproj`, served via `ManifestEmbeddedFileProvider`.
 4. **Auto SignalR**: `.AddEverTaskApi()` auto-registers SignalR monitoring if not already added.
 5. **Type Names**: Backend stores full assembly-qualified names. DTOs use short names (`Type.GetType()?.Name`).

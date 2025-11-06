@@ -23,7 +23,7 @@ public class JwtAuthenticationE2ETests : MonitoringTestBase
     private async Task<string> LoginAndGetTokenAsync()
     {
         var loginRequest = new LoginRequest("testuser", "testpass");
-        var response = await Client.PostAsJsonAsync("/monitoring/api/auth/login", loginRequest);
+        var response = await Client.PostAsJsonAsync("/evertask-monitoring/api/auth/login", loginRequest);
         response.EnsureSuccessStatusCode();
 
         var loginResponse = await DeserializeResponseAsync<LoginResponse>(response);
@@ -48,7 +48,7 @@ public class JwtAuthenticationE2ETests : MonitoringTestBase
         var token = await LoginAndGetTokenAsync();
 
         // Act - Access protected tasks endpoint with token
-        var request = CreateAuthenticatedRequest(HttpMethod.Get, "/monitoring/api/tasks?page=1&pageSize=10", token);
+        var request = CreateAuthenticatedRequest(HttpMethod.Get, "/evertask-monitoring/api/tasks?page=1&pageSize=10", token);
         var response = await Client.SendAsync(request);
 
         // Assert
@@ -71,7 +71,7 @@ public class JwtAuthenticationE2ETests : MonitoringTestBase
         await Task.Delay(500); // Give time for task to be processed
 
         // Act - Get task detail with authentication
-        var request = CreateAuthenticatedRequest(HttpMethod.Get, $"/monitoring/api/tasks/{taskId}", token);
+        var request = CreateAuthenticatedRequest(HttpMethod.Get, $"/evertask-monitoring/api/tasks/{taskId}", token);
         var response = await Client.SendAsync(request);
 
         // Assert
@@ -90,7 +90,7 @@ public class JwtAuthenticationE2ETests : MonitoringTestBase
         var token = await LoginAndGetTokenAsync();
 
         // Act - Access dashboard overview with token
-        var request = CreateAuthenticatedRequest(HttpMethod.Get, "/monitoring/api/dashboard/overview?range=Today", token);
+        var request = CreateAuthenticatedRequest(HttpMethod.Get, "/evertask-monitoring/api/dashboard/overview?range=Today", token);
         var response = await Client.SendAsync(request);
 
         // Assert
@@ -109,7 +109,7 @@ public class JwtAuthenticationE2ETests : MonitoringTestBase
         var token = await LoginAndGetTokenAsync();
 
         // Act - Access recent activity with token
-        var request = CreateAuthenticatedRequest(HttpMethod.Get, "/monitoring/api/dashboard/recent-activity?count=10", token);
+        var request = CreateAuthenticatedRequest(HttpMethod.Get, "/evertask-monitoring/api/dashboard/recent-activity?count=10", token);
         var response = await Client.SendAsync(request);
 
         // Assert
@@ -126,7 +126,7 @@ public class JwtAuthenticationE2ETests : MonitoringTestBase
         var token = await LoginAndGetTokenAsync();
 
         // Act - Access queues endpoint with token
-        var request = CreateAuthenticatedRequest(HttpMethod.Get, "/monitoring/api/queues", token);
+        var request = CreateAuthenticatedRequest(HttpMethod.Get, "/evertask-monitoring/api/queues", token);
         var response = await Client.SendAsync(request);
 
         // Assert
@@ -144,7 +144,7 @@ public class JwtAuthenticationE2ETests : MonitoringTestBase
         var token = await LoginAndGetTokenAsync();
 
         // Act - Access statistics endpoint with token
-        var request = CreateAuthenticatedRequest(HttpMethod.Get, "/monitoring/api/statistics/success-rate-trend?period=Last7Days", token);
+        var request = CreateAuthenticatedRequest(HttpMethod.Get, "/evertask-monitoring/api/statistics/success-rate-trend?period=Last7Days", token);
         var response = await Client.SendAsync(request);
 
         // Assert
@@ -163,7 +163,7 @@ public class JwtAuthenticationE2ETests : MonitoringTestBase
         var token = await LoginAndGetTokenAsync();
 
         // Act - Access task types statistics with token
-        var request = CreateAuthenticatedRequest(HttpMethod.Get, "/monitoring/api/statistics/task-types?topN=10", token);
+        var request = CreateAuthenticatedRequest(HttpMethod.Get, "/evertask-monitoring/api/statistics/task-types?topN=10", token);
         var response = await Client.SendAsync(request);
 
         // Assert
@@ -181,7 +181,7 @@ public class JwtAuthenticationE2ETests : MonitoringTestBase
         var token = await LoginAndGetTokenAsync();
 
         // Act - Access execution times statistics with token
-        var request = CreateAuthenticatedRequest(HttpMethod.Get, "/monitoring/api/statistics/execution-times?days=7", token);
+        var request = CreateAuthenticatedRequest(HttpMethod.Get, "/evertask-monitoring/api/statistics/execution-times?days=7", token);
         var response = await Client.SendAsync(request);
 
         // Assert
@@ -201,13 +201,13 @@ public class JwtAuthenticationE2ETests : MonitoringTestBase
         // Arrange - Protected endpoints
         var protectedEndpoints = new[]
         {
-            "/monitoring/api/tasks?page=1&pageSize=10",
-            "/monitoring/api/dashboard/overview",
-            "/monitoring/api/dashboard/recent-activity",
-            "/monitoring/api/queues",
-            "/monitoring/api/statistics/success-rate-trend",
-            "/monitoring/api/statistics/task-types",
-            "/monitoring/api/statistics/execution-times"
+            "/evertask-monitoring/api/tasks?page=1&pageSize=10",
+            "/evertask-monitoring/api/dashboard/overview",
+            "/evertask-monitoring/api/dashboard/recent-activity",
+            "/evertask-monitoring/api/queues",
+            "/evertask-monitoring/api/statistics/success-rate-trend",
+            "/evertask-monitoring/api/statistics/task-types",
+            "/evertask-monitoring/api/statistics/execution-times"
         };
 
         // Act & Assert - All should return 401
@@ -224,7 +224,7 @@ public class JwtAuthenticationE2ETests : MonitoringTestBase
     {
         // Arrange - Use a completely malformed token
         var malformedToken = "this.is.not.a.valid.jwt.token";
-        var request = CreateAuthenticatedRequest(HttpMethod.Get, "/monitoring/api/tasks", malformedToken);
+        var request = CreateAuthenticatedRequest(HttpMethod.Get, "/evertask-monitoring/api/tasks", malformedToken);
 
         // Act
         var response = await Client.SendAsync(request);
@@ -240,7 +240,7 @@ public class JwtAuthenticationE2ETests : MonitoringTestBase
         var token = await LoginAndGetTokenAsync();
         var invalidToken = token.Substring(0, token.Length - 10) + "INVALIDXXX";
 
-        var request = CreateAuthenticatedRequest(HttpMethod.Get, "/monitoring/api/dashboard/overview", invalidToken);
+        var request = CreateAuthenticatedRequest(HttpMethod.Get, "/evertask-monitoring/api/dashboard/overview", invalidToken);
 
         // Act
         var response = await Client.SendAsync(request);
@@ -253,7 +253,7 @@ public class JwtAuthenticationE2ETests : MonitoringTestBase
     public async Task Should_reject_request_with_empty_bearer_token()
     {
         // Arrange - Empty bearer token
-        var request = new HttpRequestMessage(HttpMethod.Get, "/monitoring/api/tasks");
+        var request = new HttpRequestMessage(HttpMethod.Get, "/evertask-monitoring/api/tasks");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "");
 
         // Act
@@ -268,7 +268,7 @@ public class JwtAuthenticationE2ETests : MonitoringTestBase
     {
         // Arrange - Use Basic instead of Bearer
         var token = await LoginAndGetTokenAsync();
-        var request = new HttpRequestMessage(HttpMethod.Get, "/monitoring/api/tasks");
+        var request = new HttpRequestMessage(HttpMethod.Get, "/evertask-monitoring/api/tasks");
         request.Headers.Authorization = new AuthenticationHeaderValue("Basic", token);
 
         // Act
@@ -286,7 +286,7 @@ public class JwtAuthenticationE2ETests : MonitoringTestBase
     public async Task Should_allow_config_endpoint_without_token()
     {
         // Act - No authentication header
-        var response = await Client.GetAsync("/monitoring/api/config");
+        var response = await Client.GetAsync("/evertask-monitoring/api/config");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -301,7 +301,7 @@ public class JwtAuthenticationE2ETests : MonitoringTestBase
     {
         // Act - Login should not require existing token
         var loginRequest = new LoginRequest("testuser", "testpass");
-        var response = await Client.PostAsJsonAsync("/monitoring/api/auth/login", loginRequest);
+        var response = await Client.PostAsJsonAsync("/evertask-monitoring/api/auth/login", loginRequest);
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -320,9 +320,9 @@ public class JwtAuthenticationE2ETests : MonitoringTestBase
         // Act - Use same token for multiple requests
         var endpoints = new[]
         {
-            "/monitoring/api/tasks?page=1&pageSize=10",
-            "/monitoring/api/dashboard/overview",
-            "/monitoring/api/queues"
+            "/evertask-monitoring/api/tasks?page=1&pageSize=10",
+            "/evertask-monitoring/api/dashboard/overview",
+            "/evertask-monitoring/api/queues"
         };
 
         // Assert - All requests should succeed with same token
@@ -347,11 +347,11 @@ public class JwtAuthenticationE2ETests : MonitoringTestBase
         token1.ShouldNotBe(token2);
 
         // Both tokens should work
-        var request1 = CreateAuthenticatedRequest(HttpMethod.Get, "/monitoring/api/tasks", token1);
+        var request1 = CreateAuthenticatedRequest(HttpMethod.Get, "/evertask-monitoring/api/tasks", token1);
         var response1 = await Client.SendAsync(request1);
         response1.StatusCode.ShouldBe(HttpStatusCode.OK);
 
-        var request2 = CreateAuthenticatedRequest(HttpMethod.Get, "/monitoring/api/tasks", token2);
+        var request2 = CreateAuthenticatedRequest(HttpMethod.Get, "/evertask-monitoring/api/tasks", token2);
         var response2 = await Client.SendAsync(request2);
         response2.StatusCode.ShouldBe(HttpStatusCode.OK);
     }

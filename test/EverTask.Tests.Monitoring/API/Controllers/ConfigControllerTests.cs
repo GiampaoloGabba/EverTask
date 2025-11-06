@@ -10,16 +10,16 @@ public class ConfigControllerTests : MonitoringTestBase
         // Arrange - No auth header added
 
         // Act
-        var response = await Client.GetAsync("/monitoring/api/config");
+        var response = await Client.GetAsync("/evertask-monitoring/api/config");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
 
         var config = await DeserializeResponseAsync<ConfigResponse>(response);
         config.ShouldNotBeNull();
-        config.ApiBasePath.ShouldBe("/monitoring/api");
-        config.UiBasePath.ShouldBe("/monitoring");
-        config.SignalRHubPath.ShouldBe("/monitoring/hub");
+        config.ApiBasePath.ShouldBe("/evertask-monitoring/api");
+        config.UiBasePath.ShouldBe("/evertask-monitoring");
+        config.SignalRHubPath.ShouldBe("/evertask-monitoring/hub");
         config.RequireAuthentication.ShouldBe(false);
         config.UiEnabled.ShouldBe(false);
     }

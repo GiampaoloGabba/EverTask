@@ -13,7 +13,7 @@ public class TasksControllerTests : MonitoringTestBase
         const int pageSize = 10;
 
         // Act
-        var response = await Client.GetAsync($"/monitoring/api/tasks?page={page}&pageSize={pageSize}");
+        var response = await Client.GetAsync($"/evertask-monitoring/api/tasks?page={page}&pageSize={pageSize}");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -33,7 +33,7 @@ public class TasksControllerTests : MonitoringTestBase
         const string status = "Completed";
 
         // Act - Note: Use 'statuses' (plural) to match TaskFilter.Statuses property
-        var response = await Client.GetAsync($"/monitoring/api/tasks?statuses={status}&page=1&pageSize=10");
+        var response = await Client.GetAsync($"/evertask-monitoring/api/tasks?statuses={status}&page=1&pageSize=10");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -52,12 +52,12 @@ public class TasksControllerTests : MonitoringTestBase
     public async Task Should_get_task_detail_when_exists()
     {
         // Arrange - Get a task ID from the list
-        var listResponse = await Client.GetAsync("/monitoring/api/tasks?page=1&pageSize=1");
+        var listResponse = await Client.GetAsync("/evertask-monitoring/api/tasks?page=1&pageSize=1");
         var pagedResponse = await DeserializeResponseAsync<TasksPagedResponse>(listResponse);
         var taskId = pagedResponse!.Items.First().Id;
 
         // Act
-        var response = await Client.GetAsync($"/monitoring/api/tasks/{taskId}");
+        var response = await Client.GetAsync($"/evertask-monitoring/api/tasks/{taskId}");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -77,7 +77,7 @@ public class TasksControllerTests : MonitoringTestBase
         var nonExistentId = Guid.NewGuid();
 
         // Act
-        var response = await Client.GetAsync($"/monitoring/api/tasks/{nonExistentId}");
+        var response = await Client.GetAsync($"/evertask-monitoring/api/tasks/{nonExistentId}");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.NotFound);
@@ -87,12 +87,12 @@ public class TasksControllerTests : MonitoringTestBase
     public async Task Should_get_status_audit_history()
     {
         // Arrange - Get a completed task ID
-        var listResponse = await Client.GetAsync("/monitoring/api/tasks?status=Completed&page=1&pageSize=1");
+        var listResponse = await Client.GetAsync("/evertask-monitoring/api/tasks?status=Completed&page=1&pageSize=1");
         var pagedResponse = await DeserializeResponseAsync<TasksPagedResponse>(listResponse);
         var taskId = pagedResponse!.Items.First().Id;
 
         // Act
-        var response = await Client.GetAsync($"/monitoring/api/tasks/{taskId}/status-audit");
+        var response = await Client.GetAsync($"/evertask-monitoring/api/tasks/{taskId}/status-audit");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -109,12 +109,12 @@ public class TasksControllerTests : MonitoringTestBase
     public async Task Should_get_runs_audit_history()
     {
         // Arrange - Get a completed task ID
-        var listResponse = await Client.GetAsync("/monitoring/api/tasks?status=Completed&page=1&pageSize=1");
+        var listResponse = await Client.GetAsync("/evertask-monitoring/api/tasks?status=Completed&page=1&pageSize=1");
         var pagedResponse = await DeserializeResponseAsync<TasksPagedResponse>(listResponse);
         var taskId = pagedResponse!.Items.First().Id;
 
         // Act
-        var response = await Client.GetAsync($"/monitoring/api/tasks/{taskId}/runs-audit");
+        var response = await Client.GetAsync($"/evertask-monitoring/api/tasks/{taskId}/runs-audit");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -150,7 +150,7 @@ public class TasksControllerTests : MonitoringTestBase
         await Storage.Persist(task);
 
         // Act
-        var response = await Client.GetAsync($"/monitoring/api/tasks/{taskId}");
+        var response = await Client.GetAsync($"/evertask-monitoring/api/tasks/{taskId}");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -183,7 +183,7 @@ public class TasksControllerTests : MonitoringTestBase
         await Storage.Persist(task);
 
         // Act
-        var response = await Client.GetAsync($"/monitoring/api/tasks/{taskId}");
+        var response = await Client.GetAsync($"/evertask-monitoring/api/tasks/{taskId}");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -232,7 +232,7 @@ public class TasksControllerTests : MonitoringTestBase
         });
 
         // Act
-        var response = await Client.GetAsync("/monitoring/api/tasks/counts");
+        var response = await Client.GetAsync("/evertask-monitoring/api/tasks/counts");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -263,7 +263,7 @@ public class TasksControllerTests : MonitoringTestBase
         });
 
         // Act
-        var response = await Client.GetAsync("/monitoring/api/tasks?page=1&pageSize=10");
+        var response = await Client.GetAsync("/evertask-monitoring/api/tasks?page=1&pageSize=10");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);

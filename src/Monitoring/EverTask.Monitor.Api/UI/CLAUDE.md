@@ -41,7 +41,7 @@ npm run build   # → ../wwwroot/
 
 ### SignalR (`src/services/signalr.ts`)
 - Auto-connects when authenticated
-- Hub: `/monitoring/hub` (fixed)
+- Hub: `/evertask-monitoring/hub` (fixed)
 - Events → `realtimeStore.addEvent()`
 
 ## Project Structure
@@ -151,7 +151,7 @@ ServiceStopped: 'bg-gray-500'
 1. **Enum Conversion**: `apiService` auto-converts status strings → numbers (see `convertStatusStringsToNumbers()`)
 2. **Login Auth**: Must call `/api/auth/login` to get JWT, not Basic Auth
 3. **Vite Base Path**: `base: '/evertask/'` in `vite.config.ts` must match backend `BasePath`
-4. **SignalR Path**: Fixed to `/monitoring/hub`, cannot change
+4. **SignalR Path**: Fixed to `/evertask-monitoring/hub`, cannot change
 5. **Rollup Windows**: Requires `@rollup/rollup-win32-x64-msvc` (package.json dependency)
 
 ## Troubleshooting
