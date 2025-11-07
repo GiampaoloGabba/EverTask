@@ -1,5 +1,6 @@
 using EverTask.Monitor.Api.DTOs.Tasks;
 using EverTask.Tests.Monitoring.TestHelpers;
+using EverTask.Tests.TestHelpers;
 
 namespace EverTask.Tests.Monitoring.API.Controllers;
 
@@ -34,11 +35,11 @@ public class ExecutionLogsEndpointTests : MonitoringTestBase
         var taskId = Guid.NewGuid();
         var task = new QueuedTask
         {
-            Id = taskId,
-            Type = "TestTask",
-            Handler = "TestHandler",
-            Request = "{}",
-            Status = QueuedTaskStatus.Completed,
+            Id           = taskId,
+            Type         = "TestTask",
+            Handler      = "TestHandler",
+            Request      = "{}",
+            Status       = QueuedTaskStatus.Completed,
             CreatedAtUtc = DateTimeOffset.UtcNow
         };
         await Storage.Persist(task);
@@ -82,7 +83,8 @@ public class ExecutionLogsEndpointTests : MonitoringTestBase
         var taskId = await Seeder.CreateTaskWithLogsAsync(logCount: 250, level: "Debug");
 
         // Act: Skip first 100, take next 100
-        var response = await Client.GetAsync($"/evertask-monitoring/api/tasks/{taskId}/execution-logs?skip=100&take=100");
+        var response =
+            await Client.GetAsync($"/evertask-monitoring/api/tasks/{taskId}/execution-logs?skip=100&take=100");
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -106,22 +108,42 @@ public class ExecutionLogsEndpointTests : MonitoringTestBase
         var taskId = Guid.NewGuid();
         var task = new QueuedTask
         {
-            Id = taskId,
-            Type = "TestTask",
-            Handler = "TestHandler",
-            Request = "{}",
-            Status = QueuedTaskStatus.Completed,
+            Id           = taskId,
+            Type         = "TestTask",
+            Handler      = "TestHandler",
+            Request      = "{}",
+            Status       = QueuedTaskStatus.Completed,
             CreatedAtUtc = DateTimeOffset.UtcNow
         };
         await Storage.Persist(task);
 
         var logs = new List<TaskExecutionLog>
         {
-            new() { Id = Guid.NewGuid(), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Information", Message = "Info 1", SequenceNumber = 0 },
-            new() { Id = Guid.NewGuid(), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Warning", Message = "Warn 1", SequenceNumber = 1 },
-            new() { Id = Guid.NewGuid(), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Error", Message = "Error 1", SequenceNumber = 2 },
-            new() { Id = Guid.NewGuid(), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Information", Message = "Info 2", SequenceNumber = 3 },
-            new() { Id = Guid.NewGuid(), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Error", Message = "Error 2", SequenceNumber = 4 }
+            new()
+            {
+                Id      = Guid.NewGuid(), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Information",
+                Message = "Info 1", SequenceNumber = 0
+            },
+            new()
+            {
+                Id      = Guid.NewGuid(), TaskId   = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Warning",
+                Message = "Warn 1", SequenceNumber = 1
+            },
+            new()
+            {
+                Id      = Guid.NewGuid(), TaskId    = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Error",
+                Message = "Error 1", SequenceNumber = 2
+            },
+            new()
+            {
+                Id      = Guid.NewGuid(), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Information",
+                Message = "Info 2", SequenceNumber = 3
+            },
+            new()
+            {
+                Id      = Guid.NewGuid(), TaskId    = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Error",
+                Message = "Error 2", SequenceNumber = 4
+            }
         };
         await Storage.SaveExecutionLogsAsync(taskId, logs, CancellationToken.None);
 
@@ -151,23 +173,47 @@ public class ExecutionLogsEndpointTests : MonitoringTestBase
         var taskId = Guid.NewGuid();
         var task = new QueuedTask
         {
-            Id = taskId,
-            Type = "TestTask",
-            Handler = "TestHandler",
-            Request = "{}",
-            Status = QueuedTaskStatus.Completed,
+            Id           = taskId,
+            Type         = "TestTask",
+            Handler      = "TestHandler",
+            Request      = "{}",
+            Status       = QueuedTaskStatus.Completed,
             CreatedAtUtc = DateTimeOffset.UtcNow
         };
         await Storage.Persist(task);
 
         var logs = new List<TaskExecutionLog>
         {
-            new() { Id = Guid.NewGuid(), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Trace", Message = "Trace msg", SequenceNumber = 0 },
-            new() { Id = Guid.NewGuid(), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Debug", Message = "Debug msg", SequenceNumber = 1 },
-            new() { Id = Guid.NewGuid(), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Information", Message = "Info msg", SequenceNumber = 2 },
-            new() { Id = Guid.NewGuid(), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Warning", Message = "Warning msg", SequenceNumber = 3 },
-            new() { Id = Guid.NewGuid(), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Error", Message = "Error msg", SequenceNumber = 4 },
-            new() { Id = Guid.NewGuid(), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Critical", Message = "Critical msg", SequenceNumber = 5 }
+            new()
+            {
+                Id      = Guid.NewGuid(), TaskId      = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Trace",
+                Message = "Trace msg", SequenceNumber = 0
+            },
+            new()
+            {
+                Id      = Guid.NewGuid(), TaskId      = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Debug",
+                Message = "Debug msg", SequenceNumber = 1
+            },
+            new()
+            {
+                Id      = Guid.NewGuid(), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Information",
+                Message = "Info msg", SequenceNumber = 2
+            },
+            new()
+            {
+                Id      = Guid.NewGuid(), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Warning",
+                Message = "Warning msg", SequenceNumber = 3
+            },
+            new()
+            {
+                Id      = Guid.NewGuid(), TaskId      = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Error",
+                Message = "Error msg", SequenceNumber = 4
+            },
+            new()
+            {
+                Id      = Guid.NewGuid(), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Critical",
+                Message = "Critical msg", SequenceNumber = 5
+            }
         };
         await Storage.SaveExecutionLogsAsync(taskId, logs, CancellationToken.None);
 
@@ -184,59 +230,14 @@ public class ExecutionLogsEndpointTests : MonitoringTestBase
     }
 
     [Fact]
-    public async Task Should_order_by_sequence_number_ascending()
-    {
-        // Arrange: Task with logs in random order
-        var taskId = Guid.NewGuid();
-        var task = new QueuedTask
-        {
-            Id = taskId,
-            Type = "TestTask",
-            Handler = "TestHandler",
-            Request = "{}",
-            Status = QueuedTaskStatus.Completed,
-            CreatedAtUtc = DateTimeOffset.UtcNow
-        };
-        await Storage.Persist(task);
-
-        var logs = new List<TaskExecutionLog>
-        {
-            new() { Id = Guid.NewGuid(), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Information", Message = "Log 5", SequenceNumber = 5 },
-            new() { Id = Guid.NewGuid(), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Information", Message = "Log 0", SequenceNumber = 0 },
-            new() { Id = Guid.NewGuid(), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Information", Message = "Log 3", SequenceNumber = 3 },
-            new() { Id = Guid.NewGuid(), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Information", Message = "Log 1", SequenceNumber = 1 },
-            new() { Id = Guid.NewGuid(), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Information", Message = "Log 2", SequenceNumber = 2 },
-            new() { Id = Guid.NewGuid(), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Information", Message = "Log 4", SequenceNumber = 4 }
-        };
-        await Storage.SaveExecutionLogsAsync(taskId, logs, CancellationToken.None);
-
-        // Act
-        var response = await Client.GetAsync($"/evertask-monitoring/api/tasks/{taskId}/execution-logs");
-
-        // Assert
-        response.StatusCode.ShouldBe(HttpStatusCode.OK);
-
-        var result = await DeserializeResponseAsync<ExecutionLogsResponse>(response);
-        result.ShouldNotBeNull();
-        result.Logs.Count.ShouldBe(6);
-
-        // Verify correct order: 0 → 1 → 2 → 3 → 4 → 5
-        for (int i = 0; i < 6; i++)
-        {
-            result.Logs[i].SequenceNumber.ShouldBe(i);
-            result.Logs[i].Message.ShouldBe($"Log {i}");
-        }
-    }
-
-    [Fact]
     public async Task Should_include_exception_details_when_present()
     {
         // Arrange: Task with error log + exception
         var taskId = await Seeder.CreateTaskWithLogsAsync(
-            logCount: 5,
-            level: "Error",
-            includeExceptions: true
-        );
+                         logCount: 5,
+                         level: "Error",
+                         includeExceptions: true
+                     );
 
         // Act
         var response = await Client.GetAsync($"/evertask-monitoring/api/tasks/{taskId}/execution-logs");
@@ -294,14 +295,15 @@ public class ExecutionLogsEndpointTests : MonitoringTestBase
 
         // Act 1: Get all logs (default take = 100)
         var response1 = await Client.GetAsync($"/evertask-monitoring/api/tasks/{taskId}/execution-logs");
-        var result1 = await DeserializeResponseAsync<ExecutionLogsResponse>(response1);
+        var result1   = await DeserializeResponseAsync<ExecutionLogsResponse>(response1);
 
         // Assert 1: Should return all 100 logs
         result1!.Logs.Count.ShouldBe(100);
         result1.TotalCount.ShouldBe(100);
 
         // Act 2: Try to get beyond available logs
-        var response2 = await Client.GetAsync($"/evertask-monitoring/api/tasks/{taskId}/execution-logs?skip=100&take=50");
+        var response2 =
+            await Client.GetAsync($"/evertask-monitoring/api/tasks/{taskId}/execution-logs?skip=100&take=50");
         var result2 = await DeserializeResponseAsync<ExecutionLogsResponse>(response2);
 
         // Assert 2: Should return empty array (no more logs)

@@ -473,6 +473,6 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         dbContext.TaskExecutionLogs
                  .AsNoTracking()
                  .Where(log => log.TaskId == taskId)
-                 .OrderBy(log => log.TimestampUtc)      // Primary: chronological order
-                 .ThenBy(log => log.SequenceNumber);    // Secondary: preserve sequence within same timestamp
+                 .OrderBy(log => log.Id)      // UUIDv7 chronological order (database-friendly, SQLite-compatible)
+                 .ThenBy(log => log.SequenceNumber); // preserve sequence within same timestamp
 }

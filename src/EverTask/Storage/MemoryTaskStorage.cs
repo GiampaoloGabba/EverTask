@@ -329,9 +329,9 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         {
             return _executionLogs
                 .Where(log => log.TaskId == taskId)
-                .OrderBy(log => log.TimestampUtc)      // Primary: chronological order
-                .ThenBy(log => log.SequenceNumber)    // Secondary: preserve sequence within same timestamp
-                .ToList(); // Materialize inside lock
+                .OrderBy(log => log.Id)            // Primary: UUIDv7 chronological order
+                .ThenBy(log => log.SequenceNumber) // Secondary: preserve sequence within same timestamp
+                .ToList();
         }
     }
 }
