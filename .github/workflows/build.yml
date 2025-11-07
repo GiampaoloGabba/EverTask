@@ -21,7 +21,7 @@ jobs:
           node-version: '20'
 
       - name: Install UI dependencies
-        run: npm install --force
+        run: npm install
         working-directory: src/Monitoring/EverTask.Monitor.Api/UI
 
       - name: Build UI
