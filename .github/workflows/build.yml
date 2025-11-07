@@ -20,12 +20,17 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Install pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 8
+
       - name: Install UI dependencies
-        run: npm install
+        run: pnpm install
         working-directory: src/Monitoring/EverTask.Monitor.Api/UI
 
       - name: Build UI
-        run: npm run build
+        run: pnpm run build
         working-directory: src/Monitoring/EverTask.Monitor.Api/UI
 
       - name: Setup .NET 6
