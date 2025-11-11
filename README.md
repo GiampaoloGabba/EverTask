@@ -5,14 +5,18 @@
 [![NuGet](https://img.shields.io/nuget/vpre/EverTask.Abstractions.svg?label=EverTask.Abstractions)](https://www.nuget.org/packages/EverTask.Abstractions)
 [![NuGet](https://img.shields.io/nuget/vpre/EverTask.Storage.SqlServer.svg?label=EverTask.Storage.SqlServer)](https://www.nuget.org/packages/EverTask.Storage.SqlServer)
 [![NuGet](https://img.shields.io/nuget/vpre/EverTask.Storage.Sqlite.svg?label=EverTask.Storage.Sqlite)](https://www.nuget.org/packages/EverTask.Storage.Sqlite)
+[![NuGet](https://img.shields.io/nuget/vpre/EverTask.Storage.EfCore.svg?label=EverTask.Storage.EfCore)](https://www.nuget.org/packages/EverTask.Storage.EfCore)
 [![NuGet](https://img.shields.io/nuget/vpre/EverTask.Logging.Serilog.svg?label=EverTask.Logging.Serilog)](https://www.nuget.org/packages/EverTask.Logging.Serilog)
 [![NuGet](https://img.shields.io/nuget/vpre/EverTask.Monitor.AspnetCore.SignalR.svg?label=EverTask.Monitor.AspnetCore.SignalR)](https://www.nuget.org/packages/EverTask.Monitor.AspnetCore.SignalR)
+[![NuGet](https://img.shields.io/nuget/vpre/EverTask.Monitor.Api.svg?label=EverTask.Monitor.Api)](https://www.nuget.org/packages/EverTask.Monitor.Api)
 
 ## Overview
 
 **EverTask** is a high-performance .NET library for background task execution. It handles everything from simple fire-and-forget operations to complex recurring schedules, with persistence that survives application restarts.
 
 Supports **CPU-intensive, I/O-bound, long-running and short-running tasks**. No external schedulers or Windows Services required — everything runs in-process with your application.
+
+EverTask doesn't continuously poll the database: it uses a lightweight and optimized in-memory scheduler, coupled with channels and strategic persistence.
 
 If you've used MediatR, you'll feel right at home with the request/handler pattern — but with built-in persistence, multi-queue isolation, and the ability to scale to high load.
 
@@ -22,6 +26,7 @@ Works great with ASP.NET Core, Windows Services, or any .NET project that needs 
 
 ### Core Execution
 - **Background Execution** — Fire-and-forget, scheduled, and recurring tasks with elegant API
+- **Zero Database Polling** — Smart scheduler with in-memory channels and persistence, no continuous database polling
 - **Smart Persistence** — Tasks resume after application restarts (SQL Server, SQLite, In-Memory)
 - **Fluent Scheduling API** — Intuitive recurring task configuration (every minute, hour, day, week, month, cron)
 - **Idempotent Task Registration** — Prevent duplicate recurring tasks with unique keys
@@ -229,7 +234,7 @@ Monitor your tasks with a feature-complete web dashboard providing real-time ins
 
 Capture all logs written during task execution and persist them to the database for debugging and auditing:
 
-<img src="assets/screenshots/4.png" style="width:100%;max-width:900px;display: block; margin:20px auto;" alt="Task Details" />
+<img src="assets/screenshots/5.png" style="width:100%;max-width:900px;display: block; margin:20px auto;" alt="Task Details" />
 <br />
 <em>View logs in dashboard or retrieve via storage</em>
 
@@ -242,8 +247,10 @@ Capture all logs written during task execution and persist them to the database 
   - [EverTask.Abstractions](https://www.nuget.org/packages/EverTask.Abstractions) - Lightweight interfaces package
   - [EverTask.Storage.SqlServer](https://www.nuget.org/packages/EverTask.Storage.SqlServer) - SQL Server storage
   - [EverTask.Storage.Sqlite](https://www.nuget.org/packages/EverTask.Storage.Sqlite) - SQLite storage
+  - [EverTask.Storage.EfCore](https://www.nuget.org/packages/EverTask.Storage.EfCore) - EF Core base storage
   - [EverTask.Logging.Serilog](https://www.nuget.org/packages/EverTask.Logging.Serilog) - Serilog integration
   - [EverTask.Monitor.AspnetCore.SignalR](https://www.nuget.org/packages/EverTask.Monitor.AspnetCore.SignalR) - Real-time monitoring
+  - [EverTask.Monitor.Api](https://www.nuget.org/packages/EverTask.Monitor.Api) - Monitoring API and Dashboard
 
 - 📝 **Resources**
   - [Changelog](CHANGELOG.md) - Version history and release notes
