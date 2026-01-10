@@ -6,9 +6,7 @@ namespace EverTask.Scheduler.Recurring;
 /// </summary>
 /// <param name="NextRun">The next valid run time, or null if no more runs should occur</param>
 /// <param name="SkippedCount">The number of occurrences that were skipped because they were in the past</param>
-/// <param name="SkippedOccurrences">List of DateTimeOffset values that were skipped</param>
 public record NextRunResult(
     DateTimeOffset? NextRun,
-    int SkippedCount,
-    List<DateTimeOffset> SkippedOccurrences
+    int SkippedCount
 );
