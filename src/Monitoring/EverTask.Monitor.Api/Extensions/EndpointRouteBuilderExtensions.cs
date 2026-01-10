@@ -27,20 +27,10 @@ public static class EndpointRouteBuilderExtensions
     {
         var options = app.ApplicationServices.GetRequiredService<EverTaskApiOptions>();
 
-        // TODO: Rate limiting middleware - temporarily commented out
-        /*
-#if NET8_0_OR_GREATER
-        // Enable rate limiting for login endpoint (NET8+ only)
-        if (options.EnableJwt)
-        {
-            app.UseRateLimiter();
-        }
-#endif
-        */
-
         // Enable JWT authentication if configured
         if (options.EnableAuthentication)
         {
+            app.UseRateLimiter();
             app.UseAuthentication();
         }
 
@@ -80,10 +70,23 @@ public static class EndpointRouteBuilderExtensions
         // Conditionally serve UI
         if (options.EnableUI)
         {
-            var fileProvider = new ManifestEmbeddedFileProvider(
-                typeof(EverTaskApiOptions).Assembly,
-                "wwwroot"
-            );
+            IFileProvider fileProvider;
+            try
+            {
+                // Try ManifestEmbeddedFileProvider first (optimized for production)
+                fileProvider = new ManifestEmbeddedFileProvider(
+                    typeof(EverTaskApiOptions).Assembly,
+                    "wwwroot"
+                );
+            }
+            catch (InvalidOperationException)
+            {
+                // Fallback to EmbeddedFileProvider (works without manifest, e.g., during tests)
+                fileProvider = new EmbeddedFileProvider(
+                    typeof(EverTaskApiOptions).Assembly,
+                    $"{typeof(EverTaskApiOptions).Assembly.GetName().Name}.wwwroot"
+                );
+            }
 
             // Map static files endpoint (assets)
             endpoints.MapGet($"{options.UIBasePath}/assets/{{**file}}", async (string file, HttpContext context) =>

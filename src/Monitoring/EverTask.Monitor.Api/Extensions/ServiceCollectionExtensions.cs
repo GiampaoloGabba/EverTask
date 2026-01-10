@@ -1,21 +1,15 @@
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using EverTask.Monitor.Api.Infrastructure;
 using EverTask.Monitor.Api.Options;
 using EverTask.Monitor.Api.Services;
 using EverTask.Monitoring;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
-using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using Swashbuckle.AspNetCore.SwaggerGen;
-#if NET8_0_OR_GREATER
-using Microsoft.AspNetCore.RateLimiting;
-#endif
 
 namespace EverTask.Monitor.Api.Extensions;
 

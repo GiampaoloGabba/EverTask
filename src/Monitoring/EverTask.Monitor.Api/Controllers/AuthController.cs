@@ -4,6 +4,7 @@ using EverTask.Monitor.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
 
 namespace EverTask.Monitor.Api.Controllers;
@@ -33,13 +34,9 @@ public class AuthController : ControllerBase
     /// </summary>
     /// <param name="request">Login credentials</param>
     /// <returns>JWT token and expiration information</returns>
-    // TODO: Rate limiting attribute - temporarily commented out
-    /*
-#if NET8_0_OR_GREATER
-    [Microsoft.AspNetCore.RateLimiting.EnableRateLimiting("login")]
-#endif
-    */
+
     [HttpPost("login")]
+    [EnableRateLimiting("login")]
     [ProducesResponseType(typeof(LoginResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]

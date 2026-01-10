@@ -9,7 +9,21 @@
 
     <!-- Disable ApiDescription.Server (class library has no entry point) -->
     <IsApiDescriptionServerEnabled>false</IsApiDescriptionServerEnabled>
+
+    <!-- Exclude node_modules from MSBuild processing (avoid Windows path length limits) -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);UI\node_modules\**</DefaultItemExcludes>
+
+    <!-- Disable default Compile items for entire UI folder to prevent path scanning -->
+    <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
   </PropertyGroup>
+
+  <!-- Explicitly exclude UI folder from all default item types -->
+  <ItemGroup>
+    <Compile Remove="UI\node_modules\**" />
+    <EmbeddedResource Remove="UI\node_modules\**" />
+    <None Remove="UI\node_modules\**" />
+    <Content Remove="UI\node_modules\**" />
+  </ItemGroup>
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
@@ -34,9 +48,6 @@
   <ItemGroup>
     <!-- Embed all wwwroot files as resources for NuGet package -->
     <EmbeddedResource Include="wwwroot\**\*" />
-
-    <!-- Exclude UI source files from NuGet package (dev-only) -->
-    <None Include="UI\**\*" Pack="false" />
 
     <None Include="..\..\..\assets\logo-nuget.png" Pack="true" PackagePath="" />
     <None Include="README.md" Pack="true" PackagePath="" />
