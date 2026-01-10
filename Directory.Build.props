@@ -1,6 +1,6 @@
 ﻿<Project>
   <PropertyGroup>
-    <TargetFrameworks>net6.0;net7.0;net8.0;net9.0</TargetFrameworks>
+    <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
     <LangVersion>12.0</LangVersion>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -8,7 +8,7 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <Version>3.3.0</Version>
+    <Version>3.4.0</Version>
     <Authors>Giampaolo Gabba</Authors>
     <Description>Easy background task with persistence for ASP.NET Core</Description>
     <Copyright>Copyright Giampaolo Gabba</Copyright>
