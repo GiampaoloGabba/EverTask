@@ -254,42 +254,6 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
     }
 
     /// <inheritdoc />
-    public Task RecordSkippedOccurrences(Guid taskId, List<DateTimeOffset> skippedOccurrences, CancellationToken ct = default)
-    {
-        if (skippedOccurrences.Count == 0)
-            return Task.CompletedTask;
-
-        logger.LogInformation("Recording {Count} skipped occurrences for task {TaskId}", skippedOccurrences.Count, taskId);
-
-        lock (_pendingTasksLock)
-        {
-            var task = _pendingTasks.FirstOrDefault(x => x.Id == taskId);
-
-            if (task != null)
-            {
-                // Create a summary of skipped times
-                var skippedTimes = string.Join(", ", skippedOccurrences.Select(d => d.ToString("yyyy-MM-dd HH:mm:ss")));
-                var skipMessage = $"Skipped {skippedOccurrences.Count} missed occurrence(s) to maintain schedule: {skippedTimes}";
-
-                // Add a RunsAudit entry documenting the skips
-                task.RunsAudits.Add(new RunsAudit
-                {
-                    QueuedTaskId = taskId,
-                    ExecutedAt   = DateTimeOffset.UtcNow,
-                    Status       = QueuedTaskStatus.Completed, // Using Completed as the base status
-                    Exception    = skipMessage // Store skip info in Exception field for audit trail
-                });
-            }
-            else
-            {
-                logger.LogWarning("Task {TaskId} not found when trying to record skipped occurrences", taskId);
-            }
-        }
-
-        return Task.CompletedTask;
-    }
-
-    /// <inheritdoc />
     public Task SaveExecutionLogsAsync(Guid taskId, IReadOnlyList<TaskExecutionLog> logs, CancellationToken cancellationToken)
     {
         // Performance optimization: skip if no logs
