@@ -159,16 +159,19 @@ public abstract class EfCoreTaskStorageTestsBase
     {
         var queued = QueuedTasks[0];
         await _storage.Persist(queued);
-        var result         = await _storage.Get(x => x.Id == queued.Id);
-        var startingLength = _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == result[0].Id);
+        var result = await _storage.Get(x => x.Id == queued.Id);
+        result.ShouldNotBeEmpty();
 
-        await _storage.SetInProgress(result[0].Id, AuditLevel.Full);
+        var taskId = result[0].Id;
+        var startingLength = _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == taskId);
+
+        await _storage.SetInProgress(taskId, AuditLevel.Full);
 
         result = await _storage.Get(x => x.Id == queued.Id);
         result[0].Status.ShouldBe(QueuedTaskStatus.InProgress);
 
-        _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == result[0].Id).ShouldBe(startingLength + 1);
-        _mockedDbContext.StatusAudit.OrderBy(x => x.Id).LastOrDefault(x => x.QueuedTaskId == result[0].Id)
+        _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == taskId).ShouldBe(startingLength + 1);
+        _mockedDbContext.StatusAudit.OrderBy(x => x.Id).LastOrDefault(x => x.QueuedTaskId == taskId)
                         ?.NewStatus.ShouldBe(QueuedTaskStatus.InProgress);
     }
 

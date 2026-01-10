@@ -6,48 +6,63 @@ using EverTask.Tests.TestHelpers;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Options;
 using Respawn;
 using Shouldly;
+using Testcontainers.MsSql;
 using Xunit;
 
 namespace EverTask.Tests.Storage;
 
-[Collection("StorageTests")]
-public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IDisposable
+[Collection("DatabaseTests")]
+public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsyncLifetime, IDisposable
 {
     private ITaskStoreDbContext _dbContext = null!;
     private ITaskStorage _taskStorage = null!;
     private Respawner? _respawner;
     private string _connectionString = "";
-    private static bool _dbInitialized = false;
-    private static readonly object _lock = new object();
+    private static MsSqlContainer? _sqlContainer;
+    private static bool _containerInitialized = false;
+    private static readonly object _lock = new();
+
+    public async Task InitializeAsync()
+    {
+        // Clean database before each test
+        await CleanUpDatabase();
+    }
+
+    public Task DisposeAsync() => Task.CompletedTask;
 
     protected override void Initialize()
     {
-        _connectionString = "Server=(localdb)\\mssqllocaldb;Database=EverTaskTestDb;Trusted_Connection=True;MultipleActiveResultSets=true";
-
-        var services = new ServiceCollection();
-        services.AddLogging();
-        services.AddEverTask(opt=>opt.RegisterTasksFromAssembly(typeof(SqlServerEfCoreTaskStorageTests).Assembly))
-                .AddSqlServerStorage(_connectionString, opt => opt.AutoApplyMigrations = false);
-
-        // Create database only once for all tests in this collection
+        // Start container once for all tests in this collection
         lock (_lock)
         {
-            if (!_dbInitialized)
+            if (!_containerInitialized)
             {
-                using var scope = services.BuildServiceProvider().CreateScope();
-                var context = scope.ServiceProvider.GetRequiredService<SqlServerTaskStoreContext>();
-                // Don't delete - just ensure migrations are applied
-                context.Database.Migrate();
-                _dbInitialized = true;
+                _sqlContainer = new MsSqlBuilder("mcr.microsoft.com/mssql/server:2022-latest").Build();
+                _sqlContainer.StartAsync().GetAwaiter().GetResult();
+                _containerInitialized = true;
             }
         }
 
+        _connectionString = _sqlContainer!.GetConnectionString();
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddEverTask(opt => opt.RegisterTasksFromAssembly(typeof(SqlServerEfCoreTaskStorageTests).Assembly))
+                .AddSqlServerStorage(_connectionString, opt => opt.AutoApplyMigrations = true);
+
         var serviceProvider = services.BuildServiceProvider();
 
-        _dbContext   = serviceProvider.GetService<ITaskStoreDbContext>()!;
+        // Apply migrations once
+        lock (_lock)
+        {
+            using var scope = serviceProvider.CreateScope();
+            var context = scope.ServiceProvider.GetRequiredService<SqlServerTaskStoreContext>();
+            context.Database.Migrate();
+        }
+
+        _dbContext = serviceProvider.GetService<ITaskStoreDbContext>()!;
         _taskStorage = serviceProvider.GetRequiredService<ITaskStorage>();
     }
 
@@ -61,13 +76,14 @@ public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IDisp
 
     private async Task<Respawner> GetRespawner() =>
         _respawner ??= await Respawner.CreateAsync(_connectionString, new RespawnerOptions
-        { TablesToIgnore = new Respawn.Graph.Table[] { "__EFMigrationsHistory" } });
+                           { TablesToIgnore = ["__EFMigrationsHistory"] });
 
     protected override async Task CleanUpDatabase()
     {
         // Use Respawn for efficient, reliable cleanup
         var respawner = await GetRespawner();
-        using var connection = new SqlConnection(_connectionString);
+
+        await using var connection = new SqlConnection(_connectionString);
         await connection.OpenAsync();
         await respawner.ResetAsync(connection);
     }

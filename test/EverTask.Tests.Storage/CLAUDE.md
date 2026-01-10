@@ -14,7 +14,11 @@ Integration tests for all EverTask storage implementations (InMemory, Sqlite, Sq
 |-------|----------|---------------|------------------|
 | `InMemoryEfCoreTaskStorageTests` | EF Core InMemory | None (fastest) | New DB per test class |
 | `SqliteEfCoreTaskStorageTests` | SQLite file | None | Manual `RemoveRange()` |
-| `SqlServerEfCoreTaskStorageTests` | SQL Server LocalDB | SQL Server installed | Respawn library |
+| `SqlServerEfCoreTaskStorageTests` | SQL Server Testcontainers | Docker | Respawn library |
+
+## Prerequisites
+
+**SQL Server Tests**: Require Docker to run Testcontainers. The container is started automatically and shared across tests in the same collection.
 
 ## Quick Commands
 
@@ -31,27 +35,19 @@ dotnet test test/EverTask.Tests.Storage/ --filter "FullyQualifiedName~InMemoryEf
 # SQLite (file-based, minimal setup)
 dotnet test test/EverTask.Tests.Storage/ --filter "FullyQualifiedName~SqliteEfCoreTaskStorageTests"
 
-# SQL Server (production-like, schema support)
+# SQL Server (requires Docker)
 dotnet test test/EverTask.Tests.Storage/ --filter "FullyQualifiedName~SqlServerEfCoreTaskStorageTests"
 
-# Exclude SQL Server (no Docker/LocalDB available)
+# Exclude SQL Server (no Docker available)
 dotnet test test/EverTask.Tests.Storage/ --filter "FullyQualifiedName!~SqlServerEfCoreTaskStorageTests"
 ```
 
-## Connection String Configuration
+## Test Collections
 
-**SQL Server Tests**: Use connection string from:
-1. Environment variable: `EVERTASK_SQL_CONNECTION_STRING`
-2. Fallback: `Server=(localdb)\\mssqllocaldb;Database=EverTaskTests;Integrated Security=True`
-
-**Set via environment variable**:
-```bash
-# Windows (PowerShell)
-$env:EVERTASK_SQL_CONNECTION_STRING="Server=localhost,1433;Database=EverTaskTests;User Id=sa;Password=YourStrong@Passw0rd;TrustServerCertificate=True"
-
-# Linux/macOS
-export EVERTASK_SQL_CONNECTION_STRING="Server=localhost,1433;Database=EverTaskTests;User Id=sa;Password=YourStrong@Passw0rd;TrustServerCertificate=True"
-```
+| Collection | Tests | Purpose |
+|------------|-------|---------|
+| `DatabaseTests` | `SqlServerEfCoreTaskStorageTests`, `SqliteEfCoreTaskStorageTests`, `AuditLevelIntegrationTests` | Serialized DB tests sharing Testcontainers |
+| `TimingSensitiveTests` | Scheduled/recurring task tests | Serialized to avoid CPU contention |
 
 ## Adding Tests
 
@@ -104,4 +100,4 @@ public async Task Should_get_pending_tasks()
 
 **Sample Data**: `QueuedTasks` property provides 2 test tasks in base class.
 
-**Cleanup**: Each test class handles cleanup differently (see table above).
+**Cleanup**: Each test class handles cleanup differently (see table above). SQL Server uses Respawn for fast cleanup between tests.
