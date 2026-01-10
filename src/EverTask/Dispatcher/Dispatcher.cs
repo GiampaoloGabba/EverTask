@@ -165,10 +165,17 @@ public class Dispatcher(
                 // Calculate next run for new tasks or when existing NextRunUtc is in the past
                 // Use CalculateNextValidRun to properly handle past RunAt times and skip past occurrences
                 // This ensures tasks with past SpecificRunTime are scheduled for the next future occurrence
-                // Use the same reference time for both scheduledTime and referenceTime to avoid timing issues
-                // where RunNow gets incorrectly skipped due to millisecond differences
+
+                // For re-dispatch scenarios (existingTaskId provided with executionTime from storage),
+                // use the provided executionTime as base to maintain schedule synchronization.
+                // This preserves the original schedule rhythm even after app restarts.
+                // For new tasks, use UtcNow as the base.
+                var scheduledTime = (existingTaskId != null && executionTime.HasValue)
+                    ? executionTime.Value
+                    : DateTimeOffset.UtcNow;
                 var referenceTime = DateTimeOffset.UtcNow;
-                var result = recurring.CalculateNextValidRun(referenceTime, currentRun ?? 0, referenceTime: referenceTime);
+
+                var result = recurring.CalculateNextValidRun(scheduledTime, currentRun ?? 0, referenceTime: referenceTime);
 
                 if (result.NextRun == null)
                     throw new ArgumentException("Invalid scheduler recurring expression", nameof(recurring));

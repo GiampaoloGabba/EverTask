@@ -214,7 +214,11 @@ public class WorkerService(
             {
                 try
                 {
-                    await taskDispatcher.ExecuteDispatch(task, taskInfo.ScheduledExecutionUtc, scheduledTask,
+                    // For recurring tasks, use NextRunUtc if available (preserves schedule after restart)
+                    // Fall back to ScheduledExecutionUtc for non-recurring or first-time tasks
+                    var executionTime = taskInfo.NextRunUtc ?? taskInfo.ScheduledExecutionUtc;
+
+                    await taskDispatcher.ExecuteDispatch(task, executionTime, scheduledTask,
                         taskInfo.CurrentRunCount, token, taskInfo.Id)
                         .ConfigureAwait(false);
                 }

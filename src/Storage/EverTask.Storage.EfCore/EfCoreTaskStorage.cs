@@ -1,8 +1,6 @@
 ﻿using System.Linq.Expressions;
 using EverTask.Abstractions;
 using EverTask.Logger;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace EverTask.Storage.EfCore;
@@ -10,6 +8,12 @@ namespace EverTask.Storage.EfCore;
 public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTaskLogger<EfCoreTaskStorage> logger)
     : ITaskStorage
 {
+    /// <summary>
+    /// Gets the current UTC time with explicit +00:00 offset.
+    /// Ensures consistent timezone handling regardless of server timezone configuration.
+    /// </summary>
+    private static DateTimeOffset UtcNowNormalized => new(DateTime.UtcNow, TimeSpan.Zero);
+
     public virtual async Task<QueuedTask[]> Get(Expression<Func<QueuedTask, bool>> where,
                                                 CancellationToken ct = default)
     {
@@ -52,7 +56,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             "Retrieving Pending Tasks (keyset: lastCreatedAt={LastCreatedAt}, lastId={LastId}, take={Take})",
             lastCreatedAt, lastId, take);
 
-        var now = DateTimeOffset.UtcNow;
+        var now = UtcNowNormalized;
 
         var query = dbContext.QueuedTasks
                              .AsNoTracking()
@@ -111,7 +115,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             var statusAudit = new StatusAudit
             {
                 QueuedTaskId = taskId,
-                UpdatedAtUtc = DateTimeOffset.UtcNow,
+                UpdatedAtUtc = UtcNowNormalized,
                 NewStatus    = status,
                 Exception    = detailedException
             };
@@ -133,7 +137,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                                && status != QueuedTaskStatus.InProgress
                                && status != QueuedTaskStatus.Cancelled
                                && status != QueuedTaskStatus.Pending
-                                   ? DateTimeOffset.UtcNow
+                                   ? UtcNowNormalized
                                    : (DateTimeOffset?)null;
 
         try
@@ -252,7 +256,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                 task.RunsAudits.Add(new RunsAudit
                 {
                     QueuedTaskId    = taskId,
-                    ExecutedAt      = DateTimeOffset.UtcNow,
+                    ExecutedAt      = UtcNowNormalized,
                     ExecutionTimeMs = executionTimeMs,
                     Status          = task.Status,
                     Exception       = task.Exception
@@ -415,7 +419,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             var runsAudit = new RunsAudit
             {
                 QueuedTaskId = taskId,
-                ExecutedAt   = DateTimeOffset.UtcNow,
+                ExecutedAt   = UtcNowNormalized,
                 Status       = QueuedTaskStatus.Cancelled,
                 Exception    = skipMessage
             };
