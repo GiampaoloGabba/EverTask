@@ -540,21 +540,12 @@ public class WorkerExecutor(
             // Use extension method to calculate next valid run and get skip information
             var result = task.RecurringTask.CalculateNextValidRun(scheduledTime, currentRun + 1);
 
-            // Log and persist skipped occurrences if any
+            // Log skipped occurrences if any
             if (result.SkippedCount > 0)
             {
-                var skippedTimes = string.Join(", ",
-                    result.SkippedOccurrences.Select(d => d.ToString("yyyy-MM-dd HH:mm:ss")));
-
                 logger.LogInformation(
-                    "Task {TaskId} skipped {SkippedCount} missed occurrence(s) to maintain schedule: {SkippedTimes}",
-                    task.PersistenceId, result.SkippedCount, skippedTimes);
-
-                // Persist skip information to storage
-                await taskStorage.RecordSkippedOccurrences(
-                    task.PersistenceId,
-                    result.SkippedOccurrences,
-                    CancellationToken.None).ConfigureAwait(false);
+                    "Task {TaskId} skipped {SkippedCount} missed occurrence(s) to maintain schedule",
+                    task.PersistenceId, result.SkippedCount);
             }
 
             await taskStorage.UpdateCurrentRun(task.PersistenceId, executionTimeMs, result.NextRun, task.AuditLevel)
