@@ -199,9 +199,17 @@ public class LogCaptureIntegrationTests : IsolatedIntegrationTestBase
 
         // Act - task logs 50 messages
         var taskId = await Dispatcher.Dispatch(new TestTaskManyLogs(50));
-        var (_, logs) = await TaskWaitHelper.WaitForTaskCompletionWithLogsAsync(Storage, taskId, expectedLogCount: 10);
 
-        // Assert - only first 10 logs should be captured
+        // Wait for task completion first
+        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed, timeoutMs: 10000);
+
+        // Small delay to ensure all log persistence operations complete
+        await Task.Delay(200);
+
+        // Query logs fresh - filter explicitly by taskId to ensure isolation
+        var logs = await Storage.GetExecutionLogsAsync(taskId, CancellationToken.None);
+
+        // Assert - only first 10 logs should be captured (MaxLogsPerTask enforcement)
         logs.Count.ShouldBe(10);
         logs[0].Message.ShouldBe("Log message 1 of 50");
         logs[9].Message.ShouldBe("Log message 10 of 50");
