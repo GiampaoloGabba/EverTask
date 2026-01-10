@@ -1,10 +1,6 @@
 ﻿using EverTask.Abstractions;
 using EverTask.Example.Console;
 using EverTask.Monitor.Api.Extensions;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 
 var builder = WebApplication.CreateBuilder(args);
 
