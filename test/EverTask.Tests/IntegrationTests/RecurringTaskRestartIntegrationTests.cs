@@ -510,8 +510,8 @@ public class RecurringTaskRestartIntegrationTests : IsolatedIntegrationTestBase
             SecondInterval = new SecondInterval(1)
         };
 
-        // Use maxIterations to prevent excessive processing
-        var result = recurringTask.CalculateNextValidRun(baseTime, 0, maxIterations: 500);
+        // O(1) calculation handles any number of skipped intervals
+        var result = recurringTask.CalculateNextValidRun(baseTime, 0);
 
         result.NextRun.ShouldNotBeNull();
         result.NextRun!.Value.ShouldBeGreaterThan(DateTimeOffset.UtcNow);
@@ -566,51 +566,6 @@ public class RecurringTaskRestartIntegrationTests : IsolatedIntegrationTestBase
         var result = recurringTask.CalculateNextRun(DateTimeOffset.UtcNow, 1);
 
         result.ShouldBeNull();
-    }
-
-    #endregion
-
-    #region Skipped Occurrences Tracking
-
-    [Fact]
-    public async Task SkippedOccurrences_ShouldBeInChronologicalOrder()
-    {
-        var recurringTask = new RecurringTask
-        {
-            MinuteInterval = new MinuteInterval(5)
-        };
-
-        var baseTime = DateTimeOffset.UtcNow.AddMinutes(-30);
-        var result = recurringTask.CalculateNextValidRun(baseTime, 1);
-
-        result.SkippedCount.ShouldBeGreaterThan(1);
-        result.SkippedOccurrences.Count.ShouldBe(result.SkippedCount);
-
-        // Verify chronological order
-        for (int i = 1; i < result.SkippedOccurrences.Count; i++)
-        {
-            result.SkippedOccurrences[i].ShouldBeGreaterThan(result.SkippedOccurrences[i - 1]);
-        }
-    }
-
-    [Fact]
-    public async Task SkippedOccurrences_ShouldAllBeInThePast()
-    {
-        var recurringTask = new RecurringTask
-        {
-            MinuteInterval = new MinuteInterval(10)
-        };
-
-        var baseTime = DateTimeOffset.UtcNow.AddHours(-2);
-        var result = recurringTask.CalculateNextValidRun(baseTime, 1);
-
-        result.SkippedCount.ShouldBeGreaterThan(0);
-
-        // All skipped occurrences should be in the past
-        foreach (var skipped in result.SkippedOccurrences)
-        {
-            skipped.ShouldBeLessThanOrEqualTo(DateTimeOffset.UtcNow);
-        }
     }
 
     #endregion

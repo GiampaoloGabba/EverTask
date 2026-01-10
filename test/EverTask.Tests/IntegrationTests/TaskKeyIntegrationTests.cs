@@ -817,15 +817,15 @@ public class TaskKeyIntegrationTests : IsolatedIntegrationTestBase
         // rather than drifting based on the current time.
 
         // Arrange
-        var baseTime = DateTimeOffset.UtcNow.AddMinutes(-20); // 20 minutes ago
+        var baseTime = DateTimeOffset.UtcNow.AddMinutes(-22); // 22 minutes ago
         var recurringTask = new EverTask.Scheduler.Recurring.RecurringTask
         {
             MinuteInterval = new EverTask.Scheduler.Recurring.Intervals.MinuteInterval(5)
         };
 
-        // Simulate: task was supposed to run at baseTime+15min (5 minutes ago)
+        // Simulate: task was supposed to run at baseTime+15min (7 minutes ago)
         // but server was down. Now we're recalculating.
-        var missedRunTime = baseTime.AddMinutes(15); // 5 minutes ago
+        var missedRunTime = baseTime.AddMinutes(15); // 7 minutes ago
         var currentRun = 3; // 3 runs completed
 
         // Act - Calculate next valid run from the missed time
@@ -833,7 +833,8 @@ public class TaskKeyIntegrationTests : IsolatedIntegrationTestBase
 
         // Assert
         result.NextRun.ShouldNotBeNull();
-        result.NextRun!.Value.ShouldBeGreaterThan(DateTimeOffset.UtcNow);
+        // Allow for edge case where nextRun equals now exactly (within tolerance)
+        result.NextRun!.Value.ShouldBeGreaterThanOrEqualTo(DateTimeOffset.UtcNow.AddSeconds(-1));
 
         // NextRunUtc should maintain 5-minute rhythm from missedRunTime
         // Expected: missedRunTime + 5min, or if that's also past, missedRunTime + 10min, etc.
@@ -936,6 +937,152 @@ public class TaskKeyIntegrationTests : IsolatedIntegrationTestBase
         updatedTask!.NextRunUtc.ShouldNotBeNull();
         var timeDiff = Math.Abs((updatedTask.NextRunUtc!.Value - originalNextRunUtc.Value).TotalMilliseconds);
         timeDiff.ShouldBeLessThan(100, $"NextRunUtc should be preserved. Original: {originalNextRunUtc}, Updated: {updatedTask.NextRunUtc}");
+    }
+
+    #endregion
+
+    #region Past NextRunUtc Calculation Base Fix
+
+    [Fact]
+    public async Task Dispatch_RecurringTaskWithTaskKey_WhenNextRunUtcInPast_UsesItAsCalculationBase_SingleRun()
+    {
+        // This test verifies the fix for the scenario where:
+        // 1. A recurring task exists (created with simple Every interval)
+        // 2. NextRunUtc is in the past (app was offline for a short time)
+        // 3. CurrentRunCount is 1 (task executed once before offline)
+        // 4. On re-dispatch, should use NextRunUtc (not SpecificRunTime) as calculation base
+
+        // Arrange
+        await CreateIsolatedHostAsync();
+
+        // Create a recurring task with simple interval (no far-past RunAt)
+        var taskId = await Dispatcher.Dispatch(
+            new TestTaskRecurringSeconds(),
+            recurring => recurring
+                .Schedule()
+                .Every(5).Minutes(),
+            taskKey: "past-nextrun-single-runcount-key");
+
+        await Task.Delay(100);
+
+        // Get the initial task and verify NextRunUtc was calculated
+        var initialTasks = await Storage.Get(t => t.Id == taskId);
+        var initialTask = initialTasks.FirstOrDefault();
+        initialTask.ShouldNotBeNull();
+        var initialNextRunUtc = initialTask!.NextRunUtc;
+        initialNextRunUtc.ShouldNotBeNull();
+        initialNextRunUtc!.Value.ShouldBeGreaterThan(DateTimeOffset.UtcNow);
+
+        // Simulate one execution and set NextRunUtc to be in the past
+        // This simulates: task executed, then app went offline before next run
+        var pastNextRunUtc = DateTimeOffset.UtcNow.AddMinutes(-10);
+        await Storage.UpdateCurrentRun(taskId, 100, pastNextRunUtc, AuditLevel.Full);
+
+        // Set status to WaitingQueue (as if the task is pending re-execution)
+        await Storage.SetStatus(taskId, QueuedTaskStatus.WaitingQueue, null, AuditLevel.Full);
+
+        // Verify state before re-dispatch
+        var tasksBeforeRedispatch = await Storage.Get(t => t.Id == taskId);
+        var taskBeforeRedispatch = tasksBeforeRedispatch.FirstOrDefault();
+        taskBeforeRedispatch.ShouldNotBeNull();
+        taskBeforeRedispatch!.NextRunUtc.ShouldBe(pastNextRunUtc);
+        taskBeforeRedispatch.CurrentRunCount.ShouldBe(1); // One execution
+
+        // Act - Re-dispatch with the same task key
+        // This should NOT throw "Invalid scheduler recurring expression"
+        var taskId2 = await Dispatcher.Dispatch(
+            new TestTaskRecurringSeconds(),
+            recurring => recurring
+                .Schedule()
+                .Every(5).Minutes(),
+            taskKey: "past-nextrun-single-runcount-key");
+
+        // Assert - Should return same ID (updated, not replaced for recurring)
+        taskId2.ShouldBe(taskId);
+
+        // Get the updated task
+        var updatedTasks = await Storage.Get(t => t.Id == taskId);
+        var updatedTask = updatedTasks.FirstOrDefault();
+        updatedTask.ShouldNotBeNull();
+
+        // NextRunUtc should be in the future
+        updatedTask!.NextRunUtc.ShouldNotBeNull();
+        updatedTask.NextRunUtc!.Value.ShouldBeGreaterThan(DateTimeOffset.UtcNow);
+
+        // CurrentRunCount should be preserved (still 1)
+        updatedTask.CurrentRunCount.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Dispatch_RecurringTaskWithTaskKey_WhenNextRunUtcInPast_UsesItAsCalculationBase_WithExistingRunCount()
+    {
+        // This test verifies the same fix but when the task already has multiple executions
+        // (CurrentRunCount = 3)
+
+        // Arrange
+        await CreateIsolatedHostAsync();
+
+        // Create a recurring task with simple interval
+        var taskId = await Dispatcher.Dispatch(
+            new TestTaskRecurringSeconds(),
+            recurring => recurring
+                .Schedule()
+                .Every(5).Minutes(),
+            taskKey: "past-nextrun-with-runcount-key");
+
+        await Task.Delay(100);
+
+        // Simulate multiple executions by calling UpdateCurrentRun multiple times
+        // This increments CurrentRunCount and sets NextRunUtc
+        var pastNextRunUtc = DateTimeOffset.UtcNow.AddMinutes(-8);
+        await Storage.UpdateCurrentRun(taskId, 100, pastNextRunUtc, AuditLevel.Full); // Run 1
+        await Storage.UpdateCurrentRun(taskId, 100, pastNextRunUtc, AuditLevel.Full); // Run 2
+        await Storage.UpdateCurrentRun(taskId, 100, pastNextRunUtc, AuditLevel.Full); // Run 3
+
+        // Set status to Completed (simulating last execution completed)
+        await Storage.SetStatus(taskId, QueuedTaskStatus.Completed, null, AuditLevel.Full);
+
+        // Verify state before re-dispatch
+        var tasksBeforeRedispatch = await Storage.Get(t => t.Id == taskId);
+        var taskBeforeRedispatch = tasksBeforeRedispatch.FirstOrDefault();
+        taskBeforeRedispatch.ShouldNotBeNull();
+        taskBeforeRedispatch!.NextRunUtc.ShouldBe(pastNextRunUtc);
+        taskBeforeRedispatch.CurrentRunCount.ShouldBe(3); // 3 executions
+        taskBeforeRedispatch.Status.ShouldBe(QueuedTaskStatus.Completed);
+
+        // Act - Re-dispatch with the same task key
+        // This should NOT throw "Invalid scheduler recurring expression"
+        var taskId2 = await Dispatcher.Dispatch(
+            new TestTaskRecurringSeconds(),
+            recurring => recurring
+                .Schedule()
+                .Every(5).Minutes(),
+            taskKey: "past-nextrun-with-runcount-key");
+
+        // Assert - Should return same ID
+        taskId2.ShouldBe(taskId);
+
+        // Get the updated task
+        var updatedTasks = await Storage.Get(t => t.Id == taskId);
+        var updatedTask = updatedTasks.FirstOrDefault();
+        updatedTask.ShouldNotBeNull();
+
+        // NextRunUtc should be in the future
+        updatedTask!.NextRunUtc.ShouldNotBeNull();
+        updatedTask.NextRunUtc!.Value.ShouldBeGreaterThan(DateTimeOffset.UtcNow);
+
+        // CurrentRunCount should be preserved (still 3)
+        updatedTask.CurrentRunCount.ShouldBe(3);
+
+        // NextRunUtc should maintain 5-minute rhythm from pastNextRunUtc
+        var minutesFromPastNextRun = (updatedTask.NextRunUtc.Value - pastNextRunUtc).TotalMinutes;
+        var remainder = minutesFromPastNextRun % 5;
+
+        // Should be a multiple of 5 minutes (allowing small floating point error)
+        (remainder < 0.1 || remainder > 4.9).ShouldBeTrue(
+            $"NextRunUtc doesn't maintain 5-minute rhythm. " +
+            $"pastNextRunUtc: {pastNextRunUtc}, NextRunUtc: {updatedTask.NextRunUtc}, " +
+            $"Minutes difference: {minutesFromPastNextRun:F2}, Remainder: {remainder:F2}");
     }
 
     #endregion

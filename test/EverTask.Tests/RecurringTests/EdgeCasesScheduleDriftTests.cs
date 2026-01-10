@@ -223,10 +223,10 @@ public class EdgeCasesScheduleDriftTests : IsolatedIntegrationTestBase
 
     #endregion
 
-    #region Infinite Loop Protection Tests
+    #region Long Downtime Handling Tests
 
     [Fact]
-    public void CalculateNextValidRun_Should_Stop_At_MaxIterations()
+    public void CalculateNextValidRun_Should_Handle_Very_Old_Time_With_O1_Calculation()
     {
         // Arrange: Task runs every second
         var task = new RecurringTask
@@ -234,15 +234,18 @@ public class EdgeCasesScheduleDriftTests : IsolatedIntegrationTestBase
             SecondInterval = new SecondInterval(1)
         };
 
-        // Very old scheduled time (would require many iterations)
+        // Very old scheduled time (1 year ago = ~31.5M seconds)
         var veryOldTime = DateTimeOffset.UtcNow.AddYears(-1);
 
-        // Act: Use low max iterations to trigger limit
-        var result = task.CalculateNextValidRun(veryOldTime, 1, maxIterations: 100);
+        // Act: O(1) calculation should handle this instantly
+        var result = task.CalculateNextValidRun(veryOldTime, 1);
 
-        // Assert: Should stop at max iterations
-        Assert.Equal(100, result.SkippedCount);
-        Assert.Null(result.NextRun); // Returns null when limit exceeded
+        // Assert: With O(1) math, we should get a valid future run
+        Assert.NotNull(result.NextRun);
+        Assert.True(result.NextRun.Value > DateTimeOffset.UtcNow);
+
+        // Should have calculated many skipped intervals
+        Assert.True(result.SkippedCount > 1000);
     }
 
     [Fact]
@@ -257,12 +260,35 @@ public class EdgeCasesScheduleDriftTests : IsolatedIntegrationTestBase
         // Scheduled 10 years ago (extreme downtime)
         var extremelyOldTime = DateTimeOffset.UtcNow.AddYears(-10);
 
-        // Act: Use default max iterations (should hit limit)
+        // Act: O(1) calculation should handle this
         var result = task.CalculateNextValidRun(extremelyOldTime, 1);
 
-        // Assert: Should hit safety limit
-        Assert.Equal(1000, result.SkippedCount); // Default max iterations
-        Assert.Null(result.NextRun);
+        // Assert: Should calculate the next future run (not hit iteration limit)
+        Assert.NotNull(result.NextRun);
+        Assert.True(result.NextRun.Value > DateTimeOffset.UtcNow);
+
+        // 10 years = ~87,600 hours
+        Assert.True(result.SkippedCount > 80000);
+    }
+
+    [Fact]
+    public void CalculateNextValidRun_With_Cron_Uses_O1_Via_Cronos()
+    {
+        // Arrange: Cron task (every hour at minute 0)
+        var task = new RecurringTask
+        {
+            CronInterval = new CronInterval("0 * * * *") // Every hour at :00
+        };
+
+        // Scheduled 5 hours ago
+        var oldTime = DateTimeOffset.UtcNow.AddHours(-5);
+
+        // Act: Cron uses Cronos.GetNextOccurrence which is O(1)
+        var result = task.CalculateNextValidRun(oldTime, 1);
+
+        // Assert: Should find a future run
+        Assert.NotNull(result.NextRun);
+        Assert.True(result.NextRun.Value > DateTimeOffset.UtcNow);
     }
 
     #endregion
@@ -380,55 +406,6 @@ public class EdgeCasesScheduleDriftTests : IsolatedIntegrationTestBase
 
         // Assert: Third run would be 17:00, which equals RunUntil, so should be null
         Assert.Null(thirdRun);
-    }
-
-    #endregion
-
-    #region Skip Recording Tests
-
-    [Fact]
-    public void SkippedOccurrences_Should_Be_In_Chronological_Order()
-    {
-        // Arrange: Task runs every 5 minutes
-        var task = new RecurringTask
-        {
-            MinuteInterval = new MinuteInterval(5)
-        };
-
-        // Scheduled 30 minutes ago
-        var scheduledInPast = DateTimeOffset.UtcNow.AddMinutes(-30);
-
-        // Act
-        var result = task.CalculateNextValidRun(scheduledInPast, 1);
-
-        // Assert: Skipped occurrences should be in order
-        if (result.SkippedCount > 1)
-        {
-            for (int i = 1; i < result.SkippedOccurrences.Count; i++)
-            {
-                Assert.True(result.SkippedOccurrences[i] > result.SkippedOccurrences[i - 1],
-                    "Skipped occurrences should be in chronological order");
-            }
-        }
-    }
-
-    [Fact]
-    public void SkippedOccurrences_Count_Should_Match_List_Length()
-    {
-        // Arrange: Task runs every 10 seconds
-        var task = new RecurringTask
-        {
-            SecondInterval = new SecondInterval(10)
-        };
-
-        // Scheduled 1 minute ago
-        var scheduledInPast = DateTimeOffset.UtcNow.AddMinutes(-1);
-
-        // Act
-        var result = task.CalculateNextValidRun(scheduledInPast, 1);
-
-        // Assert: SkippedCount should equal the length of SkippedOccurrences list
-        Assert.Equal(result.SkippedCount, result.SkippedOccurrences.Count);
     }
 
     #endregion
