@@ -40,7 +40,7 @@ public class WeeklyBuilderChainTests
     {
         // Arrange
         var builder = new RecurringTaskBuilder();
-        var runUntil = new DateTimeOffset(2025, 12, 31, 23, 59, 59, TimeSpan.Zero);
+        var runUntil = new DateTimeOffset(2099, 12, 31, 23, 59, 59, TimeSpan.Zero);
 
         // Act
         builder.Schedule().EveryWeek()
@@ -110,7 +110,7 @@ public class WeeklyBuilderChainTests
     {
         // Arrange
         var builder = new RecurringTaskBuilder();
-        var runUntil = new DateTimeOffset(2025, 12, 31, 23, 59, 59, TimeSpan.Zero);
+        var runUntil = new DateTimeOffset(2099, 12, 31, 23, 59, 59, TimeSpan.Zero);
         // Act
         builder.Schedule()
             .Every(2).Weeks()

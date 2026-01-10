@@ -1,4 +1,5 @@
 using EverTask.Tests.Monitoring.TestData;
+using UUIDNext;
 
 namespace EverTask.Tests.Monitoring.TestHelpers;
 
@@ -251,7 +252,7 @@ public class TestDataSeeder
         {
             var log = new TaskExecutionLog
             {
-                Id = Guid.NewGuid(),
+                Id = Uuid.NewDatabaseFriendly(Database.Other),
                 TaskId = taskId,
                 TimestampUtc = now.AddMinutes(-4).AddSeconds(i * 5),
                 Level = level,

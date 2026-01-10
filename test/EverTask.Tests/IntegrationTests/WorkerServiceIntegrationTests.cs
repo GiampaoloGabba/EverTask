@@ -4,7 +4,7 @@ using EverTask.Tests.TestHelpers;
 
 namespace EverTask.Tests.IntegrationTests;
 
-[Collection("StorageTests")]
+[Collection("TimingSensitiveTests")]
 public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
 {
     [Fact]

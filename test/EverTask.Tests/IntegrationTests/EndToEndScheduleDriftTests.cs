@@ -10,7 +10,7 @@ namespace EverTask.Tests.IntegrationTests;
 /// Tests complete scenarios with multiple components working together.
 /// Related to schedule drift fix - see docs/test-plan-schedule-drift-fix.md
 /// </summary>
-[Collection("StorageTests")]
+[Collection("TimingSensitiveTests")]
 public class EndToEndScheduleDriftTests : IsolatedIntegrationTestBase
 {
 

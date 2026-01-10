@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging;
 
 namespace EverTask.Tests.IntegrationTests;
 
+[Collection("TimingSensitiveTests")]
 public class LogCaptureIntegrationTests : IsolatedIntegrationTestBase
 {
     [Fact]

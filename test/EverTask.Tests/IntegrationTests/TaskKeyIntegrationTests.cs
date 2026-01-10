@@ -449,6 +449,13 @@ public class TaskKeyIntegrationTests : IsolatedIntegrationTestBase
         // Assert
         var tasks = await Storage.GetAll();
         tasks.Length.ShouldBe(1);
+
+        // Debug: if TaskKey is null, log additional info
+        if (tasks[0].TaskKey == null)
+        {
+            throw new Exception($"TaskKey is null! TaskId dispatched: {taskId}, TaskId in storage: {tasks[0].Id}, Type: {tasks[0].Type}, Status: {tasks[0].Status}");
+        }
+
         tasks[0].TaskKey.ShouldBe(specialKey);
 
     }

@@ -1,6 +1,7 @@
 using EverTask.Monitor.Api.DTOs.Tasks;
 using EverTask.Tests.Monitoring.TestHelpers;
 using EverTask.Tests.TestHelpers;
+using UUIDNext;
 
 namespace EverTask.Tests.Monitoring.API.Controllers;
 
@@ -121,27 +122,27 @@ public class ExecutionLogsEndpointTests : MonitoringTestBase
         {
             new()
             {
-                Id      = Guid.NewGuid(), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Information",
+                Id      = Uuid.NewDatabaseFriendly(Database.Other), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Information",
                 Message = "Info 1", SequenceNumber = 0
             },
             new()
             {
-                Id      = Guid.NewGuid(), TaskId   = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Warning",
+                Id      = Uuid.NewDatabaseFriendly(Database.Other), TaskId   = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Warning",
                 Message = "Warn 1", SequenceNumber = 1
             },
             new()
             {
-                Id      = Guid.NewGuid(), TaskId    = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Error",
+                Id      = Uuid.NewDatabaseFriendly(Database.Other), TaskId    = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Error",
                 Message = "Error 1", SequenceNumber = 2
             },
             new()
             {
-                Id      = Guid.NewGuid(), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Information",
+                Id      = Uuid.NewDatabaseFriendly(Database.Other), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Information",
                 Message = "Info 2", SequenceNumber = 3
             },
             new()
             {
-                Id      = Guid.NewGuid(), TaskId    = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Error",
+                Id      = Uuid.NewDatabaseFriendly(Database.Other), TaskId    = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Error",
                 Message = "Error 2", SequenceNumber = 4
             }
         };
@@ -186,32 +187,32 @@ public class ExecutionLogsEndpointTests : MonitoringTestBase
         {
             new()
             {
-                Id      = Guid.NewGuid(), TaskId      = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Trace",
+                Id      = Uuid.NewDatabaseFriendly(Database.Other), TaskId      = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Trace",
                 Message = "Trace msg", SequenceNumber = 0
             },
             new()
             {
-                Id      = Guid.NewGuid(), TaskId      = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Debug",
+                Id      = Uuid.NewDatabaseFriendly(Database.Other), TaskId      = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Debug",
                 Message = "Debug msg", SequenceNumber = 1
             },
             new()
             {
-                Id      = Guid.NewGuid(), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Information",
+                Id      = Uuid.NewDatabaseFriendly(Database.Other), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Information",
                 Message = "Info msg", SequenceNumber = 2
             },
             new()
             {
-                Id      = Guid.NewGuid(), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Warning",
+                Id      = Uuid.NewDatabaseFriendly(Database.Other), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Warning",
                 Message = "Warning msg", SequenceNumber = 3
             },
             new()
             {
-                Id      = Guid.NewGuid(), TaskId      = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Error",
+                Id      = Uuid.NewDatabaseFriendly(Database.Other), TaskId      = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Error",
                 Message = "Error msg", SequenceNumber = 4
             },
             new()
             {
-                Id      = Guid.NewGuid(), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Critical",
+                Id      = Uuid.NewDatabaseFriendly(Database.Other), TaskId = taskId, TimestampUtc = DateTimeOffset.UtcNow, Level = "Critical",
                 Message = "Critical msg", SequenceNumber = 5
             }
         };

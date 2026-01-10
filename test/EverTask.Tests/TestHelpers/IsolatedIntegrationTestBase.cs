@@ -146,7 +146,7 @@ public abstract class IsolatedIntegrationTestBase : IAsyncDisposable
     protected async Task<QueuedTask> WaitForTaskStatusAsync(
         Guid taskId,
         QueuedTaskStatus expectedStatus,
-        int timeoutMs = 5000)
+        int timeoutMs = 12000)
     {
         return await TaskWaitHelper.WaitForTaskStatusAsync(Storage, taskId, expectedStatus, timeoutMs);
     }

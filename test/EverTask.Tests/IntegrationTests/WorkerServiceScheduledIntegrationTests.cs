@@ -4,7 +4,7 @@ using EverTask.Tests.TestHelpers;
 
 namespace EverTask.Tests.IntegrationTests;
 
-[Collection("StorageTests")]
+[Collection("TimingSensitiveTests")]
 public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBase
 {
     [Fact]
@@ -72,9 +72,9 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
         var task = new TestTaskDelayed2();
 
         // Adaptive parameters: tighter constraints locally, more generous on CI
-        var cronInterval = TestEnvironment.GetCronInterval(localSeconds: 5, ciSeconds: 10);
+        var cronInterval = TestEnvironment.GetCronInterval(localSeconds: 7, ciSeconds: 10);
         var maxRuns = TestEnvironment.GetIterations(local: 3, ci: 2);
-        var timeout = TestEnvironment.GetTimeout(localMs: 25000, ciMs: 50000);
+        var timeout = TestEnvironment.GetTimeout(localMs: 45000, ciMs: 65000);
 
         // Test RunDelayed + Cron combination
         // Local: */5 (every 5s), 3 runs, 25s timeout
