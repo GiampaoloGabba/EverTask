@@ -13,15 +13,15 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v2
+        uses: pnpm/action-setup@v4
         with:
-          version: 8
+          version: 9
 
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'pnpm'
@@ -35,25 +35,20 @@ jobs:
         run: pnpm run build
         working-directory: src/Monitoring/EverTask.Monitor.Api/UI
 
-      - name: Setup .NET 6
-        uses: actions/setup-dotnet@v2
-        with:
-          dotnet-version: '6.0.x'
-
-      - name: Setup .NET 7
-        uses: actions/setup-dotnet@v2
-        with:
-          dotnet-version: '7.0.x'
-
       - name: Setup .NET 8
-        uses: actions/setup-dotnet@v2
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '8.0.x'
 
       - name: Setup .NET 9
-        uses: actions/setup-dotnet@v2
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '9.0.x'
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
 
       - name: Restore dependencies
         run: dotnet restore EverTask.sln
@@ -61,6 +56,9 @@ jobs:
       - name: Build
         run: dotnet build EverTask.sln --no-restore
 
-      - name: Test
-        run: dotnet test test/EverTask.Tests/EverTask.Tests.csproj --no-restore --verbosity normal --filter "FullyQualifiedName!~EverTask.Tests.Storage.SqlServer.SqlServerEfCoreTaskStorageTests&FullyQualifiedName!~EverTask.Tests.IntegrationTests.AuditLevelIntegrationTests"
+      - name: Test (EverTask.Tests)
+        run: dotnet test test/EverTask.Tests/EverTask.Tests.csproj --no-restore --verbosity normal
+
+      - name: Test (EverTask.Tests.Storage - exclude SQL Server)
+        run: dotnet test test/EverTask.Tests.Storage/EverTask.Tests.Storage.csproj --no-restore --verbosity normal --filter "FullyQualifiedName!~SqlServerEfCoreTaskStorageTests&FullyQualifiedName!~AuditLevelIntegrationTests"
 
