@@ -35,7 +35,7 @@ public class WorkerExecutor(
     {
         //Task storage could be a dbcontext wich is not thread safe.
         //So its safer to just use a new scope for each task
-        using var     scope       = serviceScopeFactory.CreateScope();
+        await using var scope       = serviceScopeFactory.CreateAsyncScope();
         ITaskStorage? taskStorage = scope.ServiceProvider.GetService<ITaskStorage>();
 
         // Create log capture instance (always logs to ILogger, optionally persists)
@@ -138,7 +138,8 @@ public class WorkerExecutor(
         finally
         {
             // Dispose handler if created (BEFORE recurring scheduling)
-            if (handler != null)
+            // Only dispose explicitly in eager mode - lazy mode handlers are disposed by the async scope
+            if (handler != null && !task.IsLazy)
             {
                 await ExecuteDisposeHandler(handler);
             }
@@ -226,18 +227,11 @@ public class WorkerExecutor(
         var retryPolicy = handlerOptions.RetryPolicy;
         var timeout = handlerOptions.Timeout;
 
-        // Use GetTimestamp/GetElapsedTime for .NET 7+ to avoid Stopwatch allocation
-#if NET7_0_OR_GREATER
+        // Use GetTimestamp/GetElapsedTime to avoid Stopwatch allocation
         var startTime = Stopwatch.GetTimestamp();
         await DoExecute();
         var elapsedTime = Stopwatch.GetElapsedTime(startTime);
         return elapsedTime.TotalMilliseconds;
-#else
-        var stopwatch = Stopwatch.StartNew();
-        await DoExecute();
-        stopwatch.Stop();
-        return stopwatch.Elapsed.TotalMilliseconds;
-#endif
 
         async Task DoExecute()
         {
@@ -250,8 +244,10 @@ public class WorkerExecutor(
             }
             else
             {
-                // Lazy mode: resolve handler and create callback
-                var (_, callback) = task.GetOrResolveHandlerWithCallback(serviceProvider);
+                // Lazy mode: create callback from handler already resolved in DoWork
+                // Use CreateHandlerCallback to avoid duplicate DI resolution (which would create
+                // a second handler instance that gets disposed separately by the async scope)
+                var (_, callback) = task.CreateHandlerCallback(handler);
                 handlerCallback = callback;
             }
 

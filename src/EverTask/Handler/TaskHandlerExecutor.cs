@@ -11,20 +11,21 @@ namespace EverTask.Handler;
 /// Supports both eager mode (handler instance present) and lazy mode (handler type stored for later resolution).
 /// </summary>
 public record TaskHandlerExecutor(
-        IEverTask Task,
-        object? Handler,
-        string? HandlerTypeName,
-        DateTimeOffset? ExecutionTime,
-        RecurringTask? RecurringTask,
-        Func<IEverTask, CancellationToken, Task>? HandlerCallback,
-        Func<Guid, Exception?, string, ValueTask>? HandlerErrorCallback,
-        Func<Guid, ValueTask>? HandlerStartedCallback,
-        Func<Guid, ValueTask>? HandlerCompletedCallback,
-        Guid PersistenceId,
-        string? QueueName,
-        string? TaskKey,
-        AuditLevel AuditLevel)
-    {
+    IEverTask Task,
+    object? Handler,
+    string? HandlerTypeName,
+    DateTimeOffset? ExecutionTime,
+    RecurringTask? RecurringTask,
+    Func<IEverTask, CancellationToken, Task>? HandlerCallback,
+    Func<Guid, Exception?, string, ValueTask>? HandlerErrorCallback,
+    Func<Guid, ValueTask>? HandlerStartedCallback,
+    Func<Guid, ValueTask>? HandlerCompletedCallback,
+    Guid PersistenceId,
+    string? QueueName,
+    string? TaskKey,
+    AuditLevel AuditLevel)
+{
+
     /// <summary>
     /// Indicates whether this executor is in lazy mode (handler not yet resolved).
     /// </summary>
@@ -61,40 +62,36 @@ public record TaskHandlerExecutor(
                 $"Handler type '{HandlerTypeName}' could not be loaded. Ensure assembly is referenced and type exists.");
 
         // Resolve handler from DI
-        var handler = serviceProvider.GetService(handlerType);
-        if (handler == null)
-            throw new InvalidOperationException(
-                $"Handler '{handlerType.Name}' is not registered in DI container. Call RegisterTasksFromAssembly() to register handlers.");
+        var handler = serviceProvider.GetService(handlerType)
+                      ?? throw new InvalidOperationException(
+                          $"Handler '{handlerType.Name}' is not registered in DI container. Call RegisterTasksFromAssembly() to register handlers.");
 
         return handler;
     }
 
     /// <summary>
-    /// Resolves the handler and creates a typed callback for invocation.
-    /// This method is more performant than reflection-based invocation.
+    /// Creates a typed callback for the provided handler instance.
+    /// Use this when the handler has already been resolved to avoid duplicate DI resolutions.
     /// </summary>
-    /// <param name="serviceProvider">Service provider for DI resolution</param>
+    /// <param name="handler">Pre-resolved handler instance</param>
     /// <returns>Tuple containing handler instance and typed callback</returns>
-    public (object Handler, Func<IEverTask, CancellationToken, Task> Callback)
-        GetOrResolveHandlerWithCallback(IServiceProvider serviceProvider)
+    public (object Handler, Func<IEverTask, CancellationToken, Task> Callback) CreateHandlerCallback(object handler)
     {
-        var handler = GetOrResolveHandler(serviceProvider);
-
         // If we already have a callback (eager mode), return it
         if (HandlerCallback != null)
             return (handler, HandlerCallback);
 
         // Lazy mode: create typed callback using reflection
-        var taskType = Task.GetType();
-        var handleMethod = handler.GetType().GetMethod("Handle", new[] { taskType, typeof(CancellationToken) });
+        var taskType     = Task.GetType();
+        var handleMethod = handler.GetType().GetMethod("Handle", [taskType, typeof(CancellationToken)]);
 
         if (handleMethod == null)
             throw new InvalidOperationException(
                 $"Handle method not found on handler {handler.GetType().Name} for task {taskType.Name}");
 
-        Task Callback(IEverTask t, CancellationToken ct) => (Task)handleMethod.Invoke(handler, [t, ct])!;
-
         return (handler, Callback);
+
+        Task Callback(IEverTask t, CancellationToken ct) => (Task)handleMethod.Invoke(handler, [t, ct])!;
     }
 
     /// <summary>
@@ -137,7 +134,8 @@ public record TaskHandlerExecutor(
 
         // Extract handler type name
         var handlerTypeName = Handler!.GetType().AssemblyQualifiedName
-            ?? throw new InvalidOperationException($"Handler type {Handler.GetType().Name} has no AssemblyQualifiedName");
+                              ?? throw new InvalidOperationException(
+                                  $"Handler type {Handler.GetType().Name} has no AssemblyQualifiedName");
 
         // Create lazy executor with handler and callbacks set to null
         return new TaskHandlerExecutor(
@@ -173,7 +171,8 @@ public static class TaskHandlerExecutorExtensions
         // Use cached AssemblyQualifiedName to avoid repeated string generation
         var requestType = AssemblyQualifiedNameCache.GetOrAdd(
             executor.Task.GetType(),
-            type => type.AssemblyQualifiedName ?? throw new InvalidOperationException($"Type {type} has no AssemblyQualifiedName"));
+            type => type.AssemblyQualifiedName ??
+                    throw new InvalidOperationException($"Type {type} has no AssemblyQualifiedName"));
 
         // Get handler type from Handler instance (eager mode) or HandlerTypeName (lazy mode)
         string handlerType;
@@ -182,7 +181,8 @@ public static class TaskHandlerExecutorExtensions
             // Eager mode: extract from handler instance
             handlerType = AssemblyQualifiedNameCache.GetOrAdd(
                 executor.Handler.GetType(),
-                type => type.AssemblyQualifiedName ?? throw new InvalidOperationException($"Type {type} has no AssemblyQualifiedName"));
+                type => type.AssemblyQualifiedName ??
+                        throw new InvalidOperationException($"Type {type} has no AssemblyQualifiedName"));
         }
         else if (!string.IsNullOrEmpty(executor.HandlerTypeName))
         {
@@ -205,7 +205,7 @@ public static class TaskHandlerExecutorExtensions
         if (executor.RecurringTask != null)
         {
             scheduleTask = JsonConvert.SerializeObject(executor.RecurringTask);
-            isRecurring = true;
+            isRecurring  = true;
 
             // For a newly dispatched recurring task, NextRunUtc should be the time of the first execution
             // (same as ScheduledExecutionUtc). If ExecutionTime is null (e.g., immediate execution),
@@ -218,7 +218,8 @@ public static class TaskHandlerExecutorExtensions
             {
                 // Calculate first occurrence for immediate execution
                 var referenceTime = DateTimeOffset.UtcNow;
-                var result = executor.RecurringTask.CalculateNextValidRun(referenceTime, 0, referenceTime: referenceTime);
+                var result =
+                    executor.RecurringTask.CalculateNextValidRun(referenceTime, 0, referenceTime: referenceTime);
                 nextRun = result.NextRun;
             }
 
@@ -227,7 +228,7 @@ public static class TaskHandlerExecutorExtensions
                 executor.RecurringTask,
                 rt => rt.ToString() ?? "Recurring Task");
 
-            maxRuns = executor.RecurringTask.MaxRuns;
+            maxRuns  = executor.RecurringTask.MaxRuns;
             runUntil = executor.RecurringTask.RunUntil;
         }
 
