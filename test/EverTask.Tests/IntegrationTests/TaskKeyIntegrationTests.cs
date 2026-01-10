@@ -1,3 +1,4 @@
+using EverTask.Scheduler.Recurring;
 using EverTask.Storage;
 using EverTask.Tests.TestHelpers;
 
@@ -801,6 +802,140 @@ public class TaskKeyIntegrationTests : IsolatedIntegrationTestBase
 
         // CreatedAtUtc should be different (new task)
         tasksWithKey[0].CreatedAtUtc.ShouldNotBe(originalCreatedAt);
+    }
+
+    #endregion
+
+    #region ProcessPendingAsync Simulation - NextRunUtc Rhythm Preservation
+
+    [Fact]
+    public async Task RecurringTask_CalculateNextValidRun_MaintainsScheduleRhythm()
+    {
+        // This test verifies the fix for the schedule drift bug:
+        // When CalculateNextValidRun is called with a past scheduledTime,
+        // NextRunUtc should maintain the original rhythm (e.g., 5-minute intervals)
+        // rather than drifting based on the current time.
+
+        // Arrange
+        var baseTime = DateTimeOffset.UtcNow.AddMinutes(-20); // 20 minutes ago
+        var recurringTask = new EverTask.Scheduler.Recurring.RecurringTask
+        {
+            MinuteInterval = new EverTask.Scheduler.Recurring.Intervals.MinuteInterval(5)
+        };
+
+        // Simulate: task was supposed to run at baseTime+15min (5 minutes ago)
+        // but server was down. Now we're recalculating.
+        var missedRunTime = baseTime.AddMinutes(15); // 5 minutes ago
+        var currentRun = 3; // 3 runs completed
+
+        // Act - Calculate next valid run from the missed time
+        var result = recurringTask.CalculateNextValidRun(missedRunTime, currentRun);
+
+        // Assert
+        result.NextRun.ShouldNotBeNull();
+        result.NextRun!.Value.ShouldBeGreaterThan(DateTimeOffset.UtcNow);
+
+        // NextRunUtc should maintain 5-minute rhythm from missedRunTime
+        // Expected: missedRunTime + 5min, or if that's also past, missedRunTime + 10min, etc.
+        var expectedFirstNext = missedRunTime.AddMinutes(5);
+        var minutesFromMissed = (result.NextRun.Value - missedRunTime).TotalMinutes;
+
+        // Should be a multiple of 5 minutes from the missed time
+        var remainder = minutesFromMissed % 5;
+        (remainder < 0.1 || remainder > 4.9).ShouldBeTrue(
+            $"NextRun doesn't maintain 5-minute rhythm. " +
+            $"Minutes from missedRunTime: {minutesFromMissed}, Remainder: {remainder}");
+    }
+
+    [Fact]
+    public async Task RecurringTask_WithSpecificRunTime_MaintainsRhythmAfterSkippedOccurrences()
+    {
+        // This test verifies that when a recurring task with SpecificRunTime
+        // has multiple skipped occurrences, the next run maintains the original rhythm.
+
+        // Arrange
+        var specificStartTime = DateTimeOffset.UtcNow.AddHours(-1); // Started 1 hour ago
+        var recurringTask = new EverTask.Scheduler.Recurring.RecurringTask
+        {
+            SpecificRunTime = specificStartTime,
+            MinuteInterval = new EverTask.Scheduler.Recurring.Intervals.MinuteInterval(5)
+        };
+
+        // Simulate: server was down, many runs were missed
+        // Last known scheduled time was 30 minutes ago
+        var lastScheduledTime = DateTimeOffset.UtcNow.AddMinutes(-30);
+        var currentRun = 6; // 6 runs completed before downtime
+
+        // Act
+        var result = recurringTask.CalculateNextValidRun(lastScheduledTime, currentRun);
+
+        // Assert
+        result.NextRun.ShouldNotBeNull();
+        result.NextRun!.Value.ShouldBeGreaterThan(DateTimeOffset.UtcNow);
+
+        // Should have skipped some occurrences
+        result.SkippedCount.ShouldBeGreaterThan(0);
+
+        // Next run should maintain 5-minute rhythm from the original specific start time
+        var minutesFromStart = (result.NextRun.Value - specificStartTime).TotalMinutes;
+        var remainder = minutesFromStart % 5;
+
+        (remainder < 0.1 || remainder > 4.9).ShouldBeTrue(
+            $"NextRun {result.NextRun.Value:HH:mm:ss.fff} doesn't maintain 5-minute rhythm from start {specificStartTime:HH:mm:ss.fff}. " +
+            $"Minutes from start: {minutesFromStart:F2}, Remainder: {remainder:F2}");
+    }
+
+    [Fact]
+    public async Task Dispatch_RecurringTaskWithTaskKey_AfterRestartSimulation_MaintainsRhythm()
+    {
+        // This test simulates a restart scenario using the public API:
+        // 1. Create recurring task with future execution (so it doesn't run during test)
+        // 2. Re-dispatch with same TaskKey (simulating ProcessPendingAsync behavior)
+        // 3. Verify NextRunUtc is preserved when still in the future
+
+        // Arrange
+        await CreateIsolatedHostAsync();
+
+        // Create a recurring task that runs every hour (won't execute during test)
+        var taskId = await Dispatcher.Dispatch(
+            new TestTaskRecurringSeconds(),
+            recurring => recurring.Schedule().Every(1).Hours(),
+            taskKey: "restart-rhythm-test-key");
+
+        await Task.Delay(100);
+
+        var initialTasks = await Storage.Get(t => t.Id == taskId);
+        var initialTask = initialTasks.FirstOrDefault();
+        initialTask.ShouldNotBeNull();
+
+        // Store the original NextRunUtc (should be ~1 hour in the future)
+        var originalNextRunUtc = initialTask!.NextRunUtc;
+        originalNextRunUtc.ShouldNotBeNull();
+        originalNextRunUtc!.Value.ShouldBeGreaterThan(DateTimeOffset.UtcNow);
+
+        // Small delay to ensure different timestamp if recalculated
+        await Task.Delay(50);
+
+        // Simulate: server restarts and re-dispatches the task
+        // The key behavior we're testing: NextRunUtc should be preserved
+        // when it's still in the future
+        var taskId2 = await Dispatcher.Dispatch(
+            new TestTaskRecurringSeconds(),
+            recurring => recurring.Schedule().Every(1).Hours(),
+            taskKey: "restart-rhythm-test-key");
+
+        // Assert
+        taskId2.ShouldBe(taskId);
+
+        var updatedTasks = await Storage.Get(t => t.Id == taskId);
+        var updatedTask = updatedTasks.FirstOrDefault();
+        updatedTask.ShouldNotBeNull();
+
+        // NextRunUtc should be preserved (same as before restart)
+        // Use tolerance for millisecond differences due to storage precision
+        updatedTask!.NextRunUtc.ShouldNotBeNull();
+        var timeDiff = Math.Abs((updatedTask.NextRunUtc!.Value - originalNextRunUtc.Value).TotalMilliseconds);
+        timeDiff.ShouldBeLessThan(100, $"NextRunUtc should be preserved. Original: {originalNextRunUtc}, Updated: {updatedTask.NextRunUtc}");
     }
 
     #endregion
