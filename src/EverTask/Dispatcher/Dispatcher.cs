@@ -83,8 +83,9 @@ public class Dispatcher(
     {
         ArgumentNullException.ThrowIfNull(task);
 
-        // Track existing task's NextRunUtc for recurring tasks to preserve schedule across restarts
+        // Track existing task's NextRunUtc and CurrentRunCount for recurring tasks to preserve schedule across restarts
         DateTimeOffset? existingNextRunUtc = null;
+        int? existingCurrentRunCount = null;
 
         // Handle taskKey resolution if provided
         if (!string.IsNullOrWhiteSpace(taskKey) && taskStorage != null && existingTaskId == null)
@@ -111,13 +112,14 @@ public class Dispatcher(
                     logger.LogInformation("Updating recurring task {TaskId} (preserving history)", existingTask.Id);
                     existingTaskId = existingTask.Id;
 
-                    // Preserve existing NextRunUtc if it's still in the future
-                    // This prevents rescheduling on every app restart
-                    if (existingTask.NextRunUtc.HasValue && existingTask.NextRunUtc.Value > DateTimeOffset.UtcNow)
+                    // Preserve existing NextRunUtc (even if in the past) to maintain schedule rhythm
+                    // Also preserve CurrentRunCount for correct calculation
+                    if (existingTask.NextRunUtc.HasValue)
                     {
                         existingNextRunUtc = existingTask.NextRunUtc;
-                        logger.LogDebug("Preserving existing NextRunUtc {NextRunUtc} for recurring task {TaskId}",
-                            existingNextRunUtc, existingTask.Id);
+                        existingCurrentRunCount = existingTask.CurrentRunCount;
+                        logger.LogDebug("Preserving existing NextRunUtc {NextRunUtc} and CurrentRunCount {CurrentRunCount} for recurring task {TaskId}",
+                            existingNextRunUtc, existingCurrentRunCount, existingTask.Id);
                     }
                 }
                 // For NON-RECURRING tasks: original behavior
@@ -152,35 +154,46 @@ public class Dispatcher(
 
         if (recurring != null)
         {
-            // If we have a valid existing NextRunUtc from a task with TaskKey, use it
-            // This preserves the schedule across app restarts
+            // If we have a valid existing NextRunUtc from a task with TaskKey
             if (existingNextRunUtc.HasValue)
             {
-                nextRun = existingNextRunUtc;
-                executionTime = nextRun;
-                logger.LogInformation("Using preserved NextRunUtc {NextRun} for recurring task", nextRun);
+                // If NextRunUtc is still in the future, use it directly
+                if (existingNextRunUtc.Value > DateTimeOffset.UtcNow)
+                {
+                    nextRun = existingNextRunUtc;
+                    executionTime = nextRun;
+                    logger.LogInformation("Using preserved NextRunUtc {NextRun} for recurring task (still in future)", nextRun);
+                }
+                else
+                {
+                    // NextRunUtc is in the past - use it as base to maintain schedule rhythm
+                    // Use CalculateNextValidRun with O(1) math to skip forward while preserving rhythm
+                    var result = recurring.CalculateNextValidRun(
+                        existingNextRunUtc.Value,
+                        existingCurrentRunCount ?? 0);
+
+                    if (result.NextRun == null)
+                        throw new ArgumentException("Invalid scheduler recurring expression", nameof(recurring));
+
+                    nextRun = result.NextRun;
+                    executionTime = nextRun;
+                    logger.LogInformation("Calculated NextRunUtc {NextRun} from past NextRunUtc {PastNextRun} (skipped {SkippedCount})",
+                        nextRun, existingNextRunUtc, result.SkippedCount);
+                }
             }
             else
             {
-                // Calculate next run for new tasks or when existing NextRunUtc is in the past
-                // Use CalculateNextValidRun to properly handle past RunAt times and skip past occurrences
-                // This ensures tasks with past SpecificRunTime are scheduled for the next future occurrence
-
-                // For re-dispatch scenarios (existingTaskId provided with executionTime from storage),
-                // use the provided executionTime as base to maintain schedule synchronization.
-                // This preserves the original schedule rhythm even after app restarts.
-                // For new tasks, use UtcNow as the base.
+                // New task - calculate from current time
                 var scheduledTime = (existingTaskId != null && executionTime.HasValue)
                     ? executionTime.Value
                     : DateTimeOffset.UtcNow;
-                var referenceTime = DateTimeOffset.UtcNow;
 
-                var result = recurring.CalculateNextValidRun(scheduledTime, currentRun ?? 0, referenceTime: referenceTime);
+                var result = recurring.CalculateNextValidRun(scheduledTime, currentRun ?? 0);
 
                 if (result.NextRun == null)
                     throw new ArgumentException("Invalid scheduler recurring expression", nameof(recurring));
 
-                nextRun       = result.NextRun;
+                nextRun = result.NextRun;
                 executionTime = nextRun;
             }
         }
