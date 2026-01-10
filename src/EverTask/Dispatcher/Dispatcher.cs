@@ -83,6 +83,9 @@ public class Dispatcher(
     {
         ArgumentNullException.ThrowIfNull(task);
 
+        // Track existing task's NextRunUtc for recurring tasks to preserve schedule across restarts
+        DateTimeOffset? existingNextRunUtc = null;
+
         // Handle taskKey resolution if provided
         if (!string.IsNullOrWhiteSpace(taskKey) && taskStorage != null && existingTaskId == null)
         {
@@ -93,27 +96,54 @@ public class Dispatcher(
                 logger.LogInformation("Found existing task with key {TaskKey}, ID {TaskId}, Status {Status}",
                     taskKey, existingTask.Id, existingTask.Status);
 
-                // If task is terminated (Completed/Failed/Cancelled), remove it and create new
-                if (existingTask.Status is QueuedTaskStatus.Completed
-                    or QueuedTaskStatus.Failed
-                    or QueuedTaskStatus.Cancelled
-                    or QueuedTaskStatus.ServiceStopped)
+                // For RECURRING tasks: preserve history and don't remove/recreate on terminal status
+                // Recurring tasks with Completed/Failed status are not truly "terminated" - they should continue
+                if (existingTask.IsRecurring && recurring != null)
                 {
-                    logger.LogInformation("Removing terminated task {TaskId} to create new one", existingTask.Id);
-                    await taskStorage.Remove(existingTask.Id, ct).ConfigureAwait(false);
+                    // If task is in progress, return existing ID (cannot modify running task)
+                    if (existingTask.Status is QueuedTaskStatus.InProgress)
+                    {
+                        logger.LogInformation("Recurring task {TaskId} is in progress, returning existing ID", existingTask.Id);
+                        return existingTask.Id;
+                    }
+
+                    // For all other statuses (including Completed/Failed): update, don't remove
+                    logger.LogInformation("Updating recurring task {TaskId} (preserving history)", existingTask.Id);
+                    existingTaskId = existingTask.Id;
+
+                    // Preserve existing NextRunUtc if it's still in the future
+                    // This prevents rescheduling on every app restart
+                    if (existingTask.NextRunUtc.HasValue && existingTask.NextRunUtc.Value > DateTimeOffset.UtcNow)
+                    {
+                        existingNextRunUtc = existingTask.NextRunUtc;
+                        logger.LogDebug("Preserving existing NextRunUtc {NextRunUtc} for recurring task {TaskId}",
+                            existingNextRunUtc, existingTask.Id);
+                    }
                 }
-                // If task is in progress, return existing ID (cannot modify running task)
-                else if (existingTask.Status is QueuedTaskStatus.InProgress)
-                {
-                    logger.LogInformation("Task {TaskId} is in progress, returning existing ID", existingTask.Id);
-                    return existingTask.Id;
-                }
-                // If task is pending (Queued/WaitingQueue/Pending), update it
+                // For NON-RECURRING tasks: original behavior
                 else
                 {
-                    logger.LogInformation("Updating pending task {TaskId}", existingTask.Id);
-                    existingTaskId = existingTask.Id;
-                    // Will continue with update logic below
+                    // If task is terminated (Completed/Failed/Cancelled), remove it and create new
+                    if (existingTask.Status is QueuedTaskStatus.Completed
+                        or QueuedTaskStatus.Failed
+                        or QueuedTaskStatus.Cancelled
+                        or QueuedTaskStatus.ServiceStopped)
+                    {
+                        logger.LogInformation("Removing terminated task {TaskId} to create new one", existingTask.Id);
+                        await taskStorage.Remove(existingTask.Id, ct).ConfigureAwait(false);
+                    }
+                    // If task is in progress, return existing ID (cannot modify running task)
+                    else if (existingTask.Status is QueuedTaskStatus.InProgress)
+                    {
+                        logger.LogInformation("Task {TaskId} is in progress, returning existing ID", existingTask.Id);
+                        return existingTask.Id;
+                    }
+                    // If task is pending (Queued/WaitingQueue/Pending), update it
+                    else
+                    {
+                        logger.LogInformation("Updating pending task {TaskId}", existingTask.Id);
+                        existingTaskId = existingTask.Id;
+                    }
                 }
             }
         }
@@ -122,18 +152,30 @@ public class Dispatcher(
 
         if (recurring != null)
         {
-            // Use CalculateNextValidRun to properly handle past RunAt times and skip past occurrences
-            // This ensures tasks with past SpecificRunTime are scheduled for the next future occurrence
-            // Use the same reference time for both scheduledTime and referenceTime to avoid timing issues
-            // where RunNow gets incorrectly skipped due to millisecond differences
-            var referenceTime = DateTimeOffset.UtcNow;
-            var result = recurring.CalculateNextValidRun(referenceTime, currentRun ?? 0, referenceTime: referenceTime);
+            // If we have a valid existing NextRunUtc from a task with TaskKey, use it
+            // This preserves the schedule across app restarts
+            if (existingNextRunUtc.HasValue)
+            {
+                nextRun = existingNextRunUtc;
+                executionTime = nextRun;
+                logger.LogInformation("Using preserved NextRunUtc {NextRun} for recurring task", nextRun);
+            }
+            else
+            {
+                // Calculate next run for new tasks or when existing NextRunUtc is in the past
+                // Use CalculateNextValidRun to properly handle past RunAt times and skip past occurrences
+                // This ensures tasks with past SpecificRunTime are scheduled for the next future occurrence
+                // Use the same reference time for both scheduledTime and referenceTime to avoid timing issues
+                // where RunNow gets incorrectly skipped due to millisecond differences
+                var referenceTime = DateTimeOffset.UtcNow;
+                var result = recurring.CalculateNextValidRun(referenceTime, currentRun ?? 0, referenceTime: referenceTime);
 
-            if (result.NextRun == null)
-                throw new ArgumentException("Invalid scheduler recurring expression", nameof(recurring));
+                if (result.NextRun == null)
+                    throw new ArgumentException("Invalid scheduler recurring expression", nameof(recurring));
 
-            nextRun       = result.NextRun;
-            executionTime = nextRun;
+                nextRun       = result.NextRun;
+                executionTime = nextRun;
+            }
         }
 
         var taskType = task.GetType();

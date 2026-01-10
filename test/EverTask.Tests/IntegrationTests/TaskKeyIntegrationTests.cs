@@ -383,11 +383,13 @@ public class TaskKeyIntegrationTests : IsolatedIntegrationTestBase
         await WaitForTaskStatusAsync(taskId1, QueuedTaskStatus.Completed);
         await WaitForTaskStatusAsync(taskId2, QueuedTaskStatus.Completed);
 
-        // Assert - Both tasks should be created (no deduplication)
+        // Assert - Both tasks should be created (no deduplication, filter by ID to avoid interference)
         taskId1.ShouldNotBe(taskId2);
 
-        var tasks = await Storage.GetAll();
-        tasks.Length.ShouldBe(2);
+        var task1 = await Storage.Get(t => t.Id == taskId1);
+        var task2 = await Storage.Get(t => t.Id == taskId2);
+        task1.Length.ShouldBe(1);
+        task2.Length.ShouldBe(1);
 
     }
 
@@ -404,11 +406,13 @@ public class TaskKeyIntegrationTests : IsolatedIntegrationTestBase
         await WaitForTaskStatusAsync(taskId1, QueuedTaskStatus.Completed);
         await WaitForTaskStatusAsync(taskId2, QueuedTaskStatus.Completed);
 
-        // Assert - Both tasks should be created
+        // Assert - Both tasks should be created (filter by ID to avoid interference)
         taskId1.ShouldNotBe(taskId2);
 
-        var tasks = await Storage.GetAll();
-        tasks.Length.ShouldBe(2);
+        var task1 = await Storage.Get(t => t.Id == taskId1);
+        var task2 = await Storage.Get(t => t.Id == taskId2);
+        task1.Length.ShouldBe(1);
+        task2.Length.ShouldBe(1);
 
     }
 
@@ -425,11 +429,13 @@ public class TaskKeyIntegrationTests : IsolatedIntegrationTestBase
         await WaitForTaskStatusAsync(taskId1, QueuedTaskStatus.Completed);
         await WaitForTaskStatusAsync(taskId2, QueuedTaskStatus.Completed);
 
-        // Assert
+        // Assert (filter by ID to avoid interference from other tests)
         taskId1.ShouldNotBe(taskId2);
 
-        var tasks = await Storage.GetAll();
-        tasks.Length.ShouldBe(2);
+        var task1 = await Storage.Get(t => t.Id == taskId1);
+        var task2 = await Storage.Get(t => t.Id == taskId2);
+        task1.Length.ShouldBe(1);
+        task2.Length.ShouldBe(1);
 
     }
 
@@ -446,16 +452,9 @@ public class TaskKeyIntegrationTests : IsolatedIntegrationTestBase
 
         await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed);
 
-        // Assert
-        var tasks = await Storage.GetAll();
+        // Assert - filter by ID to avoid interference from other tests
+        var tasks = await Storage.Get(t => t.Id == taskId);
         tasks.Length.ShouldBe(1);
-
-        // Debug: if TaskKey is null, log additional info
-        if (tasks[0].TaskKey == null)
-        {
-            throw new Exception($"TaskKey is null! TaskId dispatched: {taskId}, TaskId in storage: {tasks[0].Id}, Type: {tasks[0].Type}, Status: {tasks[0].Status}");
-        }
-
         tasks[0].TaskKey.ShouldBe(specialKey);
 
     }
@@ -543,27 +542,28 @@ public class TaskKeyIntegrationTests : IsolatedIntegrationTestBase
                 .AddQueue("high-priority", q => q.SetMaxDegreeOfParallelism(5))
                 .AddMemoryStorage();
         });
+        const string taskKey = "high-priority-key";
 
         // Act - Dispatch task with taskKey to custom queue
-        var taskId = await Dispatcher.Dispatch(new TestTaskHighPriority(), taskKey: "high-priority-key");
+        var taskId = await Dispatcher.Dispatch(new TestTaskHighPriority(), taskKey: taskKey);
 
         await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed);
 
-        // Assert
-        var tasks = await Storage.GetAll();
+        // Assert - filter by TaskKey to avoid interference from other tests
+        var tasks = await Storage.Get(t => t.TaskKey == taskKey);
         tasks.Length.ShouldBe(1);
-        tasks[0].TaskKey.ShouldBe("high-priority-key");
+        tasks[0].TaskKey.ShouldBe(taskKey);
         tasks[0].QueueName.ShouldBe("high-priority");
 
         // Dispatch again - should update existing task in same queue
-        var taskId2 = await Dispatcher.Dispatch(new TestTaskHighPriority(), taskKey: "high-priority-key");
+        var taskId2 = await Dispatcher.Dispatch(new TestTaskHighPriority(), taskKey: taskKey);
 
         // Should create new task since first completed
         taskId2.ShouldNotBe(taskId);
 
-        var allTasks = await Storage.GetAll();
-        allTasks.Length.ShouldBe(1); // Old removed, new created
-        allTasks[0].QueueName.ShouldBe("high-priority");
+        var tasksAfterSecond = await Storage.Get(t => t.TaskKey == taskKey);
+        tasksAfterSecond.Length.ShouldBe(1); // Old removed, new created
+        tasksAfterSecond[0].QueueName.ShouldBe("high-priority");
 
     }
 
@@ -622,6 +622,185 @@ public class TaskKeyIntegrationTests : IsolatedIntegrationTestBase
         tasks.Length.ShouldBe(3);
         tasks.Select(t => t.TaskKey).ShouldBe(new[] { "key-1", "key-2", "key-3" }, ignoreOrder: true);
 
+    }
+
+    #endregion
+
+    #region Recurring Task with TaskKey - History Preservation
+
+    [Fact]
+    public async Task Dispatch_RecurringTaskWithTaskKey_WhenCompleted_PreservesHistoryAndUpdates()
+    {
+        // Arrange
+        await CreateIsolatedHostAsync();
+
+        // Act - Dispatch recurring task and wait for first execution
+        var taskId1 = await Dispatcher.Dispatch(
+            new TestTaskRecurringSeconds(),
+            recurring => recurring.Schedule().Every(1).Seconds(),
+            taskKey: "recurring-completed-key");
+
+        // Wait for first execution to complete
+        await WaitForTaskStatusAsync(taskId1, QueuedTaskStatus.Completed, timeoutMs: 5000);
+
+        // Get task state after first execution
+        var tasksAfterFirstRun = await Storage.Get(t => t.Id == taskId1);
+        var taskAfterFirstRun = tasksAfterFirstRun.FirstOrDefault();
+        taskAfterFirstRun.ShouldNotBeNull();
+        taskAfterFirstRun!.CurrentRunCount.ShouldNotBeNull();
+        taskAfterFirstRun.CurrentRunCount!.Value.ShouldBeGreaterThanOrEqualTo(1);
+        taskAfterFirstRun.LastExecutionUtc.ShouldNotBeNull();
+        var originalCreatedAt = taskAfterFirstRun.CreatedAtUtc;
+        var originalCurrentRunCount = taskAfterFirstRun.CurrentRunCount;
+        var originalLastExecutionUtc = taskAfterFirstRun.LastExecutionUtc;
+
+        // Dispatch again with same taskKey (simulating app restart)
+        // For RECURRING tasks, this should UPDATE (not remove/recreate)
+        var taskId2 = await Dispatcher.Dispatch(
+            new TestTaskRecurringSeconds(),
+            recurring => recurring.Schedule().Every(2).Seconds(), // Changed interval
+            taskKey: "recurring-completed-key");
+
+        // Assert - Should return SAME ID (updated, not replaced)
+        taskId2.ShouldBe(taskId1);
+
+        // Verify history was preserved
+        var tasksAfterRedispatch = await Storage.Get(t => t.Id == taskId1);
+        var taskAfterRedispatch = tasksAfterRedispatch.FirstOrDefault();
+        taskAfterRedispatch.ShouldNotBeNull();
+
+        // CreatedAtUtc should be preserved (not reset)
+        taskAfterRedispatch!.CreatedAtUtc.ShouldBe(originalCreatedAt);
+
+        // CurrentRunCount should be preserved
+        taskAfterRedispatch.CurrentRunCount.ShouldBe(originalCurrentRunCount);
+
+        // LastExecutionUtc should be preserved
+        taskAfterRedispatch.LastExecutionUtc.ShouldBe(originalLastExecutionUtc);
+
+        // Still only one task
+        var allTasks = await Storage.GetAll();
+        allTasks.Length.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Dispatch_RecurringTaskWithTaskKey_WhenFailed_PreservesHistoryAndUpdates()
+    {
+        // Arrange
+        await CreateIsolatedHostAsync();
+
+        // Create a recurring task (hourly, so it won't execute during test)
+        var taskId1 = await Dispatcher.Dispatch(
+            new TestTaskRecurringSeconds(),
+            recurring => recurring.Schedule().Every(1).Hours(),
+            taskKey: "recurring-failed-key");
+
+        // Wait for task to be persisted
+        await Task.Delay(100);
+
+        // Get task state and verify it exists
+        var tasksAfterCreate = await Storage.Get(t => t.Id == taskId1);
+        var taskAfterCreate = tasksAfterCreate.FirstOrDefault();
+        taskAfterCreate.ShouldNotBeNull();
+        taskAfterCreate!.IsRecurring.ShouldBeTrue();
+        var originalCreatedAt = taskAfterCreate.CreatedAtUtc;
+
+        // Manually set task status to Failed to simulate a failed execution
+        await Storage.SetStatus(taskId1, QueuedTaskStatus.Failed, new Exception("Simulated failure"), AuditLevel.Full);
+
+        // Verify task is now Failed
+        var tasksAfterFailure = await Storage.Get(t => t.Id == taskId1);
+        tasksAfterFailure.FirstOrDefault()!.Status.ShouldBe(QueuedTaskStatus.Failed);
+
+        // Dispatch again with same taskKey
+        // For RECURRING tasks, this should UPDATE (not remove/recreate)
+        var taskId2 = await Dispatcher.Dispatch(
+            new TestTaskRecurringSeconds(),
+            recurring => recurring.Schedule().Every(2).Hours(), // Different interval
+            taskKey: "recurring-failed-key");
+
+        // Assert - Should return SAME ID (updated, not replaced)
+        taskId2.ShouldBe(taskId1);
+
+        // CreatedAtUtc should be preserved
+        var tasksAfterRedispatch = await Storage.Get(t => t.Id == taskId1);
+        var taskAfterRedispatch = tasksAfterRedispatch.FirstOrDefault();
+        taskAfterRedispatch.ShouldNotBeNull();
+        taskAfterRedispatch!.CreatedAtUtc.ShouldBe(originalCreatedAt);
+
+        // Still only one task
+        var allTasks = await Storage.GetAll();
+        allTasks.Length.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Dispatch_RecurringTaskWithTaskKey_PreservesNextRunUtcIfInFuture()
+    {
+        // Arrange
+        await CreateIsolatedHostAsync();
+
+        // Act - Dispatch recurring task with future execution
+        var taskId1 = await Dispatcher.Dispatch(
+            new TestTaskRecurringSeconds(),
+            recurring => recurring.Schedule().Every(1).Hours(),
+            taskKey: "preserve-nextrun-key");
+
+        // Get the NextRunUtc that was calculated
+        var tasksAfterFirstDispatch = await Storage.Get(t => t.Id == taskId1);
+        var taskAfterFirstDispatch = tasksAfterFirstDispatch.FirstOrDefault();
+        taskAfterFirstDispatch.ShouldNotBeNull();
+        var originalNextRunUtc = taskAfterFirstDispatch!.NextRunUtc;
+        originalNextRunUtc.ShouldNotBeNull();
+
+        // Small delay to ensure we're testing that NextRunUtc is preserved, not recalculated
+        await Task.Delay(100);
+
+        // Dispatch again with same taskKey (simulating app restart)
+        var taskId2 = await Dispatcher.Dispatch(
+            new TestTaskRecurringSeconds(),
+            recurring => recurring.Schedule().Every(1).Hours(),
+            taskKey: "preserve-nextrun-key");
+
+        // Assert - Same task ID
+        taskId2.ShouldBe(taskId1);
+
+        // NextRunUtc should be preserved (not recalculated to a new time)
+        var tasksAfterRedispatch = await Storage.Get(t => t.Id == taskId1);
+        var taskAfterRedispatch = tasksAfterRedispatch.FirstOrDefault();
+        taskAfterRedispatch.ShouldNotBeNull();
+        taskAfterRedispatch!.NextRunUtc.ShouldBe(originalNextRunUtc);
+    }
+
+    [Fact]
+    public async Task Dispatch_NonRecurringTaskWithTaskKey_WhenCompleted_StillReplacesTask()
+    {
+        // Arrange
+        await CreateIsolatedHostAsync();
+        const string taskKey = "non-recurring-replace-key";
+
+        // Act - Dispatch NON-recurring task and wait for completion
+        var taskId1 = await Dispatcher.Dispatch(new TestTaskRequest("first"), taskKey: taskKey);
+        await WaitForTaskStatusAsync(taskId1, QueuedTaskStatus.Completed);
+
+        var tasksAfterFirstRun = await Storage.Get(t => t.Id == taskId1);
+        var taskAfterFirstRun = tasksAfterFirstRun.FirstOrDefault();
+        taskAfterFirstRun.ShouldNotBeNull();
+        var originalCreatedAt = taskAfterFirstRun!.CreatedAtUtc;
+
+        // Dispatch again with same taskKey (should remove old and create new for NON-recurring)
+        var taskId2 = await Dispatcher.Dispatch(new TestTaskRequest("second"), taskKey: taskKey);
+        await WaitForTaskStatusAsync(taskId2, QueuedTaskStatus.Completed);
+
+        // Assert - Should be DIFFERENT ID (replaced, not updated) for non-recurring tasks
+        taskId2.ShouldNotBe(taskId1);
+
+        // Only one task with this TaskKey should exist (filter by TaskKey to avoid flaky test)
+        var tasksWithKey = await Storage.Get(t => t.TaskKey == taskKey);
+        tasksWithKey.Length.ShouldBe(1);
+        tasksWithKey[0].Id.ShouldBe(taskId2);
+
+        // CreatedAtUtc should be different (new task)
+        tasksWithKey[0].CreatedAtUtc.ShouldNotBe(originalCreatedAt);
     }
 
     #endregion
