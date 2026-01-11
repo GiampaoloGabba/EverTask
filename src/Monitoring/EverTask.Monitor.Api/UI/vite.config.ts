@@ -14,6 +14,7 @@ export default defineConfig({
   build: {
     outDir: '../wwwroot', // Build to parent wwwroot folder
     emptyOutDir: true,
+    chunkSizeWarningLimit: 1000, // 1MB - acceptable for admin dashboard
     rollupOptions: {
       output: {
         manualChunks: {
