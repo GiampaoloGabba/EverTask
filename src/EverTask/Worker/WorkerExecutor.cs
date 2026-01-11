@@ -515,27 +515,14 @@ public class WorkerExecutor(
             // even when execution is delayed due to system load or downtime.
             // See: docs/recurring-task-schedule-drift-fix.md
 
-            // Use the scheduled execution time for THIS run as the base for calculating the next run.
-            // For the first run, task.ExecutionTime contains the correct scheduled time.
-            // For subsequent runs, task.ExecutionTime still contains the original time from first dispatch
-            // because TaskHandlerExecutor is reused. We need to reconstruct the scheduled time from
-            // the interval and the number of completed runs.
+            // task.ExecutionTime is the scheduled execution time for THIS run:
+            // - For first dispatch: the original scheduled time from the builder
+            // - For tasks loaded from storage (after restart): NextRunUtc from the database
+            //   (set in WorkerService.cs when loading pending tasks)
+            //
+            // We use this directly to calculate the next run. No reconstruction needed
+            // because task.ExecutionTime is already the correct scheduled time for THIS run.
             var scheduledTime = task.ExecutionTime ?? DateTimeOffset.UtcNow;
-
-            // For subsequent runs (currentRun > 0), calculate the scheduled time for THIS run
-            // by adding the interval * currentRun to the original execution time
-            if (currentRun > 0)
-            {
-                // Recalculate the scheduled time for THIS run from the original execution time
-                var firstRunTime = task.ExecutionTime ?? DateTimeOffset.UtcNow;
-                for (int i = 0; i < currentRun; i++)
-                {
-                    var nextRun = task.RecurringTask.CalculateNextRun(firstRunTime, i + 1);
-                    if (nextRun.HasValue)
-                        firstRunTime = nextRun.Value;
-                }
-                scheduledTime = firstRunTime;
-            }
 
             // Use extension method to calculate next valid run and get skip information
             var result = task.RecurringTask.CalculateNextValidRun(scheduledTime, currentRun + 1);
@@ -552,7 +539,12 @@ public class WorkerExecutor(
                              .ConfigureAwait(false);
 
             if (result.NextRun.HasValue)
-                scheduler.Schedule(task, result.NextRun);
+            {
+                // Update ExecutionTime for the next run so that subsequent calculations
+                // use the correct scheduled time (not the original time from first dispatch)
+                var updatedTask = task with { ExecutionTime = result.NextRun };
+                scheduler.Schedule(updatedTask, result.NextRun);
+            }
         }
     }
 
