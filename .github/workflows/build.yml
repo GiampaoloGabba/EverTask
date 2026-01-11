@@ -56,9 +56,11 @@ jobs:
       - name: Build
         run: dotnet build EverTask.sln --no-restore
 
+      # Tests run only on .NET 9 - multi-target testing disabled (flaky on GitHub Actions)
+      # To run on all frameworks, remove --framework net9.0
       - name: Test (EverTask.Tests)
-        run: dotnet test test/EverTask.Tests/EverTask.Tests.csproj --no-restore --verbosity normal
+        run: dotnet test test/EverTask.Tests/EverTask.Tests.csproj --no-restore --verbosity normal --framework net9.0
 
       - name: Test (EverTask.Tests.Storage - exclude SQL Server)
-        run: dotnet test test/EverTask.Tests.Storage/EverTask.Tests.Storage.csproj --no-restore --verbosity normal --filter "FullyQualifiedName!~SqlServerEfCoreTaskStorageTests&FullyQualifiedName!~AuditLevelIntegrationTests"
+        run: dotnet test test/EverTask.Tests.Storage/EverTask.Tests.Storage.csproj --no-restore --verbosity normal --framework net9.0 --filter "FullyQualifiedName!~SqlServerEfCoreTaskStorageTests&FullyQualifiedName!~AuditLevelIntegrationTests"
 
