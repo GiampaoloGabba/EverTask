@@ -48,7 +48,7 @@ export function SuccessRateTrendChart({ data }: SuccessRateTrendChartProps) {
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis dataKey="time" />
             <YAxis domain={[0, 100]} tickFormatter={(value) => `${value}%`} />
-            <Tooltip formatter={(value: number) => `${value.toFixed(1)}%`} />
+            <Tooltip formatter={(value) => `${(value as number).toFixed(1)}%`} />
             <Legend />
             <Line
               type="monotone"

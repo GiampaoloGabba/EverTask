@@ -48,7 +48,7 @@ export function ExecutionTimeChart({ data }: ExecutionTimeChartProps) {
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis dataKey="time" />
             <YAxis tickFormatter={(value) => `${value} ms`} />
-            <Tooltip formatter={(value: number) => `${value.toFixed(2)} ms`} />
+            <Tooltip formatter={(value) => `${(value as number).toFixed(2)} ms`} />
             <Legend />
             <Line
               type="monotone"
