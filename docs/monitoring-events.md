@@ -741,7 +741,6 @@ builder.Services.AddEverTask(opt =>
 .AddSqlServerStorage(connectionString)
 .AddMonitoringApi(options =>
 {
-    options.BasePath = "/evertask-monitoring";
     options.EnableUI = true;
     options.Username = "admin";
     options.Password = "admin";

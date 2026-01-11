@@ -38,7 +38,6 @@ builder.Services.AddEverTask(opt =>
 .AddSqlServerStorage(connectionString)
 .AddMonitoringApi(options =>
 {
-    options.BasePath = "/evertask-monitoring";
     options.EnableUI = true;
     options.Username = "admin";
     options.Password = "admin";
@@ -165,7 +164,6 @@ For most applications, the monitoring dashboard provides everything you need:
 ```csharp
 .AddMonitoringApi(options =>
 {
-    options.BasePath = "/evertask-monitoring";
     options.EnableUI = true;
     options.EnableAuthentication = true;
     options.Username = Environment.GetEnvironmentVariable("MONITOR_USERNAME") ?? "admin";
