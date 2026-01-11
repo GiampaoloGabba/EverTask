@@ -809,12 +809,10 @@ AddMonitoringApi(Action<EverTaskApiOptions> configure)
 ```csharp
 .AddMonitoringApi(options =>
 {
-    options.BasePath = "/admin/tasks";
     options.EnableUI = true;
     options.Username = "monitor_user";
     options.Password = "secure_password_123";
     options.EnableAuthentication = true;
-    options.SignalRHubPath = "/realtime/monitor";
     options.EnableCors = true;
     options.CorsAllowedOrigins = new[] { "https://myapp.com" };
 })
@@ -824,7 +822,6 @@ AddMonitoringApi(Action<EverTaskApiOptions> configure)
 ```csharp
 .AddMonitoringApi(options =>
 {
-    options.BasePath = "/api/evertask";
     options.EnableUI = false;  // Disable embedded dashboard
     options.EnableAuthentication = false;  // Open API for custom frontend
 })
@@ -834,7 +831,6 @@ AddMonitoringApi(Action<EverTaskApiOptions> configure)
 ```csharp
 .AddMonitoringApi(options =>
 {
-    options.BasePath = "/evertask-monitoring";
     options.EnableUI = true;
 
     if (builder.Environment.IsDevelopment())
@@ -860,30 +856,16 @@ AddMonitoringApi(Action<EverTaskApiOptions> configure)
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `BasePath` | `string` | `"/evertask-monitoring"` | Base path for API and UI endpoints |
 | `EnableUI` | `bool` | `true` | Enable embedded React dashboard |
 | `EnableSwagger` | `bool` | `false` | Enable Swagger/OpenAPI documentation |
-| `ApiBasePath` | `string` | `"{BasePath}/api"` | API endpoint path (readonly, derived from BasePath) |
-| `UIBasePath` | `string` | `"{BasePath}"` | UI endpoint path (readonly, derived from BasePath) |
 | `Username` | `string` | `"admin"` | JWT Authentication username |
 | `Password` | `string` | `"admin"` | JWT Authentication password (CHANGE IN PRODUCTION!) |
-| `SignalRHubPath` | `string` | `"/evertask-monitoring/hub"` | SignalR hub path for real-time updates (readonly, fixed) |
 | `EnableAuthentication` | `bool` | `true` | Enable JWT Authentication |
 | `EnableCors` | `bool` | `true` | Enable CORS for API endpoints |
 | `CorsAllowedOrigins` | `string[]` | `[]` | CORS allowed origins (empty = allow all) |
 | `AllowedIpAddresses` | `string[]` | `[]` | IP address whitelist (empty = allow all IPs). Supports IPv4, IPv6, and CIDR notation |
+| `MagicLinkToken` | `string?` | `null` | Static token for magic link authentication. When set, enables instant access via `/api/auth/magic?token=...` |
 | `EventDebounceMs` | `int` | `1000` | Debounce time in milliseconds for SignalR event-driven cache invalidation in the dashboard. Higher values reduce API load during task bursts but introduce slight UI update delays. Recommended: 300ms (very responsive), 500ms (balanced), 1000ms (conservative for high-volume) |
-
-#### BasePath
-
-Sets the base path for both API and dashboard endpoints.
-
-**Examples:**
-```csharp
-options.BasePath = "/evertask-monitoring";     // Dashboard: /evertask-monitoring, API: /evertask-monitoring/api
-options.BasePath = "/admin/tasks";    // Dashboard: /admin/tasks, API: /admin/tasks/api
-options.BasePath = "/evertask";       // Dashboard: /evertask, API: /evertask/api
-```
 
 #### EnableUI
 
@@ -1106,6 +1088,43 @@ location /evertask-monitoring {
     proxy_pass http://localhost:5000/evertask-monitoring;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 }
+```
+
+#### MagicLinkToken
+
+Enables instant authentication via a static token URL. Useful for embedding the dashboard in other systems or providing quick access without credential management.
+
+**Examples:**
+```csharp
+// Enable magic link access
+options.MagicLinkToken = "your-very-long-secret-token-here-min-32-chars";
+
+// Combined with IP whitelist for extra security
+options.MagicLinkToken = "your-secret-token";
+options.AllowedIpAddresses = new[] { "10.0.0.0/8" };
+```
+
+**Access URL:**
+```
+https://your-server/evertask-monitoring/magic?token=your-very-long-secret-token-here-min-32-chars
+```
+
+**How it works:**
+1. User visits the magic link URL
+2. Backend validates the token against `MagicLinkToken`
+3. If valid, generates a standard JWT session token
+4. User is redirected to the dashboard, fully authenticated
+
+**Security Notes:**
+- Use a long, random token (32+ characters recommended)
+- Token never expires - change it in configuration to revoke all magic link access
+- Combine with `AllowedIpAddresses` for defense in depth
+- If `MagicLinkToken` is not set, the endpoint returns 404
+
+**Token Generation:**
+```powershell
+# PowerShell - generate secure random token
+[Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Maximum 256 }) -as [byte[]])
 ```
 
 ### API Endpoints

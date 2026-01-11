@@ -94,7 +94,6 @@ builder.Services.AddEverTask(opt =>
 .AddSqlServerStorage(connectionString)
 .AddMonitoringApi(options =>
 {
-    options.BasePath = "/evertask-monitoring";
     options.EnableUI = true;
     options.Username = "admin";
     options.Password = "admin";
@@ -154,22 +153,19 @@ All configuration is done through the `EverTaskApiOptions` class passed to `AddM
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `BasePath` | string | `"/evertask-monitoring"` | Base path for API and UI |
 | `EnableUI` | bool | `true` | Enable embedded dashboard UI |
 | `EnableSwagger` | bool | `false` | Enable Swagger/OpenAPI documentation |
-| `ApiBasePath` | string | `"{BasePath}/api"` | API base path (readonly, derived) |
-| `UIBasePath` | string | `"{BasePath}"` | UI base path (readonly, derived) |
 | `Username` | string | `"admin"` | JWT authentication username |
 | `Password` | string | `"admin"` | JWT authentication password |
 | `JwtSecret` | string? | auto-generated | Secret key for signing JWT tokens (min 256 bits recommended) |
 | `JwtIssuer` | string | `"EverTask.Monitor.Api"` | JWT token issuer |
 | `JwtAudience` | string | `"EverTask.Monitor.Api"` | JWT token audience |
 | `JwtExpirationHours` | int | `8` | JWT token expiration time in hours |
-| `SignalRHubPath` | string | `"/evertask-monitoring/hub"` | SignalR hub path (readonly, fixed) |
 | `EnableAuthentication` | bool | `true` | Enable JWT authentication |
 | `EnableCors` | bool | `true` | Enable CORS |
 | `CorsAllowedOrigins` | string[] | `[]` | CORS allowed origins (empty = allow all) |
 | `AllowedIpAddresses` | string[] | `[]` | IP whitelist (empty = allow all IPs). Supports IPv4/IPv6 and CIDR notation |
+| `MagicLinkToken` | string? | `null` | Static token for magic link access. If set, enables `/api/auth/magic` endpoint for instant authentication |
 | `EventDebounceMs` | int | `1000` | Debounce time in milliseconds for SignalR event-driven cache invalidation in the dashboard. Higher values reduce API load during task bursts but introduce slight UI update delays |
 
 ## Authentication
@@ -272,6 +268,45 @@ For development environments only:
 });
 ```
 
+### Magic Link Access
+
+For external system integration (embedding in other dashboards, direct access from internal tools), you can configure a static magic link token that provides instant access without login:
+
+```csharp
+.AddMonitoringApi(options =>
+{
+    options.EnableAuthentication = true;
+    options.MagicLinkToken = "your-very-long-secret-token-here-min-32-chars";
+});
+```
+
+**Access URL:**
+```
+https://your-server/evertask-monitoring/magic?token=your-very-long-secret-token-here-min-32-chars
+```
+
+When a user visits this URL, they're automatically authenticated and redirected to the dashboard. The magic link generates a standard JWT session token, so all subsequent requests work normally.
+
+**Use cases:**
+- Embedding in internal dashboards or portals
+- Bookmarking for quick access
+- Integration with other monitoring systems
+- Sharing access with team members without credential management
+
+**Security notes:**
+- Use a long, random token (32+ characters recommended)
+- The token never expires - change it in configuration to revoke access
+- Combine with IP whitelist (`AllowedIpAddresses`) for additional security
+- Always use HTTPS in production
+
+**Generate a secure token:**
+```powershell
+# PowerShell
+[Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Maximum 256 }) -as [byte[]])
+```
+
+If `MagicLinkToken` is not configured, the endpoint returns 404 and the feature is disabled.
+
 ## Advanced Scenarios
 
 ### API-Only Mode
@@ -281,7 +316,6 @@ Disable the embedded UI to use only the REST API:
 ```csharp
 .AddMonitoringApi(options =>
 {
-    options.BasePath = "/api/evertask";
     options.EnableUI = false;  // Disable embedded dashboard
 });
 ```
@@ -291,20 +325,6 @@ This is useful when:
 - Integrating with existing monitoring systems
 - Mobile app integration
 - Third-party dashboard integration
-
-### Custom Base Path
-
-Configure a custom base path for your monitoring:
-
-```csharp
-.AddMonitoringApi(options =>
-{
-    options.BasePath = "/admin/tasks";
-});
-
-// UI:  http://localhost:5000/admin/tasks
-// API: http://localhost:5000/admin/tasks/api
-```
 
 ### CORS Configuration
 
@@ -344,7 +364,6 @@ builder.Services.AddEverTask(opt =>
 .AddSqlServerStorage(connectionString)
 .AddMonitoringApi(options =>
 {
-    options.BasePath = "/evertask-monitoring";
     options.EnableUI = true;
 
     if (builder.Environment.IsDevelopment())
@@ -379,7 +398,6 @@ Use the monitoring API without EverTask integration (for custom scenarios):
 // In Program.cs
 builder.Services.AddEverTaskMonitoringApiStandalone(options =>
 {
-    options.BasePath = "/evertask-monitoring";
     options.EnableUI = false;
 });
 
@@ -458,10 +476,7 @@ builder.Services.AddEverTask(opt =>
 {
     opt.IncludeExecutionLogs = true;  // Include logs in SignalR events
 })
-.AddMonitoringApi(options =>
-{
-    options.BasePath = "/evertask-monitoring";
-});
+.AddMonitoringApi();
 ```
 
 ### SignalR Events
@@ -678,7 +693,6 @@ builder.Services.AddEverTask(opt =>
 .AddMemoryStorage()
 .AddMonitoringApi(options =>
 {
-    options.BasePath = "/evertask-monitoring";
     options.Username = "admin";
     options.Password = "admin";
 });
@@ -707,7 +721,6 @@ builder.Services.AddEverTask(opt =>
 .AddSqlServerStorage(builder.Configuration.GetConnectionString("EverTaskDb")!)
 .AddMonitoringApi(options =>
 {
-    options.BasePath = "/admin/tasks";
     options.EnableAuthentication = !builder.Environment.IsDevelopment();
 });
 
@@ -734,10 +747,7 @@ builder.Services.AddEverTask(opt =>
     opt.RegisterTasksFromAssembly(typeof(Program).Assembly);
 })
 .AddSqlServerStorage(builder.Configuration.GetConnectionString("EverTaskDb")!)
-.AddMonitoringApi(options =>
-{
-    options.BasePath = "/evertask-monitoring";
-});
+.AddMonitoringApi();
 
 // Add web server for monitoring
 builder.Services.Configure<HostOptions>(options =>

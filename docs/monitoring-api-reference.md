@@ -58,7 +58,31 @@ Content-Type: application/json
 }
 ```
 
-> **Exception**: The `/config` endpoint does not require authentication.
+> **Exception**: The `/config` and `/auth/magic` endpoints do not require authentication.
+
+### Magic Link Authentication
+
+If `MagicLinkToken` is configured, you can authenticate via a simple GET request:
+
+**Request:**
+```bash
+GET /evertask-monitoring/api/auth/magic?token=your-configured-token
+```
+
+**Response (200 OK):**
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "expiresAt": "2025-01-16T02:00:00Z",
+  "username": "admin"
+}
+```
+
+**Error Responses:**
+- `404 Not Found` - Magic link not configured (`MagicLinkToken` is null)
+- `401 Unauthorized` - Invalid token
+
+The returned JWT can be used like any other JWT token for subsequent API requests.
 
 ## Tasks Endpoints
 

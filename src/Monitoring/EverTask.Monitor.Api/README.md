@@ -340,6 +340,9 @@ public class EverTaskApiOptions
 
     // CORS allowed origins (default: allow all)
     public string[] CorsAllowedOrigins { get; set; } = Array.Empty<string>();
+
+    // Magic link token for instant authentication (default: null = disabled)
+    public string? MagicLinkToken { get; set; }
 }
 ```
 
@@ -399,6 +402,21 @@ builder.Services.AddEverTaskApi(options =>
     options.EnableAuthentication = false;
 });
 ```
+
+### Magic Link (External Integration)
+
+Enable instant access via URL token for embedding in other dashboards or portals:
+
+```csharp
+builder.Services.AddEverTaskApi(options =>
+{
+    options.MagicLinkToken = "your-32-char-secret-token-here";
+});
+```
+
+Access URL: `https://yourapp.com/evertask-monitoring/magic?token=your-32-char-secret-token-here`
+
+The magic link validates the token and returns a standard JWT session. If `MagicLinkToken` is not configured, the endpoint returns 404.
 
 ## CORS Configuration
 

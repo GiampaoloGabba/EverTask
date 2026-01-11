@@ -30,6 +30,7 @@ cd UI && npm run build  # → ../wwwroot/
 - `JwtExpirationHours` (int, default: 8) - Token TTL
 - `SignalRHubPath` (readonly: "/evertask-monitoring/hub") - Fixed, cannot change
 - `AllowedIpAddresses` (string[], default: empty = allow all) - IP whitelist (CIDR supported)
+- `MagicLinkToken` (string?, default: null) - Static token for instant auth via `/api/auth/magic?token=...`
 
 ## Architecture
 
@@ -41,7 +42,7 @@ cd UI && npm run build  # → ../wwwroot/
 ### Middleware Chain
 1. IP whitelist check (if configured) → 403 if blocked
 2. JWT authentication (if `EnableAuthentication = true`)
-   - Skips: `/api/config`, `/api/auth/login`, `/api/auth/validate`
+   - Skips: `/api/config`, `/api/auth/login`, `/api/auth/validate`, `/api/auth/magic`
    - Validates: `Authorization: Bearer <token>`
    - Returns 401 + WWW-Authenticate challenge if invalid
 

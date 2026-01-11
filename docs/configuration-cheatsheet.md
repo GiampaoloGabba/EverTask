@@ -142,6 +142,7 @@ await dispatcher.Dispatch(task, recurring => ..., auditLevel: AuditLevel.Minimal
         "10.0.0.0/8",                          // CIDR notation (entire network)
         "::1"                                  // IPv6 localhost
     };
+    opt.MagicLinkToken = "your-secret-token"; // Default: null (disabled)
 })
 ```
 
@@ -169,7 +170,6 @@ await dispatcher.Dispatch(task, recurring => ..., auditLevel: AuditLevel.Minimal
 // API-only mode (no UI)
 .AddMonitoringApi(opt => {
     opt.EnableUI = false;
-    opt.BasePath = "/api/evertask";
 })
 
 // Custom frontend integration
@@ -185,6 +185,12 @@ await dispatcher.Dispatch(task, recurring => ..., auditLevel: AuditLevel.Minimal
         "10.0.0.0/8",              // Internal network only
         "203.0.113.100"            // Specific admin IP
     };
+})
+
+// Magic link (external integration)
+.AddMonitoringApi(opt => {
+    opt.MagicLinkToken = "your-32-char-secret-token-here";
+    // Access: /evertask-monitoring/magic?token=your-32-char-secret-token-here
 })
 
 // Swagger/OpenAPI documentation
