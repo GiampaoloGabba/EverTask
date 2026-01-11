@@ -8,7 +8,7 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <Version>3.4.3</Version>
+    <Version>3.4.4</Version>
     <Authors>Giampaolo Gabba</Authors>
     <Description>Easy background task with persistence for ASP.NET Core</Description>
     <Copyright>Copyright Giampaolo Gabba</Copyright>
