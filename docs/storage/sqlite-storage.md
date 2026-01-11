@@ -72,16 +72,6 @@ var dbPath = Path.Combine(
 - Desktop applications
 - IoT / edge computing
 
-## Backup and Recovery
-
-```bash
-# Backup (simple file copy)
-cp evertask.db evertask.db.backup
-
-# Restore
-cp evertask.db.backup evertask.db
-```
-
 ## Best Practices
 
 ### File Permissions

@@ -148,36 +148,6 @@ dotnet ef migrations script --project YourProject --context TaskStoreDbContext -
 - Compliance requirements
 - Staged rollouts
 
-## Backup and Recovery
-
-### SQL Server
-
-```sql
--- Backup
-BACKUP DATABASE EverTaskDb TO DISK = 'C:\Backups\EverTaskDb.bak'
-
--- Restore
-RESTORE DATABASE EverTaskDb FROM DISK = 'C:\Backups\EverTaskDb.bak'
-```
-
-### SQLite
-
-```bash
-# Backup (simple file copy)
-cp evertask.db evertask.db.backup
-
-# Restore
-cp evertask.db.backup evertask.db
-```
-
-### Backup Strategy
-
-**Recommended approach:**
-1. **Regular backups**: Daily full backups, hourly incrementals (SQL Server)
-2. **Test restores**: Verify backups work before you need them
-3. **Off-site storage**: Store backups in different location/region
-4. **Retention policy**: Keep 30 days of backups, longer for compliance
-
 ## Monitoring Storage Performance
 
 ### Track Storage Metrics

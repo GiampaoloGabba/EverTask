@@ -162,16 +162,6 @@ The SetStatus operation now uses a stored procedure that atomically updates the 
 .AddSqlServerStorage("Server=localhost;Database=EverTaskDb;...")
 ```
 
-### Backup and Recovery
-
-```sql
--- Backup
-BACKUP DATABASE EverTaskDb TO DISK = 'C:\Backups\EverTaskDb.bak'
-
--- Restore
-RESTORE DATABASE EverTaskDb FROM DISK = 'C:\Backups\EverTaskDb.bak'
-```
-
 ## When to Use
 
 Use SQL Server storage when:

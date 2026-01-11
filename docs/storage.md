@@ -37,7 +37,7 @@ Learn how to implement custom storage providers for Redis, MongoDB, PostgreSQL, 
 Best practices for designing serializable tasks and handling serialization with Newtonsoft.Json.
 
 ### [Best Practices](storage/best-practices.md)
-Storage selection guidelines, connection string management, migration strategies, backup/recovery, and cleanup tasks.
+Storage selection guidelines, connection string management, migration strategies, and cleanup tasks.
 
 ## Quick Start
 
