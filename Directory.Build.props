@@ -8,11 +8,11 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <Version>3.4.4</Version>
+    <Version>3.5.0</Version>
     <Authors>Giampaolo Gabba</Authors>
     <Description>Easy background task with persistence for ASP.NET Core</Description>
     <Copyright>Copyright Giampaolo Gabba</Copyright>
-    <PackageTags>easytask;background tasks;task persistence</PackageTags>
+    <PackageTags>evertask;easytask;task persistence;background tasks</PackageTags>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <IncludeSymbols>true</IncludeSymbols>
@@ -22,6 +22,7 @@
     <MinVerTagPrefix>v</MinVerTagPrefix>
     <PackageIcon>logo-nuget.png</PackageIcon>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/GiampaoloGabba/EverTask</PackageProjectUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
