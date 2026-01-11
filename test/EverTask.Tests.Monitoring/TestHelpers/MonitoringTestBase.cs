@@ -11,10 +11,11 @@ public abstract class MonitoringTestBase : IAsyncLifetime
 
     protected virtual bool RequireAuthentication => false;
     protected virtual bool EnableWorker => false;
+    protected virtual Action<Monitor.Api.Options.EverTaskApiOptions>? ConfigureOptions => null;
 
     public virtual async Task InitializeAsync()
     {
-        Factory = new MonitoringTestWebAppFactory(RequireAuthentication, EnableWorker);
+        Factory = new MonitoringTestWebAppFactory(RequireAuthentication, EnableWorker, configureOptions: ConfigureOptions);
         Client = Factory.CreateClient();
         Storage = Factory.Services.GetRequiredService<ITaskStorage>();
         await Task.CompletedTask;

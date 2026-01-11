@@ -141,4 +141,90 @@ public class AuthControllerTests : MonitoringTestBase
         validationResult.IsValid.ShouldBeFalse();
         validationResult.Username.ShouldBeNull();
     }
+
+    [Fact]
+    public async Task Should_return_404_when_magic_link_not_configured()
+    {
+        // Act - Try magic link without it being configured
+        var response = await Client.GetAsync("/evertask-monitoring/api/auth/magic?token=anytoken");
+
+        // Assert
+        response.StatusCode.ShouldBe(HttpStatusCode.NotFound);
+    }
+}
+
+/// <summary>
+/// Tests for magic link authentication
+/// </summary>
+public class MagicLinkAuthControllerTests : MonitoringTestBase
+{
+    private const string TestMagicToken = "test-magic-link-token-abc123";
+
+    protected override bool RequireAuthentication => true;
+    protected override Action<Monitor.Api.Options.EverTaskApiOptions>? ConfigureOptions =>
+        options => options.MagicLinkToken = TestMagicToken;
+
+    [Fact]
+    public async Task Should_return_token_on_valid_magic_link()
+    {
+        // Act
+        var response = await Client.GetAsync($"/evertask-monitoring/api/auth/magic?token={TestMagicToken}");
+
+        // Assert
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+
+        var loginResponse = await DeserializeResponseAsync<LoginResponse>(response);
+        loginResponse.ShouldNotBeNull();
+        loginResponse.Token.ShouldNotBeNullOrEmpty();
+        loginResponse.Username.ShouldBe("testuser");
+        loginResponse.ExpiresAt.ShouldBeGreaterThan(DateTimeOffset.UtcNow);
+    }
+
+    [Fact]
+    public async Task Should_return_401_on_invalid_magic_link_token()
+    {
+        // Act
+        var response = await Client.GetAsync("/evertask-monitoring/api/auth/magic?token=wrong-token");
+
+        // Assert
+        response.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task Should_return_401_on_missing_magic_link_token()
+    {
+        // Act
+        var response = await Client.GetAsync("/evertask-monitoring/api/auth/magic");
+
+        // Assert
+        response.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task Should_return_401_on_empty_magic_link_token()
+    {
+        // Act
+        var response = await Client.GetAsync("/evertask-monitoring/api/auth/magic?token=");
+
+        // Assert
+        response.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task Should_allow_api_access_with_jwt_from_magic_link()
+    {
+        // Arrange - Get JWT via magic link
+        var magicResponse = await Client.GetAsync($"/evertask-monitoring/api/auth/magic?token={TestMagicToken}");
+        magicResponse.EnsureSuccessStatusCode();
+
+        var loginResult = await DeserializeResponseAsync<LoginResponse>(magicResponse);
+        var jwtToken = loginResult!.Token;
+
+        // Act - Use JWT to access protected API
+        Client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", jwtToken);
+        var apiResponse = await Client.GetAsync("/evertask-monitoring/api/dashboard/overview");
+
+        // Assert
+        apiResponse.StatusCode.ShouldBe(HttpStatusCode.OK);
+    }
 }

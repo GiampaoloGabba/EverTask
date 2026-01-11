@@ -2,6 +2,7 @@ import { createBrowserRouter, Navigate } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { LoginPage } from '@/pages/LoginPage';
+import { MagicLinkPage } from '@/pages/MagicLinkPage';
 import { OverviewPage } from '@/pages/OverviewPage';
 import { TasksPage } from '@/pages/TasksPage';
 import { TaskDetailPage } from '@/pages/TaskDetailPage';
@@ -24,6 +25,10 @@ const router = createBrowserRouter([
   {
     path: '/login',
     element: <LoginPage />,
+  },
+  {
+    path: '/magic',
+    element: <MagicLinkPage />,
   },
   {
     path: '/',

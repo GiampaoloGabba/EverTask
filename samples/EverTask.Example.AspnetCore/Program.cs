@@ -61,7 +61,8 @@ builder.Services.AddEverTask(opt =>
            options.EnableSwagger        = true;
            options.Username             = "admin";
            options.Password             = "admin";
-           options.EnableAuthentication = false; //disable auth for testing purposes
+           options.EnableAuthentication = true;
+           options.MagicLinkToken       = "test";
            options.EventDebounceMs      = 500;
        });
 

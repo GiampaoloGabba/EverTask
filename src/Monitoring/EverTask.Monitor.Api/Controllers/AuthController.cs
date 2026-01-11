@@ -90,4 +90,33 @@ public class AuthController : ControllerBase
 
         return Ok(response);
     }
+
+    /// <summary>
+    /// Authenticate via magic link token.
+    /// Returns a JWT session token if the magic link token is valid.
+    /// Magic link must be configured via EverTaskApiOptions.MagicLinkToken.
+    /// </summary>
+    /// <param name="token">The magic link token</param>
+    /// <returns>JWT token and expiration information</returns>
+    [HttpGet("magic")]
+    [ProducesResponseType(typeof(LoginResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public ActionResult<LoginResponse> MagicLinkLogin([FromQuery] string? token)
+    {
+        if (string.IsNullOrEmpty(_options.MagicLinkToken))
+        {
+            return NotFound(new { message = "Magic link is not configured" });
+        }
+
+        if (string.IsNullOrEmpty(token) || !string.Equals(token, _options.MagicLinkToken, StringComparison.Ordinal))
+        {
+            return Unauthorized(new { message = "Invalid magic link token" });
+        }
+
+        // Generate session JWT
+        var response = _jwtTokenService.GenerateToken(_options.Username);
+
+        return Ok(response);
+    }
 }

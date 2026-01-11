@@ -114,6 +114,14 @@ public class EverTaskApiOptions
     public string[] AllowedIpAddresses { get; set; } = [];
 
     /// <summary>
+    /// Static token for magic link authentication. If set, enables magic link access via /api/auth/magic endpoint.
+    /// Use a long random string (32+ characters recommended) for security.
+    /// Example: "your-very-long-secret-token-abc123xyz"
+    /// When configured, users can access the dashboard via: /evertask-monitoring/magic?token=YOUR_TOKEN
+    /// </summary>
+    public string? MagicLinkToken { get; set; }
+
+    /// <summary>
     /// Debounce time in milliseconds for SignalR event-driven cache invalidation in the frontend dashboard.
     /// When multiple task events occur in rapid succession, the dashboard will wait this duration
     /// before refreshing data to prevent excessive API calls during task bursts.

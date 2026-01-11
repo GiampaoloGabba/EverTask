@@ -18,15 +18,18 @@ public class MonitoringTestWebAppFactory : WebApplicationFactory<TestProgram>
     private readonly bool _requireAuthentication;
     private readonly bool _enableWorker;
     private readonly Action<IServiceCollection>? _configureServices;
+    private readonly Action<EverTaskApiOptions>? _configureOptions;
 
     public MonitoringTestWebAppFactory(
         bool requireAuthentication = false,
         bool enableWorker = false,
-        Action<IServiceCollection>? configureServices = null)
+        Action<IServiceCollection>? configureServices = null,
+        Action<EverTaskApiOptions>? configureOptions = null)
     {
         _requireAuthentication = requireAuthentication;
         _enableWorker          = enableWorker;
         _configureServices     = configureServices;
+        _configureOptions      = configureOptions;
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -78,6 +81,9 @@ public class MonitoringTestWebAppFactory : WebApplicationFactory<TestProgram>
                 options.Username             = "testuser";
                 options.Password             = "testpass";
                 options.EnableCors           = true;
+
+                // Allow custom options configuration (e.g., for magic link testing)
+                _configureOptions?.Invoke(options);
             });
 
             // Allow custom service configuration

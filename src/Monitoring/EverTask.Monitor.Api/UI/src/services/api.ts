@@ -135,6 +135,11 @@ class ApiService {
     return this.client.post<TokenValidationResponse>('/auth/validate', token);
   }
 
+  async magicLinkLogin(token: string) {
+    await this.initialize();
+    return this.client.get<LoginResponse>(`/auth/magic?token=${encodeURIComponent(token)}`);
+  }
+
   // Tasks API
   async getTasks(filter: TaskFilter, pagination: PaginationParams) {
     await this.initialize();

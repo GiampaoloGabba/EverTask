@@ -83,9 +83,10 @@ public class JwtAuthenticationMiddleware
             return;
         }
 
-        // Allow anonymous access to auth endpoints (login/validate)
+        // Allow anonymous access to auth endpoints (login/validate/magic)
         if (path.Equals($"{_options.ApiBasePath}/auth/login", StringComparison.OrdinalIgnoreCase) ||
-            path.Equals($"{_options.ApiBasePath}/auth/validate", StringComparison.OrdinalIgnoreCase))
+            path.Equals($"{_options.ApiBasePath}/auth/validate", StringComparison.OrdinalIgnoreCase) ||
+            path.Equals($"{_options.ApiBasePath}/auth/magic", StringComparison.OrdinalIgnoreCase))
         {
             await _next(context);
             return;
