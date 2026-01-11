@@ -453,11 +453,13 @@ public class TaskKeyIntegrationTests : IsolatedIntegrationTestBase
 
         await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed);
 
-        // Assert - filter by ID to avoid interference from other tests
-        var tasks = await Storage.Get(t => t.Id == taskId);
-        tasks.Length.ShouldBe(1);
-        tasks[0].TaskKey.ShouldBe(specialKey);
-
+        // Assert - resolve storage fresh from Host to ensure we're using the correct instance
+        var storage = Host!.Services.GetRequiredService<ITaskStorage>();
+        var tasks = await storage.Get(t => t.Id == taskId);
+        tasks.Length.ShouldBe(1,
+            $"Expected exactly 1 task with ID {taskId}. Storage type: {storage.GetType().Name}");
+        tasks[0].TaskKey.ShouldBe(specialKey,
+            $"TaskKey mismatch for task {taskId}. Task status: {tasks[0].Status}");
     }
 
     #endregion
@@ -612,17 +614,25 @@ public class TaskKeyIntegrationTests : IsolatedIntegrationTestBase
         var taskId2 = await Dispatcher.Dispatch(new TestTaskRequest("task2"), taskKey: "key-2");
         var taskId3 = await Dispatcher.Dispatch(new TestTaskRequest("task3"), taskKey: "key-3");
 
-        await WaitForTaskCountAsync(3);
-
-        // Assert - All different tasks should be created
+        // Assert - All different task IDs should be unique
         taskId1.ShouldNotBe(taskId2);
         taskId2.ShouldNotBe(taskId3);
         taskId1.ShouldNotBe(taskId3);
 
-        var tasks = await Storage.GetAll();
-        tasks.Length.ShouldBe(3);
-        tasks.Select(t => t.TaskKey).ShouldBe(new[] { "key-1", "key-2", "key-3" }, ignoreOrder: true);
+        // Verify each task individually by ID to avoid interference from other tests
+        var storage = Host!.Services.GetRequiredService<ITaskStorage>();
 
+        var task1 = await storage.Get(t => t.Id == taskId1);
+        task1.Length.ShouldBe(1, $"Task 1 with ID {taskId1} not found");
+        task1[0].TaskKey.ShouldBe("key-1", $"Task 1 TaskKey mismatch");
+
+        var task2 = await storage.Get(t => t.Id == taskId2);
+        task2.Length.ShouldBe(1, $"Task 2 with ID {taskId2} not found");
+        task2[0].TaskKey.ShouldBe("key-2", $"Task 2 TaskKey mismatch");
+
+        var task3 = await storage.Get(t => t.Id == taskId3);
+        task3.Length.ShouldBe(1, $"Task 3 with ID {taskId3} not found");
+        task3[0].TaskKey.ShouldBe("key-3", $"Task 3 TaskKey mismatch");
     }
 
     #endregion

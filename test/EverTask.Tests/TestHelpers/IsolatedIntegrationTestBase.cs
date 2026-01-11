@@ -36,6 +36,14 @@ public abstract class IsolatedIntegrationTestBase : IAsyncDisposable
         Action<EverTaskServiceConfiguration>? configureEverTask = null,
         Action<IServiceCollection>? configureServices = null)
     {
+        // Ensure any previous host is properly disposed before creating new one
+        if (Host != null)
+        {
+            await StopHostAsync();
+            Host.Dispose();
+            Host = null;
+        }
+
         Host = new HostBuilder()
             .ConfigureServices((context, services) =>
             {

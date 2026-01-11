@@ -206,11 +206,13 @@ public class LogCaptureIntegrationTests : IsolatedIntegrationTestBase
         // Small delay to ensure all log persistence operations complete
         await Task.Delay(200);
 
-        // Query logs fresh - filter explicitly by taskId to ensure isolation
-        var logs = await Storage.GetExecutionLogsAsync(taskId, CancellationToken.None);
+        // Query logs fresh from Host to ensure we're using the correct storage instance
+        var storage = Host!.Services.GetRequiredService<ITaskStorage>();
+        var logs = await storage.GetExecutionLogsAsync(taskId, CancellationToken.None);
 
         // Assert - only first 10 logs should be captured (MaxLogsPerTask enforcement)
-        logs.Count.ShouldBe(10);
+        logs.Count.ShouldBe(10,
+            $"Expected 10 logs for task {taskId}, got {logs.Count}. First log: {logs.FirstOrDefault()?.Message ?? "none"}");
         logs[0].Message.ShouldBe("Log message 1 of 50");
         logs[9].Message.ShouldBe("Log message 10 of 50");
     }
@@ -292,10 +294,20 @@ public class LogCaptureIntegrationTests : IsolatedIntegrationTestBase
 
         // Act - task logs 200 messages
         var taskId = await Dispatcher.Dispatch(new TestTaskManyLogs(200));
-        var (_, logs) = await TaskWaitHelper.WaitForTaskCompletionWithLogsAsync(Storage, taskId, expectedLogCount: 200, timeoutMs: 10000);
+
+        // Wait for task completion first
+        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed, timeoutMs: 15000);
+
+        // Small delay to ensure all log persistence operations complete
+        await Task.Delay(300);
+
+        // Query logs fresh from Host to ensure we're using the correct storage instance
+        var storage = Host!.Services.GetRequiredService<ITaskStorage>();
+        var logs = await storage.GetExecutionLogsAsync(taskId, CancellationToken.None);
 
         // Assert - all 200 logs should be captured
-        logs.Count.ShouldBe(200);
+        logs.Count.ShouldBe(200,
+            $"Expected 200 logs for task {taskId}, got {logs.Count}. First log: {logs.FirstOrDefault()?.Message ?? "none"}");
         logs[0].Message.ShouldBe("Log message 1 of 200");
         logs[199].Message.ShouldBe("Log message 200 of 200");
     }
