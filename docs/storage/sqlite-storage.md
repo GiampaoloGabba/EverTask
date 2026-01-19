@@ -12,7 +12,7 @@ SQLite provides lightweight, file-based storage that works well for single-serve
 ## Installation
 
 ```bash
-dotnet add package EverTask.Sqlite
+dotnet add package EverTask.Storage.Sqlite
 ```
 
 ## Configuration

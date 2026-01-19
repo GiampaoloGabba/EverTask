@@ -203,6 +203,7 @@ Always use strong credentials and HTTPS in production:
         ?? throw new InvalidOperationException("MONITOR_USERNAME not set");
     options.Password = Environment.GetEnvironmentVariable("MONITOR_PASSWORD")
         ?? throw new InvalidOperationException("MONITOR_PASSWORD not set");
+    // Optionally set JwtSecret for multi-instance deployments
     options.JwtSecret = Environment.GetEnvironmentVariable("JWT_SECRET");
 });
 ```

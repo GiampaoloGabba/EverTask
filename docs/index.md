@@ -23,8 +23,8 @@ EverTask is a .NET background task execution library built for **persistence** a
 
 ```csharp
 // 1. Register in Program.cs
-builder.Services.AddEverTask(options =>
-    options.RegisterTasksFromAssemblyContaining<SendEmailTask>()
+builder.Services.AddEverTask(opt =>
+    opt.RegisterTasksFromAssembly(typeof(Program).Assembly)
 ).AddSqlServerStorage(connectionString);
 
 // 2. Define your task
@@ -40,7 +40,7 @@ public class SendEmailHandler : EverTaskHandler<SendEmailTask>
 }
 
 // 4. Dispatch anywhere
-await _dispatcher.DispatchAsync(new SendEmailTask("user@example.com", "Hello!"));
+await _dispatcher.Dispatch(new SendEmailTask("user@example.com", "Hello!"));
 ```
 
 **That's it!** EverTask persists the task, handles retries on failure, and executes it in the background. Learn more in [Getting Started](getting-started.md).

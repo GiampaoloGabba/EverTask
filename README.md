@@ -144,11 +144,11 @@ await dispatcher.Dispatch(
     new DailyCleanupTask(),
     builder => builder.Schedule().EveryDay().AtTime(new TimeOnly(3, 0)));
 
-// Run every Monday, Wednesday, Friday at 9 AM
+// Run every Monday, Wednesday, Friday at 9 AM (for 30 days)
 var days = new[] { DayOfWeek.Monday, DayOfWeek.Wednesday, DayOfWeek.Friday };
 await dispatcher.Dispatch(
     new BackupTask(),
-    builder => builder.Schedule().EveryWeek().OnDays(days).AtTime(new TimeOnly(9, 0)))).RunUntil(DateTimeOffset.UtcNow.AddDays(30)));
+    builder => builder.Schedule().EveryWeek().OnDays(days).AtTime(new TimeOnly(9, 0)).RunUntil(DateTimeOffset.UtcNow.AddDays(30)));
 ```
 
 ### Multi-Queue Workload Isolation

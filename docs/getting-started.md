@@ -19,19 +19,20 @@ dotnet add package EverTask
 dotnet add package EverTask.Abstractions
 
 # Storage providers
-dotnet add package EverTask.SqlServer
-dotnet add package EverTask.Sqlite
+dotnet add package EverTask.Storage.SqlServer
+dotnet add package EverTask.Storage.Sqlite
 
 # Optional packages
-dotnet add package EverTask.Serilog
+dotnet add package EverTask.Logging.Serilog
 dotnet add package EverTask.Monitor.AspnetCore.SignalR
+dotnet add package EverTask.Monitor.Api
 ```
 
 Alternatively, you can install via Package Manager Console:
 
 ```powershell
 Install-Package EverTask
-Install-Package EverTask.SqlServer
+Install-Package EverTask.Storage.SqlServer
 ```
 
 ## Basic Configuration

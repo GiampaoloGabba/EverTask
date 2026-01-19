@@ -33,40 +33,42 @@ Quick reference guide with all configuration options in a concise, scannable for
 
 ### Minimal Setup
 ```csharp
-services.AddEverTask(options =>
+builder.Services.AddEverTask(opt =>
 {
-    options.RegisterTasksFromAssembly(typeof(Program).Assembly);
+    opt.RegisterTasksFromAssembly(typeof(Program).Assembly);
 })
 .AddMemoryStorage();
 ```
 
 ### Production Setup
 ```csharp
-services.AddEverTask(options =>
+builder.Services.AddEverTask(opt =>
 {
-    options.MaxConcurrency = 10;
-    options.DefaultRetryPolicy = new RetryPolicy
-    {
-        MaxAttempts = 3,
-        DelayMilliseconds = 1000,
-        BackoffMultiplier = 2.0
-    };
-    options.DefaultTimeoutMilliseconds = 30000;
+    opt.SetMaxDegreeOfParallelism(10)
+       .SetDefaultRetryPolicy(new LinearRetryPolicy(3, TimeSpan.FromSeconds(1)))
+       .SetDefaultTimeout(TimeSpan.FromSeconds(30))
+       .RegisterTasksFromAssembly(typeof(Program).Assembly);
 })
 .AddSqlServerStorage(connectionString);
 ```
 
 ### High-Throughput Setup
 ```csharp
-services.AddEverTask(options =>
+builder.Services.AddEverTask(opt =>
 {
-    options.MaxConcurrency = 50;
-    options.QueueCapacity = 1000;
-    options.EnableMultiQueue = true;
-    options.RegisterQueue("critical", priority: 1, maxConcurrency: 20);
-    options.RegisterQueue("standard", priority: 5, maxConcurrency: 20);
-    options.RegisterQueue("background", priority: 10, maxConcurrency: 10);
+    opt.SetMaxDegreeOfParallelism(50)
+       .SetChannelOptions(5000)
+       .RegisterTasksFromAssembly(typeof(Program).Assembly);
 })
+.ConfigureDefaultQueue(q => q
+    .SetMaxDegreeOfParallelism(20)
+    .SetChannelCapacity(500))
+.AddQueue("critical", q => q
+    .SetMaxDegreeOfParallelism(20)
+    .SetChannelCapacity(500))
+.AddQueue("background", q => q
+    .SetMaxDegreeOfParallelism(10)
+    .SetChannelCapacity(200))
 .AddSqlServerStorage(connectionString);
 ```
 

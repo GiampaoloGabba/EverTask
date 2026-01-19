@@ -122,8 +122,8 @@ All configuration is done through the `EverTaskApiOptions` class passed to `AddM
 ```csharp
 .AddMonitoringApi(options =>
 {
-    // Base path for API and UI (default: "/evertask-monitoring")
-    options.BasePath = "/evertask-monitoring";
+    // Base path for API and UI is fixed to "/evertask-monitoring"
+    // options.BasePath is read-only
 
     // Enable/disable embedded dashboard (default: true)
     options.EnableUI = true;

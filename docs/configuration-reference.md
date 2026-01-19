@@ -31,12 +31,12 @@ Controls how many tasks can be queued and what happens when the queue fills up.
 **Signatures:**
 ```csharp
 SetChannelOptions(int capacity)
-SetChannelOptions(Action<BoundedChannelOptions> configure)
+SetChannelOptions(BoundedChannelOptions options)
 ```
 
 **Parameters:**
 - `capacity` (int): Maximum number of tasks that can be queued
-- `configure` (Action): Custom configuration for `BoundedChannelOptions`
+- `options` (BoundedChannelOptions): Fully configured channel options instance
 
 **Default:** `Environment.ProcessorCount * 200` (minimum 1000)
 
@@ -46,10 +46,9 @@ SetChannelOptions(Action<BoundedChannelOptions> configure)
 opt.SetChannelOptions(5000)
 
 // Custom configuration
-opt.SetChannelOptions(options =>
+opt.SetChannelOptions(new BoundedChannelOptions(5000)
 {
-    options.Capacity = 5000;
-    options.FullMode = BoundedChannelFullMode.Wait; // or DropWrite, DropOldest
+    FullMode = BoundedChannelFullMode.Wait // or DropWrite, DropOldest
 })
 ```
 

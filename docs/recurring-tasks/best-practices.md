@@ -59,10 +59,7 @@ If your task takes a while to complete, set a timeout that gives it room to brea
 ```csharp
 public class LongRunningRecurringHandler : EverTaskHandler<LongRunningRecurringTask>
 {
-    public LongRunningRecurringHandler()
-    {
-        Timeout = TimeSpan.FromMinutes(30); // Generous timeout for long operations
-    }
+    public override TimeSpan? Timeout => TimeSpan.FromMinutes(30); // Generous timeout for long operations
 
     public override async Task Handle(LongRunningRecurringTask task, CancellationToken cancellationToken)
     {

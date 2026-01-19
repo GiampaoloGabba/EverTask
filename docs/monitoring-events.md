@@ -555,7 +555,7 @@ builder.Services.AddEverTask(opt =>
 ### Serilog Integration
 
 ```bash
-dotnet add package EverTask.Serilog
+dotnet add package EverTask.Logging.Serilog
 ```
 
 ```csharp

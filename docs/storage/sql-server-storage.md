@@ -12,7 +12,7 @@ SQL Server provides enterprise-grade storage for production environments.
 ## Installation
 
 ```bash
-dotnet add package EverTask.SqlServer
+dotnet add package EverTask.Storage.SqlServer
 ```
 
 ## Basic Configuration
