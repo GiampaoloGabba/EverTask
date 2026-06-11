@@ -294,6 +294,120 @@ public class SchedulerResilienceTests
     }
 
     [Fact]
+    public async Task Should_not_remove_newer_registration_when_conditional_TryUnschedule_targets_stale_one()
+    {
+        var calls = 0;
+        var mock = CreateManagerMock(_ =>
+        {
+            Interlocked.Increment(ref calls);
+            return EnqueueResult.Enqueued;
+        });
+
+        using var scheduler = new PeriodicTimerScheduler(
+            mock.Object,
+            new Mock<IEverTaskLogger<PeriodicTimerScheduler>>().Object,
+            TimeSpan.FromMilliseconds(50));
+
+        // Same PersistenceId, two registrations (latest wins). The conditional unschedule
+        // of the STALE one must fail and must NOT remove the newer registration.
+        var stale = CreateExecutor(DateTimeOffset.UtcNow.AddMilliseconds(300));
+        var newer = stale with { ExecutionTime = DateTimeOffset.UtcNow.AddMilliseconds(400) };
+        scheduler.Schedule(stale);
+        scheduler.Schedule(newer);
+
+        scheduler.TryUnschedule(stale.PersistenceId, stale).ShouldBeFalse();
+
+        // The newer registration is still live and must dispatch
+        await TaskWaitHelper.WaitForConditionAsync(() => calls >= 1, timeoutMs: 5000);
+        calls.ShouldBe(1);
+
+        // Conditional unschedule of the CURRENT registration succeeds when it is still parked
+        var parked = CreateExecutor(DateTimeOffset.UtcNow.AddMinutes(5));
+        scheduler.Schedule(parked);
+        scheduler.TryUnschedule(parked.PersistenceId, parked).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Should_not_remove_newer_registration_when_conditional_TryUnschedule_targets_stale_one_on_sharded_scheduler()
+    {
+        var calls = 0;
+        var mock = CreateManagerMock(_ =>
+        {
+            Interlocked.Increment(ref calls);
+            return EnqueueResult.Enqueued;
+        });
+
+        using var scheduler = new ShardedScheduler(
+            mock.Object,
+            new Mock<IEverTaskLogger<ShardedScheduler>>().Object,
+            null,
+            shardCount: 4);
+
+        var stale = CreateExecutor(DateTimeOffset.UtcNow.AddMilliseconds(300));
+        var newer = stale with { ExecutionTime = DateTimeOffset.UtcNow.AddMilliseconds(400) };
+        scheduler.Schedule(stale);
+        scheduler.Schedule(newer);
+
+        scheduler.TryUnschedule(stale.PersistenceId, stale).ShouldBeFalse();
+
+        await TaskWaitHelper.WaitForConditionAsync(() => calls >= 1, timeoutMs: 5000);
+        calls.ShouldBe(1);
+
+        var parked = CreateExecutor(DateTimeOffset.UtcNow.AddMinutes(5));
+        scheduler.Schedule(parked);
+        scheduler.TryUnschedule(parked.PersistenceId, parked).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Should_ignore_schedule_after_dispose_without_throwing()
+    {
+        var calls = 0;
+        var mock = CreateManagerMock(_ =>
+        {
+            Interlocked.Increment(ref calls);
+            return EnqueueResult.Enqueued;
+        });
+
+        var scheduler = new PeriodicTimerScheduler(
+            mock.Object,
+            new Mock<IEverTaskLogger<PeriodicTimerScheduler>>().Object,
+            TimeSpan.FromMilliseconds(50));
+
+        scheduler.Dispose();
+
+        // Scheduling after Dispose must not throw into the caller (the task stays in its
+        // recoverable status and is re-dispatched at the next startup) and must not dispatch.
+        Should.NotThrow(() => scheduler.Schedule(CreateExecutor(DateTimeOffset.UtcNow.AddMilliseconds(50))));
+
+        await Task.Delay(400);
+        calls.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task Should_ignore_schedule_after_dispose_without_throwing_on_sharded_scheduler()
+    {
+        var calls = 0;
+        var mock = CreateManagerMock(_ =>
+        {
+            Interlocked.Increment(ref calls);
+            return EnqueueResult.Enqueued;
+        });
+
+        var scheduler = new ShardedScheduler(
+            mock.Object,
+            new Mock<IEverTaskLogger<ShardedScheduler>>().Object,
+            null,
+            shardCount: 2);
+
+        scheduler.Dispose();
+
+        Should.NotThrow(() => scheduler.Schedule(CreateExecutor(DateTimeOffset.UtcNow.AddMilliseconds(50))));
+
+        await Task.Delay(400);
+        calls.ShouldBe(0);
+    }
+
+    [Fact]
     public void Should_not_throw_when_scheduling_concurrently_on_sharded_scheduler()
     {
         var mock = CreateManagerMock(_ => EnqueueResult.Enqueued);

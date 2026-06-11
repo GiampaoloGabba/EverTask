@@ -32,6 +32,7 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
     private readonly CancellationToken _shutdownToken;
     private readonly SemaphoreSlim _wakeUpSignal;
     private int _wakeUpPending;
+    private volatile bool _disposed;
 
     /// <summary>
     /// Delay before retrying the dispatch of a due task whose target queue is full.
@@ -83,6 +84,16 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
             scheduledTime = item.ExecutionTime.Value;
         }
 
+        // Post-dispose guard: scheduling after shutdown must not throw into the caller.
+        // The task stays in its recoverable status and is re-dispatched at the next startup.
+        if (_disposed)
+        {
+            _logger.LogWarning(
+                "Scheduler is disposed, ignoring schedule request for task {TaskId}: " +
+                "the task stays in a recoverable status for the next startup", item.PersistenceId);
+            return;
+        }
+
         // Latest-wins registration per PersistenceId: a previously parked entry for the same task
         // (e.g. recovery racing with a taskKey re-registration at startup) becomes stale and is
         // discarded at dequeue time, so the task executes only once per occurrence.
@@ -95,7 +106,15 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
         // Il flag _wakeUpPending viene resettato dopo che WaitAsync consuma il segnale.
         if (Interlocked.CompareExchange(ref _wakeUpPending, 1, 0) == 0)
         {
-            _wakeUpSignal.Release();
+            try
+            {
+                _wakeUpSignal.Release();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Disposed concurrently with this Schedule: the registration stays parked and
+                // the task is recovered at the next startup (same as the guard above)
+            }
         }
     }
 
@@ -105,6 +124,14 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
         // The orphan entry left in the priority queue is discarded by the staleness
         // check in ProcessReadyTasksAsync.
         return _scheduledItems.TryRemove(persistenceId, out _);
+    }
+
+    /// <inheritdoc />
+    public bool TryUnschedule(Guid persistenceId, TaskHandlerExecutor expected)
+    {
+        // Conditional remove (same pattern as the consume in ProcessReadyTasksAsync):
+        // a concurrent newer registration for the same task is preserved.
+        return _scheduledItems.TryRemove(new KeyValuePair<Guid, TaskHandlerExecutor>(persistenceId, expected));
     }
 
     private async Task ProcessScheduledTasksAsync(CancellationToken cancellationToken)
@@ -259,6 +286,11 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
 
     public void Dispose()
     {
+        if (_disposed)
+            return;
+
+        _disposed = true;
+
         _cts.Cancel();
         _cts.Dispose();
         _wakeUpSignal.Dispose();

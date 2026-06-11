@@ -28,12 +28,12 @@ public class HanlderExecutorTests
     }
 
     [Fact]
-    public void Should_return_Executor()
+    public async Task Should_return_Executor()
     {
         var guid               = TestGuidGenerator.New();
         var task               = new TestTaskRequest("test");
         var taskHandlerWrapper = new TaskHandlerWrapperImp<TestTaskRequest>();
-        var executor           = taskHandlerWrapper.Handle(task, null, null, _provider, AuditLevel.Full, guid);
+        var executor           = await taskHandlerWrapper.Handle(task, null, null, _provider, AuditLevel.Full, guid);
 
         executor.PersistenceId.ShouldBe(guid);
         executor.Task.ShouldBe(task);
@@ -41,40 +41,41 @@ public class HanlderExecutorTests
     }
 
     [Fact]
-    public void Executor_Should_convert_offset_to_utc()
+    public async Task Executor_Should_convert_offset_to_utc()
     {
         var task           = new TestTaskRequest("test");
         var inputOffset    = new DateTimeOffset(2023, 1, 1, 12, 0, 0, TimeSpan.FromHours(10));
         var expectedOffset = new DateTimeOffset(inputOffset.UtcDateTime);
 
         var handlerWrapper = new TaskHandlerWrapperImp<TestTaskRequest>();
-        var executor       = handlerWrapper.Handle(task, inputOffset, null, _provider, AuditLevel.Full, TestGuidGenerator.New());
+        var executor       = await handlerWrapper.Handle(task, inputOffset, null, _provider, AuditLevel.Full, TestGuidGenerator.New());
 
         executor.ExecutionTime.ShouldBe(expectedOffset);
     }
 
     [Fact]
-    public void Should_throw_for_not_registered()
+    public async Task Should_throw_for_not_registered()
     {
         var taskHandlerWrapper = new TaskHandlerWrapperImp<TestTaskRequestNoHandler>();
-        Should.Throw<ArgumentNullException>(() => taskHandlerWrapper.Handle(null!, null, null, _provider, AuditLevel.Full));
+        await Should.ThrowAsync<ArgumentNullException>(async () =>
+            await taskHandlerWrapper.Handle(null!, null, null, _provider, AuditLevel.Full));
     }
 
     [Fact]
-    public void Should_throw_for_not_serializable()
+    public async Task Should_throw_for_not_serializable()
     {
         var taskHandlerWrapper = new TaskHandlerWrapperImp<TestTaskRequestNoSerializable>();
         var executor =
-            taskHandlerWrapper.Handle(new TestTaskRequestNoSerializable(IPAddress.None), null, null, _provider, AuditLevel.Full);
+            await taskHandlerWrapper.Handle(new TestTaskRequestNoSerializable(IPAddress.None), null, null, _provider, AuditLevel.Full);
 
         Should.Throw<JsonSerializationException>(() => executor.ToQueuedTask());
     }
 
     [Fact]
-    public void Should_return_queued_task()
+    public async Task Should_return_queued_task()
     {
         var taskHandlerWrapper = new TaskHandlerWrapperImp<TestTaskRequest>();
-        var executor           = taskHandlerWrapper.Handle(new TestTaskRequest("test"), null, null, _provider, AuditLevel.Full);
+        var executor           = await taskHandlerWrapper.Handle(new TestTaskRequest("test"), null, null, _provider, AuditLevel.Full);
 
         var queuedTask = executor.ToQueuedTask();
 
@@ -86,16 +87,41 @@ public class HanlderExecutorTests
     }
 
     [Fact]
-    public void Should_persis_existing_Guid()
+    public async Task Should_persis_existing_Guid()
     {
         var guid               = TestGuidGenerator.New();
         var task               = new TestTaskRequest("test");
         var taskHandlerWrapper = new TaskHandlerWrapperImp<TestTaskRequest>();
-        var executor           = taskHandlerWrapper.Handle(task, null, null, _provider, AuditLevel.Full, guid);
+        var executor           = await taskHandlerWrapper.Handle(task, null, null, _provider, AuditLevel.Full, guid);
 
         var queuedTask = executor.ToQueuedTask();
 
         queuedTask.Id.ShouldBe(guid);
+    }
+
+    [Fact]
+    public async Task Should_return_lazy_executor_without_handler_instance_when_lazy_requested()
+    {
+        var serviceCollection = new ServiceCollection();
+        serviceCollection.AddTransient<IEverTaskHandler<TestTaskRequest>, TestTaskHanlder>();
+        serviceCollection.AddSingleton<IGuidGenerator>(new DefaultGuidGenerator(UUIDNext.Database.Other));
+        await using var provider = serviceCollection.BuildServiceProvider();
+
+        var guid               = TestGuidGenerator.New();
+        var task               = new TestTaskRequest("test");
+        var taskHandlerWrapper = new TaskHandlerWrapperImp<TestTaskRequest>();
+        var executor = await taskHandlerWrapper.Handle(task, null, null, provider, AuditLevel.Full, guid,
+            useLazyExecutor: true);
+
+        executor.IsLazy.ShouldBeTrue();
+        executor.Handler.ShouldBeNull();
+        executor.HandlerCallback.ShouldBeNull();
+        executor.HandlerTypeName.ShouldBe(typeof(TestTaskHanlder).AssemblyQualifiedName);
+        executor.PersistenceId.ShouldBe(guid);
+
+        // The lazy executor must still serialize correctly (HandlerTypeName path)
+        var queuedTask = executor.ToQueuedTask();
+        queuedTask.Handler.ShouldBe(typeof(TestTaskHanlder).AssemblyQualifiedName);
     }
 
     [Fact]

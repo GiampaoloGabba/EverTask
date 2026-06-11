@@ -608,9 +608,11 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         TestTaskLifecycleWithAsyncDispose.WasDisposed.ShouldBeTrue();
         TestTaskLifecycleWithAsyncDispose.CallbackOrder.ShouldContain("DisposeAsyncCore");
 
-        // Verify callback order: Handle should come before DisposeAsyncCore
+        // Verify callback order: the EXECUTING instance is disposed after Handle.
+        // (Immediate dispatches are lazy: the dispatch-time metadata instance adds a
+        // DisposeAsyncCore entry before Handle, so compare against the LAST dispose.)
         var handleIndex = TestTaskLifecycleWithAsyncDispose.CallbackOrder.IndexOf("Handle");
-        var disposeIndex = TestTaskLifecycleWithAsyncDispose.CallbackOrder.IndexOf("DisposeAsyncCore");
+        var disposeIndex = TestTaskLifecycleWithAsyncDispose.CallbackOrder.LastIndexOf("DisposeAsyncCore");
 
         handleIndex.ShouldBeGreaterThanOrEqualTo(0);
         disposeIndex.ShouldBeGreaterThanOrEqualTo(0);

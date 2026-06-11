@@ -2,6 +2,7 @@
 using EverTask.Dispatcher;
 using EverTask.Handler;
 using EverTask.Logger;
+using EverTask.RateLimiting;
 using EverTask.Scheduler;
 using EverTask.Scheduler.Recurring.Intervals;
 
@@ -16,6 +17,7 @@ public class DispatcherTests
     private readonly Mock<IWorkerBlacklist> _blackListMock;
     private readonly Mock<IScheduler> _delayedQueue;
     private readonly Mock<ICancellationSourceProvider> _cancSourceProviderMock;
+    private readonly GateInvalidationRegistry _gateInvalidationRegistry = new();
 
     public DispatcherTests()
     {
@@ -41,6 +43,20 @@ public class DispatcherTests
 
         serviceProviderMock.Setup(s => s.GetService(typeof(IGuidGenerator)))
                            .Returns(new DefaultGuidGenerator(UUIDNext.Database.Other));
+
+        // Lazy dispatches resolve the metadata handler in a short-lived scope (MEM-2):
+        // expose a scope factory whose scope serves from the same mocked provider
+        var serviceScopeMock = new Mock<IServiceScope>();
+        serviceScopeMock.Setup(s => s.ServiceProvider).Returns(() => serviceProviderMock.Object);
+
+        var serviceScopeFactoryMock = new Mock<IServiceScopeFactory>();
+        serviceScopeFactoryMock.Setup(f => f.CreateScope()).Returns(serviceScopeMock.Object);
+
+        serviceProviderMock.Setup(s => s.GetService(typeof(IServiceScopeFactory)))
+                           .Returns(serviceScopeFactoryMock.Object);
+
+        serviceProviderMock.Setup(s => s.GetService(typeof(IGateInvalidationRegistry)))
+                           .Returns(_gateInvalidationRegistry);
 
         // Setup the queue manager to return the default queue
         _workerQueueManagerMock.Setup(x => x.GetQueue("default")).Returns(_workerQueueMock.Object);
@@ -103,6 +119,20 @@ public class DispatcherTests
 
         _blackListMock.Verify(q => q.Add(taskId), Times.Once);
         _cancSourceProviderMock.Verify(q => q.CancelTokenForTask(taskId), Times.Once);
+    }
+
+    [Fact]
+    public async Task Should_invalidate_gate_registration_when_task_is_cancelled()
+    {
+        var taskId = await _dispatcher.Dispatch(new TestTaskRequest2());
+        var epochBefore = _gateInvalidationRegistry.GetEpoch(taskId);
+
+        await _dispatcher.Cancel(taskId);
+
+        // Cancel must also unschedule any parked occurrence and bump the gate epoch,
+        // covering the dequeue→re-park limbo window the scheduler cannot see
+        _delayedQueue.Verify(q => q.TryUnschedule(taskId), Times.Once);
+        _gateInvalidationRegistry.HasChangedSince(taskId, epochBefore).ShouldBeTrue();
     }
 
     [Fact]

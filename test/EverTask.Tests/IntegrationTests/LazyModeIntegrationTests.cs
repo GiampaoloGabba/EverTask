@@ -7,14 +7,20 @@ namespace EverTask.Tests.IntegrationTests;
 /// Integration tests for lazy handler resolution mode.
 ///
 /// KEY INSIGHT: BOTH lazy and eager modes ALWAYS dispose handlers after execution.
-/// The ONLY difference is WHEN the handler is created:
+/// The difference is WHEN the EXECUTING handler is created:
 /// - Eager mode: Handler created at dispatch time (lives in memory until execution)
 /// - Lazy mode: Handler created at execution time (minimal memory footprint)
+///
+/// Lazy dispatches additionally resolve a short-lived metadata instance at dispatch time
+/// (queue name / handler type extraction) which is created AND disposed inside the dispatch
+/// scope (MEM-2 fix: nothing stays pinned in the root container). So in lazy mode
+/// DisposeAsyncCore fires once at dispatch (metadata instance, never executed) and once
+/// after each execution (executing instance).
 ///
 /// Tests validate:
 /// 1. Adaptive algorithm assigns correct mode based on task type/interval
 /// 2. Handlers are disposed after execution in BOTH modes (not kept in memory)
-/// 3. Disposal happens AFTER execution, not during dispatch
+/// 3. In eager mode, disposal happens AFTER execution, not during dispatch
 /// </summary>
 public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
 {
@@ -157,10 +163,11 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
             .MaxRuns(1));
 
 
-        // At this point, dispatch is complete but task hasn't executed
-        // In lazy mode, handler is NOT created during dispatch (null in TaskHandlerExecutor)
-        TestTaskLazyModeRecurringWithAsyncDispose.DisposeCount.ShouldBe(0,
-            "Handler should NOT be created during dispatch (lazy mode defers handler creation)");
+        // At this point, dispatch is complete but task hasn't executed.
+        // In lazy mode the dispatch resolves a short-lived metadata instance and disposes it
+        // with the dispatch scope (MEM-2): one dispose, zero executions.
+        TestTaskLazyModeRecurringWithAsyncDispose.DisposeCount.ShouldBe(1,
+            "The dispatch-time metadata instance should be disposed with the dispatch scope (MEM-2)");
 
         TestTaskLazyModeRecurringWithAsyncDispose.ExecutionCount.ShouldBe(0,
             "Task should not have executed yet (host not started)");
@@ -267,12 +274,14 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
     }
 
     [Fact]
-    public async Task Should_dispose_handler_in_eager_mode_for_immediate_task()
+    public async Task Should_dispose_executing_handler_after_immediate_task_execution()
     {
-        // This test verifies the original fix: eager mode (immediate tasks) should also dispose handlers
+        // Immediate tasks are lazy by default (MEM-2): the executing handler is resolved and
+        // disposed inside the worker's per-task scope; the dispatch-time metadata instance is
+        // disposed with the dispatch scope.
         await CreateIsolatedHostAsync(configureEverTask: cfg =>
         {
-            cfg.UseLazyHandlerResolution = true; // Enabled, but immediate tasks use eager mode
+            cfg.UseLazyHandlerResolution = true;
         });
 
         // Reset static properties
@@ -280,7 +289,7 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
         TestTaskLifecycleWithAsyncDispose.WasDisposed = false;
 
         var task = new TestTaskLifecycleWithAsyncDispose();
-        var taskId = await Dispatcher.Dispatch(task); // Immediate dispatch = eager mode
+        var taskId = await Dispatcher.Dispatch(task); // Immediate dispatch = lazy mode (MEM-2)
 
         // Wait for task to complete
         await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed);
@@ -288,19 +297,21 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
         // Give disposal a moment to complete
         await Task.Delay(200);
 
-        // Verify disposal was called (this is the bug that was fixed)
+        // Verify disposal was called
         TestTaskLifecycleWithAsyncDispose.WasDisposed.ShouldBeTrue(
-            "Handler should be disposed in eager mode too (bug fix verification)");
+            "Executing handler should be disposed after execution");
 
         TestTaskLifecycleWithAsyncDispose.CallbackOrder.ShouldContain("DisposeAsyncCore");
 
-        // Verify callback order: Handle should come before DisposeAsyncCore
+        // Verify callback order: the EXECUTING instance is disposed after Handle.
+        // (The dispatch-time metadata instance may add a DisposeAsyncCore entry before Handle,
+        // so compare against the LAST dispose.)
         var handleIndex = TestTaskLifecycleWithAsyncDispose.CallbackOrder.IndexOf("Handle");
-        var disposeIndex = TestTaskLifecycleWithAsyncDispose.CallbackOrder.IndexOf("DisposeAsyncCore");
+        var lastDisposeIndex = TestTaskLifecycleWithAsyncDispose.CallbackOrder.LastIndexOf("DisposeAsyncCore");
 
         handleIndex.ShouldBeGreaterThanOrEqualTo(0);
-        disposeIndex.ShouldBeGreaterThanOrEqualTo(0);
-        disposeIndex.ShouldBeGreaterThan(handleIndex, "DisposeAsyncCore should be called after Handle");
+        lastDisposeIndex.ShouldBeGreaterThanOrEqualTo(0);
+        lastDisposeIndex.ShouldBeGreaterThan(handleIndex, "The executing handler is disposed after Handle");
     }
 
     [Fact]
@@ -339,7 +350,8 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
         }
 
         executionCount.ShouldBe(1, "First run should have executed");
-        disposeCount.ShouldBe(1, "Handler should be disposed after first run (lazy mode)");
+        disposeCount.ShouldBe(2,
+            "Both the dispatch-time metadata instance (MEM-2) and the executing handler should be disposed");
 
         // Verify first run completed successfully
         var tasks = await Storage.GetAll();
@@ -425,7 +437,8 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
         }
 
         executionCount.ShouldBe(1);
-        disposeCount.ShouldBe(1, "Handler should be disposed (lazy mode for long-interval cron)");
+        disposeCount.ShouldBe(2,
+            "Both the dispatch-time metadata instance (MEM-2) and the executing handler should be disposed (lazy mode for long-interval cron)");
     }
 
     [Fact]

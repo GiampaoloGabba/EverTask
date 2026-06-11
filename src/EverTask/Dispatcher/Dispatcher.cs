@@ -1,4 +1,5 @@
 ﻿using EverTask.Configuration;
+using EverTask.RateLimiting;
 using EverTask.Scheduler.Recurring.Builder;
 using System.Collections.Concurrent;
 using System.Linq.Expressions;
@@ -22,6 +23,25 @@ public class Dispatcher(
 {
     // Cache for compiled TaskHandlerWrapper constructors to avoid reflection overhead
     private static readonly ConcurrentDictionary<Type, Func<TaskHandlerWrapper>> WrapperFactoryCache = new();
+
+    // Resolved lazily: optional component (registered by AddEverTask, may be absent in
+    // hand-wired unit-test providers)
+    private IGateInvalidationRegistry? _gateInvalidation;
+    private bool _gateInvalidationResolved;
+
+    private IGateInvalidationRegistry? GateInvalidation
+    {
+        get
+        {
+            if (!_gateInvalidationResolved)
+            {
+                _gateInvalidation         = serviceProvider.GetService<IGateInvalidationRegistry>();
+                _gateInvalidationResolved = true;
+            }
+
+            return _gateInvalidation;
+        }
+    }
 
     /// <inheritdoc />
     public Task<Guid> Dispatch(IEverTask task, AuditLevel? auditLevel = null, string? taskKey = null, CancellationToken cancellationToken = default) =>
@@ -59,6 +79,10 @@ public class Dispatcher(
         // Drop any occurrence still parked in the scheduler so it isn't even dispatched
         // (the blacklist would discard it at enqueue time anyway, this is just cleaner)
         scheduler.TryUnschedule(taskId);
+
+        // Invalidate any rate-limit gate operation in flight for this task: a deferral
+        // being re-parked concurrently with this Cancel must not survive it.
+        GateInvalidation?.Invalidate(taskId);
     }
 
     /// <inheritdoc />
@@ -227,7 +251,13 @@ public class Dispatcher(
         // Use provided audit level or fall back to global default
         var effectiveAuditLevel = auditLevel ?? serviceConfiguration.DefaultAuditLevel;
 
-        var executor = handler.Handle(task, executionTime, recurring, serviceProvider, effectiveAuditLevel, existingTaskId, taskKey);
+        // Lazy executors never carry a handler instance: the wrapper resolves one in a
+        // short-lived scope for metadata extraction only, and the worker resolves a fresh
+        // instance in its per-task scope at execution time
+        var useLazyExecutor = ShouldUseLazyResolution(executionTime, recurring);
+
+        var executor = await handler.Handle(task, executionTime, recurring, serviceProvider, effectiveAuditLevel,
+            existingTaskId, taskKey, useLazyExecutor).ConfigureAwait(false);
 
         // Persist or update task (lazy serialize only if storage exists).
         // Recovery dispatches skip the update entirely: the definition was just read from storage
@@ -262,20 +292,9 @@ public class Dispatcher(
             }
         }
 
-        // Determine if task should use lazy handler resolution
+        // The executor is already lazy when useLazyExecutor is true (built by the wrapper
+        // without a handler instance), eager otherwise
         TaskHandlerExecutor executorToSchedule = executor;
-        if (ShouldUseLazyResolution(executionTime, recurring))
-        {
-            // ⚠️ DO NOT DISPOSE HANDLER HERE!
-            // Handler has not executed yet, user's DisposeAsyncCore() expects execution first.
-            // GC will collect the unused handler instance naturally (lightweight, only DI references).
-            // See implementation plan section 2.2 for detailed rationale.
-
-            // Convert to lazy mode (handler → null, only metadata kept)
-            executorToSchedule = executor.ToLazy();
-
-            logger.LogDebug("Task {TaskId} converted to lazy handler resolution mode", executor.PersistenceId);
-        }
 
         if (executorToSchedule.ExecutionTime > DateTimeOffset.UtcNow || recurring != null)
         {
@@ -285,9 +304,13 @@ public class Dispatcher(
         {
             // Immediate re-dispatch of an existing task (e.g. taskKey update of a previously
             // delayed task): invalidate any registration still parked in the scheduler, or the
-            // stale occurrence would fire later causing a double execution.
+            // stale occurrence would fire later causing a double execution. The gate invalidation
+            // additionally covers the dequeue→re-park limbo window the scheduler cannot see.
             if (existingTaskId != null)
+            {
                 scheduler.TryUnschedule(executorToSchedule.PersistenceId);
+                GateInvalidation?.Invalidate(executorToSchedule.PersistenceId);
+            }
 
             // Determine queue name with automatic routing for recurring tasks
             var queueName = executorToSchedule.QueueName ??
@@ -336,8 +359,10 @@ public class Dispatcher(
             return delay >= TimeSpan.FromMinutes(30);
         }
 
-        // Immediate tasks: always eager
-        return false;
+        // Immediate tasks: lazy by default (MEM-2). An eager handler resolved at dispatch from
+        // the singleton dispatcher's root provider is pinned in the root container's disposables
+        // list until shutdown; the worker resolves and disposes a fresh instance per task anyway.
+        return true;
     }
 
     /// <summary>

@@ -28,8 +28,10 @@ public class EverTaskServiceConfiguration
     internal int? ShardedSchedulerShardCount { get; private set; }
 
     /// <summary>
-    /// Enable adaptive lazy handler resolution for scheduled and recurring tasks.
+    /// Enable adaptive lazy handler resolution.
     /// When enabled, handlers are recreated at execution time based on task scheduling:
+    /// - Immediate tasks use lazy mode (the worker resolves a fresh handler in its per-task scope;
+    ///   an eager instance resolved at dispatch would be pinned in the root container until shutdown)
     /// - Recurring tasks with intervals >= 5 minutes use lazy mode (memory efficient)
     /// - Recurring tasks with intervals < 5 minutes use eager mode (performance efficient)
     /// - Delayed tasks with delay >= 30 minutes use lazy mode

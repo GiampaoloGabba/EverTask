@@ -46,7 +46,7 @@ public class ShardedScheduler : IScheduler, IDisposable
         private readonly ShardedScheduler _owner;
         private readonly int _shardId;
         private int _wakeUpPending;
-        private bool _disposed;
+        private volatile bool _disposed;
 
         public Shard(
             int shardId,
@@ -75,6 +75,16 @@ public class ShardedScheduler : IScheduler, IDisposable
         /// </summary>
         public void Schedule(TaskHandlerExecutor item, DateTimeOffset scheduledTime)
         {
+            // Post-dispose guard: scheduling after shutdown must not throw into the caller.
+            // The task stays in its recoverable status and is re-dispatched at the next startup.
+            if (_disposed)
+            {
+                _logger.LogWarning(
+                    "Shard {ShardId}: scheduler is disposed, ignoring schedule request for task {TaskId}: " +
+                    "the task stays in a recoverable status for the next startup", _shardId, item.PersistenceId);
+                return;
+            }
+
             _logger.LogDebug("Shard {ShardId}: Scheduling task {TaskId} for {ScheduledTime}",
                 _shardId, item.PersistenceId, scheduledTime);
 
@@ -88,7 +98,15 @@ public class ShardedScheduler : IScheduler, IDisposable
             // due Schedule() concorrenti con CurrentCount==0 lancerebbero SemaphoreFullException.
             if (Interlocked.CompareExchange(ref _wakeUpPending, 1, 0) == 0)
             {
-                _wakeUpSignal.Release();
+                try
+                {
+                    _wakeUpSignal.Release();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // Disposed concurrently with this Schedule: the registration stays parked
+                    // and the task is recovered at the next startup (same as the guard above)
+                }
             }
         }
 
@@ -99,6 +117,15 @@ public class ShardedScheduler : IScheduler, IDisposable
         {
             // The orphan entry left in the priority queue is discarded by the staleness check
             return _scheduledItems.TryRemove(persistenceId, out _);
+        }
+
+        /// <summary>
+        /// Conditionally invalidates a parked registration in this shard: removed only if it is
+        /// still the expected one (a concurrent newer registration is preserved).
+        /// </summary>
+        public bool TryUnschedule(Guid persistenceId, TaskHandlerExecutor expected)
+        {
+            return _scheduledItems.TryRemove(new KeyValuePair<Guid, TaskHandlerExecutor>(persistenceId, expected));
         }
 
         /// <summary>
@@ -303,6 +330,13 @@ public class ShardedScheduler : IScheduler, IDisposable
     {
         // Hash-based sharding is deterministic: the registration, if any, lives in this shard
         return GetShard(persistenceId).TryUnschedule(persistenceId);
+    }
+
+    /// <inheritdoc />
+    public bool TryUnschedule(Guid persistenceId, TaskHandlerExecutor expected)
+    {
+        // Hash-based sharding is deterministic: the registration, if any, lives in this shard
+        return GetShard(persistenceId).TryUnschedule(persistenceId, expected);
     }
 
     private Shard GetShard(Guid persistenceId)

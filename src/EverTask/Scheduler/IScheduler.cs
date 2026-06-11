@@ -13,4 +13,14 @@ public interface IScheduler
     /// <param name="persistenceId">The persistence id of the task to unschedule.</param>
     /// <returns>True if a parked registration was removed.</returns>
     bool TryUnschedule(Guid persistenceId);
+
+    /// <summary>
+    /// Conditionally invalidates a parked registration: it is removed only if the currently
+    /// registered executor is the <paramref name="expected"/> one. A concurrent newer
+    /// registration for the same task (latest-wins) is preserved.
+    /// </summary>
+    /// <param name="persistenceId">The persistence id of the task to unschedule.</param>
+    /// <param name="expected">The registration expected to be currently parked.</param>
+    /// <returns>True if the expected registration was removed.</returns>
+    bool TryUnschedule(Guid persistenceId, TaskHandlerExecutor expected);
 }

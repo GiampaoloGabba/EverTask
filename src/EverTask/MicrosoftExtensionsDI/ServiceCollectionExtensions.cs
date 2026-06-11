@@ -1,4 +1,5 @@
 ﻿using EverTask.Configuration;
+using EverTask.RateLimiting;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -73,6 +74,7 @@ public static class ServiceCollectionExtensions
             services.TryAddSingleton<IScheduler, PeriodicTimerScheduler>();
         }
 
+        services.TryAddSingleton<IGateInvalidationRegistry, GateInvalidationRegistry>();
         services.TryAddSingleton<ITaskDispatcherInternal, Dispatcher>();
         services.TryAddSingleton<ITaskDispatcher>(provider => provider.GetRequiredService<ITaskDispatcherInternal>());
         services.TryAddSingleton<ICancellationSourceProvider, CancellationSourceProvider>();

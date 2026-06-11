@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Linq.Expressions;
 
 namespace EverTask.Handler;
 
@@ -44,6 +45,17 @@ public record TaskHandlerExecutor(
     /// <exception cref="InvalidOperationException">
     /// Thrown if handler type cannot be loaded or is not registered in DI
     /// </exception>
+    // Performance optimization: cache Type.GetType lookups for lazy resolution.
+    // The immediate path is lazy by default, so this lookup is on the hot path.
+    private static readonly ConcurrentDictionary<string, Type> HandlerTypeLookupCache = new();
+
+    // Performance optimization: compiled Handle invokers per (handler, task) type pair for
+    // lazy-mode callbacks. A compiled delegate avoids MethodInfo.Invoke, which would both be
+    // slower on the hot path and wrap synchronous handler exceptions in
+    // TargetInvocationException (breaking retry-policy exception filtering).
+    private static readonly ConcurrentDictionary<(Type HandlerType, Type TaskType),
+        Func<object, IEverTask, CancellationToken, Task>?> HandleInvokerCache = new();
+
     public object GetOrResolveHandler(IServiceProvider serviceProvider)
     {
         // Eager mode: return existing handler instance
@@ -55,8 +67,14 @@ public record TaskHandlerExecutor(
             throw new InvalidOperationException(
                 $"Cannot resolve handler for task {PersistenceId}: both Handler and HandlerTypeName are null");
 
-        // Load type from assembly-qualified name
-        var handlerType = Type.GetType(HandlerTypeName);
+        // Load type from assembly-qualified name (cached: Type.GetType parses the name on every call)
+        if (!HandlerTypeLookupCache.TryGetValue(HandlerTypeName, out var handlerType))
+        {
+            handlerType = Type.GetType(HandlerTypeName);
+            if (handlerType != null)
+                HandlerTypeLookupCache.TryAdd(HandlerTypeName, handlerType);
+        }
+
         if (handlerType == null)
             throw new InvalidOperationException(
                 $"Handler type '{HandlerTypeName}' could not be loaded. Ensure assembly is referenced and type exists.");
@@ -81,17 +99,41 @@ public record TaskHandlerExecutor(
         if (HandlerCallback != null)
             return (handler, HandlerCallback);
 
-        // Lazy mode: create typed callback using reflection
-        var taskType     = Task.GetType();
-        var handleMethod = handler.GetType().GetMethod("Handle", [taskType, typeof(CancellationToken)]);
+        // Lazy mode: create typed callback via a compiled delegate (cached per type pair)
+        var taskType = Task.GetType();
+        var invoker = HandleInvokerCache.GetOrAdd(
+            (handler.GetType(), taskType),
+            static key =>
+            {
+                var handleMethod = key.HandlerType.GetMethod("Handle", [key.TaskType, typeof(CancellationToken)]);
+                if (handleMethod == null)
+                    return null;
 
-        if (handleMethod == null)
+                // (object handler, IEverTask task, CancellationToken ct) =>
+                //     ((THandler)handler).Handle((TTask)task, ct)
+                var handlerParam = Expression.Parameter(typeof(object), "handler");
+                var taskParam    = Expression.Parameter(typeof(IEverTask), "task");
+                var tokenParam   = Expression.Parameter(typeof(CancellationToken), "ct");
+
+                var call = Expression.Call(
+                    Expression.Convert(handlerParam, key.HandlerType),
+                    handleMethod,
+                    Expression.Convert(taskParam, key.TaskType),
+                    tokenParam);
+
+                return Expression
+                       .Lambda<Func<object, IEverTask, CancellationToken, Task>>(
+                           call, handlerParam, taskParam, tokenParam)
+                       .Compile();
+            });
+
+        if (invoker == null)
             throw new InvalidOperationException(
                 $"Handle method not found on handler {handler.GetType().Name} for task {taskType.Name}");
 
         return (handler, Callback);
 
-        Task Callback(IEverTask t, CancellationToken ct) => (Task)handleMethod.Invoke(handler, [t, ct])!;
+        Task Callback(IEverTask t, CancellationToken ct) => invoker(handler, t, ct);
     }
 
     /// <summary>
@@ -100,13 +142,12 @@ public record TaskHandlerExecutor(
     /// </summary>
     /// <returns>
     /// New lazy executor with null handler and populated HandlerTypeName,
-    /// or self if already lazy
+    /// or a new instance with the same values if already lazy
     /// </returns>
     /// <remarks>
-    /// The original handler instance at dispatch time is NOT disposed. It will be collected by GC.
-    /// This is intentional: the handler has not executed yet, so calling DisposeAsyncCore() would
-    /// be inappropriate (user's dispose logic expects handler to have been executed).
-    /// Fresh handler instances are resolved and disposed at execution time.
+    /// The handler instance is NOT disposed here: its lifetime is owned by the DI scope or
+    /// container that resolved it. Fresh handler instances are resolved and disposed at
+    /// execution time inside the worker's per-task scope.
     /// </remarks>
     public TaskHandlerExecutor ToLazy()
     {
@@ -132,10 +173,9 @@ public record TaskHandlerExecutor(
             );
         }
 
-        // Extract handler type name
-        var handlerTypeName = Handler!.GetType().AssemblyQualifiedName
-                              ?? throw new InvalidOperationException(
-                                  $"Handler type {Handler.GetType().Name} has no AssemblyQualifiedName");
+        // Reuse the handler type name stamped at dispatch time when available,
+        // falling back to the shared type-name cache (AQN dedup)
+        var handlerTypeName = HandlerTypeName ?? TypeNameCache.GetAssemblyQualifiedName(Handler!.GetType());
 
         // Create lazy executor with handler and callbacks set to null
         return new TaskHandlerExecutor(
@@ -159,7 +199,6 @@ public record TaskHandlerExecutor(
 public static class TaskHandlerExecutorExtensions
 {
     // Performance optimization: Cache type metadata strings to avoid repeated generation
-    private static readonly ConcurrentDictionary<Type, string> AssemblyQualifiedNameCache = new();
     private static readonly ConcurrentDictionary<RecurringTask, string> RecurringTaskToStringCache = new();
 
     public static QueuedTask ToQueuedTask(this TaskHandlerExecutor executor)
@@ -168,21 +207,15 @@ public static class TaskHandlerExecutorExtensions
 
         var request = JsonConvert.SerializeObject(executor.Task);
 
-        // Use cached AssemblyQualifiedName to avoid repeated string generation
-        var requestType = AssemblyQualifiedNameCache.GetOrAdd(
-            executor.Task.GetType(),
-            type => type.AssemblyQualifiedName ??
-                    throw new InvalidOperationException($"Type {type} has no AssemblyQualifiedName"));
+        // Use the shared assembly-qualified-name cache to avoid repeated string generation
+        var requestType = TypeNameCache.GetAssemblyQualifiedName(executor.Task.GetType());
 
         // Get handler type from Handler instance (eager mode) or HandlerTypeName (lazy mode)
         string handlerType;
         if (executor.Handler != null)
         {
             // Eager mode: extract from handler instance
-            handlerType = AssemblyQualifiedNameCache.GetOrAdd(
-                executor.Handler.GetType(),
-                type => type.AssemblyQualifiedName ??
-                        throw new InvalidOperationException($"Type {type} has no AssemblyQualifiedName"));
+            handlerType = TypeNameCache.GetAssemblyQualifiedName(executor.Handler.GetType());
         }
         else if (!string.IsNullOrEmpty(executor.HandlerTypeName))
         {
