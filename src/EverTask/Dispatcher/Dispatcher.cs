@@ -55,6 +55,10 @@ public class Dispatcher(
         cancellationSourceProvider.CancelTokenForTask(taskId);
 
         workerBlacklist.Add(taskId);
+
+        // Drop any occurrence still parked in the scheduler so it isn't even dispatched
+        // (the blacklist would discard it at enqueue time anyway, this is just cleaner)
+        scheduler.TryUnschedule(taskId);
     }
 
     /// <inheritdoc />
@@ -79,7 +83,8 @@ public class Dispatcher(
 
     public async Task<Guid> ExecuteDispatch(IEverTask task, DateTimeOffset? executionTime = null,
                                             RecurringTask? recurring = null, int? currentRun = null,
-                                            CancellationToken ct = default, Guid? existingTaskId = null, string? taskKey = null, AuditLevel? auditLevel = null)
+                                            CancellationToken ct = default, Guid? existingTaskId = null, string? taskKey = null, AuditLevel? auditLevel = null,
+                                            bool isRecovery = false)
     {
         ArgumentNullException.ThrowIfNull(task);
 
@@ -152,6 +157,17 @@ public class Dispatcher(
 
         DateTimeOffset? nextRun = null;
 
+        // Recovery re-dispatch of a recurring task: executionTime is the stored NextRunUtc
+        // (or ScheduledExecutionUtc). Treat it as the preserved next occurrence, exactly like
+        // the taskKey path: using it as a bare recalculation base would compute the occurrence
+        // strictly AFTER it, skipping one occurrence at every restart (and killing the last
+        // occurrence before RunUntil).
+        if (isRecovery && recurring != null && existingNextRunUtc == null && executionTime.HasValue)
+        {
+            existingNextRunUtc      = executionTime;
+            existingCurrentRunCount = currentRun;
+        }
+
         if (recurring != null)
         {
             // If we have a valid existing NextRunUtc from a task with TaskKey
@@ -207,8 +223,12 @@ public class Dispatcher(
 
         var executor = handler.Handle(task, executionTime, recurring, serviceProvider, effectiveAuditLevel, existingTaskId, taskKey);
 
-        // Persist or update task (lazy serialize only if storage exists)
-        if (taskStorage != null)
+        // Persist or update task (lazy serialize only if storage exists).
+        // Recovery dispatches skip the update entirely: the definition was just read from storage
+        // unchanged, and rewriting it could overwrite a concurrent live re-registration via taskKey
+        // (lost update). Recalculated schedule data is re-derived deterministically at the next
+        // restart and persisted by UpdateCurrentRun after each run.
+        if (taskStorage != null && !(isRecovery && existingTaskId != null))
         {
             var taskEntity = executor.ToQueuedTask();
 
@@ -257,10 +277,25 @@ public class Dispatcher(
         }
         else
         {
+            // Immediate re-dispatch of an existing task (e.g. taskKey update of a previously
+            // delayed task): invalidate any registration still parked in the scheduler, or the
+            // stale occurrence would fire later causing a double execution.
+            if (existingTaskId != null)
+                scheduler.TryUnschedule(executorToSchedule.PersistenceId);
+
             // Determine queue name with automatic routing for recurring tasks
             var queueName = executorToSchedule.QueueName ??
                             (executorToSchedule.RecurringTask != null ? QueueNames.Recurring : QueueNames.Default);
-            await queueManager.TryEnqueue(queueName, executorToSchedule).ConfigureAwait(false);
+
+            if (isRecovery)
+            {
+                // Recovery path: never fail fast, wait for queue space (consumers are draining concurrently)
+                await queueManager.EnqueueBlocking(queueName, executorToSchedule, ct).ConfigureAwait(false);
+            }
+            else
+            {
+                await queueManager.TryEnqueue(queueName, executorToSchedule, ct).ConfigureAwait(false);
+            }
         }
 
         return executor.PersistenceId;

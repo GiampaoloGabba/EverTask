@@ -1406,5 +1406,89 @@ public abstract class EfCoreTaskStorageTestsBase
 
     #endregion
 
+    #region RetrievePending recovery filter
+
+    private async Task<QueuedTask> PersistTaskWithStatus(
+        QueuedTaskStatus status,
+        bool isRecurring = false,
+        DateTimeOffset? nextRunUtc = null)
+    {
+        var task = new QueuedTask
+        {
+            Id           = GetGuidForProvider(),
+            Type         = "RecoveryFilterTask",
+            Request      = "{}",
+            Handler      = "RecoveryFilterHandler",
+            CreatedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-1),
+            Status       = status,
+            IsRecurring  = isRecurring,
+            NextRunUtc   = nextRunUtc
+        };
+        await _storage.Persist(task);
+        return task;
+    }
+
+    [Fact]
+    public async Task RetrievePending_should_include_WaitingQueue_tasks()
+    {
+        // WaitingQueue = persisted but never delivered to a worker queue (parked in the
+        // in-memory scheduler at shutdown, or dropped by a full queue with ThrowException).
+        // Without this, delayed one-shot tasks are silently lost on restart.
+        var task = await PersistTaskWithStatus(QueuedTaskStatus.WaitingQueue);
+
+        var pending = await _storage.RetrievePending(null, null, 100);
+
+        pending.ShouldContain(t => t.Id == task.Id);
+    }
+
+    [Fact]
+    public async Task RetrievePending_should_include_recurring_tasks_between_runs()
+    {
+        // Between two runs a recurring task sits as Completed (or Failed after a bad run)
+        // with a future NextRunUtc: it must be revived at startup.
+        var completed = await PersistTaskWithStatus(QueuedTaskStatus.Completed,
+            isRecurring: true, nextRunUtc: DateTimeOffset.UtcNow.AddMinutes(10));
+        var failed = await PersistTaskWithStatus(QueuedTaskStatus.Failed,
+            isRecurring: true, nextRunUtc: DateTimeOffset.UtcNow.AddMinutes(10));
+
+        var pending = await _storage.RetrievePending(null, null, 100);
+
+        pending.ShouldContain(t => t.Id == completed.Id);
+        pending.ShouldContain(t => t.Id == failed.Id);
+    }
+
+    [Fact]
+    public async Task RetrievePending_should_not_include_terminal_one_shot_tasks()
+    {
+        var completed = await PersistTaskWithStatus(QueuedTaskStatus.Completed);
+        var failed    = await PersistTaskWithStatus(QueuedTaskStatus.Failed);
+        var cancelled = await PersistTaskWithStatus(QueuedTaskStatus.Cancelled);
+
+        var pending = await _storage.RetrievePending(null, null, 100);
+
+        pending.ShouldNotContain(t => t.Id == completed.Id);
+        pending.ShouldNotContain(t => t.Id == failed.Id);
+        pending.ShouldNotContain(t => t.Id == cancelled.Id);
+    }
+
+    [Fact]
+    public async Task RetrievePending_should_not_include_recurring_tasks_without_next_run()
+    {
+        // Recurring task that exhausted its schedule: NextRunUtc is null, must not be revived.
+        var exhausted = await PersistTaskWithStatus(QueuedTaskStatus.Completed,
+            isRecurring: true, nextRunUtc: null);
+
+        // A cancelled recurring task must never be revived, even with a future NextRunUtc.
+        var cancelled = await PersistTaskWithStatus(QueuedTaskStatus.Cancelled,
+            isRecurring: true, nextRunUtc: DateTimeOffset.UtcNow.AddMinutes(10));
+
+        var pending = await _storage.RetrievePending(null, null, 100);
+
+        pending.ShouldNotContain(t => t.Id == exhausted.Id);
+        pending.ShouldNotContain(t => t.Id == cancelled.Id);
+    }
+
+    #endregion
+
     protected abstract Task CleanUpDatabase();
 }

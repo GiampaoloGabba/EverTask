@@ -52,15 +52,15 @@ public class QueueFullBehaviorTests
         var result1 = await queue.TryQueue(task1);
         var result2 = await queue.TryQueue(task2);
 
-        result1.ShouldBeTrue();
-        result2.ShouldBeTrue();
+        result1.ShouldBe(EnqueueResult.Enqueued);
+        result2.ShouldBe(EnqueueResult.Enqueued);
 
         // Act - Try to add third task
         var task3 = CreateTaskExecutor();
         var result3 = await queue.TryQueue(task3);
 
-        // Assert - Should return false (queue full)
-        result3.ShouldBeFalse("TryQueue should return false when queue is full");
+        // Assert - Should report QueueFull (queue full)
+        result3.ShouldBe(EnqueueResult.QueueFull, "TryQueue should report QueueFull when queue is full");
     }
 
     [Fact]
@@ -92,8 +92,8 @@ public class QueueFullBehaviorTests
         var task3 = CreateTaskExecutor();
         var result3 = await queue.TryQueue(task3);
 
-        // Assert - Should return true (space available)
-        result3.ShouldBeTrue("TryQueue should return true when space is available");
+        // Assert - Should report Enqueued (space available)
+        result3.ShouldBe(EnqueueResult.Enqueued, "TryQueue should report Enqueued when space is available");
     }
 
     [Fact]
@@ -203,8 +203,8 @@ public class QueueFullBehaviorTests
         // Act
         var tryQueueResult = await queue.TryQueue(task);
 
-        // Assert
-        tryQueueResult.ShouldBeFalse("TryQueue should return false for blacklisted tasks");
+        // Assert - blacklisted tasks are intentionally dropped (Discarded), not queued
+        tryQueueResult.ShouldBe(EnqueueResult.Discarded, "TryQueue should report Discarded for blacklisted tasks");
     }
 
     [Fact]
@@ -262,7 +262,7 @@ public class QueueFullBehaviorTests
         var result = await queue.TryQueue(task2);
 
         // Assert
-        result.ShouldBeFalse();
+        result.ShouldBe(EnqueueResult.QueueFull);
         mockStorage.Verify(x => x.SetQueued(It.IsAny<Guid>(), AuditLevel.Full,It.IsAny<CancellationToken>()), Times.Never);
     }
 }

@@ -34,6 +34,11 @@ Base EF Core storage for EverTask. **Cannot be used standalone** — extended by
 ### No Change Tracking on Reads
 All read queries use `.AsNoTracking()` — tasks are read, executed externally, status updated separately. No tracking = less memory + faster queries.
 
+### RetrievePending = Startup Recovery Filter (no task loss)
+`RetrievePending` defines what survives a restart. Recoverable statuses: `WaitingQueue`, `Queued`, `Pending`, `InProgress`, `ServiceStopped`, **plus** recurring tasks (`IsRecurring && NextRunUtc != null`) in `Completed`/`Failed` (revives recurring tasks between runs without re-registration). `WaitingQueue` is essential — it's the status of every task persisted but not yet delivered to a channel (delayed tasks parked in the scheduler, tasks dropped by a full queue); excluding it silently loses them on restart.
+
+**CRITICAL**: the filter is duplicated in `SqliteTaskStorage` (override) and `MemoryTaskStorage` — change all three together. Covered by the recovery-filter section in `EfCoreTaskStorageTestsBase.cs` (runs on all providers).
+
 ### Schema-Aware Migrations
 SQL Server supports custom schemas via `DbSchemaAwareMigrationAssembly`. Migrations inject `ITaskStoreDbContext` to access `Schema` property dynamically.
 

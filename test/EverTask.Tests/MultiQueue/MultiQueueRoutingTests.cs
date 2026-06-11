@@ -24,7 +24,7 @@ public class MultiQueueRoutingTests
         var mockQueueManager = new Mock<IWorkerQueueManager>();
         var customQueue = new Mock<IWorkerQueue>();
 
-        mockQueueManager.Setup(x => x.TryEnqueue("high-priority", It.IsAny<TaskHandlerExecutor>()))
+        mockQueueManager.Setup(x => x.TryEnqueue("high-priority", It.IsAny<TaskHandlerExecutor>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
         // Create a task with custom queue
@@ -49,8 +49,8 @@ public class MultiQueueRoutingTests
         await mockQueueManager.Object.TryEnqueue(executor.QueueName, executor);
 
         // Assert
-        mockQueueManager.Verify(x => x.TryEnqueue("high-priority", It.IsAny<TaskHandlerExecutor>()), Times.Once);
-        mockQueueManager.Verify(x => x.TryEnqueue("default", It.IsAny<TaskHandlerExecutor>()), Times.Never);
+        mockQueueManager.Verify(x => x.TryEnqueue("high-priority", It.IsAny<TaskHandlerExecutor>(), It.IsAny<CancellationToken>()), Times.Once);
+        mockQueueManager.Verify(x => x.TryEnqueue("default", It.IsAny<TaskHandlerExecutor>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -59,7 +59,7 @@ public class MultiQueueRoutingTests
         // Arrange
         var mockQueueManager = new Mock<IWorkerQueueManager>();
 
-        mockQueueManager.Setup(x => x.TryEnqueue("default", It.IsAny<TaskHandlerExecutor>()))
+        mockQueueManager.Setup(x => x.TryEnqueue("default", It.IsAny<TaskHandlerExecutor>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
         // Create a task without queue name
@@ -85,7 +85,7 @@ public class MultiQueueRoutingTests
         await mockQueueManager.Object.TryEnqueue(targetQueue, executor);
 
         // Assert
-        mockQueueManager.Verify(x => x.TryEnqueue("default", It.IsAny<TaskHandlerExecutor>()), Times.Once);
+        mockQueueManager.Verify(x => x.TryEnqueue("default", It.IsAny<TaskHandlerExecutor>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -95,7 +95,7 @@ public class MultiQueueRoutingTests
         var mockQueueManager = new Mock<IWorkerQueueManager>();
         var recurringTask = new RecurringTask { SecondInterval = new SecondInterval(30) };
 
-        mockQueueManager.Setup(x => x.TryEnqueue("recurring", It.IsAny<TaskHandlerExecutor>()))
+        mockQueueManager.Setup(x => x.TryEnqueue("recurring", It.IsAny<TaskHandlerExecutor>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
         // Create a recurring task without explicit queue name
@@ -121,8 +121,8 @@ public class MultiQueueRoutingTests
         await mockQueueManager.Object.TryEnqueue(targetQueue, executor);
 
         // Assert
-        mockQueueManager.Verify(x => x.TryEnqueue("recurring", It.IsAny<TaskHandlerExecutor>()), Times.Once);
-        mockQueueManager.Verify(x => x.TryEnqueue("default", It.IsAny<TaskHandlerExecutor>()), Times.Never);
+        mockQueueManager.Verify(x => x.TryEnqueue("recurring", It.IsAny<TaskHandlerExecutor>(), It.IsAny<CancellationToken>()), Times.Once);
+        mockQueueManager.Verify(x => x.TryEnqueue("default", It.IsAny<TaskHandlerExecutor>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -132,7 +132,7 @@ public class MultiQueueRoutingTests
         var mockQueueManager = new Mock<IWorkerQueueManager>();
         var recurringTask = new RecurringTask { SecondInterval = new SecondInterval(30) };
 
-        mockQueueManager.Setup(x => x.TryEnqueue("background", It.IsAny<TaskHandlerExecutor>()))
+        mockQueueManager.Setup(x => x.TryEnqueue("background", It.IsAny<TaskHandlerExecutor>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
         // Create a recurring task with explicit queue name
@@ -157,8 +157,8 @@ public class MultiQueueRoutingTests
         await mockQueueManager.Object.TryEnqueue(executor.QueueName, executor);
 
         // Assert
-        mockQueueManager.Verify(x => x.TryEnqueue("background", It.IsAny<TaskHandlerExecutor>()), Times.Once);
-        mockQueueManager.Verify(x => x.TryEnqueue("recurring", It.IsAny<TaskHandlerExecutor>()), Times.Never);
+        mockQueueManager.Verify(x => x.TryEnqueue("background", It.IsAny<TaskHandlerExecutor>(), It.IsAny<CancellationToken>()), Times.Once);
+        mockQueueManager.Verify(x => x.TryEnqueue("recurring", It.IsAny<TaskHandlerExecutor>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]

@@ -4,6 +4,8 @@
 
 Integration tests for all EverTask storage implementations (InMemory, Sqlite, SqlServer). Verifies `ITaskStorage` contract for task persistence, status transitions, scheduling, audit trails.
 
+**End-to-end recovery against real SQL Server**: `SqlServerRecoveryIntegrationTests.cs` (Docker, `DatabaseTests` collection) exercises the **concurrent recovery flow** (WorkerService + consumers + dispatcher + scheduler) against real storage — backlog > capacity without deadlock/loss, `WaitingQueue` recovery across restart, recurring revival preserving `NextRunUtc`. This is the real-DB counterpart of the memory-backed `QueueResilienceIntegrationTests` in `EverTask.Tests`. The `RetrievePending` recoverable-status filter is covered for all three providers by the recovery-filter section in `EfCoreTaskStorageTestsBase.cs`.
+
 ## Test Architecture
 
 **Base Class**: `EfCore/EfCoreTaskStorageTestsBase.cs` — Defines comprehensive test suite running identically across all providers.

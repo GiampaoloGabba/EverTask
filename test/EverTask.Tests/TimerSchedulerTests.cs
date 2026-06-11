@@ -27,12 +27,13 @@ public class TimerSchedulerTests
         // Setup the queue manager to return the default queue
         _mockWorkerQueueManager.Setup(x => x.GetQueue("default")).Returns(_mockWorkerQueue.Object);
 
-        // Setup TryEnqueue to delegate to the worker queue
-        _mockWorkerQueueManager.Setup(x => x.TryEnqueue(It.IsAny<string?>(), It.IsAny<TaskHandlerExecutor>()))
-                               .Returns<string?, TaskHandlerExecutor>(async (queueName, executor) =>
+        // Setup TryEnqueueImmediate to delegate to the worker queue.
+        // The scheduler now dispatches via TryEnqueueImmediate (non-blocking) and reacts to EnqueueResult.
+        _mockWorkerQueueManager.Setup(x => x.TryEnqueueImmediate(It.IsAny<string?>(), It.IsAny<TaskHandlerExecutor>(), It.IsAny<CancellationToken>()))
+                               .Returns<string?, TaskHandlerExecutor, CancellationToken>(async (queueName, executor, ct) =>
                                {
                                    await _mockWorkerQueue.Object.Queue(executor);
-                                   return true;
+                                   return EnqueueResult.Enqueued;
                                });
 
         _timerScheduler = new PeriodicTimerScheduler(_mockWorkerQueueManager.Object, _mockLogger.Object);
@@ -126,7 +127,7 @@ public class TimerSchedulerTests
 
         await Task.Delay(1500);
 
-        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == taskHandlerExecutor)),
+        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == taskHandlerExecutor), It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
@@ -136,14 +137,14 @@ public class TimerSchedulerTests
         var taskHandlerExecutor = CreateTaskHandlerExecutor();
         await _timerScheduler.DispatchToWorkerQueue(taskHandlerExecutor);
 
-        _mockWorkerQueue.Verify(wq => wq.Queue(taskHandlerExecutor), Times.Once);
+        _mockWorkerQueue.Verify(wq => wq.Queue(taskHandlerExecutor, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
     public async Task DispatcherQueueAsync_should_handle_exceptions_correctly()
     {
         var taskHandlerExecutor = CreateTaskHandlerExecutor();
-        _mockWorkerQueue.Setup(wq => wq.Queue(It.IsAny<TaskHandlerExecutor>()))
+        _mockWorkerQueue.Setup(wq => wq.Queue(It.IsAny<TaskHandlerExecutor>(), It.IsAny<CancellationToken>()))
                         .ThrowsAsync(new Exception("Test Exception"));
 
         await _timerScheduler.DispatchToWorkerQueue(taskHandlerExecutor);
@@ -195,7 +196,7 @@ public class TimerSchedulerTests
         await Task.Delay(100);
         await Task.Delay(TimeSpan.FromSeconds(5));
 
-        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == task)), Times.Once);
+        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == task), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -208,7 +209,7 @@ public class TimerSchedulerTests
         _timerScheduler.GetQueue().Count.ShouldBe(0);
         await Task.Delay(3000);
 
-        _mockWorkerQueue.Verify(wq => wq.Queue(It.IsAny<TaskHandlerExecutor>()), Times.Once);
+        _mockWorkerQueue.Verify(wq => wq.Queue(It.IsAny<TaskHandlerExecutor>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -220,7 +221,7 @@ public class TimerSchedulerTests
 
         await Task.Delay(100);
 
-        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == task)), Times.Once);
+        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == task), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -274,7 +275,7 @@ public class TimerSchedulerTests
 
         // Assert: Urgent task should be processed quickly (within 500ms)
         await Task.Delay(500);
-        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == urgentTask)), Times.Once);
+        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == urgentTask), It.IsAny<CancellationToken>()), Times.Once);
 
         // Future task should still be in queue
         _timerScheduler.GetQueue().Count.ShouldBe(1);
@@ -301,7 +302,7 @@ public class TimerSchedulerTests
 
         // Assert: Task should be processed
         await Task.Delay(300);
-        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == task)), Times.Once);
+        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == task), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -321,9 +322,9 @@ public class TimerSchedulerTests
         // Assert: All should be processed in quick succession
         await Task.Delay(400);
 
-        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == task1)), Times.Once);
-        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == task2)), Times.Once);
-        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == task3)), Times.Once);
+        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == task1), It.IsAny<CancellationToken>()), Times.Once);
+        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == task2), It.IsAny<CancellationToken>()), Times.Once);
+        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == task3), It.IsAny<CancellationToken>()), Times.Once);
 
         // Queue should be empty
         _timerScheduler.GetQueue().Count.ShouldBe(0);
@@ -349,7 +350,7 @@ public class TimerSchedulerTests
 
         // Task should execute within short time
         await Task.Delay(400);
-        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == task)), Times.Once);
+        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == task), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -373,7 +374,7 @@ public class TimerSchedulerTests
         // All should be processed
         foreach (var task in tasks)
         {
-            _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == task)), Times.Once);
+            _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == task), It.IsAny<CancellationToken>()), Times.Once);
         }
     }
 
@@ -387,12 +388,12 @@ public class TimerSchedulerTests
 
         // Setup queue manager to track queue name
         string? capturedQueueName = null;
-        _mockWorkerQueueManager.Setup(x => x.TryEnqueue(It.IsAny<string?>(), It.IsAny<TaskHandlerExecutor>()))
-                               .Returns<string?, TaskHandlerExecutor>(async (queueName, executor) =>
+        _mockWorkerQueueManager.Setup(x => x.TryEnqueueImmediate(It.IsAny<string?>(), It.IsAny<TaskHandlerExecutor>(), It.IsAny<CancellationToken>()))
+                               .Returns<string?, TaskHandlerExecutor, CancellationToken>(async (queueName, executor, ct) =>
                                {
                                    capturedQueueName = queueName;
                                    await _mockWorkerQueue.Object.Queue(executor);
-                                   return true;
+                                   return EnqueueResult.Enqueued;
                                });
 
         // Act
@@ -411,12 +412,12 @@ public class TimerSchedulerTests
 
         // Setup queue manager to track queue name
         string? capturedQueueName = null;
-        _mockWorkerQueueManager.Setup(x => x.TryEnqueue(It.IsAny<string?>(), It.IsAny<TaskHandlerExecutor>()))
-                               .Returns<string?, TaskHandlerExecutor>(async (queueName, executor) =>
+        _mockWorkerQueueManager.Setup(x => x.TryEnqueueImmediate(It.IsAny<string?>(), It.IsAny<TaskHandlerExecutor>(), It.IsAny<CancellationToken>()))
+                               .Returns<string?, TaskHandlerExecutor, CancellationToken>(async (queueName, executor, ct) =>
                                {
                                    capturedQueueName = queueName;
                                    await _mockWorkerQueue.Object.Queue(executor);
-                                   return true;
+                                   return EnqueueResult.Enqueued;
                                });
 
         // Act
@@ -476,7 +477,7 @@ public class TimerSchedulerTests
         await Task.Delay(2500);
 
         // Assert: Task should NOT be processed after dispose
-        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == futureTask)), Times.Never);
+        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == futureTask), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]

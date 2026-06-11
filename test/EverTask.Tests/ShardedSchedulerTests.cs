@@ -22,12 +22,13 @@ public class ShardedSchedulerTests : IDisposable
         // Setup the queue manager to return the default queue
         _mockWorkerQueueManager.Setup(x => x.GetQueue("default")).Returns(_mockWorkerQueue.Object);
 
-        // Setup TryEnqueue to delegate to the worker queue
-        _mockWorkerQueueManager.Setup(x => x.TryEnqueue(It.IsAny<string?>(), It.IsAny<TaskHandlerExecutor>()))
-            .Returns<string?, TaskHandlerExecutor>(async (queueName, executor) =>
+        // Setup TryEnqueueImmediate to delegate to the worker queue.
+        // Shards now dispatch via TryEnqueueImmediate (non-blocking) and react to EnqueueResult.
+        _mockWorkerQueueManager.Setup(x => x.TryEnqueueImmediate(It.IsAny<string?>(), It.IsAny<TaskHandlerExecutor>(), It.IsAny<CancellationToken>()))
+            .Returns<string?, TaskHandlerExecutor, CancellationToken>(async (queueName, executor, ct) =>
             {
                 await _mockWorkerQueue.Object.Queue(executor);
-                return true;
+                return EnqueueResult.Enqueued;
             });
     }
 
@@ -106,7 +107,7 @@ public class ShardedSchedulerTests : IDisposable
         await Task.Delay(1500);
 
         // Assert
-        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == taskHandlerExecutor)), Times.Once);
+        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == taskHandlerExecutor), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -173,7 +174,7 @@ public class ShardedSchedulerTests : IDisposable
 
         await Task.Delay(1500);
 
-        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == taskHandlerExecutor)), Times.Once);
+        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == taskHandlerExecutor), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -196,10 +197,10 @@ public class ShardedSchedulerTests : IDisposable
         await Task.Delay(5500);
 
         // Assert - The 5-second task should have been processed
-        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == taskHandlerExecutor2)), Times.Once);
+        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == taskHandlerExecutor2), It.IsAny<CancellationToken>()), Times.Once);
 
         // The 10-minute task should NOT have been processed yet
-        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == taskHandlerExecutor1)), Times.Never);
+        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == taskHandlerExecutor1), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -254,7 +255,7 @@ public class ShardedSchedulerTests : IDisposable
         await Task.Delay(1500);
 
         // Assert - Task should have been processed (because nextRecurringRun was 1 second)
-        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == taskHandlerExecutor)), Times.Once);
+        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == taskHandlerExecutor), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -279,7 +280,7 @@ public class ShardedSchedulerTests : IDisposable
         await Task.Delay(2000);
 
         // Assert - All tasks should have been queued
-        _mockWorkerQueue.Verify(wq => wq.Queue(It.IsAny<TaskHandlerExecutor>()), Times.Exactly(20));
+        _mockWorkerQueue.Verify(wq => wq.Queue(It.IsAny<TaskHandlerExecutor>(), It.IsAny<CancellationToken>()), Times.Exactly(20));
 
         // Verify tasks were distributed across shards (check debug logs)
         _mockLogger.Verify(
@@ -308,7 +309,7 @@ public class ShardedSchedulerTests : IDisposable
         await Task.Delay(500);
 
         // Assert - Task should NOT have been dispatched yet
-        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == taskHandlerExecutor)), Times.Never);
+        _mockWorkerQueue.Verify(wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == taskHandlerExecutor), It.IsAny<CancellationToken>()), Times.Never);
 
         // Verify scheduling log
         _mockLogger.Verify(
@@ -332,9 +333,9 @@ public class ShardedSchedulerTests : IDisposable
         var failedShardId = -1;
         var successfulEnqueues = new List<Guid>();
 
-        // Setup TryEnqueue to fail for specific task IDs (simulate shard-specific failure)
-        queueManagerMock.Setup(x => x.TryEnqueue(It.IsAny<string?>(), It.IsAny<TaskHandlerExecutor>()))
-            .Returns<string?, TaskHandlerExecutor>((queueName, executor) =>
+        // Setup TryEnqueueImmediate to fail for specific task IDs (simulate shard-specific failure)
+        queueManagerMock.Setup(x => x.TryEnqueueImmediate(It.IsAny<string?>(), It.IsAny<TaskHandlerExecutor>(), It.IsAny<CancellationToken>()))
+            .Returns<string?, TaskHandlerExecutor, CancellationToken>((queueName, executor, ct) =>
             {
                 // Calculate which shard this would go to
                 int shardIndex = Math.Abs(executor.PersistenceId.GetHashCode()) % 4;
@@ -348,7 +349,7 @@ public class ShardedSchedulerTests : IDisposable
 
                 // Other shards succeed
                 successfulEnqueues.Add(executor.PersistenceId);
-                return Task.FromResult(true);
+                return Task.FromResult(EnqueueResult.Enqueued);
             });
 
         _shardedScheduler = new ShardedScheduler(queueManagerMock.Object, loggerMock.Object, null, shardCount: 4);
@@ -375,11 +376,13 @@ public class ShardedSchedulerTests : IDisposable
         successfulEnqueues.Count.ShouldBeGreaterThan(0, "Other shards should have processed tasks successfully");
 
         // 3. Verify error was logged for shard 2
+        // (new semantics: a dispatch failure is treated as transient and parked for retry
+        // with backoff, so the log message mentions the retry instead of marking Failed)
         loggerMock.Verify(
             x => x.Log(
                 LogLevel.Error,
                 It.IsAny<EventId>(),
-                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("Unable to dispatch task")),
+                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("unable to dispatch task")),
                 It.IsAny<Exception>(),
                 It.Is<Func<It.IsAnyType, Exception, string>>((v, t) => true)!),
             Times.AtLeastOnce,
@@ -417,7 +420,7 @@ public class ShardedSchedulerTests : IDisposable
 
         // Assert - Task should have been dispatched immediately (not after 5 seconds in future)
         _mockWorkerQueue.Verify(
-            wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == taskHandlerExecutor)),
+            wq => wq.Queue(It.Is<TaskHandlerExecutor>(te => te == taskHandlerExecutor), It.IsAny<CancellationToken>()),
             Times.Once,
             "Task with past execution time should be processed immediately");
     }

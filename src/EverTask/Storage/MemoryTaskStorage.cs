@@ -50,11 +50,15 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         {
             var now = DateTimeOffset.UtcNow;
 
+            // Recoverable statuses: same rules as EfCoreTaskStorage.RetrievePending (see comments there)
             var pending = _pendingTasks
                 .Where(t => (t.MaxRuns == null || t.CurrentRunCount <= t.MaxRuns)
                             && (t.RunUntil == null || t.RunUntil >= now)
-                            && (t.Status is QueuedTaskStatus.Queued or QueuedTaskStatus.Pending
-                                or QueuedTaskStatus.ServiceStopped or QueuedTaskStatus.InProgress));
+                            && (t.Status is QueuedTaskStatus.WaitingQueue or QueuedTaskStatus.Queued
+                                    or QueuedTaskStatus.Pending or QueuedTaskStatus.ServiceStopped
+                                    or QueuedTaskStatus.InProgress
+                                || (t.IsRecurring && t.NextRunUtc != null &&
+                                    t.Status is QueuedTaskStatus.Completed or QueuedTaskStatus.Failed)));
 
             if (lastCreatedAt.HasValue)
             {

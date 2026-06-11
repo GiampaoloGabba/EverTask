@@ -58,14 +58,26 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
         var now = UtcNowNormalized;
 
+        // Recoverable statuses:
+        // - WaitingQueue: persisted but never delivered to a worker queue (parked in the in-memory
+        //   scheduler at shutdown, or dropped by a full queue) - without it delayed tasks are lost on restart
+        // - Queued: written to the in-memory channel but not executed before shutdown
+        // - InProgress / ServiceStopped: interrupted mid-execution
+        // - Pending: legacy status, kept for backward compatibility
+        // - Recurring tasks between two runs (Completed/Failed with a future NextRunUtc): without
+        //   them a recurring task not re-registered at startup dies after the first restart
         var query = dbContext.QueuedTasks
                              .AsNoTracking()
                              .Where(t => (t.MaxRuns == null || t.CurrentRunCount <= t.MaxRuns)
                                          && (t.RunUntil == null || t.RunUntil >= now)
-                                         && (t.Status == QueuedTaskStatus.Queued ||
+                                         && (t.Status == QueuedTaskStatus.WaitingQueue ||
+                                             t.Status == QueuedTaskStatus.Queued ||
                                              t.Status == QueuedTaskStatus.Pending ||
                                              t.Status == QueuedTaskStatus.ServiceStopped ||
-                                             t.Status == QueuedTaskStatus.InProgress));
+                                             t.Status == QueuedTaskStatus.InProgress ||
+                                             (t.IsRecurring && t.NextRunUtc != null &&
+                                              (t.Status == QueuedTaskStatus.Completed ||
+                                               t.Status == QueuedTaskStatus.Failed))));
 
         if (lastCreatedAt.HasValue)
         {

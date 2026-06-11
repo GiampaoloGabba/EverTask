@@ -45,9 +45,9 @@ public class DispatcherTests
         // Setup the queue manager to return the default queue
         _workerQueueManagerMock.Setup(x => x.GetQueue("default")).Returns(_workerQueueMock.Object);
 
-        // Setup TryEnqueue to delegate to the worker queue
-        _workerQueueManagerMock.Setup(x => x.TryEnqueue(It.IsAny<string?>(), It.IsAny<TaskHandlerExecutor>()))
-            .Returns<string?, TaskHandlerExecutor>(async (queueName, executor) =>
+        // Setup TryEnqueue to delegate to the worker queue (dispatcher immediate path uses TryEnqueue)
+        _workerQueueManagerMock.Setup(x => x.TryEnqueue(It.IsAny<string?>(), It.IsAny<TaskHandlerExecutor>(), It.IsAny<CancellationToken>()))
+            .Returns<string?, TaskHandlerExecutor, CancellationToken>(async (queueName, executor, ct) =>
             {
                 await _workerQueueMock.Object.Queue(executor);
                 return true;
@@ -90,7 +90,7 @@ public class DispatcherTests
         var task = new TestTaskRequest2();
 
         var taskId = await _dispatcher.Dispatch(task);
-        _workerQueueMock.Verify(q => q.Queue(It.Is<TaskHandlerExecutor>(executor => executor.PersistenceId == taskId)), Times.Once);
+        _workerQueueMock.Verify(q => q.Queue(It.Is<TaskHandlerExecutor>(executor => executor.PersistenceId == taskId), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using EverTask.Configuration;
 
 namespace EverTask.Scheduler;
@@ -13,17 +14,30 @@ namespace EverTask.Scheduler;
 /// - Reduced lock contention (no UpdateTimer() on every Schedule())
 /// - Wake-up anticipato when new urgent tasks arrive
 /// - Dynamic delay based on next task execution time
+///
+/// Dispatch characteristics:
+/// - Non-blocking dispatch: a full worker queue never stalls the scheduler loop
+///   (no head-of-line blocking across queues); the task is retried with a backoff.
+/// - Idempotent scheduling per PersistenceId (latest wins): scheduling the same task twice
+///   (e.g. startup recovery + taskKey re-registration) executes it once.
 /// </remarks>
 public class PeriodicTimerScheduler : IScheduler, IDisposable
 {
     private readonly ConcurrentPriorityQueue<TaskHandlerExecutor, DateTimeOffset> _queue;
+    private readonly ConcurrentDictionary<Guid, TaskHandlerExecutor> _scheduledItems;
     private readonly IWorkerQueueManager _queueManager;
-    private readonly ITaskStorage? _taskStorage;
     private readonly IEverTaskLogger<PeriodicTimerScheduler> _logger;
     private readonly TimeSpan _checkInterval;
     private readonly CancellationTokenSource _cts;
+    private readonly CancellationToken _shutdownToken;
     private readonly SemaphoreSlim _wakeUpSignal;
     private int _wakeUpPending;
+
+    /// <summary>
+    /// Delay before retrying the dispatch of a due task whose target queue is full.
+    /// Internal for testing purposes.
+    /// </summary>
+    internal TimeSpan FullQueueRetryDelay { get; set; } = TimeSpan.FromSeconds(2);
 
 #if DEBUG
     // For tests purpose
@@ -34,36 +48,46 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
         IWorkerQueueManager queueManager,
         IEverTaskLogger<PeriodicTimerScheduler> logger,
         TimeSpan? checkInterval = null,
-        ITaskStorage? taskStorage = null)
+        ITaskStorage? taskStorage = null) // taskStorage kept for signature compatibility (no longer used)
     {
         _queueManager = queueManager;
         _logger = logger;
-        _taskStorage = taskStorage;
+        _ = taskStorage;
         _queue = new ConcurrentPriorityQueue<TaskHandlerExecutor, DateTimeOffset>();
+        _scheduledItems = new ConcurrentDictionary<Guid, TaskHandlerExecutor>();
         _cts = new CancellationTokenSource();
+        // Captured before any dispatch: accessing _cts.Token after Dispose would throw
+        _shutdownToken = _cts.Token;
         _wakeUpSignal = new SemaphoreSlim(0, 1);
 
         // Default: check ogni 1 secondo (bilanciamento ottimale)
         _checkInterval = checkInterval ?? TimeSpan.FromSeconds(1);
 
         // Avvia background loop
-        _ = ProcessScheduledTasksAsync(_cts.Token);
+        _ = ProcessScheduledTasksAsync(_shutdownToken);
     }
 
     internal ConcurrentPriorityQueue<TaskHandlerExecutor, DateTimeOffset> GetQueue() => _queue;
 
     public void Schedule(TaskHandlerExecutor item, DateTimeOffset? nextRecurringRun = null)
     {
+        DateTimeOffset scheduledTime;
         if (item.RecurringTask != null && nextRecurringRun != null)
         {
             _logger.LogInformation("Next run {NextRecurringRun}", nextRecurringRun.Value);
-            _queue.Enqueue(item, nextRecurringRun.Value);
+            scheduledTime = nextRecurringRun.Value;
         }
         else
         {
             ArgumentNullException.ThrowIfNull(item.ExecutionTime);
-            _queue.Enqueue(item, item.ExecutionTime.Value);
+            scheduledTime = item.ExecutionTime.Value;
         }
+
+        // Latest-wins registration per PersistenceId: a previously parked entry for the same task
+        // (e.g. recovery racing with a taskKey re-registration at startup) becomes stale and is
+        // discarded at dequeue time, so the task executes only once per occurrence.
+        _scheduledItems[item.PersistenceId] = item;
+        _queue.Enqueue(item, scheduledTime);
 
         // Sveglia il timer se è dormiente (coda era vuota)
         // Thread-safe: usa Interlocked.CompareExchange per garantire che solo un thread
@@ -73,6 +97,14 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
         {
             _wakeUpSignal.Release();
         }
+    }
+
+    /// <inheritdoc />
+    public bool TryUnschedule(Guid persistenceId)
+    {
+        // The orphan entry left in the priority queue is discarded by the staleness
+        // check in ProcessReadyTasksAsync.
+        return _scheduledItems.TryRemove(persistenceId, out _);
     }
 
     private async Task ProcessScheduledTasksAsync(CancellationToken cancellationToken)
@@ -109,7 +141,7 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
                 }
 
                 // Processa task pronti
-                await ProcessReadyTasksAsync();
+                await ProcessReadyTasksAsync().ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -167,14 +199,35 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
         // Dequeue tutti i task pronti
         while (_queue.TryPeek(out var item, out var scheduledTime) && scheduledTime <= now)
         {
-            if (_queue.TryDequeue(out item, out _))
+            if (!_queue.TryDequeue(out item, out _))
+                continue;
+
+            // Stale entry: the task was re-scheduled with a newer registration (latest wins)
+            // or already dispatched. Drop this occurrence silently.
+            if (!_scheduledItems.TryGetValue(item.PersistenceId, out var current) || !ReferenceEquals(current, item))
+                continue;
+
+            var result = await DispatchToWorkerQueue(item).ConfigureAwait(false);
+
+            if (result == EnqueueResult.QueueFull)
             {
-                await DispatchToWorkerQueue(item).ConfigureAwait(false);
+                // Target queue saturated: park the task and retry later WITHOUT blocking the loop,
+                // so tasks targeting other queues keep flowing (no head-of-line blocking).
+                _logger.LogWarning(
+                    "Queue for task {TaskId} is full, retrying dispatch in {RetryDelay}",
+                    item.PersistenceId, FullQueueRetryDelay);
+                _queue.Enqueue(item, DateTimeOffset.UtcNow + FullQueueRetryDelay);
+            }
+            else
+            {
+                // Enqueued, discarded or failed: this registration is consumed.
+                // Conditional remove: keep a concurrent newer registration alive.
+                _scheduledItems.TryRemove(new KeyValuePair<Guid, TaskHandlerExecutor>(item.PersistenceId, item));
             }
         }
     }
 
-    internal async Task DispatchToWorkerQueue(TaskHandlerExecutor item)
+    internal async Task<EnqueueResult> DispatchToWorkerQueue(TaskHandlerExecutor item)
     {
         try
         {
@@ -184,17 +237,23 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
             _logger.LogDebug("Dispatching scheduled task {TaskId} to queue '{QueueName}'",
                 item.PersistenceId, queueName);
 
-            await _queueManager.TryEnqueue(queueName, item).ConfigureAwait(false);
+            // Non-blocking: a full queue must not stall the scheduler loop
+            return await _queueManager.TryEnqueueImmediate(queueName, item, _shutdownToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Scheduler shutdown while dispatching: leave the task in its recoverable status,
+            // startup recovery will re-dispatch it. Marking it Failed would lose it permanently.
+            _logger.LogInformation("Dispatch of task {TaskId} cancelled by scheduler shutdown", item.PersistenceId);
+            return EnqueueResult.Discarded;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Unable to dispatch task with id {TaskId} to queue", item.PersistenceId);
-            if (_taskStorage != null)
-            {
-                await _taskStorage
-                      .SetStatus(item.PersistenceId, QueuedTaskStatus.Failed, ex, item.AuditLevel, 100, CancellationToken.None)
-                      .ConfigureAwait(false);
-            }
+            // Transient failure (typically storage): park and retry with backoff instead of
+            // marking Failed, which would make a one-shot task permanently unrecoverable.
+            _logger.LogError(ex, "Unable to dispatch task {TaskId} to queue, retrying in {RetryDelay}",
+                item.PersistenceId, FullQueueRetryDelay);
+            return EnqueueResult.QueueFull;
         }
     }
 

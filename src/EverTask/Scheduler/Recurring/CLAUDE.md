@@ -45,6 +45,9 @@ Tasks auto-stop when:
 
 **Location**: `RecurringTask.CalculateNextRun()` returns `null` to signal termination.
 
+### 6. Restart Revival Preserves Stored NextRunUtc
+On startup recovery a recurring task is re-dispatched with `isRecovery: true`. When the stored `NextRunUtc` is still in the **future** it is used **as-is** as the next occurrence — it must NOT be fed to `CalculateNextValidRun` as a bare base time, which computes the occurrence strictly *after* it, skipping one occurrence per restart (and dropping the last occurrence before `RunUntil`). Recalculation (skip-forward) applies only when `NextRunUtc` is in the past. See `Dispatcher.ExecuteDispatch` (recovery branch) and the `RunUntil`/`NextRunUtc`-preservation tests in `QueueResilienceIntegrationTests` / `SqlServerRecoveryIntegrationTests`.
+
 ## 🔗 Test Coverage
 
 **When modifying interval calculation**:

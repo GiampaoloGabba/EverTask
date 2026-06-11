@@ -35,13 +35,18 @@ public class SqliteTaskStorage : EfCoreTaskStorage
         var now = DateTimeOffset.UtcNow;
 
         // Query database with filters SQLite can handle
+        // Recoverable statuses: same rules as EfCoreTaskStorage.RetrievePending (see comments there)
         var tasks = await dbContext.QueuedTasks
             .AsNoTracking()
             .Where(t => (t.MaxRuns == null || t.CurrentRunCount <= t.MaxRuns)
-                        && (t.Status == QueuedTaskStatus.Queued ||
+                        && (t.Status == QueuedTaskStatus.WaitingQueue ||
+                            t.Status == QueuedTaskStatus.Queued ||
                             t.Status == QueuedTaskStatus.Pending ||
                             t.Status == QueuedTaskStatus.ServiceStopped ||
-                            t.Status == QueuedTaskStatus.InProgress))
+                            t.Status == QueuedTaskStatus.InProgress ||
+                            (t.IsRecurring && t.NextRunUtc != null &&
+                             (t.Status == QueuedTaskStatus.Completed ||
+                              t.Status == QueuedTaskStatus.Failed))))
             .ToArrayAsync(ct)
             .ConfigureAwait(false);
 

@@ -25,9 +25,6 @@ public class WorkerService(
                 recommendedParallelism);
         }
 
-        // Process pending tasks from storage
-        await ProcessPendingAsync(ct).ConfigureAwait(false);
-
         // Get all configured queues
         var queues = queueManager.GetAllQueues().ToList();
         logger.LogInformation("Starting consumption of {QueueCount} queue(s): {QueueNames}",
@@ -39,8 +36,35 @@ public class WorkerService(
             .SelectMany(q => StartConsumers(q.Name, q.Queue, ct))
             .ToList();
 
-        // Wait for all consumers to complete
+        // Recover pending tasks from storage CONCURRENTLY with the consumers.
+        // Consumers must already be draining the bounded queues while recovery re-enqueues:
+        // otherwise a backlog larger than a queue's capacity deadlocks the startup
+        // (recovery blocks on a full channel that nobody is consuming yet).
+        queueConsumptionTasks.Add(RunRecoveryAsync(ct));
+
+        // Wait for all consumers (and the recovery) to complete
         await Task.WhenAll(queueConsumptionTasks).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Runs the startup recovery, isolating its failures from the queue consumers:
+    /// a recovery error must never stop task consumption.
+    /// </summary>
+    private async Task RunRecoveryAsync(CancellationToken ct)
+    {
+        try
+        {
+            await ProcessPendingAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            logger.LogInformation("Pending task recovery cancelled by host shutdown");
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Pending task recovery failed. Queue consumers keep running; " +
+                                "unrecovered tasks will be retried at the next startup");
+        }
     }
 
     /// <summary>
@@ -159,12 +183,18 @@ public class WorkerService(
         Guid? lastId = null;
         int totalProcessed = 0;
 
+        // Recovery runs concurrently with live dispatching: only recover tasks created BEFORE
+        // this point, so tasks dispatched while recovery is paginating are not re-enqueued twice.
+        var recoveryCutoff = DateTimeOffset.UtcNow;
+
         while (true)
         {
-            var pendingTasks = await taskStorage.RetrievePending(lastCreatedAt, lastId, pageSize, ct).ConfigureAwait(false);
+            var page = await taskStorage.RetrievePending(lastCreatedAt, lastId, pageSize, ct).ConfigureAwait(false);
 
-            if (pendingTasks.Length == 0)
+            if (page.Length == 0)
                 break;
+
+            var pendingTasks = page.Where(t => t.CreatedAtUtc <= recoveryCutoff).ToArray();
 
             logger.LogInformation("Processing batch with {Count} pending tasks (lastCreatedAt={LastCreatedAt}, lastId={LastId})",
                 pendingTasks.Length, lastCreatedAt, lastId);
@@ -218,23 +248,31 @@ public class WorkerService(
                     // Fall back to ScheduledExecutionUtc for non-recurring or first-time tasks
                     var executionTime = taskInfo.NextRunUtc ?? taskInfo.ScheduledExecutionUtc;
 
+                    // isRecovery: recovery must never drop tasks, so full queues exert
+                    // backpressure here (consumers are draining concurrently), the stored
+                    // NextRunUtc is preserved for recurring tasks and the task definition
+                    // is not rewritten in storage
                     await taskDispatcher.ExecuteDispatch(task, executionTime, scheduledTask,
-                        taskInfo.CurrentRunCount, token, taskInfo.Id)
+                        taskInfo.CurrentRunCount, token, taskInfo.Id, isRecovery: true)
                         .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    // Host shutdown: leave the task in its recoverable status so the next
+                    // startup picks it up again. Marking it Failed here would lose it.
+                    throw;
                 }
                 catch (Exception ex)
                 {
-                    // Create scope per iteration for thread safety (required for DbContext-based storage)
-                    using var itemScope = serviceScopeFactory.CreateScope();
-                    var itemStorage = itemScope.ServiceProvider.GetService<ITaskStorage>();
-
-                    if (itemStorage != null)
-                    {
-                        await itemStorage.SetStatus(taskInfo.Id, QueuedTaskStatus.Failed, ex, auditLevel, null,  token)
-                            .ConfigureAwait(false);
-                    }
-
-                    logger.LogError(ex, "Error occurred executing pending task with id {TaskId}", taskInfo.Id);
+                    // Do NOT mark the task Failed: the typical failure here is transient
+                    // (storage hiccup) and Failed would make a one-shot task permanently
+                    // unrecoverable. Leaving the status untouched keeps the task visible to
+                    // the next startup recovery; genuinely poison tasks (broken payload) are
+                    // already marked Failed by the deserialization branch below.
+                    logger.LogError(ex,
+                        "Error occurred re-dispatching pending task with id {TaskId}. " +
+                        "The task remains in a recoverable status and will be retried at the next startup",
+                        taskInfo.Id);
                 }
             }
             else
@@ -257,9 +295,15 @@ public class WorkerService(
         }).ConfigureAwait(false);
 
             totalProcessed += pendingTasks.Length;
-            var lastTask = pendingTasks[^1];
+
+            // Advance the keyset cursor using the RAW page (not the filtered one) so pagination
+            // always makes progress; stop once the page goes past the recovery cutoff.
+            var lastTask = page[^1];
             lastCreatedAt = lastTask.CreatedAtUtc;
             lastId = lastTask.Id;
+
+            if (lastTask.CreatedAtUtc > recoveryCutoff)
+                break;
         }
 
         logger.LogInformation("Completed processing {TotalCount} pending tasks", totalProcessed);

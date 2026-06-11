@@ -31,7 +31,32 @@ public class WorkerExecutor(
 
     public event Func<EverTaskEventData, Task>? TaskEventOccurredAsync;
 
+    // PersistenceIds currently executing in this process. Last line of defense against
+    // double execution when the same persisted task is delivered twice (e.g. startup
+    // recovery racing a live dispatch): the second delivery is skipped while the first runs.
+    private readonly ConcurrentDictionary<Guid, byte> _inFlightTasks = new();
+
     public async ValueTask DoWork(TaskHandlerExecutor task, CancellationToken serviceToken)
+    {
+        if (!_inFlightTasks.TryAdd(task.PersistenceId, 0))
+        {
+            logger.LogWarning(
+                "Task {TaskId} is already executing in this process, skipping duplicate delivery",
+                task.PersistenceId);
+            return;
+        }
+
+        try
+        {
+            await DoWorkCore(task, serviceToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _inFlightTasks.TryRemove(task.PersistenceId, out _);
+        }
+    }
+
+    private async ValueTask DoWorkCore(TaskHandlerExecutor task, CancellationToken serviceToken)
     {
         //Task storage could be a dbcontext wich is not thread safe.
         //So its safer to just use a new scope for each task

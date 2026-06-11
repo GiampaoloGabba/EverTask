@@ -92,6 +92,15 @@ public abstract class IsolatedIntegrationTestBase : IAsyncDisposable
         bool startHost = true,
         Action<EverTaskServiceConfiguration>? configureEverTask = null)
     {
+        // Ensure any previous host is properly disposed before creating new one
+        // (a restart simulation must not leave two live hosts on the same storage)
+        if (Host != null)
+        {
+            await StopHostAsync();
+            Host.Dispose();
+            Host = null;
+        }
+
         Host = new HostBuilder()
             .ConfigureServices((context, services) =>
             {

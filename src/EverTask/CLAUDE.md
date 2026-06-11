@@ -34,7 +34,16 @@ Monitoring events (`TaskEventOccurredAsync`) published fire-and-forget to preven
 After recurring task completes, `WorkerExecutor` auto-calculates next run and updates storage. Stops when `MaxRuns` reached or `RunUntil` exceeded.
 
 ### Blacklist for Cancelled Tasks
-`ITaskDispatcher.Cancel(Guid)` adds to blacklist. `WorkerExecutor` checks before execution.
+`ITaskDispatcher.Cancel(Guid)` adds to blacklist. `WorkerExecutor` checks before execution. `Cancel` also calls `IScheduler.TryUnschedule(id)` to drop any parked occurrence.
+
+### Queue & Recovery Resilience (no task loss, no deadlock)
+**Lifecycle invariant**: every persisted task is executed or stays in a status `RetrievePending` recovers. Recoverable statuses: `WaitingQueue`, `Queued`, `Pending`, `InProgress`, `ServiceStopped`, plus recurring tasks (`IsRecurring && NextRunUtc != null`) in `Completed`/`Failed`. Identical across EfCore/Sqlite/Memory storage — **keep the three filters in sync**.
+
+- **Startup order matters**: `WorkerService.ExecuteAsync` starts consumers **first**, then runs `ProcessPendingAsync` **concurrently** (`RunRecoveryAsync`). Reverting to recover-before-consume reintroduces the capacity deadlock. Recovery has a `recoveryCutoff` (CreatedAtUtc) and uses `ExecuteDispatch(isRecovery: true)`.
+- **`isRecovery` flag** (Dispatcher): (1) blocking enqueue (`EnqueueBlocking`, never drop); (2) preserves stored `NextRunUtc` for recurring (recalculating past it skips an occurrence — the P0 bug); (3) skips `UpdateTask` (avoids overwriting a concurrent live taskKey re-registration).
+- **Double-execution defense (at-least-once contract)**: `WorkerQueue` dedupes by `PersistenceId` via an in-channel registry (removed at dequeue); `WorkerExecutor.DoWork` has an in-flight guard. Handlers with side effects must still be idempotent — recommend a stable `taskKey`.
+- **CancellationToken** flows `Dispatch → TryEnqueue → WriteAsync`. Cancel during a full-queue wait → OCE to caller, task stays `Queued` (recovered later), never `Failed`.
+- **Schedulers never block on a full queue**: dispatch via `TryEnqueueImmediate`; on `QueueFull` re-enqueue at `now + FullQueueRetryDelay` (no head-of-line blocking). They do **not** mark `Failed` on shutdown (OCE) or transient errors — only real handler failures fail a task. `QueueFullBehavior` applies to **immediate dispatches only**.
 
 ### Async Best Practices
 Code follows [David Fowl's AsyncGuidance.md](https://github.com/davidfowl/AspNetCoreDiagnosticScenarios/blob/master/AsyncGuidance.md) (see inline comments in `WorkerExecutor.cs`).
@@ -53,3 +62,8 @@ Code follows [David Fowl's AsyncGuidance.md](https://github.com/davidfowl/AspNet
 - Update: `test/EverTask.Tests/WorkerExecutorTests.cs`
 - Verify retry integration: `test/EverTask.Tests/RetryPolicyTests.cs`
 - Check lifecycle callbacks: `test/EverTask.Tests/LifecycleTests.cs`
+
+**When modifying queue/recovery/scheduler resilience** (no-loss/no-deadlock invariants):
+- `test/EverTask.Tests/IntegrationTests/QueueResilienceIntegrationTests.cs` (deadlock, WaitingQueue recovery, HOL, cancellation, recurring revival, RunUntil, exactly-once)
+- `test/EverTask.Tests/SchedulerResilienceTests.cs`, `WorkerQueueResilienceTests.cs`, `MemoryStorageRecoveryFilterTests.cs`
+- Real-DB recovery: `test/EverTask.Tests.Storage/SqlServerRecoveryIntegrationTests.cs` (Docker) + recovery-filter section in `EfCoreTaskStorageTestsBase.cs` (all 3 providers)

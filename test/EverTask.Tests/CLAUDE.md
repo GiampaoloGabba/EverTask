@@ -4,6 +4,15 @@
 
 Comprehensive test coverage for EverTask core library (`src/EverTask/`): dispatcher, worker executor, queue, scheduling, handler execution, retry policies, timeouts, cancellation.
 
+## Queue & Recovery Resilience Suite
+
+The no-loss / no-deadlock invariants have dedicated coverage — keep it green when touching the queue/recovery/scheduler:
+- `IntegrationTests/QueueResilienceIntegrationTests.cs` — startup deadlock (backlog > capacity), `WaitingQueue` recovery across restart, head-of-line blocking, cancellation on a full queue, recurring revival + `NextRunUtc` preservation, `RunUntil` last occurrence, exactly-once with recovery racing live dispatch, `InProgress` at-least-once, repeated restarts.
+- `SchedulerResilienceTests.cs` — dedupe, retry-with-backoff on full queue, no-`Failed`-on-shutdown/transient, `TryUnschedule`, semaphore race (both schedulers).
+- `WorkerQueueResilienceTests.cs` — in-channel dedupe, SetQueued-before-write, revert-to-`WaitingQueue` race, blacklist semantics of `WorkerQueueManager`.
+- `MemoryStorageRecoveryFilterTests.cs` — `RetrievePending` recoverable-status filter.
+- Shared test tasks/state: `TestTasks/TestTasks.Resilience.cs` (`ResilienceTestState`, register one per host).
+
 ## Test Organization
 
 ```

@@ -41,6 +41,15 @@ public interface ITaskDispatcherInternal : ITaskDispatcher
     /// <param name="existingTaskId">Optional existing persistence guid for the task</param>
     /// <param name="taskKey">Optional. A unique key for idempotent task registration.</param>
     /// <param name="auditLevel">Optional. Audit level for this task.</param>
+    /// <param name="isRecovery">
+    /// Optional. Marks a startup-recovery dispatch. Recovery dispatches:
+    /// (1) wait for queue space regardless of the queue's configured
+    /// <see cref="EverTask.Configuration.QueueFullBehavior"/> (no caller to fail fast to, tasks must never drop);
+    /// (2) treat a future <paramref name="executionTime"/> (the stored NextRunUtc) as the preserved next
+    /// occurrence for recurring tasks instead of recalculating past it (which would skip one occurrence);
+    /// (3) skip the storage definition rewrite (UpdateTask), since the definition came from storage
+    /// unchanged and rewriting could overwrite a concurrent live re-registration (lost update).
+    /// </param>
     /// <returns>A task that represents the queue operation.</returns>
-    internal Task<Guid> ExecuteDispatch(IEverTask task, DateTimeOffset? executionTime = null, RecurringTask? recurring = null, int? currentRun = null, CancellationToken ct = default, Guid? existingTaskId = null, string? taskKey = null, AuditLevel? auditLevel = null);
+    internal Task<Guid> ExecuteDispatch(IEverTask task, DateTimeOffset? executionTime = null, RecurringTask? recurring = null, int? currentRun = null, CancellationToken ct = default, Guid? existingTaskId = null, string? taskKey = null, AuditLevel? auditLevel = null, bool isRecovery = false);
 }
