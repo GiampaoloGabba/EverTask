@@ -145,7 +145,14 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
         // Update task status using bulk update (no tracking overhead)
         var ex = exception.ToDetailedString();
-        var lastExecutionUtc = status != QueuedTaskStatus.Queued
+
+        // LastExecutionUtc is written only on terminal transitions (a run actually finished).
+        // Intermediate transitions (WaitingQueue, Queued, InProgress, Cancelled, Pending) PRESERVE
+        // the previous value (COALESCE in the update below): a full-queue revert to WaitingQueue
+        // must not stamp a fake execution time, and re-queueing a recurring task must not wipe
+        // the timestamp of its last real run.
+        var lastExecutionUtc = status != QueuedTaskStatus.WaitingQueue
+                               && status != QueuedTaskStatus.Queued
                                && status != QueuedTaskStatus.InProgress
                                && status != QueuedTaskStatus.Cancelled
                                && status != QueuedTaskStatus.Pending
@@ -163,7 +170,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                                                .Where(x => x.Id == taskId)
                                                .ExecuteUpdateAsync(setters => setters
                                                                               .SetProperty(t => t.Status, status)
-                                                                              .SetProperty(t => t.LastExecutionUtc, lastExecutionUtc)
+                                                                              .SetProperty(t => t.LastExecutionUtc, t => lastExecutionUtc ?? t.LastExecutionUtc)
                                                                               .SetProperty(t => t.Exception, ex)
                                                                               .SetProperty(t => t.ExecutionTimeMs, executionTimeMs.Value), ct)
                                                .ConfigureAwait(false);
@@ -174,7 +181,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                                                .Where(x => x.Id == taskId)
                                                .ExecuteUpdateAsync(setters => setters
                                                                               .SetProperty(t => t.Status, status)
-                                                                              .SetProperty(t => t.LastExecutionUtc, lastExecutionUtc)
+                                                                              .SetProperty(t => t.LastExecutionUtc, t => lastExecutionUtc ?? t.LastExecutionUtc)
                                                                               .SetProperty(t => t.Exception, ex), ct)
                                                .ConfigureAwait(false);
             }
@@ -236,34 +243,46 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         return task?.CurrentRunCount ?? 0;
     }
 
-    public async Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel)
+    public virtual async Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel)
     {
         logger.LogInformation("Update the current run counter for Task {taskId}", taskId);
 
         await using var dbContext = await contextFactory.CreateDbContextAsync();
 
-        // Get current status and exception for audit
-        var taskInfo = await dbContext.QueuedTasks
-                                      .Where(x => x.Id == taskId)
-                                      .Select(t => new { t.Status, t.Exception, t.CurrentRunCount })
-                                      .FirstOrDefaultAsync()
-                                      .ConfigureAwait(false);
-
-        if (taskInfo == null)
+        try
         {
-            logger.LogWarning("Task {taskId} not found for run count update", taskId);
-            return;
-        }
+            // Fast path: with AuditLevel.None no audit is ever created and the run counter can be
+            // incremented server-side, so the whole update is a single roundtrip with no SELECT.
+            if (auditLevel == AuditLevel.None)
+            {
+                var rowsAffected = await dbContext.QueuedTasks
+                                                  .Where(x => x.Id == taskId)
+                                                  .ExecuteUpdateAsync(setters => setters
+                                                                                 .SetProperty(t => t.ExecutionTimeMs, executionTimeMs)
+                                                                                 .SetProperty(t => t.NextRunUtc, nextRun)
+                                                                                 .SetProperty(t => t.CurrentRunCount, t => (t.CurrentRunCount ?? 0) + 1))
+                                                  .ConfigureAwait(false);
 
-        // If we need to create runs audit, load full task with tracking
-        if (ShouldCreateRunsAudit(auditLevel, taskInfo.Status, taskInfo.Exception))
-        {
+                if (rowsAffected == 0)
+                    logger.LogWarning("Task {taskId} not found for run count update", taskId);
+
+                return;
+            }
+
+            // Single tracked load: Status/Exception decide the audit and the same instance
+            // receives the counter update (no separate projection + reload).
             var task = await dbContext.QueuedTasks
                                       .Where(x => x.Id == taskId)
                                       .FirstOrDefaultAsync()
                                       .ConfigureAwait(false);
 
-            if (task != null)
+            if (task == null)
+            {
+                logger.LogWarning("Task {taskId} not found for run count update", taskId);
+                return;
+            }
+
+            if (ShouldCreateRunsAudit(auditLevel, task.Status, task.Exception))
             {
                 task.RunsAudits.Add(new RunsAudit
                 {
@@ -273,40 +292,17 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                     Status          = task.Status,
                     Exception       = task.Exception
                 });
-
-                task.ExecutionTimeMs = executionTimeMs;
-                task.NextRunUtc      = nextRun;
-                task.CurrentRunCount = (task.CurrentRunCount ?? 0) + 1;
-
-                try
-                {
-                    await dbContext.SaveChangesAsync(CancellationToken.None).ConfigureAwait(false);
-                }
-                catch (Exception e)
-                {
-                    logger.LogCritical(e, "Update the current run counter for Task for taskId {taskId}", taskId);
-                }
             }
+
+            task.ExecutionTimeMs = executionTimeMs;
+            task.NextRunUtc      = nextRun;
+            task.CurrentRunCount = (task.CurrentRunCount ?? 0) + 1;
+
+            await dbContext.SaveChangesAsync(CancellationToken.None).ConfigureAwait(false);
         }
-        else
+        catch (Exception e)
         {
-            // No audit needed, use ExecuteUpdateAsync for better performance
-            var newRunCount = (taskInfo.CurrentRunCount ?? 0) + 1;
-
-            try
-            {
-                await dbContext.QueuedTasks
-                               .Where(x => x.Id == taskId)
-                               .ExecuteUpdateAsync(setters => setters
-                                                              .SetProperty(t => t.ExecutionTimeMs, executionTimeMs)
-                                                              .SetProperty(t => t.NextRunUtc, nextRun)
-                                                              .SetProperty(t => t.CurrentRunCount, newRunCount))
-                               .ConfigureAwait(false);
-            }
-            catch (Exception e)
-            {
-                logger.LogCritical(e, "Update the current run counter for Task for taskId {taskId}", taskId);
-            }
+            logger.LogCritical(e, "Update the current run counter for Task for taskId {taskId}", taskId);
         }
     }
 

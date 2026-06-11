@@ -1404,6 +1404,60 @@ public abstract class EfCoreTaskStorageTestsBase
         task[0].LastExecutionUtc.ShouldBeNull("Intermediate states should NOT set LastExecutionUtc");
     }
 
+    [Fact]
+    public async Task Should_not_set_last_execution_utc_when_reverting_to_waiting_queue()
+    {
+        // Full-queue revert (TryQueue race): the task never ran, so LastExecutionUtc must stay null
+        var taskId = GetGuidForProvider();
+        await _storage.Persist(new QueuedTask
+        {
+            Id               = taskId,
+            Type             = "TestTask",
+            Request          = "{}",
+            Handler          = "TestHandler",
+            CreatedAtUtc     = DateTimeOffset.UtcNow,
+            Status           = QueuedTaskStatus.Queued,
+            LastExecutionUtc = null
+        });
+
+        // Act
+        await _storage.SetStatus(taskId, QueuedTaskStatus.WaitingQueue, null, AuditLevel.Full);
+
+        // Assert
+        var task = await _storage.Get(x => x.Id == taskId);
+        task[0].Status.ShouldBe(QueuedTaskStatus.WaitingQueue);
+        task[0].LastExecutionUtc.ShouldBeNull("WaitingQueue revert must not stamp a fake execution time");
+    }
+
+    [Fact]
+    public async Task Should_preserve_last_execution_utc_on_intermediate_transitions()
+    {
+        // Re-queueing a recurring task between runs must keep the timestamp of its last real run
+        var taskId  = GetGuidForProvider();
+        var lastRun = DateTimeOffset.UtcNow.AddMinutes(-10);
+        await _storage.Persist(new QueuedTask
+        {
+            Id               = taskId,
+            Type             = "TestTask",
+            Request          = "{}",
+            Handler          = "TestHandler",
+            CreatedAtUtc     = DateTimeOffset.UtcNow,
+            Status           = QueuedTaskStatus.Completed,
+            IsRecurring      = true,
+            LastExecutionUtc = lastRun
+        });
+
+        // Act - intermediate transition (next occurrence enqueued)
+        await _storage.SetStatus(taskId, QueuedTaskStatus.Queued, null, AuditLevel.Full);
+
+        // Assert
+        var task = await _storage.Get(x => x.Id == taskId);
+        task[0].Status.ShouldBe(QueuedTaskStatus.Queued);
+        task[0].LastExecutionUtc.ShouldNotBeNull("intermediate transitions must PRESERVE the last run timestamp");
+        (task[0].LastExecutionUtc!.Value - lastRun).Duration().ShouldBeLessThan(TimeSpan.FromSeconds(1),
+            "the preserved value must be the previous run timestamp, not a new one");
+    }
+
     #endregion
 
     #region RetrievePending recovery filter

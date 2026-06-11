@@ -62,4 +62,35 @@ public class SqlServerTaskStorage : EfCoreTaskStorage
             _logger.LogCritical(e, "Unable to update the status {Status} for taskId {TaskId}", status, taskId);
         }
     }
+
+    /// <summary>
+    /// Updates the current run counter using optimized stored procedure.
+    /// Performs the audit decision (read of Status/Exception), the counter update and the
+    /// RunsAudit insert (if required by AuditLevel) in a single atomic database roundtrip.
+    /// </summary>
+    public override async Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel)
+    {
+        _logger.LogInformation("Update the current run counter for Task {TaskId} using SQL Server stored procedure", taskId);
+
+        await using var dbContext = await _contextFactory.CreateDbContextAsync();
+
+        try
+        {
+            var sql = $"EXEC [{_schema}].[usp_UpdateCurrentRun] @TaskId, @ExecutionTimeMs, @NextRunUtc, @AuditLevel";
+
+            await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(
+                sql,
+                [
+                    new SqlParameter("@TaskId", taskId),
+                    new SqlParameter("@ExecutionTimeMs", executionTimeMs),
+                    new SqlParameter("@NextRunUtc", (object?)nextRun ?? DBNull.Value),
+                    new SqlParameter("@AuditLevel", (int)auditLevel)
+                ]
+            ).ConfigureAwait(false);
+        }
+        catch (Exception e)
+        {
+            _logger.LogCritical(e, "Update the current run counter for Task for taskId {TaskId}", taskId);
+        }
+    }
 }

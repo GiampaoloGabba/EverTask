@@ -90,18 +90,31 @@ public partial class MigrationName : Migration
 
 **Enforcement**: `DbSchemaAwareMigrationAssembly` injects `ITaskStoreDbContext` via reflection.
 
+**Raw SQL migrations** (stored procedures, indexes with INCLUDE): interpolate the schema into every object reference, with `dbo` fallback:
+```csharp
+var schema = string.IsNullOrEmpty(_dbContext.Schema) ? "dbo" : _dbContext.Schema;
+migrationBuilder.Sql($@"CREATE PROCEDURE [{schema}].[usp_Name] ... [{schema}].[QueuedTasks] ...");
+```
+`Down()` must restore the PREVIOUS version of a stored procedure (copy it from the prior migration), not just drop it. Reference examples: `20260111103208_FixStoredProcedureUtcTimezone.cs`, `20260611064213_AddRecoveryIndexAndUpdateRunProcedure.cs`.
+
 ## Generating Migrations
 
 **Commands**:
 ```bash
 cd src/Storage/EverTask.Storage.SqlServer/
-dotnet ef migrations add MigrationName
+dotnet ef migrations add MigrationName --framework net9.0
 dotnet ef migrations remove              # Remove last (if not applied)
 dotnet ef migrations script              # Generate SQL
 dotnet ef database update                # Apply manually
 ```
 
 **Prerequisites**: `TaskStoreEfDbContextFactory` must exist (DEBUG builds only).
+
+**CRITICAL — hand-edit after generation**: `dotnet ef migrations add` generates the migration WITHOUT the `ITaskStoreDbContext` constructor and with hardcoded schema. After generating, ALWAYS:
+1. Add the `ITaskStoreDbContext` constructor (see pattern above) to the main `.cs` file — keep the class `partial`
+2. Replace any hardcoded `schema: "EverTask"` with `schema: _dbContext.Schema` (or the `[{schema}]` interpolation for raw SQL)
+3. Do NOT edit the `.Designer.cs` (auto-generated, no constructor needed — injection targets the migration class)
+4. Compare with the previous migration to confirm the pattern matches before committing
 
 ## Common Issues
 

@@ -93,7 +93,8 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
 
         tasks.Length.ShouldBe(1);
         tasks[0].Status.ShouldBe(QueuedTaskStatus.Cancelled);
-        tasks[0].LastExecutionUtc.ShouldNotBeNull();
+        // The task never ran: LastExecutionUtc must stay null (same rule as EfCoreTaskStorage)
+        tasks[0].LastExecutionUtc.ShouldBeNull();
         tasks[0].Exception.ShouldBeNull();
 
     }
@@ -122,7 +123,9 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
 
         tasks.Length.ShouldBe(1);
         tasks[0].Status.ShouldBe(QueuedTaskStatus.Cancelled);
-        tasks[0].LastExecutionUtc.ShouldNotBeNull();
+        // The run was interrupted, not completed: Cancelled is an intermediate status and does
+        // not stamp LastExecutionUtc (same rule as EfCoreTaskStorage)
+        tasks[0].LastExecutionUtc.ShouldBeNull();
         tasks[0].Exception.ShouldBeNull();
 
         Should.Throw<ObjectDisposedException>(() => ctsToken?.Token);

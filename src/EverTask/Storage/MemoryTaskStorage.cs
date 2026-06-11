@@ -105,9 +105,17 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
             var task = _pendingTasks.FirstOrDefault(x => x.Id == taskId);
             if (task != null)
             {
-                task.Status           = status;
-                task.LastExecutionUtc = DateTimeOffset.UtcNow;
-                task.Exception        = exception.ToDetailedString();
+                task.Status    = status;
+                task.Exception = exception.ToDetailedString();
+
+                // LastExecutionUtc only on terminal transitions, same rule as EfCoreTaskStorage.SetStatus:
+                // intermediate statuses (WaitingQueue, Queued, InProgress, Cancelled, Pending) preserve
+                // the previous value (no fake execution time, no wipe of the last real run).
+                if (status is not (QueuedTaskStatus.WaitingQueue or QueuedTaskStatus.Queued
+                    or QueuedTaskStatus.InProgress or QueuedTaskStatus.Cancelled or QueuedTaskStatus.Pending))
+                {
+                    task.LastExecutionUtc = DateTimeOffset.UtcNow;
+                }
 
                 // Set execution time if provided
                 if (executionTimeMs.HasValue)

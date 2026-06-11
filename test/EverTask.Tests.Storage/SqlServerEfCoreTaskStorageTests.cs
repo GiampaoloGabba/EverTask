@@ -74,18 +74,56 @@ public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsyn
         _dbContext.Schema.ShouldBe("EverTask");
     }
 
-    private async Task<Respawner> GetRespawner() =>
-        _respawner ??= await Respawner.CreateAsync(_connectionString, new RespawnerOptions
-                           { TablesToIgnore = ["__EFMigrationsHistory"] });
+    [Fact]
+    public async Task Should_have_recovery_index_on_queued_tasks()
+    {
+        // IX_QueuedTasks_Recovery is what keeps RetrievePending off a clustered scan + sort
+        // on large tables (see AddRecoveryIndexAndUpdateRunProcedure migration)
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = new SqlCommand(
+            """
+            SELECT COUNT(*) FROM sys.indexes
+            WHERE name = 'IX_QueuedTasks_Recovery'
+              AND object_id = OBJECT_ID('[EverTask].[QueuedTasks]')
+            """,
+            connection);
+
+        var count = (int)(await command.ExecuteScalarAsync())!;
+        count.ShouldBe(1, "IX_QueuedTasks_Recovery should exist on QueuedTasks");
+    }
+
+    [Fact]
+    public async Task Should_have_status_and_run_update_stored_procedures()
+    {
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = new SqlCommand(
+            """
+            SELECT COUNT(*) FROM sys.objects
+            WHERE type = 'P'
+              AND SCHEMA_NAME(schema_id) = 'EverTask'
+              AND name IN ('usp_SetTaskStatus', 'usp_UpdateCurrentRun')
+            """,
+            connection);
+
+        var count = (int)(await command.ExecuteScalarAsync())!;
+        count.ShouldBe(2, "both usp_SetTaskStatus and usp_UpdateCurrentRun should exist");
+    }
 
     protected override async Task CleanUpDatabase()
     {
         // Use Respawn for efficient, reliable cleanup
-        var respawner = await GetRespawner();
-
         await using var connection = new SqlConnection(_connectionString);
         await connection.OpenAsync();
-        await respawner.ResetAsync(connection);
+
+        // Respawn 7+ requires a DbConnection (string overloads were removed)
+        _respawner ??= await Respawner.CreateAsync(connection, new RespawnerOptions
+                           { TablesToIgnore = ["__EFMigrationsHistory"] });
+
+        await _respawner.ResetAsync(connection);
     }
 
     protected override ITaskStoreDbContext CreateDbContext()
