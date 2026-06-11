@@ -5,7 +5,7 @@ All notable changes to EverTask will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.6.0] - 2026-06-11
 
 ### Added
 
@@ -70,6 +70,61 @@ The EverTask monitoring dashboard is now **feature complete** in version 3.2. Th
 - Monitoring dashboard "History" section renamed to "History & Logs" to reflect new execution logs tab
 - Task detail tabs layout changed from 2-column to 3-column grid (Status History | Runs History | Execution Logs)
 - SignalR auto-refresh implementation changed from debounce to throttle pattern for predictable update intervals
+
+### Queue & Recovery Resilience Hardening
+
+A focused pass on the task lifecycle to guarantee the two core promises under queue saturation, restarts and cancellation: **no task is ever lost** and **nothing deadlocks or crashes**. Found via an in-app integration that uses many isolated queues with `QueueFullBehavior.Wait` (webhook-driven dispatch).
+
+#### Fixed
+
+- **Startup deadlock when the cold-start backlog exceeded a queue's capacity.** `ProcessPendingAsync` ran *before* the queue consumers were started; with `Wait` behavior the recovery's blocking write filled the channel and no consumer ever drained it, wedging startup permanently (self-perpetuating, since the stuck tasks stayed `Queued` and re-wedged on the next boot). Consumers now start **first** and recovery runs **concurrently**, so a full queue exerts real backpressure instead of deadlocking.
+- **Silent task loss: `WaitingQueue` was invisible to startup recovery.** Every task is persisted as `WaitingQueue` until it enters a channel, but `RetrievePending` excluded that status. A delayed one-shot parked in the in-memory scheduler (and any task dropped by a full queue) was **never recovered after a restart**, contradicting the "tasks resume after restart" guarantee. `WaitingQueue` is now a recoverable status across all three storage providers (SQL Server, SQLite, In-Memory).
+- **Recurring tasks died after a restart unless re-registered.** Between two runs a recurring task is `Completed`/`Failed` with a future `NextRunUtc`; recovery skipped those rows, so a dynamically-created recurring task that was not re-dispatched at boot stopped firing. Recovery now revives recurring tasks (`IsRecurring && NextRunUtc != null` in `Completed`/`Failed`), while never reviving cancelled or schedule-exhausted ones.
+- **Recurring revival skipped one occurrence at every restart** (and could mark the last occurrence before `RunUntil` as `Failed`). Recovery recalculated the next run *strictly after* the stored `NextRunUtc`. The stored `NextRunUtc` is now treated as the preserved next occurrence and used as-is when still in the future.
+- **Head-of-line blocking across queues.** The scheduler dispatched with a blocking write on a single shared loop, so one full queue stalled the scheduled/recurring tasks of **every other queue**. Both schedulers (`PeriodicTimerScheduler`, `ShardedScheduler`) now dispatch non-blocking and re-enqueue a due task with a backoff (`FullQueueRetryDelay`, default 2s) when its target queue is full, leaving the other queues flowing.
+- **Dispatch ignored the caller's `CancellationToken` on a full queue.** The token flowed only to `Persist`, never to the channel write, so a dispatch from an aborted HTTP request (e.g. a Stripe webhook retry) hung indefinitely and accumulated. The token now flows `Dispatch → TryEnqueue → WriteAsync`; on cancellation the task stays persisted as `Queued` (recovered at the next startup), never `Failed`.
+- **Double execution of immediate tasks.** The same persisted task could be delivered to the channel twice (recovery racing a live dispatch, an `IHostedService` dispatching before the worker started, or a `taskKey` re-dispatch) and both copies executed. Added an in-channel dedupe registry per `PersistenceId` plus an in-flight guard in the executor.
+- **Schedulers turned shutdown and transient storage errors into permanent `Failed`.** `OperationCanceledException` at shutdown and transient storage failures were caught and the task marked `Failed`, losing one-shot tasks. Shutdown now leaves the task recoverable; transient failures are parked and retried with backoff. The startup recovery likewise no longer marks a task `Failed` on a transient re-dispatch error (only genuinely poison payloads are failed).
+- **Recovery could overwrite a concurrent live re-registration (lost update).** Recovery called `UpdateTask`, rewriting the definition read from storage; a concurrent `taskKey` re-registration with a new cron/payload could be lost. Recovery dispatches no longer rewrite the task definition.
+- **`ShardedScheduler` could throw `SemaphoreFullException`** under concurrent `Schedule()` calls (racy check-then-act on a max-count-1 semaphore). Fixed with the same `Interlocked` wake-up signaling as `PeriodicTimerScheduler`.
+- **`QueueFullBehavior.ThrowException` + blacklisted task** threw `QueueFullException` instead of returning cleanly; `FallbackToDefault` re-routed a blacklisted (cancelled) task to the default queue. Both now treat a blacklisted task as a no-op.
+- Pinned `System.Security.Cryptography.Xml` to a patched version to clear a pre-existing transitive high-severity advisory (NU1903) that broke the warnings-as-errors build.
+
+#### Added
+
+- `IScheduler.TryUnschedule(Guid)` — invalidates a parked occurrence; called by the dispatcher on an immediate `taskKey` re-dispatch and by `Cancel()`.
+- `IWorkerQueue.Name`, `Count`, `Capacity` — queue depth observability.
+- `IWorkerQueueManager.EnqueueBlocking` (recovery) and `TryEnqueueImmediate` (scheduler); `WorkerQueue.TryQueue`/`Queue` and `WorkerQueueManager.TryEnqueue` now accept a `CancellationToken`.
+
+#### Changed (breaking — minor API surface)
+
+- `IWorkerQueue.TryQueue` now returns `EnqueueResult` (`Enqueued`/`QueueFull`/`Discarded`) instead of `bool`, to distinguish a full queue from a blacklisted task.
+- `QueueConfiguration.ChannelOptions` default is now `SingleWriter = false` (the dispatcher, scheduler and recovery write concurrently by design).
+- **Semantic note**: `QueueFullBehavior` applies to **immediate** dispatches only. Delayed/recurring tasks dispatched by the scheduler always use a non-blocking write and retry with backoff on a full queue (no fallback, no exception), so a saturated isolated queue cannot stall other queues.
+
+#### Execution Contract (no change, now explicit)
+
+- Execution is **at-least-once**. A task interrupted mid-execution (`InProgress`) is re-dispatched and re-executed from scratch at the next startup. Handlers with external side effects must be idempotent — prefer a stable `taskKey` (e.g. an external event id) for idempotent registration.
+
+### Storage Performance & `LastExecutionUtc` Fixes
+
+#### Added
+
+- `IX_QueuedTasks_Recovery` covering index on `QueuedTasks (CreatedAtUtc, Id)`: startup recovery no longer degenerates into a clustered scan + sort on large tables (SQL Server migration `AddRecoveryIndexAndUpdateRunProcedure`).
+- `usp_UpdateCurrentRun` stored procedure (SQL Server): audit decision, run-counter update and `RunsAudit` insert in a **single atomic roundtrip** (was 2-3 roundtrips per recurring run).
+
+#### Changed
+
+- `EfCoreTaskStorage.UpdateCurrentRun` loads the task once instead of projection + full reload; with `AuditLevel.None` it issues a single `ExecuteUpdate` with server-side counter increment (no SELECT at all).
+
+#### Fixed
+
+- `LastExecutionUtc` is now written only on **terminal** transitions and **preserved** on intermediate ones (`WaitingQueue`, `Queued`, `InProgress`, `Cancelled`, `Pending`), consistently across SQL Server (`usp_SetTaskStatus`), EF Core and In-Memory storage: a full-queue revert to `WaitingQueue` no longer stamps a fake execution time on a task that never ran, and re-queueing a recurring task no longer wipes the timestamp of its last real run.
+
+### Dependencies
+
+- Update NuGet servicing packages (EF Core 8.0.28 / 9.0.17 / 10.0.9, Cronos 0.13.0, UUIDNext 4.2.4, Respawn 7.0.0, Testcontainers.MsSql 4.12.0).
+- Pin `System.Security.Cryptography.Xml` to patched versions to clear a transitive high-severity advisory (NU1903).
 
 ## [3.2.0] - 2025-11-04
 

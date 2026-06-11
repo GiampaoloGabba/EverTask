@@ -3,6 +3,7 @@ using EverTask.Storage;
 using EverTask.Storage.EfCore;
 using EverTask.Storage.SqlServer;
 using EverTask.Tests.TestHelpers;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -54,12 +55,15 @@ public class AuditLevelIntegrationTests : IsolatedIntegrationTestBase, IAsyncLif
         if (string.IsNullOrEmpty(_connectionString))
             return;
 
-        _respawner ??= await Respawner.CreateAsync(_connectionString, new RespawnerOptions
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
+
+        _respawner ??= await Respawner.CreateAsync(connection, new RespawnerOptions
         {
             TablesToIgnore = ["__EFMigrationsHistory"]
         });
 
-        await _respawner.ResetAsync(_connectionString);
+        await _respawner.ResetAsync(connection);
     }
 
     private async Task<IHost> CreateHostWithSqlServerAsync(Action<EverTaskServiceConfiguration>? configureEverTask = null)
