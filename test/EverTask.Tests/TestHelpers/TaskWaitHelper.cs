@@ -1,6 +1,63 @@
+using EverTask.Monitoring;
 using EverTask.Storage;
+using EverTask.Worker;
 
 namespace EverTask.Tests.TestHelpers;
+
+/// <summary>
+/// Collects rate-limit deferral monitoring events from the moment of construction, so a test
+/// can subscribe BEFORE dispatching and never miss a fast deferral.
+/// </summary>
+public sealed class DeferralEventCollector : IDisposable
+{
+    private readonly IEverTaskWorkerExecutor _workerExecutor;
+    private readonly System.Collections.Concurrent.ConcurrentQueue<EverTaskEventData> _events = new();
+    private readonly SemaphoreSlim _signal = new(0, int.MaxValue);
+
+    public DeferralEventCollector(IEverTaskWorkerExecutor workerExecutor)
+    {
+        _workerExecutor = workerExecutor;
+        _workerExecutor.TaskEventOccurredAsync += OnEvent;
+    }
+
+    private Task OnEvent(EverTaskEventData data)
+    {
+        if (data.Message.StartsWith("Rate limit deferred task ", StringComparison.Ordinal))
+        {
+            _events.Enqueue(data);
+            _signal.Release();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Waits for a deferral event of the given task (including ones already collected).</summary>
+    public async Task<EverTaskEventData> WaitForTaskAsync(Guid taskId, int timeoutMs = 10000)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddMilliseconds(timeoutMs);
+
+        while (true)
+        {
+            var match = _events.FirstOrDefault(e => e.TaskId == taskId);
+            if (match != null)
+                return match;
+
+            var remaining = deadline - DateTimeOffset.UtcNow;
+            if (remaining <= TimeSpan.Zero || !await _signal.WaitAsync(remaining))
+            {
+                var lateMatch = _events.FirstOrDefault(e => e.TaskId == taskId);
+                if (lateMatch != null)
+                    return lateMatch;
+
+                throw new TimeoutException(
+                    $"No rate-limit deferral event for task {taskId} within {timeoutMs}ms " +
+                    $"({_events.Count} deferral event(s) collected for other tasks)");
+            }
+        }
+    }
+
+    public void Dispose() => _workerExecutor.TaskEventOccurredAsync -= OnEvent;
+}
 
 /// <summary>
 /// Provides intelligent polling-based wait helpers for integration tests to avoid timing issues with fixed Task.Delay
@@ -222,6 +279,26 @@ public static class TaskWaitHelper
 
         return (task, logs);
     }
+
+    /// <summary>
+    /// Waits for a rate-limit deferral monitoring event for the given task using a collector
+    /// subscribed via <see cref="CreateDeferralCollector"/>. Deferrals are storage-invisible
+    /// (the status stays Queued), so the deferral event is the deterministic signal that a task
+    /// was parked by the rate-limit gate.
+    /// IMPORTANT: create the collector BEFORE dispatching, or a fast deferral can be missed.
+    /// NOTE: deferral events are aggregated per (task type, key) window — set the gate's
+    /// DeferralEventWindow to zero in tests that defer the same key repeatedly.
+    /// </summary>
+    public static Task<EverTaskEventData> WaitForDeferralAsync(
+        DeferralEventCollector collector,
+        Guid taskId,
+        int timeoutMs = DefaultTimeoutMs) => collector.WaitForTaskAsync(taskId, timeoutMs);
+
+    /// <summary>
+    /// Subscribes a deferral-event collector to the worker executor. Dispose to unsubscribe.
+    /// </summary>
+    public static DeferralEventCollector CreateDeferralCollector(IEverTaskWorkerExecutor workerExecutor) =>
+        new(workerExecutor);
 
     /// <summary>
     /// Waits for task to complete AND for execution logs to be persisted.

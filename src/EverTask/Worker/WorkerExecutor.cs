@@ -2,6 +2,7 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using EverTask.Logging;
+using EverTask.RateLimiting;
 
 namespace EverTask.Worker;
 
@@ -18,7 +19,8 @@ public class WorkerExecutor(
     IScheduler scheduler,
     ICancellationSourceProvider cancellationSourceProvider,
     IEverTaskLogger<WorkerExecutor> logger,
-    ILoggerFactory loggerFactory) : IEverTaskWorkerExecutor
+    ILoggerFactory loggerFactory,
+    IRateLimitGate? rateLimitGate = null) : IEverTaskWorkerExecutor
 {
     // Performance optimization: Cache for event data to avoid repeated serialization
     private static readonly ConditionalWeakTable<IEverTask, string> TaskJsonCache = new();
@@ -38,6 +40,33 @@ public class WorkerExecutor(
 
     public async ValueTask DoWork(TaskHandlerExecutor task, CancellationToken serviceToken)
     {
+        // Blacklist check hoisted BEFORE the rate-limit gate: a cancelled task must be discarded
+        // without burning rate-limit tokens (and without entering the execution path)
+        if (IsTaskBlacklisted(task))
+            return;
+
+        // Rate-limit gate (L0 fast path: tasks without a policy skip it entirely)
+        if (task.RateLimitPolicy != null && rateLimitGate != null)
+        {
+            var gateResult = await rateLimitGate.TryPassAsync(task, serviceToken).ConfigureAwait(false);
+            if (gateResult.Outcome == RateLimitGateOutcome.Deferred)
+            {
+                // HARD RULE: the Deferred path NEVER enters DoWorkCore — its finally would run
+                // QueueNextOccourrence (run-count corruption + lost occurrence). The gate already
+                // re-parked the task in the scheduler; nothing was written to storage and the
+                // status stays Queued (covered by startup recovery).
+                if (gateResult.EmitDeferralEvent)
+                {
+                    RegisterInfo(task,
+                        "Rate limit deferred task {0}: key={1} slotUtc={2:O} policy={3} deferredCount={4}",
+                        task.PersistenceId, task.RateLimitKey!, gateResult.SlotUtc, task.Task.GetType(),
+                        gateResult.AggregatedDeferrals);
+                }
+
+                return;
+            }
+        }
+
         if (!_inFlightTasks.TryAdd(task.PersistenceId, 0))
         {
             logger.LogWarning(
@@ -77,8 +106,7 @@ public class WorkerExecutor(
         {
             serviceToken.ThrowIfCancellationRequested();
 
-            if (IsTaskBlacklisted(task))
-                return;
+            // NOTE: the blacklist check happens in DoWork, before the rate-limit gate
 
             // Resolve handler instance
             if (task.IsLazy)

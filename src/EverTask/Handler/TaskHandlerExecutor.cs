@@ -11,6 +11,11 @@ namespace EverTask.Handler;
 /// Represents a task execution context with handler and metadata.
 /// Supports both eager mode (handler instance present) and lazy mode (handler type stored for later resolution).
 /// </summary>
+/// <remarks>
+/// <c>RateLimitPolicy</c> and <c>RateLimitKey</c> are stamped at dispatch time by the handler
+/// wrapper and live only in memory (never persisted): recovered tasks re-extract them on
+/// re-dispatch. Both are preserved by <see cref="ToLazy"/> and by <c>with</c> expressions.
+/// </remarks>
 public record TaskHandlerExecutor(
     IEverTask Task,
     object? Handler,
@@ -24,7 +29,9 @@ public record TaskHandlerExecutor(
     Guid PersistenceId,
     string? QueueName,
     string? TaskKey,
-    AuditLevel AuditLevel)
+    AuditLevel AuditLevel,
+    RateLimitPolicy? RateLimitPolicy = null,
+    string? RateLimitKey = null)
 {
 
     /// <summary>
@@ -169,7 +176,9 @@ public record TaskHandlerExecutor(
                 PersistenceId,
                 QueueName,
                 TaskKey,
-                AuditLevel
+                AuditLevel,
+                RateLimitPolicy,
+                RateLimitKey
             );
         }
 
@@ -191,7 +200,9 @@ public record TaskHandlerExecutor(
             PersistenceId,
             QueueName,
             TaskKey,
-            AuditLevel
+            AuditLevel,
+            RateLimitPolicy,
+            RateLimitKey
         );
     }
 };
