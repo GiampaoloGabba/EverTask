@@ -54,4 +54,26 @@ public interface IEverTaskHandler<in TTask> : IEverTaskHandlerOptions, IAsyncDis
     /// </summary>
     /// <param name="logCapture">The log capture instance for this task execution.</param>
     void SetLogCapture(ITaskLogCapture logCapture);
+
+    /// <summary>
+    /// Derives the rate-limit key for a task. The default implementation reads
+    /// <see cref="IRateLimitedTask.RateLimitKey"/> when the task implements
+    /// <see cref="IRateLimitedTask"/>, and returns null otherwise.
+    /// </summary>
+    /// <param name="task">The task being dispatched.</param>
+    /// <returns>
+    /// The throttling key for the task, or null when the task is not rate-limited.
+    /// A null or empty key disables the rate-limit gate for that dispatch (when the handler
+    /// declares a <see cref="IEverTaskHandlerOptions.RateLimitPolicy"/>, an empty key is logged
+    /// as a warning once per task type).
+    /// </returns>
+    /// <remarks>
+    /// Override to derive the key without touching the task type, e.g. from a property:
+    /// <code>
+    /// public override string? GetRateLimitKey(SyncTenantData task) => task.TenantId.ToString();
+    /// </code>
+    /// The key identifies the throttled bucket and is distinct from the dispatch <c>taskKey</c>
+    /// (idempotency/deduplication) — never reuse one for the other.
+    /// </remarks>
+    string? GetRateLimitKey(TTask task) => (task as IRateLimitedTask)?.RateLimitKey;
 }

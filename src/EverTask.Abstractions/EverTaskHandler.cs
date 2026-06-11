@@ -24,6 +24,12 @@ public abstract class EverTaskHandler<TTask> : IEverTaskHandler<TTask> where TTa
     /// <inheritdoc/>
     public virtual string? QueueName => null;
 
+    /// <inheritdoc cref="IEverTaskHandlerOptions.RateLimitPolicy"/>
+    public virtual RateLimitPolicy? RateLimitPolicy => null;
+
+    /// <inheritdoc cref="IEverTaskHandler{TTask}.GetRateLimitKey"/>
+    public virtual string? GetRateLimitKey(TTask task) => (task as IRateLimitedTask)?.RateLimitKey;
+
     /// <inheritdoc/>
     public abstract Task Handle(TTask backgroundTask, CancellationToken cancellationToken);
 

@@ -1,5 +1,6 @@
 ﻿using EverTask.Abstractions;
 using EverTask.Configuration;
+using EverTask.RateLimiting;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -48,6 +49,8 @@ public class EverTaskServiceConfiguration
     public PersistentLoggerOptions PersistentLogger { get; } = new();
 
     internal AuditLevel DefaultAuditLevel { get; private set; } = AuditLevel.Full;
+
+    internal RateLimiterOptions RateLimiterOptions { get; } = new();
 
     internal AuditRetentionPolicy? RetentionPolicy { get; private set; }
 
@@ -329,6 +332,31 @@ public class EverTaskServiceConfiguration
     public EverTaskServiceConfiguration SetAuditRetentionPolicy(AuditRetentionPolicy? retentionPolicy)
     {
         RetentionPolicy = retentionPolicy;
+        return this;
+    }
+
+    /// <summary>
+    /// Configures global infrastructure knobs for the keyed rate limiter (parked-task cap,
+    /// tracked-key cardinality bound, key length cap, deferral event emission).
+    /// Per-task-type limits are declared on handlers via <see cref="RateLimitPolicy"/>.
+    /// </summary>
+    /// <param name="configure">Action to configure the rate limiter options.</param>
+    /// <returns>The configuration instance for method chaining.</returns>
+    /// <remarks>
+    /// <code>
+    /// opt.SetRateLimiterOptions(o =>
+    /// {
+    ///     o.MaxParkedTasks     = 5000;
+    ///     o.MaxTrackedKeys     = 100_000;
+    ///     o.MaxKeyLength       = 256;
+    ///     o.EmitDeferralEvents = true;
+    /// });
+    /// </code>
+    /// </remarks>
+    public EverTaskServiceConfiguration SetRateLimiterOptions(Action<RateLimiterOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        configure(RateLimiterOptions);
         return this;
     }
 

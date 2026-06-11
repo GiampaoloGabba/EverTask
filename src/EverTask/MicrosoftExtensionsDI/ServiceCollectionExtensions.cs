@@ -55,6 +55,14 @@ public static class ServiceCollectionExtensions
         // Register WorkerQueueManager instead of single WorkerQueue
         RegisterQueueManager(services, options);
 
+        // Keyed rate limiter (single-instance GCRA). TryAddSingleton is the DI seam for a
+        // future distributed implementation: register a custom IKeyedRateLimiter BEFORE
+        // AddEverTask to replace it.
+        options.RateLimiterOptions.ResolveDefaults(options.Queues[QueueNames.Default].ChannelOptions.Capacity);
+        services.TryAddSingleton<IKeyedRateLimiter>(sp => new InMemoryKeyedRateLimiter(
+            options.RateLimiterOptions,
+            sp.GetRequiredService<IEverTaskLogger<InMemoryKeyedRateLimiter>>()));
+
         // Conditional scheduler registration
         if (options.ShardedSchedulerShardCount.HasValue)
         {
