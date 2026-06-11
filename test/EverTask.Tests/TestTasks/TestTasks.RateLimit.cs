@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using EverTask.Resilience;
 
 namespace EverTask.Tests;
 
@@ -160,6 +161,114 @@ public class RateLimitedQueueRoutedTaskHandler(RateLimitTestState state)
         }
 
         state.Record(backgroundTask.Key, backgroundTask.Index);
+    }
+}
+
+/// <summary>
+/// Throttled retries (default ThrottleRetries=true): fails until the 3rd attempt; each attempt
+/// records a timestamp, so the test can assert the rate-limit spacing between retries.
+/// </summary>
+public record RateLimitedRetryTask(string Key, int Index) : IEverTask, IRateLimitedTask
+{
+    public string RateLimitKey => Key;
+}
+
+public class RateLimitedRetryTaskHandler(RateLimitTestState state) : EverTaskHandler<RateLimitedRetryTask>
+{
+    public override RateLimitPolicy? RateLimitPolicy =>
+        new(1, TimeSpan.FromMilliseconds(700)) { Burst = 1 }; // ThrottleRetries defaults to true
+
+    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(4, TimeSpan.FromMilliseconds(30));
+
+    public override Task Handle(RateLimitedRetryTask backgroundTask, CancellationToken cancellationToken)
+    {
+        state.Record(backgroundTask.Key, backgroundTask.Index);
+        if (state.ExecutionCountByIndex[backgroundTask.Index] < 3)
+            throw new InvalidOperationException("transient failure (test)");
+
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>ThrottleRetries=false on a huge 60 s window: retries must bypass the limiter entirely.</summary>
+public record RateLimitedUnthrottledRetryTask(string Key, int Index) : IEverTask, IRateLimitedTask
+{
+    public string RateLimitKey => Key;
+}
+
+public class RateLimitedUnthrottledRetryTaskHandler(RateLimitTestState state)
+    : EverTaskHandler<RateLimitedUnthrottledRetryTask>
+{
+    public override RateLimitPolicy? RateLimitPolicy =>
+        new(1, TimeSpan.FromSeconds(60)) { Burst = 1, ThrottleRetries = false };
+
+    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(4, TimeSpan.FromMilliseconds(30));
+
+    public override Task Handle(RateLimitedUnthrottledRetryTask backgroundTask, CancellationToken cancellationToken)
+    {
+        state.Record(backgroundTask.Key, backgroundTask.Index);
+        if (state.ExecutionCountByIndex[backgroundTask.Index] < 3)
+            throw new InvalidOperationException("transient failure (test)");
+
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>
+/// Per-attempt 500 ms timeout with a ~600 ms budget wait between attempts: if the budget wait
+/// eroded the timeout, the 300 ms second attempt could never succeed.
+/// </summary>
+public record RateLimitedTimeoutRetryTask(string Key, int Index) : IEverTask, IRateLimitedTask
+{
+    public string RateLimitKey => Key;
+}
+
+public class RateLimitedTimeoutRetryTaskHandler(RateLimitTestState state)
+    : EverTaskHandler<RateLimitedTimeoutRetryTask>
+{
+    public override RateLimitPolicy? RateLimitPolicy =>
+        new(1, TimeSpan.FromMilliseconds(700)) { Burst = 1 };
+
+    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(3, TimeSpan.FromMilliseconds(30));
+
+    public override TimeSpan? Timeout => TimeSpan.FromMilliseconds(500);
+
+    public override async Task Handle(RateLimitedTimeoutRetryTask backgroundTask, CancellationToken cancellationToken)
+    {
+        state.Record(backgroundTask.Key, backgroundTask.Index);
+        if (state.ExecutionCountByIndex[backgroundTask.Index] == 1)
+            throw new InvalidOperationException("transient failure (test)");
+
+        // Second attempt: well within the 500 ms per-attempt timeout — unless the timeout was
+        // eroded by the ~600 ms budget wait that preceded this attempt
+        await Task.Delay(300, cancellationToken);
+    }
+}
+
+/// <summary>
+/// MaxInSlotWait=0 with a 2 s window: a throttled retry can never wait in-slot and must take the
+/// re-park path (attempt count restarts on redelivery).
+/// </summary>
+public record RateLimitedReparkRetryTask(string Key, int Index) : IEverTask, IRateLimitedTask
+{
+    public string RateLimitKey => Key;
+}
+
+public class RateLimitedReparkRetryTaskHandler(RateLimitTestState state)
+    : EverTaskHandler<RateLimitedReparkRetryTask>
+{
+    public override RateLimitPolicy? RateLimitPolicy =>
+        new(1, TimeSpan.FromSeconds(2)) { Burst = 1, MaxInSlotWait = TimeSpan.Zero };
+
+    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(3, TimeSpan.FromMilliseconds(30));
+
+    public override Task Handle(RateLimitedReparkRetryTask backgroundTask, CancellationToken cancellationToken)
+    {
+        state.Record(backgroundTask.Key, backgroundTask.Index);
+        if (state.ExecutionCountByIndex[backgroundTask.Index] == 1)
+            throw new InvalidOperationException("transient failure (test)");
+
+        return Task.CompletedTask;
     }
 }
 

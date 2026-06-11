@@ -31,6 +31,15 @@ public class WorkerExecutor(
 
     private record HandlerOptionsCache(IRetryPolicy RetryPolicy, TimeSpan? Timeout, MethodInfo? OnRetryMethod);
 
+    /// <summary>
+    /// Outcome of a task execution: elapsed time plus the gate result of a retry attempt that
+    /// was deferred by the rate limiter (null when the execution ran to completion/failure).
+    /// </summary>
+    private readonly record struct TaskExecutionResult(double ExecutionTimeMs, RateLimitGateResult? RetryDeferral)
+    {
+        public bool Deferred => RetryDeferral is { Outcome: RateLimitGateOutcome.Deferred };
+    }
+
     public event Func<EverTaskEventData, Task>? TaskEventOccurredAsync;
 
     // PersistenceIds currently executing in this process. Last line of defense against
@@ -55,14 +64,7 @@ public class WorkerExecutor(
                 // QueueNextOccourrence (run-count corruption + lost occurrence). The gate already
                 // re-parked the task in the scheduler; nothing was written to storage and the
                 // status stays Queued (covered by startup recovery).
-                if (gateResult.EmitDeferralEvent)
-                {
-                    RegisterInfo(task,
-                        "Rate limit deferred task {0}: key={1} slotUtc={2:O} policy={3} deferredCount={4}",
-                        task.PersistenceId, task.RateLimitKey!, gateResult.SlotUtc, task.Task.GetType(),
-                        gateResult.AggregatedDeferrals);
-                }
-
+                RegisterDeferralEvent(task, gateResult);
                 return;
             }
         }
@@ -101,6 +103,11 @@ public class WorkerExecutor(
 
         // Track execution time (initialized to 0, updated if task completes successfully)
         double executionTime = 0.0;
+
+        // Set when a RETRY attempt was deferred by the rate limiter: the gate re-parked the
+        // task, so the completion path AND the finally's post-execution logic must be skipped
+        // (no storage write, no recurring re-scheduling — the parked occurrence is still alive)
+        var rateLimitDeferred = false;
 
         try
         {
@@ -171,7 +178,19 @@ public class WorkerExecutor(
 
             await ExecuteCallback(GetStartedCallback(task, handler), task, "Started").ConfigureAwait(false);
 
-            executionTime = await ExecuteTask(task, handler, scope.ServiceProvider, serviceToken, taskStorage);
+            var execution = await ExecuteTask(task, handler, scope.ServiceProvider, serviceToken, taskStorage);
+            executionTime = execution.ExecutionTimeMs;
+
+            if (execution.Deferred)
+            {
+                // A retry attempt ran out of budget beyond MaxInSlotWait: the gate re-parked the
+                // task at its reserved slot (attempt count restarts on redelivery — documented).
+                // Storage keeps the InProgress status, which is recoverable, until the slot-fire
+                // re-enqueue sets Queued.
+                rateLimitDeferred = true;
+                RegisterDeferralEvent(task, execution.RetryDeferral!.Value);
+                return;
+            }
 
             if (taskStorage != null)
                 await taskStorage.SetCompleted(task.PersistenceId, executionTime, task.AuditLevel).ConfigureAwait(false);
@@ -198,8 +217,10 @@ public class WorkerExecutor(
             }
 
             // Save persisted logs (AFTER handler disposal, BEFORE recurring scheduling)
-            // Log save errors must NOT fail task execution
-            if (logCapture != null)
+            // Log save errors must NOT fail task execution.
+            // Skipped on a rate-limit retry deferral: a deferral writes nothing to storage
+            // (logs are persisted by the delivery that completes the task).
+            if (logCapture != null && !rateLimitDeferred)
             {
                 try
                 {
@@ -223,8 +244,27 @@ public class WorkerExecutor(
             }
 
             cancellationSourceProvider.Delete(task.PersistenceId);
-            await QueueNextOccourrence(task, executionTime, taskStorage);
+
+            // A rate-limit deferral must NOT schedule the next recurring occurrence: the
+            // CURRENT occurrence is still parked in the scheduler (run-count integrity)
+            if (!rateLimitDeferred)
+                await QueueNextOccourrence(task, executionTime, taskStorage);
         }
+    }
+
+    /// <summary>
+    /// Publishes the aggregated, machine-parseable deferral monitoring event when the gate
+    /// signals it (per-deferral details are logged at Debug by the gate itself).
+    /// </summary>
+    private void RegisterDeferralEvent(TaskHandlerExecutor task, RateLimitGateResult gateResult)
+    {
+        if (!gateResult.EmitDeferralEvent)
+            return;
+
+        RegisterInfo(task,
+            "Rate limit deferred task {0}: key={1} slotUtc={2:O} policy={3} deferredCount={4}",
+            task.PersistenceId, task.RateLimitKey!, gateResult.SlotUtc, task.Task.GetType(),
+            gateResult.AggregatedDeferrals);
     }
 
     private bool IsTaskBlacklisted(TaskHandlerExecutor task)
@@ -240,7 +280,7 @@ public class WorkerExecutor(
         return false;
     }
 
-    private async Task<double> ExecuteTask(TaskHandlerExecutor task, object handler, IServiceProvider serviceProvider, CancellationToken serviceToken, ITaskStorage? taskStorage)
+    private async Task<TaskExecutionResult> ExecuteTask(TaskHandlerExecutor task, object handler, IServiceProvider serviceProvider, CancellationToken serviceToken, ITaskStorage? taskStorage)
     {
         serviceToken.ThrowIfCancellationRequested();
 
@@ -280,11 +320,15 @@ public class WorkerExecutor(
         var retryPolicy = handlerOptions.RetryPolicy;
         var timeout = handlerOptions.Timeout;
 
+        // WS4 retry throttling: closure state shared with the retry action below
+        var attempt = 0;
+        RateLimitGateResult? retryDeferral = null;
+
         // Use GetTimestamp/GetElapsedTime to avoid Stopwatch allocation
         var startTime = Stopwatch.GetTimestamp();
         await DoExecute();
         var elapsedTime = Stopwatch.GetElapsedTime(startTime);
-        return elapsedTime.TotalMilliseconds;
+        return new TaskExecutionResult(elapsedTime.TotalMilliseconds, retryDeferral);
 
         async Task DoExecute()
         {
@@ -309,6 +353,27 @@ public class WorkerExecutor(
             await retryPolicy.Execute(
                 action: async retryToken =>
                 {
+                    // Retry throttling (BEFORE the timeout branch: the budget wait must never
+                    // erode the per-attempt timeout). The FIRST attempt skips re-acquisition —
+                    // the gate pass that admitted this delivery holds its budget. Retries of a
+                    // ThrottleRetries policy re-acquire; a near slot is awaited in-slot by the
+                    // gate, a far slot re-parks the task (Design A path) instead of surfacing a
+                    // retryable exception, which would consume the shared retry budget and mark
+                    // never-executed tasks Failed.
+                    if (attempt++ > 0
+                        && task.RateLimitPolicy is { ThrottleRetries: true }
+                        && rateLimitGate != null)
+                    {
+                        var gateResult = await rateLimitGate.TryPassAsync(task, retryToken).ConfigureAwait(false);
+                        if (gateResult.Outcome == RateLimitGateOutcome.Deferred)
+                        {
+                            // Stop the retry loop without failing: the task was re-parked and
+                            // the attempt sequence restarts on redelivery (documented)
+                            retryDeferral = gateResult;
+                            return;
+                        }
+                    }
+
                     if (timeout.HasValue && timeout.Value > TimeSpan.Zero)
                     {
                         await ExecuteWithTimeout(

@@ -239,6 +239,78 @@ public class RateLimitingIntegrationTests : IsolatedIntegrationTestBase
         Enumerable.Range(0, 3).ShouldAllBe(i => _state.ExecutionCountByIndex[i] == 1);
     }
 
+    // ---------------------------------------------------------------- WS4: retry integration
+
+    [Fact]
+    public async Task Should_throttle_retries_when_ThrottleRetries_enabled()
+    {
+        await CreateRateLimitHostAsync();
+
+        // Fails on attempts 1 and 2, succeeds on attempt 3; every retry must re-acquire budget
+        // (1 permit per 700 ms), waiting in-slot between attempts
+        var taskId = await Dispatcher.Dispatch(new RateLimitedRetryTask("retry-key", 0));
+        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed, timeoutMs: 20000);
+
+        _state.ExecutionCountByIndex[0].ShouldBe(3, "two failures + the successful third attempt");
+
+        var attempts = _state.TimestampsForKey("retry-key");
+        attempts.Length.ShouldBe(3);
+        for (var i = 1; i < attempts.Length; i++)
+        {
+            (attempts[i] - attempts[i - 1]).ShouldBeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(600),
+                "throttled retries must respect the 700 ms emission interval (lower bound)");
+        }
+    }
+
+    [Fact]
+    public async Task Should_not_throttle_retries_when_ThrottleRetries_disabled()
+    {
+        await CreateRateLimitHostAsync();
+
+        // 60 s window with ThrottleRetries=false: if retries were throttled, attempt 2 would
+        // park for ~60 s and the task could not complete within the ceiling below
+        var taskId = await Dispatcher.Dispatch(new RateLimitedUnthrottledRetryTask("unthrottled-key", 0));
+        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed, timeoutMs: 15000);
+
+        _state.ExecutionCountByIndex[0].ShouldBe(3,
+            "all three attempts run back-to-back when retries bypass the limiter");
+    }
+
+    [Fact]
+    public async Task Should_not_erode_attempt_timeout_when_waiting_for_token()
+    {
+        await CreateRateLimitHostAsync();
+
+        // Attempt 2 waits ~650 ms for budget and then runs for 300 ms against a 500 ms
+        // per-attempt timeout: it can only succeed if the budget wait did NOT consume the timeout
+        var taskId = await Dispatcher.Dispatch(new RateLimitedTimeoutRetryTask("timeout-key", 0));
+        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed, timeoutMs: 20000);
+
+        _state.ExecutionCountByIndex[0].ShouldBe(2);
+
+        var attempts = _state.TimestampsForKey("timeout-key");
+        (attempts[1] - attempts[0]).ShouldBeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(600),
+            "the budget wait happens BEFORE the attempt (and before its timeout starts)");
+    }
+
+    [Fact]
+    public async Task Should_repark_retry_when_budget_wait_exceeds_MaxInSlotWait()
+    {
+        await CreateRateLimitHostAsync();
+
+        // MaxInSlotWait=0 forbids in-slot waits: the throttled retry must re-park the task at
+        // its +2 s slot and the attempt sequence restarts on redelivery (no Failed status)
+        var taskId = await Dispatcher.Dispatch(new RateLimitedReparkRetryTask("repark-key", 0));
+        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed, timeoutMs: 25000);
+
+        _state.ExecutionCountByIndex[0].ShouldBe(2,
+            "first delivery fails attempt 1 and re-parks; the redelivery succeeds at attempt 1");
+
+        var attempts = _state.TimestampsForKey("repark-key");
+        (attempts[1] - attempts[0]).ShouldBeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(1700),
+            "the second execution must wait for the re-parked +2 s slot (lower bound)");
+    }
+
     [Fact]
     public async Task Should_eventually_execute_parked_task_when_slot_lands_during_in_flight_duplicate()
     {
