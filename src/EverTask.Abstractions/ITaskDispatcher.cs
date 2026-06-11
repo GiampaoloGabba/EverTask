@@ -19,6 +19,10 @@ public interface ITaskDispatcher
     /// <param name="taskKey">
     /// Optional. A unique key for idempotent task registration. If a task with the same key exists and is active,
     /// the existing task will be updated; if terminated, it will be replaced with a new one.
+    /// If the existing task is currently executing (InProgress), the dispatch is a no-op that returns the
+    /// existing task ID without scheduling anything: a handler re-dispatching itself with its own stable key
+    /// would be silently discarded. For self-redispatch from inside a handler use a null or per-attempt key
+    /// (e.g. "mytask-{id}-{attempt}"); reserve stable keys for dispatches originating outside the handler.
     /// </param>
     /// <param name="cancellationToken">
     /// Optional. A token for canceling the dispatch operation.
@@ -39,6 +43,10 @@ public interface ITaskDispatcher
     /// <param name="taskKey">
     /// Optional. A unique key for idempotent task registration. If a task with the same key exists and is active,
     /// the existing task will be updated; if terminated, it will be replaced with a new one.
+    /// If the existing task is currently executing (InProgress), the dispatch is a no-op that returns the
+    /// existing task ID without scheduling anything: a handler re-dispatching itself with its own stable key
+    /// would be silently discarded. For self-redispatch from inside a handler use a null or per-attempt key
+    /// (e.g. "mytask-{id}-{attempt}"); reserve stable keys for dispatches originating outside the handler.
     /// </param>
     /// <param name="cancellationToken">
     /// Optional. A token for canceling the dispatch operation.
@@ -60,6 +68,10 @@ public interface ITaskDispatcher
     /// <param name="taskKey">
     /// Optional. A unique key for idempotent task registration. If a task with the same key exists and is active,
     /// the existing task will be updated; if terminated, it will be replaced with a new one.
+    /// If the existing task is currently executing (InProgress), the dispatch is a no-op that returns the
+    /// existing task ID without scheduling anything: a handler re-dispatching itself with its own stable key
+    /// would be silently discarded. For self-redispatch from inside a handler use a null or per-attempt key
+    /// (e.g. "mytask-{id}-{attempt}"); reserve stable keys for dispatches originating outside the handler.
     /// </param>
     /// <param name="cancellationToken">
     /// Optional. A token for canceling the dispatch operation.
@@ -80,6 +92,10 @@ public interface ITaskDispatcher
     /// <param name="taskKey">
     /// Optional. A unique key for idempotent task registration. If a task with the same key exists and is active,
     /// the existing task will be updated; if terminated, it will be replaced with a new one.
+    /// If the existing task is currently executing (InProgress), the dispatch is a no-op that returns the
+    /// existing task ID without scheduling anything: a handler re-dispatching itself with its own stable key
+    /// would be silently discarded. For self-redispatch from inside a handler use a null or per-attempt key
+    /// (e.g. "mytask-{id}-{attempt}"); reserve stable keys for dispatches originating outside the handler.
     /// </param>
     /// <param name="cancellationToken">
     /// Optional. A token for canceling the dispatch operation.

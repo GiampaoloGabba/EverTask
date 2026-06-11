@@ -189,6 +189,11 @@ Use unique keys to safely register recurring tasks at startup without creating d
         taskKey: "daily-cleanup"); // Won't create duplicates
 ```
 
+> ⚠️ **Self-redispatch gotcha**: while a handler is executing, its task is `InProgress`. A dispatch with the
+> same key as an `InProgress` task is a no-op that returns the existing ID without scheduling anything (a
+> warning is logged). If a handler re-dispatches itself (e.g. polling chains), use a null or per-attempt key
+> like `"my-task-{id}-{attempt}"` — reserve stable keys for dispatches originating outside the handler.
+
 ### Monitoring Dashboard
 
 Monitor your tasks with a feature-complete web dashboard providing real-time insights, comprehensive analytics, and detailed observability:

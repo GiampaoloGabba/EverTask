@@ -109,7 +109,10 @@ public class Dispatcher(
                     // If task is in progress, return existing ID (cannot modify running task)
                     if (existingTask.Status is QueuedTaskStatus.InProgress)
                     {
-                        logger.LogInformation("Recurring task {TaskId} is in progress, returning existing ID", existingTask.Id);
+                        logger.LogWarning(
+                            "Dispatch with task key {TaskKey} discarded: recurring task {TaskId} is in progress and nothing was scheduled. " +
+                            "Self-redispatch from inside a handler must use a null or per-attempt task key.",
+                            taskKey, existingTask.Id);
                         return existingTask.Id;
                     }
 
@@ -142,7 +145,10 @@ public class Dispatcher(
                     // If task is in progress, return existing ID (cannot modify running task)
                     else if (existingTask.Status is QueuedTaskStatus.InProgress)
                     {
-                        logger.LogInformation("Task {TaskId} is in progress, returning existing ID", existingTask.Id);
+                        logger.LogWarning(
+                            "Dispatch with task key {TaskKey} discarded: task {TaskId} is in progress and nothing was scheduled. " +
+                            "Self-redispatch from inside a handler must use a null or per-attempt task key.",
+                            taskKey, existingTask.Id);
                         return existingTask.Id;
                     }
                     // If task is pending (Queued/WaitingQueue/Pending), update it

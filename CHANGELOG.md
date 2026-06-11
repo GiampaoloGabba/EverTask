@@ -70,6 +70,9 @@ The EverTask monitoring dashboard is now **feature complete** in version 3.2. Th
 - Monitoring dashboard "History" section renamed to "History & Logs" to reflect new execution logs tab
 - Task detail tabs layout changed from 2-column to 3-column grid (Status History | Runs History | Execution Logs)
 - SignalR auto-refresh implementation changed from debounce to throttle pattern for predictable update intervals
+- Dispatch with a `taskKey` matching an `InProgress` task now logs a **warning** (was info): the dispatch is a
+  no-op returning the existing ID, which silently kills handler self-redispatch chains using a stable key.
+  Documented the rule (use null or per-attempt keys for self-redispatch) in `ITaskDispatcher` XML docs and README.
 
 ### Queue & Recovery Resilience Hardening
 
