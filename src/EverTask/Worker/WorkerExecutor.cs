@@ -1,6 +1,7 @@
 ﻿using System.Diagnostics;
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
+using EverTask.Configuration;
 using EverTask.Logging;
 using EverTask.RateLimiting;
 
@@ -26,10 +27,12 @@ public class WorkerExecutor(
     private static readonly ConditionalWeakTable<IEverTask, string> TaskJsonCache = new();
     private static readonly ConcurrentDictionary<Type, string> TypeStringCache = new();
 
-    // Performance optimization: Cache handler options to avoid runtime casts per execution
+    // Performance optimization: Cache handler options to avoid runtime casts per execution.
+    // Stores the RAW handler overrides (null = no override): the fallback chain
+    // handler → queue → global is resolved per execution, NOT baked into the cache.
     private static readonly ConcurrentDictionary<Type, HandlerOptionsCache> HandlerOptionsInternalCache = new();
 
-    private record HandlerOptionsCache(IRetryPolicy RetryPolicy, TimeSpan? Timeout, MethodInfo? OnRetryMethod);
+    private record HandlerOptionsCache(IRetryPolicy? RetryPolicy, TimeSpan? Timeout, MethodInfo? OnRetryMethod);
 
     /// <summary>
     /// Outcome of a task execution: elapsed time plus the gate result of a retry attempt that
@@ -434,6 +437,21 @@ public class WorkerExecutor(
         RegisterError(exception, task, "Rate limit rejected task {0}: marked as Failed.", task.PersistenceId);
     }
 
+    /// <summary>
+    /// Resolves the configuration of the task's effective queue for the per-queue
+    /// retry/timeout defaults. Unregistered custom queue names fall back to the default
+    /// queue's configuration, mirroring the execution-time routing.
+    /// </summary>
+    private QueueConfiguration? ResolveQueueConfiguration(TaskHandlerExecutor task)
+    {
+        var queueName = task.QueueName ?? (task.RecurringTask != null ? QueueNames.Recurring : QueueNames.Default);
+
+        if (options.Queues.TryGetValue(queueName, out var queueConfig))
+            return queueConfig;
+
+        return options.Queues.TryGetValue(QueueNames.Default, out var defaultConfig) ? defaultConfig : null;
+    }
+
     private bool IsTaskBlacklisted(TaskHandlerExecutor task)
     {
         if (workerBlacklist.IsBlacklisted(task.PersistenceId))
@@ -457,35 +475,26 @@ public class WorkerExecutor(
         // Use GetOrAdd overload with factoryArgument to avoid closure allocation
         var handlerOptions = HandlerOptionsInternalCache.GetOrAdd(
             handler.GetType(),  // Use resolved handler
-            static (_, state) =>
+            static (_, handlerInstance) =>
             {
-                var (handlerInstance, config) = state;
-
                 // Resolve OnRetry method once and cache it
                 var onRetryMethod = handlerInstance.GetType().GetMethod(
                     nameof(IEverTaskHandler<IEverTask>.OnRetry),
                     BindingFlags.Public | BindingFlags.Instance);
 
-                // Cast only once per handler type (first time)
-                if (handlerInstance is IEverTaskHandlerOptions options)
-                {
-                    return new HandlerOptionsCache(
-                        options.RetryPolicy ?? config.DefaultRetryPolicy,
-                        options.Timeout ?? config.DefaultTimeout,
-                        onRetryMethod
-                    );
-                }
-
-                return new HandlerOptionsCache(
-                    config.DefaultRetryPolicy,
-                    config.DefaultTimeout,
-                    onRetryMethod
-                );
+                // Cast only once per handler type (first time): cache the RAW overrides
+                return handlerInstance is IEverTaskHandlerOptions handlerOpts
+                    ? new HandlerOptionsCache(handlerOpts.RetryPolicy, handlerOpts.Timeout, onRetryMethod)
+                    : new HandlerOptionsCache(null, null, onRetryMethod);
             },
-            (handler, options));
+            handler);
 
-        var retryPolicy = handlerOptions.RetryPolicy;
-        var timeout = handlerOptions.Timeout;
+        // Resolution chain: handler override → queue default → global default. The queue is
+        // the task's DECLARED queue (a FallbackToDefault reroute keeps the declared queue's
+        // retry/timeout, consistent with rate limiting following the task type everywhere).
+        var queueConfig = ResolveQueueConfiguration(task);
+        var retryPolicy = handlerOptions.RetryPolicy ?? queueConfig?.DefaultRetryPolicy ?? options.DefaultRetryPolicy;
+        var timeout     = handlerOptions.Timeout ?? queueConfig?.DefaultTimeout ?? options.DefaultTimeout;
 
         // WS4 retry throttling: closure state shared with the retry action below
         var attempt = 0;
