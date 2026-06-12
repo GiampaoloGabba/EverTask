@@ -13,12 +13,15 @@ This is a complete reference for all EverTask configuration options.
 
 - [Service Configuration](#service-configuration)
 - [Queue Configuration](#queue-configuration)
+- [Rate Limiting Configuration](#rate-limiting-configuration)
 - [Storage Configuration](#storage-configuration)
 - [Logging Configuration](#logging-configuration)
 - [Monitoring Configuration](#monitoring-configuration)
 - [Storage Provider Details](#storage-provider-details)
 - [Handler Configuration](#handler-configuration)
 - [Complete Examples](#complete-examples)
+- [Configuration Validation](#configuration-validation)
+- [Performance Tuning Guidelines](#performance-tuning-guidelines)
 
 ## Service Configuration
 
@@ -63,11 +66,11 @@ Controls how many tasks can run at the same time.
 
 **Signature:**
 ```csharp
-SetMaxDegreeOfParallelism(int maxDegreeOfParallelism)
+SetMaxDegreeOfParallelism(int parallelism)
 ```
 
 **Parameters:**
-- `maxDegreeOfParallelism` (int): Number of concurrent workers
+- `parallelism` (int): Number of concurrent workers
 
 **Default:** `Environment.ProcessorCount * 2` (minimum 4)
 
@@ -91,11 +94,11 @@ Sets how tasks should retry when they fail (applies to all tasks unless overridd
 
 **Signature:**
 ```csharp
-SetDefaultRetryPolicy(IRetryPolicy retryPolicy)
+SetDefaultRetryPolicy(IRetryPolicy policy)
 ```
 
 **Parameters:**
-- `retryPolicy` (IRetryPolicy): Retry policy implementation
+- `policy` (IRetryPolicy): Retry policy implementation
 
 **Default:** `LinearRetryPolicy(3, TimeSpan.FromMilliseconds(500))`
 
@@ -112,12 +115,14 @@ opt.SetDefaultRetryPolicy(new LinearRetryPolicy(new[]
     TimeSpan.FromSeconds(2)
 }))
 
-// Custom retry policy
-opt.SetDefaultRetryPolicy(new ExponentialBackoffPolicy())
-
-// No retries
-opt.SetDefaultRetryPolicy(new LinearRetryPolicy(1, TimeSpan.Zero))
+// Custom retry policy (your own IRetryPolicy implementation; see
+// resilience/retry-policies.md for an exponential backoff example)
+opt.SetDefaultRetryPolicy(new MyExponentialBackoffPolicy())
 ```
+
+**Notes:**
+- `LinearRetryPolicy` is the only built-in policy; `retryCount` is the number of retries AFTER the initial attempt (e.g. `LinearRetryPolicy(3, ...)` = up to 4 executions), and both `retryCount` and `retryDelay` must be greater than zero.
+- Retries cannot be disabled via `LinearRetryPolicy`: to disable them, implement a trivial `IRetryPolicy` that invokes the action once; see [Custom Retry Policies](resilience/retry-policies.md#custom-retry-policies).
 
 ### SetDefaultTimeout
 
@@ -162,9 +167,9 @@ SetDefaultAuditLevel(AuditLevel auditLevel)
 **Parameters:**
 - `auditLevel` (AuditLevel): Audit verbosity level
   - `Full` (default): Complete audit trail (all status transitions and executions)
-  - `Minimal`: Only errors in StatusAudit, all executions in RunsAudit (75% reduction)
-  - `ErrorsOnly`: Only failed executions (60% reduction)
-  - `None`: No audit trail (100% reduction)
+  - `Minimal`: Errors get the full audit trail; successful executions write NO audit rows (only `QueuedTask.LastExecutionUtc` is updated)
+  - `ErrorsOnly`: Only failed executions are audited
+  - `None`: No audit trail
 
 **Default:** `AuditLevel.Full`
 
@@ -184,7 +189,7 @@ opt.SetDefaultAuditLevel(AuditLevel.None)
 ```
 
 **Notes:**
-- For tasks running every 5 minutes: Full = ~2,304 records/day, Minimal = ~576 records/day
+- For a task running every 5 minutes: Full ≈ 1,152 audit records/day; Minimal = 0 when executions succeed
 - You can override this per task when dispatching
 - Use lower levels (Minimal/ErrorsOnly/None) for high-frequency recurring tasks
 - See [Audit Configuration](storage/audit-configuration.md) for detailed usage guide
@@ -216,27 +221,30 @@ AuditRetentionPolicy.WithErrorPriority(int successRetentionDays, int errorRetent
 
 **Basic Setup (Uniform Retention):**
 ```csharp
+var policy = AuditRetentionPolicy.WithUniformRetention(30);
+
 builder.Services.AddEverTask(opt => opt
     .RegisterTasksFromAssembly(typeof(Program).Assembly)
-    .SetAuditRetentionPolicy(AuditRetentionPolicy.WithUniformRetention(30)))
-    .AddSqlServerStorage(connectionString)
-    .AddAuditCleanup(
-        AuditRetentionPolicy.WithUniformRetention(30),
-        cleanupIntervalHours: 24);
+    .SetAuditRetentionPolicy(policy))
+    .AddSqlServerStorage(connectionString);
+
+// AddAuditCleanup extends IServiceCollection (EverTask.Storage.EfCore package),
+// NOT the EverTask builder: call it as a separate statement
+builder.Services.AddAuditCleanup(policy, cleanupIntervalHours: 24);
 ```
 
 **Advanced Setup (Keep Errors Longer):**
 ```csharp
+var policy = AuditRetentionPolicy.WithErrorPriority(
+    successRetentionDays: 7,
+    errorRetentionDays: 90);
+
 builder.Services.AddEverTask(opt => opt
     .RegisterTasksFromAssembly(typeof(Program).Assembly)
-    .SetAuditRetentionPolicy(
-        AuditRetentionPolicy.WithErrorPriority(
-            successRetentionDays: 7,
-            errorRetentionDays: 90)))
-    .AddSqlServerStorage(connectionString)
-    .AddAuditCleanup(
-        AuditRetentionPolicy.WithErrorPriority(7, 90),
-        cleanupIntervalHours: 24);
+    .SetAuditRetentionPolicy(policy))
+    .AddSqlServerStorage(connectionString);
+
+builder.Services.AddAuditCleanup(policy, cleanupIntervalHours: 24);
 ```
 
 **Custom Policy:**
@@ -251,8 +259,9 @@ var policy = new AuditRetentionPolicy
 
 builder.Services.AddEverTask(opt => opt
     .SetAuditRetentionPolicy(policy))
-    .AddSqlServerStorage(connectionString)
-    .AddAuditCleanup(policy, cleanupIntervalHours: 12);
+    .AddSqlServerStorage(connectionString);
+
+builder.Services.AddAuditCleanup(policy, cleanupIntervalHours: 12);
 ```
 
 **Retention Policy Properties:**
@@ -266,12 +275,12 @@ builder.Services.AddEverTask(opt => opt
 
 **Cleanup Service Registration:**
 
-The `AddAuditCleanup()` method registers a hosted service that periodically deletes old audit records:
+The `AddAuditCleanup()` method (an `IServiceCollection` extension from the `EverTask.Storage.EfCore` package) registers a hosted service that periodically deletes old audit records:
 
 ```csharp
-.AddAuditCleanup(
-    retentionPolicy,              // Same policy passed to SetAuditRetentionPolicy
-    cleanupIntervalHours: 24)     // Cleanup frequency (default: 24 hours)
+builder.Services.AddAuditCleanup(
+    retentionPolicy,              // Same policy passed to SetAuditRetentionPolicy (required)
+    cleanupIntervalHours: 24);    // Cleanup frequency (default: 24 hours)
 ```
 
 **Important Notes:**
@@ -308,11 +317,11 @@ Controls what happens when a task can't be saved to storage.
 
 **Signature:**
 ```csharp
-SetThrowIfUnableToPersist(bool throwIfUnableToPersist)
+SetThrowIfUnableToPersist(bool value)
 ```
 
 **Parameters:**
-- `throwIfUnableToPersist` (bool): Whether to throw on persistence failure
+- `value` (bool): Whether to throw on persistence failure
 
 **Default:** `true`
 
@@ -336,12 +345,11 @@ Enables a sharded scheduler that can handle extremely high loads by distributing
 
 **Signature:**
 ```csharp
-UseShardedScheduler()
-UseShardedScheduler(int shardCount)
+UseShardedScheduler(int shardCount = 0)
 ```
 
 **Parameters:**
-- `shardCount` (int): Number of shards (default: auto-scale based on CPU count, minimum 4)
+- `shardCount` (int): Number of shards; `0` (default) auto-scales to `Math.Max(4, ProcessorCount)`
 
 **Default:** Not enabled (uses `PeriodicTimerScheduler`)
 
@@ -442,7 +450,7 @@ opt.DisableLazyHandlerResolution()
 
 When enabled, EverTask automatically chooses the best resolution strategy:
 
-- **Immediate tasks**: Lazy mode (v3.7+ — the worker resolves a fresh handler in its per-task scope; an eager instance resolved at dispatch would stay pinned in the root container until shutdown)
+- **Immediate tasks**: Lazy mode (v3.7+: the worker resolves a fresh handler in its per-task scope; an eager instance resolved at dispatch would stay pinned in the root container until shutdown)
 - **Recurring tasks with intervals ≥ 5 minutes**: Lazy mode (memory efficient)
 - **Recurring tasks with intervals < 5 minutes**: Eager mode (performance efficient)
 - **Delayed tasks with delay ≥ 30 minutes**: Lazy mode
@@ -471,29 +479,7 @@ Only disable lazy resolution if:
 
 ### SetRateLimiterOptions
 
-Configures the global infrastructure knobs of the keyed rate limiter (v3.7+). Per-task-type limits are declared on handlers via the `RateLimitPolicy` property — see [Keyed Rate Limiting](rate-limiting.md).
-
-**Signature:**
-```csharp
-SetRateLimiterOptions(Action<RateLimiterOptions> configure)
-```
-
-**Example:**
-```csharp
-opt.SetRateLimiterOptions(o =>
-{
-    o.MaxParkedTasks     = 5000;     // default: min(5000, 2 × default-queue channel capacity)
-    o.MaxTrackedKeys     = 100_000;  // key-cardinality bound (fail-open beyond)
-    o.MaxKeyLength       = 256;      // longer keys are hashed (SHA-256)
-    o.EmitDeferralEvents = true;     // aggregated deferral monitoring events
-});
-```
-
-**Options:**
-- `MaxParkedTasks` (int): cap of DISTINCT rate-limited tasks parked in the scheduler waiting for budget; beyond it, consumers of the affected queues pause so backpressure reaches producers. Default: `min(5000, 2 × default-queue channel capacity)`.
-- `MaxTrackedKeys` (int): maximum (task type, key) buckets tracked in memory; new keys beyond the cap fail OPEN (execute unthrottled) with a warning and a monitoring event. Default: `100,000`.
-- `MaxKeyLength` (int): keys longer than this are hashed before use. Default: `256`.
-- `EmitDeferralEvents` (bool): publish deferral monitoring events (aggregated at the source). Default: `true`.
+Configures the global infrastructure knobs of the keyed rate limiter (v3.7+). See the dedicated [Rate Limiting Configuration](#rate-limiting-configuration) section below for the full reference (global knobs, per-handler `RateLimitPolicy`, key source).
 
 ## Queue Configuration
 
@@ -524,12 +510,20 @@ Creates a new named queue with its own configuration.
 
 **Signature:**
 ```csharp
-AddQueue(string queueName, Action<QueueConfiguration> configure)
+AddQueue(string name, Action<QueueConfiguration>? configure = null)
 ```
 
 **Parameters:**
-- `queueName` (string): Unique queue name
-- `configure` (Action): Queue configuration
+- `name` (string): Queue name (throws `ArgumentException` when null/whitespace)
+- `configure` (Action, optional): Queue configuration
+
+**Defaults for new queues** (different from the auto-created `default` queue, which inherits the global settings with `QueueFullBehavior.Wait`):
+- `MaxDegreeOfParallelism` = **1** (sequential: set it explicitly for parallel consumption)
+- Channel capacity = **500** (`FullMode.Wait`)
+- `QueueFullBehavior` = **`FallbackToDefault`** (a full queue spills to the default queue)
+- Retry policy / timeout = unset (fall back to the global defaults)
+
+Calling `AddQueue` again with the same name **replaces** the previous configuration (no error is raised).
 
 **Example:**
 ```csharp
@@ -567,20 +561,131 @@ Each queue supports these configuration methods:
 
 ```csharp
 // Parallelism
-SetMaxDegreeOfParallelism(int maxDegreeOfParallelism)
+SetMaxDegreeOfParallelism(int parallelism)
 
 // Capacity
 SetChannelCapacity(int capacity)
 
+// Full channel options replacement (FullMode, SingleReader/Writer, ...)
+SetChannelOptions(BoundedChannelOptions options)
+
 // Full behavior
 SetFullBehavior(QueueFullBehavior behavior)
 
-// Timeout
+// Timeout (null reverts to the global default)
 SetDefaultTimeout(TimeSpan? timeout)
 
-// Retry policy
-SetDefaultRetryPolicy(IRetryPolicy retryPolicy)
+// Retry policy (null reverts to the global default)
+SetDefaultRetryPolicy(IRetryPolicy? policy)
 ```
+
+Per-queue retry/timeout resolution chain (v3.7+): **handler override → queue default → global default**. The queue is the task's *declared* queue: a task rerouted by `FallbackToDefault` keeps its declared queue's retry/timeout.
+
+## Rate Limiting Configuration
+
+Keyed rate limiting (v3.7+) constrains how often tasks of a type execute **per key** (tenant, account, external resource). Behavior, semantics, and edge cases are documented in [Keyed Rate Limiting](rate-limiting.md); this section covers the configuration surface.
+
+Configuration lives in three places:
+
+1. **Per-handler policy**: the `RateLimitPolicy` property on the handler declares the limit.
+2. **Key source**: the task implements `IRateLimitedTask`, or the handler overrides `GetRateLimitKey`.
+3. **Global knobs**: `SetRateLimiterOptions` bounds the limiter infrastructure.
+
+### RateLimitPolicy (per handler)
+
+Declares the per-key execution budget for a task type.
+
+**Declaration:**
+```csharp
+public class SyncTenantHandler : EverTaskHandler<SyncTenantTask>
+{
+    // 15 executions per minute PER KEY
+    public override RateLimitPolicy? RateLimitPolicy =>
+        new RateLimitPolicy(permits: 15, period: TimeSpan.FromMinutes(1))
+        {
+            Burst                 = 15,
+            ThrottleRetries       = true,
+            StartEmpty            = false,
+            MaxReservationHorizon = TimeSpan.FromHours(1),
+            MaxInSlotWait         = TimeSpan.FromSeconds(1),
+            OverflowBehavior      = RateLimitOverflowBehavior.WaitForCapacity
+        };
+
+    public override async Task Handle(SyncTenantTask task, CancellationToken ct) { ... }
+}
+```
+
+**Constructor:**
+- `permits` (int): executions allowed per `period`. Must be > 0.
+- `period` (TimeSpan): the budget window. Must be > 0.
+
+**Properties:**
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `Burst` | `int` | `Permits` | Burst tolerance (≥ 1). `1` = strict even spacing (`Period / Permits` between executions); `Permits` = the full budget can front-load |
+| `ThrottleRetries` | `bool` | `true` | Retry attempts re-acquire the key's budget (the wait happens between attempts, before the per-attempt timeout starts) |
+| `StartEmpty` | `bool` | `false` | Fresh buckets admit at the steady rate instead of starting with full burst, capping the post-restart burst |
+| `MaxReservationHorizon` | `TimeSpan` | `1 hour` | Slots farther than this are never parked: terminal rejection (one-shot → `Failed` + `OnError`; recurring → occurrence skipped) |
+| `MaxInSlotWait` | `TimeSpan` | `1 second` | Slots nearer than this are awaited inline by the worker instead of re-parking |
+| `OverflowBehavior` | `RateLimitOverflowBehavior` | `WaitForCapacity` | `WaitForCapacity` defers over-budget tasks to their reserved slot; `Discard` terminally rejects them (`Failed` + `OnError`) |
+
+**Notes:**
+- The policy is read **once per handler type** (first-wins cache); changing it requires a restart.
+- A policy without a key (see below) logs a warning once per task type and executes **ungated** (fail-safe).
+
+### Rate-Limit Key Source
+
+The key is derived **per dispatch** from the task:
+
+```csharp
+// Option A: the task declares its key
+public record SyncTenantTask(Guid TenantId) : IEverTask, IRateLimitedTask
+{
+    public string RateLimitKey => TenantId.ToString();
+}
+
+// Option B: the handler derives the key (overrides IRateLimitedTask if both present)
+public class SyncTenantHandler : EverTaskHandler<SyncTenantTask>
+{
+    public override string? GetRateLimitKey(SyncTenantTask task) => task.TenantId.ToString();
+}
+```
+
+Keep keys low-cardinality and stable (tenant ids, account ids); see [Best Practices](rate-limiting.md#best-practices).
+
+### SetRateLimiterOptions (global knobs)
+
+Bounds the limiter infrastructure process-wide. These are safety valves, not per-task limits.
+
+**Signature:**
+```csharp
+SetRateLimiterOptions(Action<RateLimiterOptions> configure)
+```
+
+**Example:**
+```csharp
+opt.SetRateLimiterOptions(o =>
+{
+    o.MaxParkedTasks     = 5000;
+    o.MaxTrackedKeys     = 100_000;
+    o.MaxKeyLength       = 256;
+    o.EmitDeferralEvents = true;
+});
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `MaxParkedTasks` | `int` | `min(5000, 2 × default-queue channel capacity)` | Cap of DISTINCT rate-limited tasks parked waiting for budget; at the cap, consumers pause (bounded) before dequeued rate-limited tasks of the affected queues (unthrottled traffic keeps flowing), so backpressure reaches producers |
+| `MaxTrackedKeys` | `int` | `100,000` | Maximum (task type, key) buckets tracked in memory; new keys beyond the cap fail OPEN (execute unthrottled) with a warning and a monitoring event |
+| `MaxKeyLength` | `int` | `256` | Keys longer than this are hashed (SHA-256) before use |
+| `EmitDeferralEvents` | `bool` | `true` | Publish deferral monitoring events (aggregated at the source: first deferral per key per window plus periodic summaries) |
+
+**Notes:**
+- The `MaxParkedTasks` default is computed at first resolution, after builder methods like `ConfigureDefaultQueue(q => q.SetChannelCapacity(...))` have run.
+- The rate limiter is per-instance (in-memory): N app instances each enforce the limit independently; see [Multi-Instance](rate-limiting.md#multi-instance).
 
 ## Storage Configuration
 
@@ -612,13 +717,12 @@ Uses SQL Server for persistent storage.
 
 **Signature:**
 ```csharp
-AddSqlServerStorage(string connectionString)
-AddSqlServerStorage(string connectionString, Action<StorageOptions> configure)
+AddSqlServerStorage(string connectionString, Action<SqlServerTaskStoreOptions>? configure = null)
 ```
 
 **Parameters:**
 - `connectionString` (string): SQL Server connection string
-- `configure` (Action): Storage configuration options
+- `configure` (Action, optional): Storage configuration options
 
 **Examples:**
 ```csharp
@@ -635,7 +739,7 @@ AddSqlServerStorage(string connectionString, Action<StorageOptions> configure)
     })
 ```
 
-**StorageOptions Properties:**
+**SqlServerTaskStoreOptions Properties:**
 - `SchemaName` (string?): Database schema name (default: "EverTask", null = main schema)
 - `AutoApplyMigrations` (bool): Auto-apply EF Core migrations (default: true)
 
@@ -645,16 +749,19 @@ Uses SQLite for persistent storage.
 
 **Signature:**
 ```csharp
-AddSqliteStorage(string connectionString)
-AddSqliteStorage(string connectionString, Action<StorageOptions> configure)
+AddSqliteStorage(string connectionString = "Data Source=EverTask.db",
+                 Action<SqliteTaskStoreOptions>? configure = null)
 ```
 
 **Parameters:**
-- `connectionString` (string): SQLite connection string
-- `configure` (Action): Storage configuration options
+- `connectionString` (string, optional): SQLite connection string; defaults to `"Data Source=EverTask.db"`, so `.AddSqliteStorage()` with no arguments is valid
+- `configure` (Action, optional): Storage configuration options
 
 **Examples:**
 ```csharp
+// Zero-config (Data Source=EverTask.db)
+.AddSqliteStorage()
+
 // Basic
 .AddSqliteStorage("Data Source=evertask.db")
 
@@ -668,7 +775,7 @@ AddSqliteStorage(string connectionString, Action<StorageOptions> configure)
 ```
 
 **Notes:**
-- `SchemaName` is not supported in SQLite (always null)
+- `SchemaName` must remain an empty string (`""`): SQLite has no schema concept, do not change it
 
 ## Logging Configuration
 
@@ -680,11 +787,11 @@ Integrates Serilog for structured logging throughout EverTask.
 
 **Signature:**
 ```csharp
-AddSerilog(Action<LoggerConfiguration> configure)
+AddSerilog(Action<LoggerConfiguration>? configure = null)
 ```
 
 **Parameters:**
-- `configure` (Action): Serilog logger configuration
+- `configure` (Action, optional): Serilog logger configuration; calling `.AddSerilog()` with no arguments configures a Console-only sink
 
 **Example:**
 ```csharp
@@ -887,6 +994,10 @@ AddMonitoringApi(Action<EverTaskApiOptions> configure)
 | `Username` | `string` | `"admin"` | JWT Authentication username |
 | `Password` | `string` | `"admin"` | JWT Authentication password (CHANGE IN PRODUCTION!) |
 | `EnableAuthentication` | `bool` | `true` | Enable JWT Authentication |
+| `JwtSecret` | `string?` | `null` | JWT signing key; when unset, a random 256-bit secret is generated per instance. Set it explicitly (≥ 32 bytes) for multi-instance deployments |
+| `JwtIssuer` | `string` | `"EverTask.Monitor.Api"` | JWT issuer claim |
+| `JwtAudience` | `string` | `"EverTask.Monitor.Api"` | JWT audience claim |
+| `JwtExpirationHours` | `int` | `8` | JWT token TTL in hours |
 | `EnableCors` | `bool` | `true` | Enable CORS for API endpoints |
 | `CorsAllowedOrigins` | `string[]` | `[]` | CORS allowed origins (empty = allow all) |
 | `AllowedIpAddresses` | `string[]` | `[]` | IP address whitelist (empty = allow all IPs). Supports IPv4, IPv6, and CIDR notation |
@@ -1239,11 +1350,14 @@ Enables real-time task monitoring via SignalR.
 **Signature:**
 ```csharp
 AddSignalRMonitoring()
-AddSignalRMonitoring(Action<SignalRMonitorOptions> configure)
+AddSignalRMonitoring(Action<SignalRMonitoringOptions> configure)
+AddSignalRMonitoring(Action<HubOptions> hubOptions)
+AddSignalRMonitoring(Action<HubOptions> hubOptions, Action<SignalRMonitoringOptions> configure)
 ```
 
 **Parameters:**
-- `configure` (Action): Monitoring configuration options
+- `configure` (Action): Monitoring configuration options (`SignalRMonitoringOptions`)
+- `hubOptions` (Action): SignalR `HubOptions` customization
 
 **Examples:**
 ```csharp
@@ -1263,9 +1377,17 @@ AddSignalRMonitoring(Action<SignalRMonitorOptions> configure)
 |----------|------|---------|-------------|
 | `IncludeExecutionLogs` | `bool` | `false` | Include execution logs in SignalR events (increases message size) |
 
+**Standalone usage (without Monitor.Api):**
+
+When using the SignalR package without `AddMonitoringApi()`/`MapEverTaskApi()`, you MUST map the hub yourself or no events are broadcast:
+
+```csharp
+app.MapEverTaskMonitorHub();  // default route /evertask-monitoring/hub; a custom pattern overload exists
+```
+
 **Important Notes:**
 
-- **Hub Route**: Fixed at `/evertask-monitoring/hub` (automatically mapped by `MapEverTaskApi()`)
+- **Hub Route**: Fixed at `/evertask-monitoring/hub` (automatically mapped by `MapEverTaskApi()`; standalone via `MapEverTaskMonitorHub()`)
 - **Log Streaming**: Execution logs are always available via ILogger and database persistence (if enabled)
 - **Performance Impact**: Enabling `IncludeExecutionLogs` significantly increases SignalR message size and network bandwidth
 - **Use Case**: Enable only when you need real-time log streaming to monitoring dashboards
@@ -1278,7 +1400,7 @@ AddSignalRMonitoring(Action<SignalRMonitorOptions> configure)
 
 <script>
 const connection = new signalR.HubConnectionBuilder()
-    .withUrl("/evertask/monitor")  // Default hub route
+    .withUrl("/evertask-monitoring/hub")  // Fixed hub route
     .withAutomaticReconnect()
     .build();
 
@@ -1343,8 +1465,8 @@ connection.start()
 For production environments, apply migrations manually:
 
 ```bash
-# Generate migration script
-dotnet ef migrations script --context TaskStoreDbContext --output migration.sql
+# Generate migration script (run from src/Storage/EverTask.Storage.SqlServer/)
+dotnet ef migrations script --context SqlServerTaskStoreContext --output migration.sql
 
 # Apply via your deployment pipeline
 sqlcmd -S localhost -d EverTaskDb -i migration.sql
@@ -1352,9 +1474,10 @@ sqlcmd -S localhost -d EverTaskDb -i migration.sql
 
 **Stored Procedures:**
 
-EverTask v2.0+ uses stored procedures for critical operations:
+EverTask uses stored procedures for critical operations:
 
-- `[EverTask].[SetTaskStatus]`: Atomic status update + audit insert
+- `[EverTask].[usp_SetTaskStatus]` (v2.0+): Atomic status update + audit insert
+- `[EverTask].[usp_UpdateCurrentRun]` (v3.6+): Single-roundtrip recurring-run update
 - Performance: 50% fewer roundtrips for status changes
 
 **Connection String Options:**
@@ -1393,7 +1516,7 @@ opt.SchemaName = "CustomSchema";
     // Auto-apply migrations (default: true)
     opt.AutoApplyMigrations = true;
 
-    // Note: SchemaName is not supported in SQLite (always null)
+    // Note: SchemaName must remain "" (empty string): SQLite has no schema concept
 })
 ```
 
@@ -1436,24 +1559,21 @@ You can configure behavior at the handler level to override global defaults.
 
 ### Handler Properties
 
-Set these in your handler's constructor:
+All handler-level settings are virtual properties to override. They are get-only: assigning them in a constructor does not compile.
 
 ```csharp
 public class MyHandler : EverTaskHandler<MyTask>
 {
-    public MyHandler()
-    {
-        // Timeout
-        Timeout = TimeSpan.FromMinutes(10);
+    // Timeout
+    public override TimeSpan? Timeout => TimeSpan.FromMinutes(10);
 
-        // Retry policy
-        RetryPolicy = new LinearRetryPolicy(5, TimeSpan.FromSeconds(2));
-    }
+    // Retry policy
+    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(5, TimeSpan.FromSeconds(2));
 
     // Queue routing
     public override string? QueueName => "high-priority";
 
-    // Per-key rate limiting (v3.7+) — see rate-limiting.md
+    // Per-key rate limiting (v3.7+), see rate-limiting.md
     public override RateLimitPolicy? RateLimitPolicy =>
         new RateLimitPolicy(15, TimeSpan.FromMinutes(1));
 
@@ -1465,10 +1585,10 @@ public class MyHandler : EverTaskHandler<MyTask>
 ```
 
 **Available Properties:**
-- `Timeout` (TimeSpan?): Handler-specific timeout
-- `RetryPolicy` (IRetryPolicy): Handler-specific retry policy
+- `Timeout` (TimeSpan?): Handler-specific timeout (falls back to queue, then global default)
+- `RetryPolicy` (IRetryPolicy?): Handler-specific retry policy (falls back to queue, then global default)
 - `QueueName` (string?): Target queue for this handler
-- `RateLimitPolicy` (RateLimitPolicy?): Per-key execution frequency constraint; the key comes from `IRateLimitedTask` on the task or a `GetRateLimitKey` override on the handler (see [Keyed Rate Limiting](rate-limiting.md))
+- `RateLimitPolicy` (RateLimitPolicy?): Per-key execution frequency constraint; the key comes from `IRateLimitedTask` on the task or a `GetRateLimitKey` override on the handler (see [Rate Limiting Configuration](#rate-limiting-configuration))
 
 ## Complete Examples
 
@@ -1595,7 +1715,9 @@ Adjusting configuration based on your environment:
 ```csharp
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddEverTask(opt =>
+// Storage methods extend the EverTask builder returned by AddEverTask,
+// NOT IServiceCollection: keep a reference when branching by environment
+var everTask = builder.Services.AddEverTask(opt =>
 {
     opt.RegisterTasksFromAssembly(typeof(Program).Assembly);
 
@@ -1614,29 +1736,30 @@ builder.Services.AddEverTask(opt =>
 
 if (builder.Environment.IsProduction())
 {
-    builder.Services.AddSqlServerStorage(
+    everTask.AddSqlServerStorage(
         builder.Configuration.GetConnectionString("EverTaskDb")!,
         opt => opt.AutoApplyMigrations = false);
 }
 else
 {
-    builder.Services.AddMemoryStorage();
+    everTask.AddMemoryStorage();
 }
 ```
 
 ## Configuration Validation
 
-EverTask checks your configuration at startup and will complain if something looks off:
-
-**Warnings:**
-- `MaxDegreeOfParallelism = 1`: Usually a bad idea in production - consider scaling with CPU count
-- Large `ChannelCapacity` with low `MaxDegreeOfParallelism`: You might end up with a huge backlog
+What EverTask actually checks at startup:
 
 **Errors:**
-- `MaxDegreeOfParallelism < 1`: Must be at least 1
-- `ChannelCapacity < 1`: Must be at least 1
-- Duplicate queue names: Each queue needs a unique name
-- No handlers registered: You need to register at least one assembly
+- No assemblies registered for handler scanning: `AddEverTask` throws `ArgumentException`
+- Channel capacity < 1: `ArgumentOutOfRangeException` (raised by the BCL `BoundedChannelOptions` constructor)
+
+**Warnings:**
+- `MaxDegreeOfParallelism == 1`: a startup warning is logged (single consumer is usually a bad idea in production)
+
+**Behaviors to be aware of (no error raised):**
+- Re-adding a queue with an existing name silently **replaces** the previous configuration
+- `SetMaxDegreeOfParallelism` performs no validation: `0` fails later at runtime, negative values are treated as unlimited by `ParallelOptions`
 
 ## Performance Tuning Guidelines
 

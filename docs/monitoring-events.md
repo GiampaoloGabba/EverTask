@@ -670,7 +670,7 @@ public class MetricsAggregator
 Keep event handlers fast. If you need to do something slow (like sending an alert), fire and forget it:
 
 ```csharp
-// ✅ Good: Fire-and-forget alerting
+// Good: fire-and-forget alerting
 private Task OnTaskEventAsync(EverTaskEventData eventData)
 {
     if (eventData.Severity == nameof(SeverityLevel.Error))
@@ -681,7 +681,7 @@ private Task OnTaskEventAsync(EverTaskEventData eventData)
     return Task.CompletedTask;
 }
 
-// ❌ Bad: Blocking the event pipeline
+// Bad: blocking the event pipeline
 private async Task OnTaskEventAsync(EverTaskEventData eventData)
 {
     if (eventData.Severity == nameof(SeverityLevel.Error))

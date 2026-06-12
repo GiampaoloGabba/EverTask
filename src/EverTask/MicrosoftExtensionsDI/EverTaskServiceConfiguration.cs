@@ -146,18 +146,14 @@ public class EverTaskServiceConfiguration
     /// Individual handlers can override this via the <see cref="IEverTaskHandler{T}.RetryPolicy"/> property.
     /// </summary>
     /// <param name="policy">
-    /// Retry policy instance (LinearRetryPolicy, ExponentialRetryPolicy, or custom implementation).
+    /// Retry policy instance (<see cref="LinearRetryPolicy"/> — the only built-in policy — or a
+    /// custom <see cref="IRetryPolicy"/> implementation, e.g. an exponential backoff or a
+    /// trivial run-once policy to disable retries).
     /// </param>
     /// <returns>The configuration instance for method chaining.</returns>
     /// <remarks>
     /// <para>
     /// Default: LinearRetryPolicy with 3 retries and 500ms delay between attempts.
-    /// </para>
-    /// <para>
-    /// Built-in policies:
-    /// - <see cref="LinearRetryPolicy"/>: Fixed delay between retries (good for transient failures)
-    /// - <see cref="ExponentialRetryPolicy"/>: Exponential backoff (good for rate-limited APIs)
-    /// - <see cref="NoRetryPolicy"/>: Disable retries entirely
     /// </para>
     /// <para>
     /// Retry policies support exception filtering (v1.6.0+) to avoid retrying non-transient failures.

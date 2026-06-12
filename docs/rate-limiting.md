@@ -7,7 +7,7 @@ nav_order: 3
 
 # Keyed Rate Limiting
 
-Throttle task execution per logical key — tenant, account, external resource — so each key respects its own budget while every other key keeps flowing at full speed.
+Throttle task execution per logical key (tenant, account, external resource): each key respects its own budget while every other key keeps flowing at full speed.
 
 ## Why
 
@@ -32,7 +32,7 @@ public record SyncTenantData(Guid TenantId) : IEverTask, IRateLimitedTask
 
 public class SyncTenantDataHandler : EverTaskHandler<SyncTenantData>
 {
-    // Each tenant gets 15 calls per minute — other tenants are unaffected
+    // Each tenant gets 15 calls per minute; other tenants are unaffected
     public override RateLimitPolicy? RateLimitPolicy =>
         new RateLimitPolicy(15, TimeSpan.FromMinutes(1))
         {
@@ -48,7 +48,7 @@ public class SyncTenantDataHandler : EverTaskHandler<SyncTenantData>
 }
 ```
 
-That's it — no configuration-time registration. Tasks of other types, or tasks of this type without a key, are completely unaffected (the gate is skipped entirely).
+That's it. No configuration-time registration: tasks of other types, or tasks of this type without a key, skip the gate entirely.
 
 ## Declaring the Key
 
@@ -80,7 +80,7 @@ Rules and behavior:
 - A key selector that throws is **fail-safe**: the task executes ungated, with a warning log.
 - Keys longer than `MaxKeyLength` (default 256 chars) are hashed (SHA-256) before use.
 
-> ⚠️ The rate-limit key is a *throttling* key. It is NOT the dispatch `taskKey` (idempotency/deduplication): many tasks share the same rate-limit key, while a `taskKey` identifies one logical task. Never reuse one for the other.
+> Careful: the rate-limit key is a *throttling* key, not the dispatch `taskKey` (idempotency/deduplication). Many tasks share the same rate-limit key, while a `taskKey` identifies one logical task. Never reuse one for the other.
 
 ## How It Works
 
@@ -98,24 +98,24 @@ Key properties:
 
 - **GCRA math**: the steady emission interval is `T = Period / Permits`; `Burst` controls how many executions may happen back-to-back before the steady rate is enforced. With `Burst = 1` executions are strictly evenly spaced.
 - **Reservations are per task**: the reserved slot is keyed by the task's persistence id, so a duplicate delivery of the same task *redeems* the same slot instead of consuming new budget.
-- **A deferral writes nothing to storage.** The only storage touch of a deferral cycle is the existing `SetQueued` when the slot fires (an audit row only at `AuditLevel.Full` — for heavily throttled task types we recommend `AuditLevel.Minimal`).
+- **A deferral writes nothing to storage.** The only storage touch of a deferral cycle is the existing `SetQueued` when the slot fires. That write adds an audit row at `AuditLevel.Full`, so for heavily throttled task types we recommend `AuditLevel.Minimal`.
 - **Cancel works while parked**: `ITaskDispatcher.Cancel` drops the parked occurrence; a same-`taskKey` re-dispatch replaces the parked payload (latest wins, exactly once).
 
 ## Retries
 
-By default (`ThrottleRetries = true`) every retry attempt re-acquires budget before running — retries of a task calling a rate-limited API should respect the same limit. The budget wait happens **before** the per-attempt `Timeout` starts, so waiting never erodes it.
+By default (`ThrottleRetries = true`) every retry attempt re-acquires budget before running: if the task calls a rate-limited API, its retries should respect the same limit. The budget wait happens *before* the per-attempt `Timeout` starts, so waiting never erodes it.
 
 - A retry whose slot is at most `MaxInSlotWait` away waits inline between attempts.
-- A retry whose slot is farther away **re-parks the task** at the reserved slot instead of failing it: the attempt counter restarts on redelivery (documented trade-off: combined with a low `MaxDegreeOfParallelism`, this trades throughput for retry fidelity).
+- A retry whose slot is farther away re-parks the task at the reserved slot instead of failing it. The attempt counter restarts on redelivery; combined with a low `MaxDegreeOfParallelism`, this trades some throughput for retry fidelity.
 - Set `ThrottleRetries = false` to let retries bypass the limiter (e.g. when retrying cheap local failures).
 
 The `OnRetry` callback still fires as usual; throttled waits are visible through its delay parameter.
 
 ## Recurring Tasks
 
-Recurring tasks are throttled per occurrence, and the **series rhythm is preserved**: a deferred occurrence executes late, but the *next* occurrence is still computed from the original schedule (the re-park never touches the occurrence's scheduled time).
+Recurring tasks are throttled per occurrence, and the series rhythm is preserved: a deferred occurrence executes late, but the *next* occurrence is still computed from the original schedule (the re-park never touches the occurrence's scheduled time).
 
-- An occurrence whose reserved slot would fall **past `RunUntil`** is skipped — never fired late.
+- An occurrence whose reserved slot would fall past `RunUntil` is skipped, never fired late.
 - An occurrence rejected by the reservation horizon (see below) is skipped through the normal next-occurrence path: the skip counts toward `MaxRuns` (same semantics as downtime) and the series stays alive.
 - A recurrence faster than the policy refill rate logs a warning at first dispatch (occurrences would pile up behind the limiter).
 
@@ -123,7 +123,7 @@ Recurring tasks are throttled per occurrence, and the **series rhythm is preserv
 
 Deferrals are infrastructure routing: no handler callback fires for them (like the scheduler's full-queue re-park). Observability channels:
 
-- **Monitoring events** (`TaskEventOccurredAsync` / SignalR): deferral events with a machine-parseable message — `Rate limit deferred task {id}: key={key} slotUtc={slot:O} policy={taskType} deferredCount={n}` — aggregated at the source (first deferral per key per window, then one summary per window) so sustained throttling never becomes an event storm. Disable via `EmitDeferralEvents = false`.
+- **Monitoring events** (`TaskEventOccurredAsync` / SignalR): deferral events with a machine-parseable message (`Rate limit deferred task {id}: key={key} slotUtc={slot:O} policy={taskType} deferredCount={n}`), aggregated at the source: first deferral per key per window, then one summary per window, so sustained throttling never becomes an event storm. Disable via `EmitDeferralEvents = false`.
 - **Logs**: per-deferral details at `Debug` level.
 - **Monitor.Api / Dashboard**: `ThrottledTasks` counters in the overview, `GET /api/rate-limits` (per-key parked counts and next slots), and a per-task `throttledUntil` overlay. This view is in-memory and **single-node**.
 - **Terminal outcomes DO invoke `OnError`** with a typed `RateLimitRejectedException` (carrying key, computed slot and policy): horizon rejections and `Discard` drops.
@@ -155,12 +155,12 @@ services.AddSingleton<IKeyedRateLimiter, MyRedisGcraLimiter>();
 | **Multi-queue / FallbackToDefault** | The gate is per task type: a task rerouted to another queue is still throttled |
 | **Cancel while parked** | The parked occurrence is dropped and never executes; status becomes `Cancelled` |
 | **Same-taskKey re-dispatch while parked** | Latest payload wins and executes exactly once at the reserved slot |
-| **Duplicate delivery (recovery race)** | The reservation is redeemed idempotently; the in-flight guard prevents double execution |
-| **Slot beyond `MaxReservationHorizon`** (default 1 h) | Terminal rejection: one-shot tasks are persisted `Failed` with `RateLimitRejectedException` delivered to `OnError`; recurring occurrences are skipped, series alive |
+| **Duplicate delivery (recovery race)** | A redelivery arriving while the same task is still executing is re-parked at a short delay (never dropped, never double-executed concurrently); handlers should stay idempotent (at-least-once contract) |
+| **Slot beyond `MaxReservationHorizon`** (default 1 h) | Terminal rejection: one-shot tasks are persisted `Failed` with `RateLimitRejectedException` delivered to `OnError`; recurring occurrences are skipped, series alive. Same outcome on the first gate pass and on retry re-acquisitions |
 | **`OverflowBehavior = Discard`** | No waiting, no parking: terminal `Failed` (never `Cancelled`) with the typed exception |
-| **Parked tasks reach `MaxParkedTasks`** | Consumers of the affected queues pause (bounded), the channel fills, and the native backpressure reaches producers — safety valve, not normal operation |
+| **Parked tasks reach `MaxParkedTasks`** | Consumers pause (bounded) before dequeued *rate-limited* tasks of the affected queues (tasks without a policy keep flowing), so the channel fills and the native backpressure reaches producers. Safety valve, not normal operation |
 | **More than `MaxTrackedKeys` buckets** | New keys fail OPEN (execute unthrottled) with a rate-limited warning and a mandatory monitoring event |
-| **Limiter failure** (future distributed impl) | The gate fails OPEN: the task executes with a warning — consistent with the never-lose-a-task contract |
+| **Limiter failure** (future distributed impl) | The gate fails OPEN: the task executes with a warning, consistent with the never-lose-a-task contract |
 
 ## Configuration Reference
 
@@ -195,10 +195,10 @@ builder.Services.AddEverTask(opt => opt
 
 ## Best Practices
 
-- **Size `Period`/`Permits` to the external limit, not to your throughput wishes** — the limiter shapes execution to the declared rate; if it feels slow, the constraint is the API, not EverTask.
+- **Size `Period`/`Permits` to the external limit, not to your throughput wishes**: the limiter shapes execution to the declared rate. If it feels slow, the constraint is the API, not EverTask.
 - **Use `Burst = 1` for strict even spacing** when the external API uses small fixed windows; the default full burst can front-load up to `Permits` calls.
-- **Prefer `AuditLevel.Minimal` for heavily throttled task types** — every slot-fire writes the usual `SetQueued`, which adds an audit row at `AuditLevel.Full`.
+- **Prefer `AuditLevel.Minimal` for heavily throttled task types**: every slot-fire writes the usual `SetQueued`, which adds an audit row at `AuditLevel.Full`.
 - **Keep keys low-cardinality and stable** (tenant ids, account ids). Unbounded key spaces eventually hit `MaxTrackedKeys` and fail open.
-- **Don't reuse the dispatch `taskKey` as the rate-limit key** — they answer different questions (identity vs throttling).
+- **Don't reuse the dispatch `taskKey` as the rate-limit key**: they answer different questions (identity vs throttling).
 - **Recurring + rate limit**: keep the recurrence interval ≥ the emission interval (`Period / Permits`), or occurrences will steadily accumulate.
 - **Multiple app instances**: divide the external budget across instances (e.g. 2 instances → 7/min each for a 15/min API) until the distributed limiter ships.

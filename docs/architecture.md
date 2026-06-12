@@ -108,7 +108,7 @@ WorkerQueueManager.TryEnqueue()
          ├──> Blacklist check (cancelled tasks discarded)
          ├──> Rate-limit gate (only when the handler declares a RateLimitPolicy):
          │    no budget for the task's key → reserve the next slot and re-park into
-         │    the in-memory scheduler (storage untouched, status stays Queued) — the
+         │    the in-memory scheduler (storage untouched, status stays Queued); the
          │    worker is immediately free for other tasks
          ├──> Create service scope
          ├──> Resolve handler

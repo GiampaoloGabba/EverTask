@@ -24,7 +24,7 @@ builder.Services.AddEverTask(opt => opt.RegisterTasksFromAssembly(typeof(Program
     .AddSignalRMonitoring();
 
 // Hub mapping (REQUIRED)
-app.MapEverTaskMonitorHub();              // Default: /evertask/monitor
+app.MapEverTaskMonitorHub();              // Default: /evertask-monitoring/hub
 app.MapEverTaskMonitorHub("/custom/monitor"); // Custom endpoint
 ```
 
@@ -57,7 +57,7 @@ Rate-limit deferral events (v3.7+) reuse this shape with a machine-parseable `Me
 import * as signalR from "@microsoft/signalr";
 
 const connection = new signalR.HubConnectionBuilder()
-    .withUrl("/evertask/monitor")
+    .withUrl("/evertask-monitoring/hub")
     .withAutomaticReconnect()
     .build();
 
@@ -71,10 +71,10 @@ await connection.start();
 **Health Check** (PowerShell/Bash):
 ```powershell
 # PowerShell
-Invoke-WebRequest -Uri "https://localhost:5001/evertask/monitor" -Method HEAD
+Invoke-WebRequest -Uri "https://localhost:5001/evertask-monitoring/hub" -Method HEAD
 
 # Bash/curl
-curl -I https://localhost:5001/evertask/monitor
+curl -I https://localhost:5001/evertask-monitoring/hub
 ```
 
 Expected: HTTP 200 (SignalR negotiation endpoint active).
