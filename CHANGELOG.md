@@ -5,6 +5,34 @@ All notable changes to EverTask will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.7.0] - 2026-06-12
+
+### Keyed Rate Limiting
+
+Opt-in, per-key (tenant/account/resource) rate limiting for task execution. The driving use case: tasks calling an external API limited to ~15 requests per minute **per tenant**. The limit is a *frequency constraint per logical key*, orthogonal to queue parallelism: a key without budget never stalls tasks of other keys (no head-of-line blocking), and a worker slot is never held while waiting for budget. See the new [Keyed Rate Limiting docs](https://GiampaoloGabba.github.io/EverTask/rate-limiting.html).
+
+#### Added
+
+- **`IRateLimitedTask`** (Abstractions): marks a task as rate-limited and carries the throttling key (e.g. `TenantId.ToString()`). Alternatively, handlers can override **`GetRateLimitKey(task)`** to derive the key without touching the task type. The rate-limit key is a *throttling* key, distinct from the dispatch `taskKey` (idempotency) — never reuse one for the other.
+- **`RateLimitPolicy`** (Abstractions): declared on the handler (`public override RateLimitPolicy? RateLimitPolicy => new(15, TimeSpan.FromMinutes(1))`), next to `RetryPolicy`/`Timeout`/`QueueName`. Sealed, immutable, validated. Knobs: `Burst` (default = Permits), `ThrottleRetries` (default true), `StartEmpty` (default false), `MaxReservationHorizon` (default 1 h), `MaxInSlotWait` (default 1 s), `OverflowBehavior` (`WaitForCapacity` | `Discard`). Declared as default interface members on `IEverTaskHandlerOptions`/`IEverTaskHandler<T>` so existing external implementors keep compiling.
+- **Consumer-side gate + in-memory GCRA limiter with reservations**: at dequeue, a task without budget gets the next slot *reserved* (keyed by its persistence id, so redeliveries redeem the same slot instead of double-consuming) and is re-parked into the in-memory scheduler. Near slots (≤ `MaxInSlotWait`) are awaited inline. **A deferral writes nothing to storage**: the task stays in its recoverable `Queued` status; the only storage touch of the cycle is the usual `SetQueued` when the slot fires (recommend `AuditLevel.Minimal` for heavily throttled types).
+- **Retry integration**: with `ThrottleRetries` (default), every retry attempt re-acquires budget *before* its per-attempt `Timeout` starts (the budget wait never erodes it); a far slot re-parks the task instead of failing it (attempt count restarts on redelivery).
+- **Recurring integration**: occurrences are throttled individually while the series rhythm is preserved (re-parks never touch the occurrence's scheduled time). Occurrences whose slot falls past `RunUntil` are skipped, never fired late; horizon-rejected occurrences are skipped through the normal next-occurrence path (the skip counts toward `MaxRuns`, same semantics as downtime) and the series stays alive.
+- **Layered defense** (zero-config defaults): unconditional lazy re-park (no pinned handler instances); `MaxParkedTasks` cap with bounded consumer pause → native channel backpressure; `MaxReservationHorizon` terminal rejection (one-shot: persisted `Failed` + `OnError` with the typed **`RateLimitRejectedException`** carrying key/slot/policy); `MaxTrackedKeys` key-cardinality bound with fail-open + mandatory monitoring event; `Discard` overflow behavior (terminal `Failed`, never `Cancelled`); `StartEmpty` opt-in post-restart burst cap.
+- **Observability**: aggregated deferral monitoring events (machine-parseable `Rate limit deferred task {id}: key={key} slotUtc={slot:O} policy={taskType}`; first deferral per key per window + periodic summaries — no per-task event storms; per-deferral logs at Debug); `SetRateLimiterOptions` global knobs; **`IRateLimiterIntrospection`** (single-node view) feeding **`ThrottledTasks`** dashboard counters, the new **`GET /api/rate-limits`** endpoint and a per-task **`throttledUntil`** overlay in Monitor.Api.
+- **`IKeyedRateLimiter` DI seam** for a future distributed (e.g. Redis GCRA) limiter, with documented contract invariants (idempotent redemption, non-decreasing slots, never blocks, wall-clock UTC, fail-open on infrastructure errors). Replace via `services.AddSingleton<IKeyedRateLimiter, ...>()` before `AddEverTask`.
+- **`ITaskStorageStatistics`** optional storage side-interface (count by status, per-queue GROUP BY) implemented by the EF Core and In-Memory providers: Monitor.Api counts no longer require materializing the whole backlog.
+- `IScheduler.TryUnschedule(Guid, TaskHandlerExecutor)` conditional overload (preserves a concurrent newer registration).
+
+#### Fixed
+
+- **MEM-2 (pre-existing leak)**: immediate dispatches resolved an eager transient handler from the root provider; `IAsyncDisposable` handlers were pinned in the root container's disposables list until shutdown. Immediate dispatches are now lazy by default: the dispatch-time metadata instance is resolved and disposed in a short-lived scope, and the executing instance lives in the worker's per-task scope. (Behavior note: in lazy mode `DisposeAsyncCore` fires once at dispatch for the never-executed metadata instance and once after each execution.)
+- **Lazy-mode retry filtering**: lazy execution invoked handlers via `MethodInfo.Invoke`, which wrapped synchronous handler exceptions in `TargetInvocationException` and broke retry-policy exception filtering (whitelist/predicate policies failed fast instead of retrying). Lazy callbacks now use compiled delegates (also faster).
+- **Dashboard PendingCount omitted `Queued` tasks** from queue summaries (shared status-bucketing helper now used by dashboard and statistics services).
+- **`WorkerBlacklist` leak**: cancelling a task whose occurrence was never redelivered (e.g. unscheduled while parked) leaked its blacklist entry forever; entries now lapse via TTL sweep.
+- **Scheduler hardening**: `Schedule()` after `Dispose()` no longer throws into the caller (the task stays recoverable for the next startup); guarded semaphore wake-up against concurrent dispose.
+- Recurring `Cancel` semantics: a blacklisted (cancelled) occurrence no longer schedules the next occurrence — the blacklist check moved before the execution path.
+
 ## [3.6.0] - 2026-06-11
 
 ### Added

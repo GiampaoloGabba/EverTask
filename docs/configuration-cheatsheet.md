@@ -20,7 +20,27 @@ Quick reference for all EverTask configuration options.
 | `SetDefaultAuditLevel` | `AuditLevel` | `Full` | Audit trail verbosity |
 | `SetThrowIfUnableToPersist` | `bool` | `true` | Throw on save failure |
 | `UseShardedScheduler` | `int shardCount` | Auto (min 4) | For >10k/sec loads |
+| `SetRateLimiterOptions` | `Action<RateLimiterOptions>` | See [Rate Limiting](rate-limiting.md) | Keyed rate limiter knobs |
 | `RegisterTasksFromAssembly` | `Assembly` | - | Scan for handlers |
+
+### Rate Limiter Options (v3.7+)
+
+```csharp
+opt.SetRateLimiterOptions(o =>
+{
+    o.MaxParkedTasks     = 5000;     // parked-task cap (backpressure beyond)
+    o.MaxTrackedKeys     = 100_000;  // key-cardinality bound (fail-open beyond)
+    o.MaxKeyLength       = 256;      // longer keys are hashed
+    o.EmitDeferralEvents = true;     // aggregated deferral monitoring events
+});
+```
+
+| Option | Default | Notes |
+|--------|---------|-------|
+| `MaxParkedTasks` | `min(5000, 2 × channel capacity)` | Distinct parked tasks before consumers pause |
+| `MaxTrackedKeys` | `100,000` | (task type, key) buckets before fail-open |
+| `MaxKeyLength` | `256` | Longer keys hashed (SHA-256) |
+| `EmitDeferralEvents` | `true` | Deferral events, aggregated at source |
 
 ## Audit Configuration
 
@@ -225,6 +245,7 @@ public class MyHandler : EverTaskHandler<MyTask>
     public override TimeSpan? Timeout => TimeSpan.FromMinutes(10);
     public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(5, TimeSpan.FromSeconds(2));
     public override string? QueueName => "high-priority";
+    public override RateLimitPolicy? RateLimitPolicy => new(15, TimeSpan.FromMinutes(1));
 }
 ```
 
@@ -233,6 +254,7 @@ public class MyHandler : EverTaskHandler<MyTask>
 | `Timeout` | `TimeSpan?` | Inherits global/queue | Handler timeout |
 | `RetryPolicy` | `IRetryPolicy` | Inherits global/queue | Handler retry |
 | `QueueName` | `string?` | `"default"` | Target queue |
+| `RateLimitPolicy` | `RateLimitPolicy?` | `null` (no limit) | Per-key throttling ([docs](rate-limiting.md)) |
 
 ## Quick Examples
 

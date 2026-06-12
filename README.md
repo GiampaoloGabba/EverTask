@@ -33,6 +33,7 @@ Works great with ASP.NET Core, Windows Services, or any .NET project that needs 
 
 ### Performance & Scalability
 - **Multi-Queue Support** — Isolate workloads by priority, resource type, or business domain
+- **Keyed Rate Limiting** — Throttle tasks per tenant/account/resource against external API limits, without blocking workers or other keys
 - **High-Performance Scheduler** — Minimal lock contention and zero CPU when idle
 - **High Load Support** — Optional sharded scheduler for high-loading scheduling scenarios
 - **Optimized Performance** — Reflection caching, lazy serialization, optimized database operations
@@ -126,7 +127,7 @@ await _dispatcher.Dispatch(new SendWelcomeEmailTask(dto.Email, dto.Name));
 - **[Recurring Tasks](https://GiampaoloGabba.github.io/EverTask/recurring-tasks.html)** - Fluent scheduling API, cron expressions, idempotent registration
 - **[Resilience & Error Handling](https://GiampaoloGabba.github.io/EverTask/resilience.html)** - Retry policies, timeouts, CancellationToken usage
 - **[Monitoring](https://GiampaoloGabba.github.io/EverTask/monitoring.html)** - Complete monitoring guide (Dashboard, Events, and Logs)
-- **[Scalability](https://GiampaoloGabba.github.io/EverTask/scalability.html)** - Multi-queue support and sharded scheduler for high-load scenarios
+- **[Scalability](https://GiampaoloGabba.github.io/EverTask/scalability.html)** - Multi-queue support, keyed rate limiting, and sharded scheduler for high-load scenarios
 - **[Task Orchestration](https://GiampaoloGabba.github.io/EverTask/advanced-features.html)** - Chain tasks, build workflows, and coordinate complex processes
 - **[Storage Configuration](https://GiampaoloGabba.github.io/EverTask/storage.html)** - SQL Server, SQLite, In-Memory, custom implementations
 - **[Configuration](https://GiampaoloGabba.github.io/EverTask/configuration.html)** - Configure EverTask (Reference + Cheatsheet)
@@ -177,6 +178,29 @@ RetryPolicy = new LinearRetryPolicy(3, TimeSpan.FromSeconds(1)).Handle<DbExcepti
 // Predicate: Custom logic (e.g., HTTP 5xx only)
 RetryPolicy = new LinearRetryPolicy(3, TimeSpan.FromSeconds(1)).HandleWhen(ex => ex is HttpRequestException httpEx && httpEx.StatusCode >= 500);
 ```
+
+### Keyed Rate Limiting
+
+Throttle tasks against external API limits — per tenant, per account, per resource — without slowing anyone else down:
+
+```csharp
+public record SyncTenantData(Guid TenantId) : IEverTask, IRateLimitedTask
+{
+    public string RateLimitKey => TenantId.ToString();
+}
+
+public class SyncTenantDataHandler : EverTaskHandler<SyncTenantData>
+{
+    // Each tenant gets 15 calls per minute — other tenants are unaffected
+    public override RateLimitPolicy? RateLimitPolicy =>
+        new RateLimitPolicy(15, TimeSpan.FromMinutes(1));
+
+    public override Task Handle(SyncTenantData task, CancellationToken ct) => ...;
+}
+```
+
+When a task exceeds its key's budget, EverTask reserves the next available slot and re-schedules it automatically — no worker is blocked, no task is dropped, and tasks for other keys keep flowing. Rate limiting is in-memory and per-instance (a pluggable seam for distributed limiters is on the [roadmap](#roadmap)).
+
 ### Idempotent Task Registration
 
 Use unique keys to safely register recurring tasks at startup without creating duplicates:
@@ -269,7 +293,8 @@ We have some exciting features in the pipeline:
 
 - **Task Management API**: REST endpoints for stopping, restarting, and canceling tasks via the dashboard
 - **Distributed Clustering**: Multi-server task distribution with leader election and automatic failover
-- **Advanced Throttling**: Rate limiting and adaptive throttling based on system resources
+- **Distributed Rate Limiting**: Redis-based keyed limiter sharing budgets across instances (the in-process keyed rate limiting shipped in 3.7.0; the `IKeyedRateLimiter` DI seam is ready)
+- **Adaptive Throttling**: Dynamic throttling based on system resources
 - **Workflow Orchestration**: Complex workflow and saga orchestration with fluent API
 - **Additional Monitoring**: Sentry Crons, Application Insights, OpenTelemetry support
 - **More Storage Options**: PostgreSQL, MySQL, Redis, Cosmos DB

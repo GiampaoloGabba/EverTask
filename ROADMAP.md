@@ -99,18 +99,16 @@ Transform EverTask into a fully distributed system supporting horizontal scaling
 
 ---
 
-### Advanced Throttling and Rate Limiting System
-**Status:** Planned | **Priority:** High | **Effort:** 20-26 hours
+### Advanced Throttling System
+**Status:** Partially completed | **Priority:** Medium
 
-Comprehensive rate limiting and throttling system to prevent server overwhelm during task spikes.
+Per-key rate limiting shipped in v3.7.0 (see Completed Features). Remaining ideas:
 
 **Features:**
 - Global rate limiting (e.g., max 1000 tasks/sec)
-- Per-handler rate limiting (e.g., EmailHandler: 100/sec)
 - Concurrency limits per handler (e.g., max 5 concurrent instances)
 - Adaptive throttling based on CPU/memory pressure
-
-**Details:** See `.claude/tasks/advanced-throttling-rate-limiting.md`
+- Distributed (Redis GCRA) keyed limiter — the `IKeyedRateLimiter` DI seam and its contract invariants are already in place
 
 ---
 
@@ -147,6 +145,24 @@ High-priority tasks bypass rate limits and execute first.
 ---
 
 ## Completed Features
+
+### ✅ Keyed Rate Limiting (per tenant/account/resource)
+**Completed:** v3.7.0 (2026-06-12)
+
+Opt-in, per-key rate limiting for task execution against external API limits: a frequency constraint per logical key, orthogonal to queue parallelism — no head-of-line blocking across keys, no worker held while waiting for budget.
+
+**Delivered:**
+- Handler-declared `RateLimitPolicy` (permits/period, burst, retries, horizon, overflow behavior) + `IRateLimitedTask`/`GetRateLimitKey` for the key
+- Consumer-side gate + in-memory GCRA limiter with PersistenceId-keyed reservations (idempotent redemption across redeliveries)
+- Deferrals re-park into the in-memory scheduler with NO storage write (status stays `Queued`, covered by startup recovery)
+- Retry throttling (budget wait never erodes the per-attempt timeout), recurring rhythm preservation, RunUntil clamp
+- Layered defense: parked-task cap with native channel backpressure, reservation horizon with typed `RateLimitRejectedException` to `OnError`, key-cardinality fail-open with mandatory event, `Discard` mode, `StartEmpty` post-restart burst cap
+- Observability: aggregated deferral events, `ThrottledTasks` dashboard counters, `GET /api/rate-limits`, per-task `throttledUntil` overlay
+- **Distributed seam ready**: `IKeyedRateLimiter` (TryAddSingleton) with documented contract invariants for a future Redis-based implementation
+
+**Details:** See `.claude/tasks/keyed-rate-limiting-implementation.md` (supersedes `advanced-throttling-rate-limiting.md`)
+
+---
 
 ### ✅ Task Execution Log Capture with Proxy Pattern
 **Completed:** v3.0.0 (2025-10-23) | **Effort:** 30 hours

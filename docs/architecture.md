@@ -52,6 +52,11 @@ EverTask is a high-performance background task execution library built for persi
        │
        ▼
 ┌─────────────┐     ┌──────────────┐
+│RateLimitGate│────>│ KeyedLimiter │  (only for handlers declaring a RateLimitPolicy;
+└──────┬──────┘     └──────────────┘   deferred tasks re-park into the Scheduler)
+       │
+       ▼
+┌─────────────┐     ┌──────────────┐
 │   Workers   │────>│   Handlers   │
 └─────────────┘     └──────────────┘
 ```
@@ -100,6 +105,11 @@ WorkerQueueManager.TryEnqueue()
          ▼
     WorkerExecutor.Execute()
          │
+         ├──> Blacklist check (cancelled tasks discarded)
+         ├──> Rate-limit gate (only when the handler declares a RateLimitPolicy):
+         │    no budget for the task's key → reserve the next slot and re-park into
+         │    the in-memory scheduler (storage untouched, status stays Queued) — the
+         │    worker is immediately free for other tasks
          ├──> Create service scope
          ├──> Resolve handler
          ├──> Apply retry policy
@@ -108,6 +118,8 @@ WorkerQueueManager.TryEnqueue()
          ├──> Update storage status
          └──> Publish monitoring events
 ```
+
+See [Keyed Rate Limiting](rate-limiting.md) for the full gate semantics (reservations, retries, recurring, bounds).
 
 ### 3. Delayed/Scheduled Execution Path
 

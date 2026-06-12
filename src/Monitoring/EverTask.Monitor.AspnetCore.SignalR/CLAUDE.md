@@ -39,9 +39,16 @@ public record EverTaskEventData(
     string TaskHandlerType,     // Handler type
     string TaskParameters,      // JSON-serialized task request
     string Message,             // Human-readable message
-    string? Exception           // Detailed exception (null if no error)
+    string? Exception = null,   // Detailed exception (null if no error)
+    IReadOnlyList<TaskExecutionLog>? ExecutionLogs = null // Captured execution logs (when enabled)
 );
 ```
+
+**IMPORTANT**: `EverTaskEventData` is a positional record consumed by external `ITaskMonitor`
+implementations — adding/reordering positional parameters is binary-breaking. New data goes in
+new event types or non-positional `init` properties bundled with a monitoring-contract minor.
+Rate-limit deferral events (v3.7+) reuse this shape with a machine-parseable `Message`
+(`Rate limit deferred task {id}: key={key} slotUtc={slot:O} policy={taskType} ...`).
 
 ## Client-Side Integration
 

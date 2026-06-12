@@ -12,7 +12,7 @@
     <Authors>Giampaolo Gabba</Authors>
     <Description>Easy background task with persistence for ASP.NET Core</Description>
     <Copyright>Copyright Giampaolo Gabba</Copyright>
-    <PackageTags>evertask;easytask;task persistence;background tasks</PackageTags>
+    <PackageTags>evertask;easytask;task persistence;background tasks;rate limiting;throttling</PackageTags>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <IncludeSymbols>true</IncludeSymbols>

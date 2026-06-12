@@ -15,6 +15,7 @@ When your application needs to handle increasing workload volumes, EverTask prov
 
 - **[Multi-Queue Support](multi-queue.md)** - Isolate workloads and optimize resource allocation with multiple independent execution queues
 - **[Sharded Scheduler](sharded-scheduler.md)** - Scale scheduling infrastructure to handle extreme loads (>10,000 tasks/second)
+- **[Keyed Rate Limiting](rate-limiting.md)** - Throttle task execution per tenant/account/resource against external API limits, without blocking workers or other keys
 
 ## When to Consider Scalability Features
 
@@ -31,6 +32,11 @@ Most applications work well with EverTask's default configuration. Consider thes
 - Lock contention in profiling showing scheduler bottlenecks
 - 100,000+ tasks scheduled concurrently
 - Need for extreme throughput capacity
+
+### Keyed Rate Limiting
+- Tasks calling external APIs with per-tenant/per-account rate limits
+- A noisy key must never delay other keys (no head-of-line blocking)
+- Frequency constraints that are NOT parallelism constraints (workers stay free while a key waits for budget)
 
 ## Scaling Strategy
 
@@ -79,6 +85,7 @@ Track queue depths, processing rates, and scheduler throughput to validate scali
 
 - **[Multi-Queue Support](multi-queue.md)** - Isolate workloads with independent queues
 - **[Sharded Scheduler](sharded-scheduler.md)** - Scale to extreme scheduling loads
+- **[Keyed Rate Limiting](rate-limiting.md)** - Per-key throttling against external API limits
 - **[Configuration Reference](configuration-reference.md)** - Performance tuning options
 - **[Monitoring](monitoring.md)** - Track performance metrics
 - **[Architecture](architecture.md)** - Understand internal performance characteristics

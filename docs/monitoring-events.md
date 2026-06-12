@@ -33,6 +33,15 @@ EverTask publishes events for all significant task lifecycle moments through the
 - **Task Cancelled**: When a task is cancelled
 - **Task Timeout**: When a task exceeds its timeout
 - **Recurring Task Scheduled**: When a recurring task is scheduled for next execution
+- **Rate Limit Deferred** (v3.7+): When the [rate-limit gate](rate-limiting.md) parks a task waiting for its key's budget. Severity `Information`, machine-parseable message:
+
+  ```
+  Rate limit deferred task {id}: key={key} slotUtc={slot:O} policy={taskType} deferredCount={n}
+  ```
+
+  Deferral events are **aggregated at the source** (the first deferral of a (task type, key) window emits immediately, further deferrals surface as one summary per window with `deferredCount`), so sustained throttling never floods subscribers. Per-deferral details are logged at `Debug`. Disable via `SetRateLimiterOptions(o => o.EmitDeferralEvents = false)`.
+- **Rate Limit Fail-Open** (v3.7+): Severity `Warning`, published when the limiter exceeds `MaxTrackedKeys` and starts executing tasks for new keys unthrottled (message contains `fail OPEN` and the running `totalFailOpenCount`). Mandatory signal: a silent fail-open under key-cardinality pressure would be invisible.
+- **Rate Limit Rejected** (v3.7+): Severity `Error` (one-shot tasks marked `Failed` with a typed `RateLimitRejectedException`) or `Warning` (recurring occurrence skipped, series alive). See [terminal outcomes](rate-limiting.md#interactions--edge-behavior).
 
 ### Severity Levels
 

@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-EverTask is a .NET background task execution library inspired by MediatR. It provides persistent, resilient task execution with support for scheduled, delayed, and recurring tasks. Multi-targets **net6.0, net7.0, net8.0, net9.0**.
+EverTask is a .NET background task execution library inspired by MediatR. It provides persistent, resilient task execution with support for scheduled, delayed, and recurring tasks. Multi-targets **net8.0, net9.0, net10.0** (see `Directory.Build.props`).
 
-**Key Features**: Request/handler pattern, persistent storage (SQL Server, SQLite, In-Memory), retry policies with exception filtering, scheduled/recurring tasks (cron + fluent API), lifecycle callbacks, timeout handling, monitoring integrations.
+**Key Features**: Request/handler pattern, persistent storage (SQL Server, SQLite, In-Memory), retry policies with exception filtering, scheduled/recurring tasks (cron + fluent API), keyed rate limiting (per tenant/account/resource), lifecycle callbacks, timeout handling, monitoring integrations.
 
 ## File Organization Principle
 
@@ -54,6 +54,7 @@ EverTask uses MediatR-inspired request/handler pattern adapted for persistent ba
   - Immediate tasks: BoundedQueue (System.Threading.Channels)
   - Scheduled/recurring: ConcurrentPriorityQueue (TimerScheduler)
 - **WorkerExecutor** → Executes with retry policies, timeouts, lifecycle callbacks (OnStarted, OnCompleted, OnError, OnRetry)
+  - **RateLimitGate** (only for handlers declaring a `RateLimitPolicy`): per-key GCRA budget at dequeue; over-budget tasks re-park into the scheduler at their reserved slot with NO storage write (see `src/EverTask/RateLimiting/CLAUDE.md`)
 - **TaskHandlerExecutor** → Task execution metadata, converts to/from QueuedTask for persistence
 - **ITaskStorage** → Abstract persistence (SqlServer, Sqlite, InMemory implementations in src/Storage/)
 - **Scheduler** → Cron + fluent API for recurring tasks
@@ -95,7 +96,7 @@ See local CLAUDE.md files for implementation details.
 ## Ops Quick Facts
 
 - **Package Management**: Central Package Management (`Directory.Packages.props`) — do NOT add `<PackageReference>` versions in .csproj, add to Directory.Packages.props
-- **Version**: Current 1.5.4 (defined in `Directory.Build.props`)
+- **Version**: defined in `Directory.Build.props` (lockstep across all packages; current 3.7.0)
 - **CI/CD**: Build on push/PR to master (`.github/workflows/build.yml`), manual release workflow (`.github/workflows/release.yml`)
 - **MediatR Attribution**: Core files adapted from MediatR (Apache 2.0) — see attribution comments in Dispatcher.cs, TaskHandlerExecutor.cs, TaskHandlerWrapper.cs, HandlerRegistrar.cs
 
@@ -105,6 +106,7 @@ See local CLAUDE.md files for implementation details.
 |--------|-----------------|-------|
 | **Core** | `src/EverTask/CLAUDE.md` | Dispatcher/worker implementation, MediatR attribution, async guidance |
 | **Abstractions** | `src/EverTask.Abstractions/CLAUDE.md` | Interfaces, retry policy details, serialization gotchas |
+| **Rate Limiting** | `src/EverTask/RateLimiting/CLAUDE.md` | Keyed rate limiting invariants (no-storage-write deferrals, re-park rules, retry/restart semantics) |
 | **Recurring** | `src/EverTask/Scheduler/Recurring/CLAUDE.md` | Cron scheduling, builder flow, calculation gotchas |
 | **SQL Server** | `src/Storage/EverTask.Storage.SqlServer/CLAUDE.md` | Setup, schema-aware migrations, Docker testing |
 | **SQLite** | `src/Storage/EverTask.Storage.Sqlite/CLAUDE.md` | Setup, connection strings |

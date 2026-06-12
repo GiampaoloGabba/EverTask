@@ -127,6 +127,10 @@ public class ReportGenerationHandler : EverTaskHandler<ReportGenerationTask>
 }
 ```
 
+## Timeouts and Rate Limiting
+
+The per-attempt `Timeout` is never eroded by [keyed rate limiting](../rate-limiting.md): when a retry waits for its key's budget, the wait happens *before* the timeout window starts, so a 30-second timeout always covers 30 seconds of actual handler execution.
+
 ## Next Steps
 
 - **[Cancellation Tokens](cancellation-tokens.md)** - Implement cooperative cancellation

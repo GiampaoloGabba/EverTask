@@ -4,7 +4,7 @@
 
 Lightweight contracts package for EverTask. Application code references this without pulling full runtime (same pattern as MediatR.Contracts vs MediatR).
 
-**Dependencies**: Only `Microsoft.Extensions.Logging.Abstractions`
+**Dependencies**: `Microsoft.Extensions.Logging.Abstractions` + `UUIDNext` (database-friendly UUIDv7 generation for `IGuidGenerator`)
 
 ## Key Interfaces
 
@@ -14,6 +14,7 @@ Lightweight contracts package for EverTask. Application code references this wit
 | `ITaskDispatcher` | Entry point for dispatch/cancel | `IMediator` |
 | `IEverTaskHandler<T>` | Task execution contract | `INotificationHandler<T>` |
 | `IRetryPolicy` | Custom retry logic | - |
+| `IRateLimitedTask` | Carries the per-key throttling key (v3.7+) | - |
 
 ## Serialization Guidelines
 
@@ -32,8 +33,11 @@ Lightweight contracts package for EverTask. Application code references this wit
 |----------|---------|-------|
 | `RetryPolicy` | `LinearRetryPolicy(3, 500ms)` | Override for custom retry |
 | `Timeout` | `null` | Set per handler |
+| `RateLimitPolicy` | `null` (no limit) | Per-key throttling (v3.7+); key from `IRateLimitedTask` or a `GetRateLimitKey` override. Declared as DIM on `IEverTaskHandlerOptions` so external implementors keep compiling. See `src/EverTask/RateLimiting/CLAUDE.md` |
 
-**Override Points**: `Handle()` (required), `OnStarted/OnCompleted/OnError/OnRetry` (optional)
+**Override Points**: `Handle()` (required), `OnStarted/OnCompleted/OnError/OnRetry` (optional), `GetRateLimitKey()` (optional)
+
+**Gotcha**: terminal rate-limit rejections (horizon exceeded, `Discard`) deliver a typed `RateLimitRejectedException` to `OnError`; plain deferrals invoke NO callback. The rate-limit key is a throttling key — never reuse the dispatch `taskKey` for it.
 
 ### LinearRetryPolicy
 

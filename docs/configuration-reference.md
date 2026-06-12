@@ -442,6 +442,7 @@ opt.DisableLazyHandlerResolution()
 
 When enabled, EverTask automatically chooses the best resolution strategy:
 
+- **Immediate tasks**: Lazy mode (v3.7+ — the worker resolves a fresh handler in its per-task scope; an eager instance resolved at dispatch would stay pinned in the root container until shutdown)
 - **Recurring tasks with intervals ≥ 5 minutes**: Lazy mode (memory efficient)
 - **Recurring tasks with intervals < 5 minutes**: Eager mode (performance efficient)
 - **Delayed tasks with delay ≥ 30 minutes**: Lazy mode
@@ -465,8 +466,34 @@ Only disable lazy resolution if:
 - **CPU**: Negligible overhead (handler instantiation is fast with DI)
 
 **Notes:**
-- Immediate tasks always use eager resolution (no benefit from lazy)
 - Handler dependencies are resolved at execution time, ensuring fresh scoped services
+- At dispatch time, a short-lived metadata instance is resolved (and disposed with its scope) to extract handler options
+
+### SetRateLimiterOptions
+
+Configures the global infrastructure knobs of the keyed rate limiter (v3.7+). Per-task-type limits are declared on handlers via the `RateLimitPolicy` property — see [Keyed Rate Limiting](rate-limiting.md).
+
+**Signature:**
+```csharp
+SetRateLimiterOptions(Action<RateLimiterOptions> configure)
+```
+
+**Example:**
+```csharp
+opt.SetRateLimiterOptions(o =>
+{
+    o.MaxParkedTasks     = 5000;     // default: min(5000, 2 × default-queue channel capacity)
+    o.MaxTrackedKeys     = 100_000;  // key-cardinality bound (fail-open beyond)
+    o.MaxKeyLength       = 256;      // longer keys are hashed (SHA-256)
+    o.EmitDeferralEvents = true;     // aggregated deferral monitoring events
+});
+```
+
+**Options:**
+- `MaxParkedTasks` (int): cap of DISTINCT rate-limited tasks parked in the scheduler waiting for budget; beyond it, consumers of the affected queues pause so backpressure reaches producers. Default: `min(5000, 2 × default-queue channel capacity)`.
+- `MaxTrackedKeys` (int): maximum (task type, key) buckets tracked in memory; new keys beyond the cap fail OPEN (execute unthrottled) with a warning and a monitoring event. Default: `100,000`.
+- `MaxKeyLength` (int): keys longer than this are hashed before use. Default: `256`.
+- `EmitDeferralEvents` (bool): publish deferral monitoring events (aggregated at the source). Default: `true`.
 
 ## Queue Configuration
 
@@ -1426,6 +1453,10 @@ public class MyHandler : EverTaskHandler<MyTask>
     // Queue routing
     public override string? QueueName => "high-priority";
 
+    // Per-key rate limiting (v3.7+) — see rate-limiting.md
+    public override RateLimitPolicy? RateLimitPolicy =>
+        new RateLimitPolicy(15, TimeSpan.FromMinutes(1));
+
     public override async Task Handle(MyTask task, CancellationToken cancellationToken)
     {
         // Handler logic
@@ -1437,6 +1468,7 @@ public class MyHandler : EverTaskHandler<MyTask>
 - `Timeout` (TimeSpan?): Handler-specific timeout
 - `RetryPolicy` (IRetryPolicy): Handler-specific retry policy
 - `QueueName` (string?): Target queue for this handler
+- `RateLimitPolicy` (RateLimitPolicy?): Per-key execution frequency constraint; the key comes from `IRateLimitedTask` on the task or a `GetRateLimitKey` override on the handler (see [Keyed Rate Limiting](rate-limiting.md))
 
 ## Complete Examples
 

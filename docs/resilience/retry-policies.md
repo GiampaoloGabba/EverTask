@@ -216,6 +216,10 @@ public class CircuitBreakerRetryPolicy : IRetryPolicy
 }
 ```
 
+## Rate-Limited Retries
+
+When a handler also declares a [RateLimitPolicy](../rate-limiting.md), retry attempts re-acquire the key's budget by default (`ThrottleRetries = true`): the budget wait happens between attempts (before the per-attempt timeout starts), and a retry whose slot is too far away re-parks the task at its reserved slot instead of consuming the retry budget — the attempt count restarts on redelivery. See [Keyed Rate Limiting → Retries](../rate-limiting.md#retries).
+
 ## Next Steps
 
 - **[Exception Filtering](exception-filtering.md)** - Configure which exceptions trigger retries

@@ -204,9 +204,11 @@ builder.Services.AddEverTask(opt =>
 3. **Use Fallback Wisely**: `FallbackToDefault` gives you graceful degradation for non-critical queues
 4. **Monitor Queue Metrics**: Track queue depths and processing rates to tune your configuration
 5. **Name Queues Clearly**: Use descriptive names like "payments", "email", "reports" instead of generic ones like "queue1", "queue2"
+6. **Rate limiting is per task type, not per queue**: a handler's [RateLimitPolicy](rate-limiting.md) follows its tasks everywhere — a task rerouted to the default queue by `FallbackToDefault` is still throttled. Queues constrain *parallelism*, rate limits constrain *frequency per key*.
 
 ## Next Steps
 
 - [Sharded Scheduler](sharded-scheduler.md) - Scale to extreme loads
+- [Keyed Rate Limiting](rate-limiting.md) - Per-key throttling against external API limits
 - [Task Orchestration](task-orchestration.md) - Chain and coordinate tasks
 - [Configuration Reference](configuration-reference.md) - All configuration options

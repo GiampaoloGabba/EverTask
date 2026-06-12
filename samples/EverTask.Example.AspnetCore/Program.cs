@@ -26,6 +26,13 @@ builder.Services.AddEverTask(opt =>
        {
            opt.SetThrowIfUnableToPersist(true)
               .RegisterTasksFromAssembly(typeof(Program).Assembly)
+              // Keyed rate limiter infrastructure knobs (per-task-type limits are declared
+              // on handlers via RateLimitPolicy — see RateLimitedTasks.cs)
+              .SetRateLimiterOptions(o =>
+              {
+                  o.MaxTrackedKeys     = 10_000;
+                  o.EmitDeferralEvents = true;
+              })
               // Enable log capture for debugging and auditing
               .WithPersistentLogger(log => log
                                            .SetMinimumLevel(LogLevel.Information)
@@ -182,7 +189,22 @@ static async Task DispatchSampleTasksAsync(IServiceProvider services)
             taskBuilder => taskBuilder.Schedule().Every(2).Minutes().MaxRuns(5)
         );
 
-        logger.LogInformation("=== Successfully dispatched 31 sample tasks across 3 queues ===");
+        // 12. Keyed rate limiting demo - multi-tenant burst.
+        // Three tenants burst 4 calls each AT THE SAME TIME against a per-tenant policy of
+        // 3 calls / 10s (Burst=1 → one call every ~3.3s per tenant). Watch the logs: each
+        // tenant's calls come out evenly spaced, the three tenants interleave freely (no
+        // head-of-line blocking), and no worker is blocked while a tenant waits for budget.
+        // The dashboard shows the parked tasks as ThrottledTasks (see /api/rate-limits).
+        logger.LogInformation("=== Keyed rate limiting demo: 3 tenants burst 4 calls each (3/10s per tenant) ===");
+        foreach (var tenant in new[] { "tenant-blue", "tenant-green", "tenant-red" })
+        {
+            for (var call = 1; call <= 4; call++)
+            {
+                await dispatcher.Dispatch(new SyncTenantDataTask(tenant, call));
+            }
+        }
+
+        logger.LogInformation("=== Successfully dispatched 31 sample tasks across 3 queues (+12 rate-limited) ===");
         logger.LogInformation("  - Default queue: 18 tasks");
         logger.LogInformation("  - High-priority queue: 8 tasks (4 immediate + 3 delayed + 1 recurring)");
         logger.LogInformation("  - Low-priority queue: 5 tasks (4 immediate + 1 recurring)");
