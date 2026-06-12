@@ -27,6 +27,10 @@ namespace EverTask.Monitor.Api.DTOs.Tasks;
 /// <param name="ExecutionTimeMs">Last execution time in milliseconds.</param>
 /// <param name="StatusAudits">History of status changes.</param>
 /// <param name="RunsAudits">History of execution attempts.</param>
+/// <param name="ThrottledUntil">
+/// The reserved rate-limit slot (UTC) when the task is currently parked by the rate limiter,
+/// null otherwise. In-memory single-node overlay: only this process' parked tasks are visible.
+/// </param>
 public record TaskDetailDto(
     Guid Id,
     string Type,
@@ -49,5 +53,6 @@ public record TaskDetailDto(
     int? AuditLevel,
     double ExecutionTimeMs,
     List<StatusAuditDto> StatusAudits,
-    List<RunsAuditDto> RunsAudits
+    List<RunsAuditDto> RunsAudits,
+    DateTimeOffset? ThrottledUntil = null
 );

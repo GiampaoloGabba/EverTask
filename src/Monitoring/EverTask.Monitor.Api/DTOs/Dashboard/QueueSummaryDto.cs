@@ -4,14 +4,19 @@ namespace EverTask.Monitor.Api.DTOs.Dashboard;
 /// Summary statistics for a queue.
 /// </summary>
 /// <param name="QueueName">The queue name (null represents the default queue).</param>
-/// <param name="PendingCount">Number of pending tasks in the queue.</param>
+/// <param name="PendingCount">Number of pending tasks in the queue (WaitingQueue, Pending or Queued).</param>
 /// <param name="InProgressCount">Number of tasks currently executing.</param>
 /// <param name="CompletedCount">Number of successfully completed tasks.</param>
 /// <param name="FailedCount">Number of failed tasks.</param>
+/// <param name="ThrottledCount">
+/// Number of rate-limited tasks parked for this queue (in-memory, single-node view; these tasks
+/// also count as pending in storage).
+/// </param>
 public record QueueSummaryDto(
     string? QueueName,
     int PendingCount,
     int InProgressCount,
     int CompletedCount,
-    int FailedCount
+    int FailedCount,
+    int ThrottledCount = 0
 );

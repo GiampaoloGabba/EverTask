@@ -76,7 +76,7 @@ public class StatisticsService : IStatisticsService
             {
                 var queueTasks = g.ToList();
                 var totalTasks = queueTasks.Count;
-                var pendingTasks = queueTasks.Count(t => t.Status == QueuedTaskStatus.WaitingQueue || t.Status == QueuedTaskStatus.Pending || t.Status == QueuedTaskStatus.Queued);
+                var pendingTasks = queueTasks.Count(t => TaskStatusBuckets.IsPending(t.Status));
                 var inProgressTasks = queueTasks.Count(t => t.Status == QueuedTaskStatus.InProgress);
                 var completedTasks = queueTasks.Count(t => t.Status == QueuedTaskStatus.Completed);
                 var failedTasks = queueTasks.Count(t => t.Status == QueuedTaskStatus.Failed);

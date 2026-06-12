@@ -1,4 +1,5 @@
 using EverTask.Monitor.Api.DTOs.Dashboard;
+using EverTask.RateLimiting;
 using EverTask.Storage;
 
 namespace EverTask.Monitor.Api.Services;
@@ -9,13 +10,20 @@ namespace EverTask.Monitor.Api.Services;
 public class DashboardService : IDashboardService
 {
     private readonly ITaskStorage _storage;
+    private readonly IRateLimiterIntrospection? _rateLimiter;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="DashboardService"/> class.
     /// </summary>
-    public DashboardService(ITaskStorage storage)
+    /// <param name="storage">The task storage.</param>
+    /// <param name="rateLimiter">
+    /// Optional rate-limiter introspection (absent when EverTask runs without rate limiting or
+    /// in standalone API mode): sources the ThrottledTasks counters.
+    /// </param>
+    public DashboardService(ITaskStorage storage, IRateLimiterIntrospection? rateLimiter = null)
     {
-        _storage = storage;
+        _storage     = storage;
+        _rateLimiter = rateLimiter;
     }
 
     /// <inheritdoc />
@@ -97,7 +105,8 @@ public class DashboardService : IDashboardService
             Math.Round(avgExecutionTimeMs, 2),
             statusDistribution,
             tasksOverTime,
-            queueSummaries
+            queueSummaries,
+            _rateLimiter?.ParkedTaskCount ?? 0
         );
     }
 
@@ -140,16 +149,24 @@ public class DashboardService : IDashboardService
         return result;
     }
 
-    private static List<QueueSummaryDto> GenerateQueueSummaries(List<QueuedTask> tasks)
+    private List<QueueSummaryDto> GenerateQueueSummaries(List<QueuedTask> tasks)
     {
+        // Throttled (parked) tasks per queue from the limiter snapshot: storage cannot
+        // distinguish a parked task from a queued one (single-node, in-memory view)
+        var throttledByQueue = (_rateLimiter?.GetParkedSnapshot() ?? [])
+                               .GroupBy(s => s.QueueName)
+                               .ToDictionary(g => g.Key, g => g.Sum(s => s.ParkedCount));
+
         return tasks
             .GroupBy(t => t.QueueName)
             .Select(g => new QueueSummaryDto(
                 g.Key,
-                g.Count(t => t.Status == QueuedTaskStatus.WaitingQueue || t.Status == QueuedTaskStatus.Pending),
+                // Shared bucketing: Queued counts as pending too (it was previously omitted)
+                g.Count(t => TaskStatusBuckets.IsPending(t.Status)),
                 g.Count(t => t.Status == QueuedTaskStatus.InProgress),
                 g.Count(t => t.Status == QueuedTaskStatus.Completed),
-                g.Count(t => t.Status == QueuedTaskStatus.Failed)
+                g.Count(t => t.Status == QueuedTaskStatus.Failed),
+                throttledByQueue.GetValueOrDefault(g.Key ?? "default")
             ))
             .OrderByDescending(q => q.PendingCount + q.InProgressCount + q.CompletedCount + q.FailedCount)
             .ToList();

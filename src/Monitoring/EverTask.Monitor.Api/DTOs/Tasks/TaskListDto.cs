@@ -18,6 +18,10 @@ namespace EverTask.Monitor.Api.DTOs.Tasks;
 /// <param name="CurrentRunCount">Number of times the task has been executed.</param>
 /// <param name="MaxRuns">Maximum number of times the task should run.</param>
 /// <param name="ExecutionTimeMs">Last execution time in milliseconds.</param>
+/// <param name="ThrottledUntil">
+/// The reserved rate-limit slot (UTC) when the task is currently parked by the rate limiter,
+/// null otherwise. In-memory single-node overlay: only this process' parked tasks are visible.
+/// </param>
 public record TaskListDto(
     Guid Id,
     string Type,
@@ -31,5 +35,6 @@ public record TaskListDto(
     string? RecurringInfo,
     int? CurrentRunCount,
     int? MaxRuns,
-    double ExecutionTimeMs
+    double ExecutionTimeMs,
+    DateTimeOffset? ThrottledUntil = null
 );

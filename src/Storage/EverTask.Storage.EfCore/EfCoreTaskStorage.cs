@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 namespace EverTask.Storage.EfCore;
 
 public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTaskLogger<EfCoreTaskStorage> logger)
-    : ITaskStorage
+    : ITaskStorage, ITaskStorageStatistics
 {
     /// <summary>
     /// Gets the current UTC time with explicit +00:00 offset.
@@ -432,4 +432,43 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                  .Where(log => log.TaskId == taskId)
                  .OrderBy(log => log.Id)      // UUIDv7 chronological order (database-friendly, SQLite-compatible)
                  .ThenBy(log => log.SequenceNumber); // preserve sequence within same timestamp
+
+    /// <inheritdoc />
+    public virtual async Task<IReadOnlyDictionary<QueuedTaskStatus, int>> CountByStatusAsync(
+        DateTimeOffset? createdAtOrAfterUtc = null, CancellationToken ct = default)
+    {
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+
+        // Set-based GROUP BY: never materializes the backlog
+        var counts = await dbContext.QueuedTasks
+                                    .AsNoTracking()
+                                    .Where(t => createdAtOrAfterUtc == null || t.CreatedAtUtc >= createdAtOrAfterUtc)
+                                    .GroupBy(t => t.Status)
+                                    .Select(g => new { Status = g.Key, Count = g.Count() })
+                                    .ToListAsync(ct)
+                                    .ConfigureAwait(false);
+
+        return counts.ToDictionary(c => c.Status, c => c.Count);
+    }
+
+    /// <inheritdoc />
+    public virtual async Task<IReadOnlyDictionary<string, IReadOnlyDictionary<QueuedTaskStatus, int>>>
+        CountByQueueAndStatusAsync(DateTimeOffset? createdAtOrAfterUtc = null, CancellationToken ct = default)
+    {
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+
+        var counts = await dbContext.QueuedTasks
+                                    .AsNoTracking()
+                                    .Where(t => createdAtOrAfterUtc == null || t.CreatedAtUtc >= createdAtOrAfterUtc)
+                                    .GroupBy(t => new { t.QueueName, t.Status })
+                                    .Select(g => new { g.Key.QueueName, g.Key.Status, Count = g.Count() })
+                                    .ToListAsync(ct)
+                                    .ConfigureAwait(false);
+
+        return counts
+               .GroupBy(c => c.QueueName ?? string.Empty)
+               .ToDictionary(
+                   g => g.Key,
+                   g => (IReadOnlyDictionary<QueuedTaskStatus, int>)g.ToDictionary(c => c.Status, c => c.Count));
+    }
 }

@@ -64,6 +64,7 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<IEverTaskLogger<InMemoryKeyedRateLimiter>>()));
         services.TryAddSingleton(_ => new RateLimitParkingLot(options.RateLimiterOptions));
         services.TryAddSingleton<IRateLimitGate, RateLimitGate>();
+        services.TryAddSingleton<IRateLimiterIntrospection, RateLimiterIntrospection>();
 
         // Conditional scheduler registration
         if (options.ShardedSchedulerShardCount.HasValue)

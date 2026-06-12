@@ -97,6 +97,12 @@ internal sealed class RateLimitParkingLot(RateLimiterOptions options)
     }
 
     /// <summary>
+    /// The reserved slot of a parked task, or null when not parked.
+    /// </summary>
+    public DateTimeOffset? GetSlot(Guid taskId) =>
+        _parked.TryGetValue(taskId, out var info) ? info.SlotUtc : null;
+
+    /// <summary>
     /// Snapshot for monitoring: parked counts and earliest slot per (queue, key).
     /// </summary>
     public IReadOnlyList<(string QueueName, string Key, int ParkedCount, DateTimeOffset NextSlotUtc)> GetSnapshot()

@@ -13,6 +13,10 @@ namespace EverTask.Monitor.Api.DTOs.Dashboard;
 /// <param name="StatusDistribution">Task count grouped by status.</param>
 /// <param name="TasksOverTime">Hourly task breakdown for the last 24 hours.</param>
 /// <param name="QueueSummaries">Summary statistics for each queue.</param>
+/// <param name="ThrottledTasks">
+/// Number of rate-limited tasks currently parked waiting for budget (in-memory, single-node
+/// view sourced from the limiter snapshot — storage cannot distinguish parked from queued).
+/// </param>
 public record OverviewDto(
     int TotalTasksToday,
     int TotalTasksWeek,
@@ -21,5 +25,6 @@ public record OverviewDto(
     double AvgExecutionTimeMs,
     Dictionary<QueuedTaskStatus, int> StatusDistribution,
     List<TasksOverTimeDto> TasksOverTime,
-    List<QueueSummaryDto> QueueSummaries
+    List<QueueSummaryDto> QueueSummaries,
+    int ThrottledTasks = 0
 );

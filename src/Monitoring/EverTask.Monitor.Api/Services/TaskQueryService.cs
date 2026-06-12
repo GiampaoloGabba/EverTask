@@ -1,4 +1,5 @@
 using EverTask.Monitor.Api.DTOs.Tasks;
+using EverTask.RateLimiting;
 using EverTask.Storage;
 
 namespace EverTask.Monitor.Api.Services;
@@ -9,13 +10,20 @@ namespace EverTask.Monitor.Api.Services;
 public class TaskQueryService : ITaskQueryService
 {
     private readonly ITaskStorage _storage;
+    private readonly IRateLimiterIntrospection? _rateLimiter;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="TaskQueryService"/> class.
     /// </summary>
-    public TaskQueryService(ITaskStorage storage)
+    /// <param name="storage">The task storage.</param>
+    /// <param name="rateLimiter">
+    /// Optional rate-limiter introspection: sources the per-task <c>throttledUntil</c> overlay
+    /// (in-memory join, single-node).
+    /// </param>
+    public TaskQueryService(ITaskStorage storage, IRateLimiterIntrospection? rateLimiter = null)
     {
-        _storage = storage;
+        _storage     = storage;
+        _rateLimiter = rateLimiter;
     }
 
     /// <inheritdoc />
@@ -76,6 +84,7 @@ public class TaskQueryService : ITaskQueryService
         var items = query
             .Skip(skip)
             .Take(pagination.PageSize)
+            .AsEnumerable() // project in memory: the throttledUntil overlay is an in-memory join
             .Select(t => new TaskListDto(
                 t.Id,
                 GetShortTypeName(t.Type),
@@ -89,7 +98,8 @@ public class TaskQueryService : ITaskQueryService
                 t.RecurringInfo,
                 t.CurrentRunCount,
                 t.MaxRuns,
-                t.ExecutionTimeMs
+                t.ExecutionTimeMs,
+                _rateLimiter?.GetThrottledUntil(t.Id)
             ))
             .ToList();
 
@@ -139,7 +149,8 @@ public class TaskQueryService : ITaskQueryService
             task.AuditLevel,
             task.ExecutionTimeMs,
             statusAudits,
-            runsAudits
+            runsAudits,
+            _rateLimiter?.GetThrottledUntil(task.Id)
         );
     }
 
@@ -208,12 +219,18 @@ public class TaskQueryService : ITaskQueryService
     /// <inheritdoc />
     public async Task<TaskCountsDto> GetTaskCountsAsync(CancellationToken ct = default)
     {
+        // Set-based counts when the storage provider supports them (ITaskStorageStatistics):
+        // avoids materializing the whole backlog on every dashboard refresh.
+        // IsRecurring split still requires the fallback path below.
         var allTasksList = (await _storage.GetAll(ct)).ToList();
 
         var all = allTasksList.Count;
         var standard = allTasksList.Count(t => !t.IsRecurring);
         var recurring = allTasksList.Count(t => t.IsRecurring);
-        var failed = allTasksList.Count(t => t.Status == QueuedTaskStatus.Failed);
+
+        var failed = _storage is ITaskStorageStatistics statistics
+            ? (await statistics.CountByStatusAsync(null, ct)).GetValueOrDefault(QueuedTaskStatus.Failed)
+            : allTasksList.Count(t => t.Status == QueuedTaskStatus.Failed);
 
         return new TaskCountsDto(all, standard, recurring, failed);
     }

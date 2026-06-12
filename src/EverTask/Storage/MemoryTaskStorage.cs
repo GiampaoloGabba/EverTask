@@ -3,7 +3,7 @@
 namespace EverTask.Storage;
 
 /// <inheritdoc />
-public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITaskStorage
+public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITaskStorage, ITaskStorageStatistics
 {
     private readonly List<QueuedTask> _pendingTasks = new();
     private readonly List<TaskExecutionLog> _executionLogs = new();
@@ -308,6 +308,40 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
                 .OrderBy(log => log.Id)            // Primary: UUIDv7 chronological order
                 .ThenBy(log => log.SequenceNumber) // Secondary: preserve sequence within same timestamp
                 .ToList();
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyDictionary<QueuedTaskStatus, int>> CountByStatusAsync(
+        DateTimeOffset? createdAtOrAfterUtc = null, CancellationToken ct = default)
+    {
+        lock (_pendingTasksLock)
+        {
+            IReadOnlyDictionary<QueuedTaskStatus, int> counts = _pendingTasks
+                .Where(t => createdAtOrAfterUtc == null || t.CreatedAtUtc >= createdAtOrAfterUtc.Value)
+                .GroupBy(t => t.Status)
+                .ToDictionary(g => g.Key, g => g.Count());
+
+            return Task.FromResult(counts);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyDictionary<string, IReadOnlyDictionary<QueuedTaskStatus, int>>> CountByQueueAndStatusAsync(
+        DateTimeOffset? createdAtOrAfterUtc = null, CancellationToken ct = default)
+    {
+        lock (_pendingTasksLock)
+        {
+            IReadOnlyDictionary<string, IReadOnlyDictionary<QueuedTaskStatus, int>> counts = _pendingTasks
+                .Where(t => createdAtOrAfterUtc == null || t.CreatedAtUtc >= createdAtOrAfterUtc.Value)
+                .GroupBy(t => t.QueueName ?? string.Empty)
+                .ToDictionary(
+                    g => g.Key,
+                    g => (IReadOnlyDictionary<QueuedTaskStatus, int>)g
+                         .GroupBy(t => t.Status)
+                         .ToDictionary(sg => sg.Key, sg => sg.Count()));
+
+            return Task.FromResult(counts);
         }
     }
 }

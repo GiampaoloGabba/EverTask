@@ -452,6 +452,39 @@ public class RateLimitingIntegrationTests : IsolatedIntegrationTestBase
         _state.ExecutionCountByIndex[1].ShouldBe(1, "fail-open tasks execute unthrottled");
     }
 
+    [Fact]
+    public async Task Should_aggregate_deferral_events_under_flood_without_per_task_storm()
+    {
+        await CreateRateLimitHostAsync();
+
+        // Restore the production aggregation window (the host helper zeroes it for sync points):
+        // a sustained flood on one key must NOT emit one event per deferral
+        ((RateLimitGate)Host!.Services.GetRequiredService<IRateLimitGate>()).DeferralEventWindow =
+            TimeSpan.FromSeconds(30);
+
+        var deferralEvents = 0;
+        WorkerExecutor.TaskEventOccurredAsync += data =>
+        {
+            if (data.Message.StartsWith("Rate limit deferred task ", StringComparison.Ordinal))
+                Interlocked.Increment(ref deferralEvents);
+            return Task.CompletedTask;
+        };
+
+        // 6 tasks on one single-permit key: at least 5 deferrals (plus re-park redeliveries)
+        const int floodSize = 6;
+        for (var i = 0; i < floodSize; i++)
+            await Dispatcher.Dispatch(new RateLimitedSinglePermitTask("storm-key", i));
+
+        await TaskWaitHelper.WaitForConditionAsync(
+            () => Enumerable.Range(0, floodSize).All(i => _state.ExecutionCountByIndex.ContainsKey(i)),
+            timeoutMs: 30000);
+
+        Volatile.Read(ref deferralEvents).ShouldBeGreaterThanOrEqualTo(1,
+            "the first deferral of the window must emit");
+        Volatile.Read(ref deferralEvents).ShouldBeLessThanOrEqualTo(2,
+            "deferrals within the aggregation window are summarized, never one event per deferral");
+    }
+
     // ---------------------------------------------------------------- WS4: retry integration
 
     [Fact]
