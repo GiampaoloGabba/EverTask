@@ -129,6 +129,11 @@ public class ShardedScheduler : IScheduler, IDisposable
         }
 
         /// <summary>
+        /// True when any registration is parked in this shard for the given task.
+        /// </summary>
+        public bool IsScheduled(Guid persistenceId) => _scheduledItems.ContainsKey(persistenceId);
+
+        /// <summary>
         /// Background loop that processes scheduled tasks for this shard.
         /// </summary>
         private async Task ProcessScheduledTasksAsync(CancellationToken ct)
@@ -338,6 +343,9 @@ public class ShardedScheduler : IScheduler, IDisposable
         // Hash-based sharding is deterministic: the registration, if any, lives in this shard
         return GetShard(persistenceId).TryUnschedule(persistenceId, expected);
     }
+
+    /// <inheritdoc />
+    public bool IsScheduled(Guid persistenceId) => GetShard(persistenceId).IsScheduled(persistenceId);
 
     private Shard GetShard(Guid persistenceId)
     {

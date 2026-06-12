@@ -58,11 +58,22 @@ public static class ServiceCollectionExtensions
         // Keyed rate limiter (single-instance GCRA). TryAddSingleton is the DI seam for a
         // future distributed implementation: register a custom IKeyedRateLimiter BEFORE
         // AddEverTask to replace it.
-        options.RateLimiterOptions.ResolveDefaults(options.Queues[QueueNames.Default].ChannelOptions.Capacity);
-        services.TryAddSingleton<IKeyedRateLimiter>(sp => new InMemoryKeyedRateLimiter(
-            options.RateLimiterOptions,
-            sp.GetRequiredService<IEverTaskLogger<InMemoryKeyedRateLimiter>>()));
-        services.TryAddSingleton(_ => new RateLimitParkingLot(options.RateLimiterOptions));
+        // ResolveDefaults runs inside the factories (first resolution), NOT here: builder
+        // methods (ConfigureDefaultQueue/SetChannelCapacity) mutate the queue capacity AFTER
+        // AddEverTask returns, and the capacity-derived MaxParkedTasks default must see the
+        // final value. Idempotent and order-independent across the two factories.
+        services.TryAddSingleton<IKeyedRateLimiter>(sp =>
+        {
+            options.RateLimiterOptions.ResolveDefaults(options.Queues[QueueNames.Default].ChannelOptions.Capacity);
+            return new InMemoryKeyedRateLimiter(
+                options.RateLimiterOptions,
+                sp.GetRequiredService<IEverTaskLogger<InMemoryKeyedRateLimiter>>());
+        });
+        services.TryAddSingleton(_ =>
+        {
+            options.RateLimiterOptions.ResolveDefaults(options.Queues[QueueNames.Default].ChannelOptions.Capacity);
+            return new RateLimitParkingLot(options.RateLimiterOptions);
+        });
         services.TryAddSingleton<IRateLimitGate, RateLimitGate>();
         services.TryAddSingleton<IRateLimiterIntrospection, RateLimiterIntrospection>();
 

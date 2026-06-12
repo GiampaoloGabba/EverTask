@@ -439,14 +439,17 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     {
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
 
-        // Set-based GROUP BY: never materializes the backlog
-        var counts = await dbContext.QueuedTasks
-                                    .AsNoTracking()
-                                    .Where(t => createdAtOrAfterUtc == null || t.CreatedAtUtc >= createdAtOrAfterUtc)
-                                    .GroupBy(t => t.Status)
-                                    .Select(g => new { Status = g.Key, Count = g.Count() })
-                                    .ToListAsync(ct)
-                                    .ConfigureAwait(false);
+        // Set-based GROUP BY: never materializes the backlog. The filter is applied
+        // conditionally (a "@p IS NULL OR …" predicate would defeat an index seek).
+        IQueryable<QueuedTask> query = dbContext.QueuedTasks.AsNoTracking();
+        if (createdAtOrAfterUtc != null)
+            query = query.Where(t => t.CreatedAtUtc >= createdAtOrAfterUtc);
+
+        var counts = await query
+                           .GroupBy(t => t.Status)
+                           .Select(g => new { Status = g.Key, Count = g.Count() })
+                           .ToListAsync(ct)
+                           .ConfigureAwait(false);
 
         return counts.ToDictionary(c => c.Status, c => c.Count);
     }
@@ -457,13 +460,15 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     {
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
 
-        var counts = await dbContext.QueuedTasks
-                                    .AsNoTracking()
-                                    .Where(t => createdAtOrAfterUtc == null || t.CreatedAtUtc >= createdAtOrAfterUtc)
-                                    .GroupBy(t => new { t.QueueName, t.Status })
-                                    .Select(g => new { g.Key.QueueName, g.Key.Status, Count = g.Count() })
-                                    .ToListAsync(ct)
-                                    .ConfigureAwait(false);
+        IQueryable<QueuedTask> query = dbContext.QueuedTasks.AsNoTracking();
+        if (createdAtOrAfterUtc != null)
+            query = query.Where(t => t.CreatedAtUtc >= createdAtOrAfterUtc);
+
+        var counts = await query
+                           .GroupBy(t => new { t.QueueName, t.Status })
+                           .Select(g => new { g.Key.QueueName, g.Key.Status, Count = g.Count() })
+                           .ToListAsync(ct)
+                           .ConfigureAwait(false);
 
         return counts
                .GroupBy(c => c.QueueName ?? string.Empty)

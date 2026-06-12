@@ -120,4 +120,14 @@ public interface IRateLimitGate
     /// <param name="task">The dequeued task (any task: the pause applies per queue).</param>
     /// <param name="ct">The service cancellation token.</param>
     ValueTask WaitForParkingCapacityAsync(TaskHandlerExecutor task, CancellationToken ct);
+
+    /// <summary>
+    /// Re-parks a gated task whose redelivery overlapped its still-executing original delivery
+    /// (e.g. a retry-deferral slot fired while the first delivery was unwinding). The task is
+    /// scheduled again at a short delay — never dropped (a drop would strand the only live copy
+    /// until restart recovery) and never overwriting a newer registration already parked for
+    /// the same task (latest-wins is preserved).
+    /// </summary>
+    /// <param name="task">The redelivered task (with <c>RateLimitPolicy</c> stamped).</param>
+    void ReparkInFlightRedelivery(TaskHandlerExecutor task);
 }

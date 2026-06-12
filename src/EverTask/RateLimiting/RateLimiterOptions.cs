@@ -24,9 +24,10 @@ public sealed class RateLimiterOptions
 
     /// <summary>
     /// Gets or sets the maximum number of DISTINCT rate-limited tasks parked in the in-memory
-    /// scheduler waiting for budget. When the cap is reached, consumers pause draining the
-    /// affected queue until the count drops below the cap, so the bounded channel fills up and
-    /// native backpressure reaches producers. Safety valve, not normal operation.
+    /// scheduler waiting for budget. When the cap is reached, consumers pause (bounded) before
+    /// dequeued rate-limited tasks of the affected queue — tasks without a policy keep flowing —
+    /// so the bounded channel fills up and native backpressure reaches producers. Safety valve,
+    /// not normal operation.
     /// Default: <c>min(5000, 2 × default-queue channel capacity)</c>.
     /// </summary>
     public int MaxParkedTasks
@@ -60,8 +61,9 @@ public sealed class RateLimiterOptions
     public bool EmitDeferralEvents { get; set; } = true;
 
     /// <summary>
-    /// Resolves computed defaults that depend on other configuration (called by AddEverTask
-    /// once queues are configured).
+    /// Resolves computed defaults that depend on other configuration. Called lazily by the
+    /// rate-limiter DI factories at first resolution, AFTER every builder method
+    /// (ConfigureDefaultQueue etc.) has run. Idempotent.
     /// </summary>
     internal void ResolveDefaults(int defaultQueueChannelCapacity)
     {

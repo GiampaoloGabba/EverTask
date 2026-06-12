@@ -6,8 +6,10 @@ namespace EverTask.RateLimiting;
 /// L2 bound of the rate limiter: counts the DISTINCT gated tasks currently parked in the
 /// in-memory scheduler waiting for budget. When the count reaches
 /// <see cref="RateLimiterOptions.MaxParkedTasks"/>, consumers of the affected queues pause
-/// draining: the bounded channel fills up and the native <c>FullMode=Wait</c> backpressure
-/// reaches producers. Safety valve, not normal operation.
+/// before dequeued RATE-LIMITED tasks (only gated tasks can park; pausing ungated traffic
+/// would collapse whole-queue throughput for nothing): the bounded channel fills up and the
+/// native <c>FullMode=Wait</c> backpressure reaches producers. Safety valve, not normal
+/// operation.
 /// </summary>
 /// <remarks>
 /// Accounting rules (owner decision): increment on FIRST park of a task; decrement only when
@@ -48,14 +50,20 @@ internal sealed class RateLimitParkingLot(RateLimiterOptions options)
     {
         var info = new ParkedTaskInfo(queueName, key, slotUtc);
 
-        if (_parked.TryAdd(taskId, info))
+        while (true)
         {
-            Interlocked.Increment(ref _count);
-            _perQueueCounts.AddOrUpdate(queueName, 1, static (_, current) => current + 1);
-        }
-        else
-        {
-            _parked[taskId] = info;
+            if (_parked.TryAdd(taskId, info))
+            {
+                Interlocked.Increment(ref _count);
+                _perQueueCounts.AddOrUpdate(queueName, 1, static (_, current) => current + 1);
+                return;
+            }
+
+            // Refresh of an existing entry. A plain indexer write here would race a concurrent
+            // Remove (re-adding without incrementing → permanently negative count): the
+            // conditional update fails in that case and the loop re-parks from scratch.
+            if (_parked.TryGetValue(taskId, out var current) && _parked.TryUpdate(taskId, info, current))
+                return;
         }
     }
 

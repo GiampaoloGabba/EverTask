@@ -16,6 +16,7 @@ internal sealed class RateLimitGate(
 {
     private long _lastSeenFailOpenCount;
     private long _lastFailOpenEventTicks;
+    private long _lastAggregationSweepTicks;
     private sealed class DeferralAggregation
     {
         public long WindowStartTicks;
@@ -38,6 +39,18 @@ internal sealed class RateLimitGate(
     /// Internal for testing purposes.
     /// </summary>
     internal TimeSpan DeferralEventWindow { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Aggregation entries with no deferral for this long are swept (churning per-customer keys
+    /// must not accumulate forever). Internal for testing purposes.
+    /// </summary>
+    internal TimeSpan AggregationEntryTtl { get; set; } = TimeSpan.FromHours(1);
+
+    /// <summary>Minimum interval between opportunistic aggregation sweeps. Internal for testing purposes.</summary>
+    internal TimeSpan AggregationSweepInterval { get; set; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>Number of live deferral-aggregation entries. Internal for testing purposes.</summary>
+    internal int DeferralAggregationCount => _deferralAggregations.Count;
 
     public async ValueTask<RateLimitGateResult> TryPassAsync(TaskHandlerExecutor task, CancellationToken ct)
     {
@@ -114,6 +127,79 @@ internal sealed class RateLimitGate(
         return parkingLot.WaitForCapacityAsync(EffectiveQueueName(task), ct);
     }
 
+    /// <summary>
+    /// Delay applied by <see cref="ReparkInFlightRedelivery"/>. Internal for testing purposes.
+    /// </summary>
+    internal TimeSpan InFlightRedeliveryDelay { get; set; } = TimeSpan.FromSeconds(1);
+
+    /// <inheritdoc />
+    public void ReparkInFlightRedelivery(TaskHandlerExecutor task)
+    {
+        // Latest-wins guard: if a registration already exists for this task (e.g. a newer
+        // same-taskKey payload was already re-parked), this stale redelivery must NOT
+        // overwrite it — Schedule is latest-wins. The parked copy delivers on its own.
+        if (scheduler.IsScheduled(task.PersistenceId))
+            return;
+
+        // Same set-then-check discipline as Defer: capture the epoch BEFORE Schedule so a
+        // Cancel / re-dispatch racing this re-park is observed afterwards
+        var epoch = invalidationRegistry.GetEpoch(task.PersistenceId);
+        var slot  = DateTimeOffset.UtcNow + InFlightRedeliveryDelay;
+
+        var parked = task.ToLazy();
+
+        if (task.RecurringTask != null)
+        {
+            // Same occurrence, ExecutionTime untouched (schedule-drift rule)
+            scheduler.Schedule(parked, nextRecurringRun: slot);
+        }
+        else
+        {
+            parked = parked with { ExecutionTime = slot };
+            scheduler.Schedule(parked);
+        }
+
+        // L2 accounting: the redelivery's enqueue already removed the original lot entry, so
+        // the re-park must re-register it (idempotent) or the bound under-counts
+        if (!string.IsNullOrEmpty(task.RateLimitKey))
+            parkingLot.Park(task.PersistenceId, EffectiveQueueName(task), task.RateLimitKey, slot);
+
+        DropStaleRegistrationIfInvalidated(task, task.Task.GetType(), task.RateLimitKey, parked, epoch);
+
+        logger.LogDebug(
+            "Task {TaskId} redelivered while still executing in this process: re-parked at {SlotUtc:O}",
+            task.PersistenceId, slot);
+    }
+
+    /// <summary>
+    /// Set-then-check shared by the Defer path and <see cref="ReparkInFlightRedelivery"/>: if
+    /// the invalidation epoch moved while the task sat in the dequeue→re-park limbo, drop OUR
+    /// registration and bookkeeping. The conditional unschedule covers "our registration is
+    /// still parked"; it can also fail because the invalidator's own unconditional
+    /// TryUnschedule already removed it (Cancel or same-taskKey re-dispatch landing between our
+    /// Schedule and here) — then NOTHING is registered anymore and the parking-lot entry would
+    /// leak forever (the task never re-enqueues, so nothing decrements it).
+    /// <see cref="IScheduler.IsScheduled"/> distinguishes that case from "a newer registration
+    /// took over", whose parking entry and reservation must survive untouched.
+    /// </summary>
+    private void DropStaleRegistrationIfInvalidated(TaskHandlerExecutor task, Type taskType, string? key,
+                                                    TaskHandlerExecutor parked, long epoch)
+    {
+        if (!invalidationRegistry.HasChangedSince(task.PersistenceId, epoch))
+            return;
+
+        if (scheduler.TryUnschedule(task.PersistenceId, parked) || !scheduler.IsScheduled(task.PersistenceId))
+        {
+            logger.LogDebug(
+                "Rate limit: parked registration of task {TaskId} dropped (cancelled or re-dispatched during re-park)",
+                task.PersistenceId);
+            parkingLot.Remove(task.PersistenceId);
+
+            if (!string.IsNullOrEmpty(key))
+                _ = limiter.ReleaseAsync(taskType, key, task.PersistenceId, CancellationToken.None);
+        }
+    }
+
     private static string EffectiveQueueName(TaskHandlerExecutor task) =>
         task.QueueName ?? (task.RecurringTask != null ? QueueNames.Recurring : QueueNames.Default);
 
@@ -126,16 +212,18 @@ internal sealed class RateLimitGate(
         if (limiter is InMemoryKeyedRateLimiter inMemoryLimiter)
         {
             var total = inMemoryLimiter.FailOpenCount;
-            var seen  = Interlocked.Read(ref _lastSeenFailOpenCount);
 
-            if (total > seen && Interlocked.CompareExchange(ref _lastSeenFailOpenCount, total, seen) == seen)
+            if (total > Interlocked.Read(ref _lastSeenFailOpenCount))
             {
                 var nowTicks  = DateTimeOffset.UtcNow.UtcTicks;
                 var lastEvent = Interlocked.Read(ref _lastFailOpenEventTicks);
 
+                // Window CAS first, count consumed only on the emitting path: consuming the
+                // delta before winning the window would swallow clustered fail-opens forever
                 if (nowTicks - lastEvent >= DeferralEventWindow.Ticks
                     && Interlocked.CompareExchange(ref _lastFailOpenEventTicks, nowTicks, lastEvent) == lastEvent)
                 {
+                    Interlocked.Exchange(ref _lastSeenFailOpenCount, total);
                     return new RateLimitGateResult(RateLimitGateOutcome.Proceed,
                         EmitFailOpenEvent: true, TotalFailOpenCount: total);
                 }
@@ -234,19 +322,8 @@ internal sealed class RateLimitGate(
 
         // Set-then-check: a Cancel or same-taskKey immediate re-dispatch that happened while
         // this task sat in the dequeue→re-park limbo is invisible to TryUnschedule (nothing was
-        // parked yet). If the epoch moved, drop OUR registration — conditionally, so a newer
-        // registration for the same task survives — and free the reservation.
-        if (invalidationRegistry.HasChangedSince(task.PersistenceId, epoch))
-        {
-            if (scheduler.TryUnschedule(task.PersistenceId, parked))
-            {
-                logger.LogDebug(
-                    "Rate limit: parked registration of task {TaskId} dropped (cancelled or re-dispatched during re-park)",
-                    task.PersistenceId);
-                parkingLot.Remove(task.PersistenceId);
-                _ = limiter.ReleaseAsync(taskType, key, task.PersistenceId, CancellationToken.None);
-            }
-        }
+        // parked yet). If the epoch moved, drop OUR registration and bookkeeping.
+        DropStaleRegistrationIfInvalidated(task, taskType, key, parked, epoch);
 
         logger.LogDebug(
             "Rate limit deferred task {TaskId}: key={Key} slotUtc={SlotUtc:O} policy={TaskType}",
@@ -265,6 +342,8 @@ internal sealed class RateLimitGate(
         if (!configuration.RateLimiterOptions.EmitDeferralEvents)
             return new RateLimitGateResult(RateLimitGateOutcome.Deferred, slot);
 
+        SweepAggregationsIfDue(now.UtcTicks);
+
         var aggregation = _deferralAggregations.GetOrAdd((taskType, key), static _ => new DeferralAggregation());
 
         lock (aggregation)
@@ -281,5 +360,35 @@ internal sealed class RateLimitGate(
         }
 
         return new RateLimitGateResult(RateLimitGateOutcome.Deferred, slot);
+    }
+
+    /// <summary>
+    /// Opportunistic eviction of aggregation entries whose key saw no deferral for
+    /// <see cref="AggregationEntryTtl"/>: with churning per-customer keys the dictionary would
+    /// otherwise grow unbounded (every other collection of the feature has a TTL or sweep).
+    /// A pending summary of a long-dead window is dropped with the entry — by definition the
+    /// throttling it described ended long ago.
+    /// </summary>
+    private void SweepAggregationsIfDue(long nowTicks)
+    {
+        var lastSweep = Interlocked.Read(ref _lastAggregationSweepTicks);
+        if (nowTicks - lastSweep < AggregationSweepInterval.Ticks)
+            return;
+
+        // Single sweeper at a time; losers skip (the winner does the work)
+        if (Interlocked.CompareExchange(ref _lastAggregationSweepTicks, nowTicks, lastSweep) != lastSweep)
+            return;
+
+        var cutoff = nowTicks - AggregationEntryTtl.Ticks;
+        foreach (var kvp in _deferralAggregations)
+        {
+            if (Interlocked.Read(ref kvp.Value.WindowStartTicks) < cutoff)
+            {
+                // Reference-equality remove: a concurrent GetOrAdd re-creating the entry wins.
+                // A deferral racing on the removed instance still emits correctly; the next one
+                // simply starts a fresh window (at worst one extra immediate event).
+                ((ICollection<KeyValuePair<(Type, string), DeferralAggregation>>)_deferralAggregations).Remove(kvp);
+            }
+        }
     }
 }

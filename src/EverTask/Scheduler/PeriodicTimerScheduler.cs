@@ -134,6 +134,9 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
         return _scheduledItems.TryRemove(new KeyValuePair<Guid, TaskHandlerExecutor>(persistenceId, expected));
     }
 
+    /// <inheritdoc />
+    public bool IsScheduled(Guid persistenceId) => _scheduledItems.ContainsKey(persistenceId);
+
     private async Task ProcessScheduledTasksAsync(CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)

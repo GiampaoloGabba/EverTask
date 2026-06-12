@@ -26,12 +26,29 @@ first-wins; key per dispatch, fail-safe) and stamped on `TaskHandlerExecutor`
 - **A deferral writes NOTHING to storage.** The parked task's status stays `Queued`, which is
   already covered by all three synced recovery filters (EfCore/Sqlite/Memory). The only storage
   touch of a deferral cycle is the existing `SetQueued` at slot-fire re-enqueue. The ONLY
-  mandatory storage write in the design is the horizon/Discard rejection persisting `Failed`
-  for one-shot tasks.
+  sanctioned rejection-cycle writes are: (1) horizon/Discard rejection persisting `Failed` for
+  one-shot tasks; (2) the retry-path rejection of a RECURRING task persisting `SetQueued`
+  (the occurrence was `InProgress`; the skip returns it to the parked-occurrence status).
 - **The Deferred path NEVER enters `WorkerExecutor.DoWorkCore`** — its `finally` would run
   `QueueNextOccourrence` (run-count corruption + lost occurrence). Gate sits in `DoWork`,
   BEFORE `_inFlightTasks.TryAdd`, AFTER the hoisted blacklist check (cancelled tasks must not
-  burn tokens).
+  burn tokens). The blacklist is RE-checked after the gate, BEFORE applying the
+  Proceed/Rejected outcomes (gate waits can take seconds and the per-task token does not exist
+  yet): on Rejected this prevents clobbering the user's `Cancelled` status with `Failed`. The
+  Deferred branch returns WITHOUT consuming the blacklist (the parked occurrence is discarded
+  by the entry check at redelivery).
+- **A gated redelivery overlapping its in-flight original is re-parked, never dropped** — via
+  `IRateLimitGate.ReparkInFlightRedelivery`, checked BEFORE the gate (no reservation
+  redemption) and again on `TryAdd` failure; dropping it would strand the only live copy until
+  restart (one-shot stuck `Queued`, recurring occurrence lost). The re-park never overwrites an
+  existing registration (`IsScheduled` latest-wins guard), registers the parking-lot entry, and
+  runs the same epoch set-then-check as Defer. The L2 parking-capacity pause applies to gated
+  tasks only.
+- **Set-then-check cleanup signal is `IsScheduled`, not the blacklist** — when the epoch moved
+  and the conditional `TryUnschedule(id, parked)` fails, `!IsScheduled(id)` means the
+  invalidator's own unconditional TryUnschedule already removed the registration (Cancel or
+  same-taskKey re-dispatch landed mid-re-park): clean up lot entry + reservation or they leak
+  forever. `IsScheduled(id) == true` means a newer registration took over and must survive.
 - **No storage schema changes, no recovery-filter changes, no `EverTaskEventData` changes**
   (positional record, binary compat).
 - **Never a general budget rollback**: `ReleaseAsync` is newest-only CAS at most; orphan
@@ -66,7 +83,9 @@ first-wins; key per dispatch, fail-safe) and stamped on `TaskHandlerExecutor`
   event.
 - Terminal outcomes (horizon, Discard) invoke the existing `OnError` with a typed
   `RateLimitRejectedException`; plain deferrals have NO handler callback (infrastructure
-  routing — observability via aggregated events/Debug logs/Monitor.Api).
+  routing — observability via aggregated events/Debug logs/Monitor.Api). Retry-path rejections
+  follow the SAME split: one-shot → `Failed` + `OnError`; recurring → occurrence skipped
+  (status back to `Queued`, series advanced via `QueueNextOccourrence`, no callback).
 
 ## 🔗 Test Coverage
 

@@ -63,6 +63,10 @@ public record TaskHandlerExecutor(
     private static readonly ConcurrentDictionary<(Type HandlerType, Type TaskType),
         Func<object, IEverTask, CancellationToken, Task>?> HandleInvokerCache = new();
 
+    // Performance optimization: closed IEverTaskHandler<TTask> generic per task type, for the
+    // interface-binding fallback below
+    private static readonly ConcurrentDictionary<Type, Type> HandlerInterfaceTypeCache = new();
+
     public object GetOrResolveHandler(IServiceProvider serviceProvider)
     {
         // Eager mode: return existing handler instance
@@ -86,12 +90,21 @@ public record TaskHandlerExecutor(
             throw new InvalidOperationException(
                 $"Handler type '{HandlerTypeName}' could not be loaded. Ensure assembly is referenced and type exists.");
 
-        // Resolve handler from DI
-        var handler = serviceProvider.GetService(handlerType)
-                      ?? throw new InvalidOperationException(
-                          $"Handler '{handlerType.Name}' is not registered in DI container. Call RegisterTasksFromAssembly() to register handlers.");
+        // Resolve handler from DI. Assembly scanning self-registers the concrete type, but a
+        // manual registration may only bind IEverTaskHandler<TTask> → implementation: fall back
+        // to the interface binding so immediate (lazy-by-default) dispatches keep working for
+        // interface-only registrations.
+        var handler = serviceProvider.GetService(handlerType);
+        if (handler == null)
+        {
+            var interfaceType = HandlerInterfaceTypeCache.GetOrAdd(Task.GetType(),
+                static taskType => typeof(IEverTaskHandler<>).MakeGenericType(taskType));
+            handler = serviceProvider.GetService(interfaceType);
+        }
 
-        return handler;
+        return handler
+               ?? throw new InvalidOperationException(
+                   $"Handler '{handlerType.Name}' is not registered in DI container. Call RegisterTasksFromAssembly() to register handlers.");
     }
 
     /// <summary>

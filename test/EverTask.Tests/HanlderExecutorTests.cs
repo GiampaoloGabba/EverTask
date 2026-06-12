@@ -125,6 +125,27 @@ public class HanlderExecutorTests
     }
 
     [Fact]
+    public async Task Should_resolve_lazy_handler_through_interface_binding_when_concrete_type_not_registered()
+    {
+        // Manual registration scenario: the app binds ONLY IEverTaskHandler<T> → implementation
+        // (no assembly scanning, so the concrete type is not self-registered). Immediate
+        // dispatches are lazy by default since v3.7: GetOrResolveHandler must fall back to the
+        // interface binding instead of failing at execution time.
+        var serviceCollection = new ServiceCollection();
+        serviceCollection.AddTransient<IEverTaskHandler<TestTaskRequest>, TestTaskHanlder>();
+        await using var provider = serviceCollection.BuildServiceProvider();
+
+        var executor = new TaskHandlerExecutor(
+            new TestTaskRequest("test"), null, typeof(TestTaskHanlder).AssemblyQualifiedName,
+            null, null, null, null, null, null,
+            TestGuidGenerator.New(), null, null, AuditLevel.Full);
+
+        var handler = executor.GetOrResolveHandler(provider);
+
+        handler.ShouldBeOfType<TestTaskHanlder>();
+    }
+
+    [Fact]
     public void Should_throw_for_null_Request()
     {
         var executor =

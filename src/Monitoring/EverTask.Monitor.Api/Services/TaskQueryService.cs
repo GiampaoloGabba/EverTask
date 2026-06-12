@@ -219,18 +219,15 @@ public class TaskQueryService : ITaskQueryService
     /// <inheritdoc />
     public async Task<TaskCountsDto> GetTaskCountsAsync(CancellationToken ct = default)
     {
-        // Set-based counts when the storage provider supports them (ITaskStorageStatistics):
-        // avoids materializing the whole backlog on every dashboard refresh.
-        // IsRecurring split still requires the fallback path below.
+        // The standard/recurring split needs IsRecurring, which ITaskStorageStatistics does not
+        // expose: the list is materialized once and every count derives from it (a separate
+        // statistics roundtrip would be strictly more work on top of the same materialization).
         var allTasksList = (await _storage.GetAll(ct)).ToList();
 
-        var all = allTasksList.Count;
-        var standard = allTasksList.Count(t => !t.IsRecurring);
+        var all       = allTasksList.Count;
         var recurring = allTasksList.Count(t => t.IsRecurring);
-
-        var failed = _storage is ITaskStorageStatistics statistics
-            ? (await statistics.CountByStatusAsync(null, ct)).GetValueOrDefault(QueuedTaskStatus.Failed)
-            : allTasksList.Count(t => t.Status == QueuedTaskStatus.Failed);
+        var standard  = all - recurring;
+        var failed    = allTasksList.Count(t => t.Status == QueuedTaskStatus.Failed);
 
         return new TaskCountsDto(all, standard, recurring, failed);
     }
