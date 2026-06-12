@@ -28,7 +28,8 @@ public class RateLimitingIntegrationTests : IsolatedIntegrationTestBase
         int channelCapacity = 10,
         int maxDegreeOfParallelism = 3,
         Action<EverTaskServiceBuilder>? configureBuilder = null,
-        ITaskStorage? sharedStorage = null)
+        ITaskStorage? sharedStorage = null,
+        Action<EverTaskServiceConfiguration>? configureEverTask = null)
     {
         var host = await CreateIsolatedHostWithBuilderAsync(b =>
             {
@@ -46,8 +47,11 @@ public class RateLimitingIntegrationTests : IsolatedIntegrationTestBase
                     sp.GetRequiredService<IEverTaskLogger<PeriodicTimerScheduler>>(),
                     TimeSpan.FromMilliseconds(50))));
             },
-            configureEverTask: cfg => cfg.SetChannelOptions(channelCapacity)
-                                         .SetMaxDegreeOfParallelism(maxDegreeOfParallelism));
+            configureEverTask: cfg =>
+            {
+                cfg.SetChannelOptions(channelCapacity).SetMaxDegreeOfParallelism(maxDegreeOfParallelism);
+                configureEverTask?.Invoke(cfg);
+            });
 
         // Per-deferral events: the aggregation window would otherwise swallow the second
         // deferral of the same key, which tests use as a sync point
@@ -237,6 +241,215 @@ public class RateLimitingIntegrationTests : IsolatedIntegrationTestBase
             () => Enumerable.Range(0, 3).All(i => _state.ExecutionCountByIndex.ContainsKey(i)), timeoutMs: 30000);
 
         Enumerable.Range(0, 3).ShouldAllBe(i => _state.ExecutionCountByIndex[i] == 1);
+    }
+
+    // ---------------------------------------------------------------- WS5: bounds & abuse
+
+    [Fact]
+    public async Task Should_form_backpressure_and_complete_cleanly_when_parked_tasks_exceed_cap()
+    {
+        // Tiny everything: cap 2, channel 2, single-permit 900 ms budget. Flooding one key must
+        // engage the parking-lot cap (consumers pause, channel fills) WITHOUT wedging the
+        // pipeline or losing tasks.
+        await CreateRateLimitHostAsync(channelCapacity: 2, maxDegreeOfParallelism: 2,
+            configureBuilder: _ => { },
+            configureEverTask: cfg => cfg.SetRateLimiterOptions(o => o.MaxParkedTasks = 2));
+
+        var parkingLot = Host!.Services.GetRequiredService<RateLimitParkingLot>();
+        parkingLot.MaxOverflowPause     = TimeSpan.FromSeconds(1);
+        parkingLot.OverflowPollInterval = TimeSpan.FromMilliseconds(50);
+
+        const int floodSize = 6;
+        for (var i = 0; i < floodSize; i++)
+            await Dispatcher.Dispatch(new RateLimitedSinglePermitTask("cap-key", i));
+
+        // The overflow must actually engage (the lot reaches the cap)...
+        await TaskWaitHelper.WaitForConditionAsync(() => parkingLot.Count >= 2, timeoutMs: 15000);
+
+        // ...and the safety valve must keep the system flowing: every task completes exactly
+        // once (no wedge, no loss) and the lot drains
+        await TaskWaitHelper.WaitForConditionAsync(
+            () => Enumerable.Range(0, floodSize).All(i => _state.ExecutionCountByIndex.ContainsKey(i)),
+            timeoutMs: 30000);
+
+        Enumerable.Range(0, floodSize).ShouldAllBe(i => _state.ExecutionCountByIndex[i] == 1);
+        await TaskWaitHelper.WaitForConditionAsync(() => parkingLot.Count == 0, timeoutMs: 10000);
+    }
+
+    [Fact]
+    public async Task Should_limit_post_restart_burst_when_StartEmpty_configured()
+    {
+        // Host 1 (never started): three tasks persisted as backlog
+        await CreateIsolatedHostWithBuilderAsync(b =>
+            {
+                b.AddMemoryStorage();
+                b.Services.AddSingleton(_state);
+            },
+            startHost: false);
+
+        for (var i = 0; i < 3; i++)
+            await Dispatcher.Dispatch(new RateLimitedStartEmptyTask("se-key", i));
+
+        var sharedStorage = Storage;
+
+        // Host 2 ("restart"): recovery floods the fresh bucket with the backlog. StartEmpty
+        // caps the post-restart burst: executions are admitted at the steady 1 s rate instead
+        // of bursting 2-at-once.
+        await CreateRateLimitHostAsync(sharedStorage: sharedStorage);
+
+        await TaskWaitHelper.WaitForConditionAsync(
+            () => Enumerable.Range(0, 3).All(i => _state.ExecutionCountByIndex.ContainsKey(i)),
+            timeoutMs: 30000);
+
+        var timestamps = _state.TimestampsForKey("se-key");
+        timestamps.Length.ShouldBe(3);
+        for (var i = 1; i < timestamps.Length; i++)
+        {
+            (timestamps[i] - timestamps[i - 1]).ShouldBeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(850),
+                "StartEmpty buckets admit at the steady rate (T = 1 s) with no post-restart burst");
+        }
+    }
+
+    [Fact]
+    public async Task Should_preserve_recurring_schedule_when_occurrence_deferred()
+    {
+        await CreateRateLimitHostAsync();
+        using var deferrals = TaskWaitHelper.CreateDeferralCollector(WorkerExecutor);
+
+        // The warm-up (same type + key = same bucket) exhausts the budget right before the
+        // recurring series starts: the first occurrence MUST take the re-park path
+        // (MaxInSlotWait is 50 ms)
+        await Dispatcher.Dispatch(new RateLimitedRecurringRhythmTask("rhythm-key"));
+
+        var seriesId = await Dispatcher.Dispatch(new RateLimitedRecurringRhythmTask("rhythm-key"),
+            builder => builder.RunNow().Then().Every(1).Seconds().MaxRuns(3));
+
+        // At least one occurrence must have been deferred (the rhythm survives re-parks)
+        await deferrals.WaitForTaskAsync(seriesId, timeoutMs: 15000);
+
+        // The series completes all 3 runs despite the throttling
+        await TaskWaitHelper.WaitUntilAsync(
+            async () => (await Storage.GetAll()).Single(t => t.Id == seriesId),
+            t => t.CurrentRunCount >= 3,
+            timeoutMs: 30000);
+
+        var series = (await Storage.GetAll()).Single(t => t.Id == seriesId);
+        series.CurrentRunCount.ShouldBe(3);
+
+        // Rhythm preserved: ExecutionTime is never touched by re-parks, so the LAST run cannot
+        // happen before the original schedule of the 3rd occurrence (t0 + 2 s, lower bound)
+        var executions = _state.TimestampsForKey("rhythm-key");
+        executions.Length.ShouldBe(4, "warm-up + 3 recurring runs");
+        var seriesStart = executions[0];
+        executions[^1].ShouldBeGreaterThanOrEqualTo(seriesStart + TimeSpan.FromMilliseconds(1800),
+            "the 3rd occurrence keeps its original schedule (~t0+2s) despite deferred predecessors");
+    }
+
+    [Fact]
+    public async Task Should_fail_task_and_invoke_OnError_with_typed_exception_when_horizon_exceeded()
+    {
+        await CreateRateLimitHostAsync();
+
+        // Warm-up consumes the single 5 s permit
+        var warmupId = await Dispatcher.Dispatch(new RateLimitedHorizonTask("h-key", 0));
+        await WaitForTaskStatusAsync(warmupId, QueuedTaskStatus.Completed, timeoutMs: 10000);
+
+        // The next slot (+5 s) exceeds the 1 s horizon: terminal rejection, persisted Failed
+        var rejectedId = await Dispatcher.Dispatch(new RateLimitedHorizonTask("h-key", 1));
+        var rejected = await WaitForTaskStatusAsync(rejectedId, QueuedTaskStatus.Failed, timeoutMs: 10000);
+
+        rejected.Exception.ShouldNotBeNull();
+        rejected.Exception.ShouldContain("RateLimitRejectedException");
+
+        // OnError received the TYPED exception carrying key, slot and policy
+        await TaskWaitHelper.WaitForConditionAsync(() => !_state.OnErrors.IsEmpty, timeoutMs: 5000);
+        var (_, exception) = _state.OnErrors.Single();
+        var typed = exception.ShouldBeOfType<RateLimitRejectedException>();
+        typed.RateLimitKey.ShouldBe("h-key");
+        typed.ComputedSlotUtc.ShouldNotBeNull();
+        typed.Policy.MaxReservationHorizon.ShouldBe(TimeSpan.FromSeconds(1));
+
+        // The task never executed
+        _state.ExecutionCountByIndex.ContainsKey(1).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Should_skip_recurring_occurrence_and_keep_series_alive_when_horizon_exceeded()
+    {
+        await CreateRateLimitHostAsync();
+
+        // Every-second series, 1 permit per 3.5 s, 1 s horizon: occurrences finding the budget
+        // exhausted and the next slot beyond the horizon are SKIPPED (counting toward MaxRuns),
+        // the series never fails
+        var seriesId = await Dispatcher.Dispatch(new RateLimitedHorizonRecurringTask("hr-key"),
+            builder => builder.Schedule().Every(1).Seconds().MaxRuns(4));
+
+        await TaskWaitHelper.WaitUntilAsync(
+            async () => (await Storage.GetAll()).Single(t => t.Id == seriesId),
+            t => t.CurrentRunCount >= 4,
+            timeoutMs: 30000);
+
+        var series = (await Storage.GetAll()).Single(t => t.Id == seriesId);
+        series.Status.ShouldNotBe(QueuedTaskStatus.Failed, "a skipped occurrence must never fail the series");
+        series.CurrentRunCount.ShouldBe(4);
+
+        // With a 3.5 s refill against a 1 s cadence, some occurrences executed and some were
+        // skipped — but every occurrence advanced the series
+        var executed = _state.TimestampsForKey("hr-key").Length;
+        executed.ShouldBeGreaterThanOrEqualTo(1, "the series keeps executing when budget allows");
+        executed.ShouldBeLessThan(4, "occurrences beyond the horizon are skipped, not executed late");
+    }
+
+    [Fact]
+    public async Task Should_discard_task_with_failed_status_when_overflow_behavior_is_discard()
+    {
+        await CreateRateLimitHostAsync();
+
+        var warmupId = await Dispatcher.Dispatch(new RateLimitedDiscardTask("d-key", 0));
+        await WaitForTaskStatusAsync(warmupId, QueuedTaskStatus.Completed, timeoutMs: 10000);
+
+        // No budget + Discard: terminal Failed (NOT Cancelled — that status is reserved for
+        // user cancellation), no parking, no waiting
+        var discardedId = await Dispatcher.Dispatch(new RateLimitedDiscardTask("d-key", 1));
+        var discarded = await WaitForTaskStatusAsync(discardedId, QueuedTaskStatus.Failed, timeoutMs: 10000);
+
+        discarded.Status.ShouldBe(QueuedTaskStatus.Failed);
+        discarded.Exception.ShouldNotBeNull();
+        discarded.Exception.ShouldContain("Discard");
+
+        await TaskWaitHelper.WaitForConditionAsync(() => !_state.OnErrors.IsEmpty, timeoutMs: 5000);
+        var (_, exception) = _state.OnErrors.Single();
+        exception.ShouldBeOfType<RateLimitRejectedException>();
+
+        _state.ExecutionCountByIndex.ContainsKey(1).ShouldBeFalse("a discarded task never executes");
+    }
+
+    [Fact]
+    public async Task Should_emit_fail_open_event_when_tracked_keys_cap_reached()
+    {
+        await CreateRateLimitHostAsync(
+            configureEverTask: cfg => cfg.SetRateLimiterOptions(o => o.MaxTrackedKeys = 1));
+
+        var failOpenEvents = new List<string>();
+        WorkerExecutor.TaskEventOccurredAsync += data =>
+        {
+            if (data.Message.Contains("fail OPEN", StringComparison.Ordinal))
+                lock (failOpenEvents) failOpenEvents.Add(data.Message);
+            return Task.CompletedTask;
+        };
+
+        // key-1 occupies the single tracked bucket; key-2 exceeds the cap and fails open
+        var id1 = await Dispatcher.Dispatch(new RateLimitedSinglePermitTask("fo-key-1", 0));
+        await WaitForTaskStatusAsync(id1, QueuedTaskStatus.Completed, timeoutMs: 10000);
+
+        var id2 = await Dispatcher.Dispatch(new RateLimitedSinglePermitTask("fo-key-2", 1));
+        await WaitForTaskStatusAsync(id2, QueuedTaskStatus.Completed, timeoutMs: 10000);
+
+        // The mandatory monitoring event must surface (a silent fail-open is invisible)
+        await TaskWaitHelper.WaitForConditionAsync(
+            () => { lock (failOpenEvents) return failOpenEvents.Count > 0; }, timeoutMs: 10000);
+
+        _state.ExecutionCountByIndex[1].ShouldBe(1, "fail-open tasks execute unthrottled");
     }
 
     // ---------------------------------------------------------------- WS4: retry integration

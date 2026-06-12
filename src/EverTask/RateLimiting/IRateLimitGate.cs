@@ -9,11 +9,45 @@ public enum RateLimitGateOutcome
     Proceed = 0,
 
     /// <summary>
-    /// The task was handled by the gate (re-parked into the scheduler at the reserved slot, or
-    /// its occurrence dropped): the caller MUST NOT execute it and MUST NOT run any
-    /// post-execution logic.
+    /// The task was handled by the gate (re-parked into the scheduler at the reserved slot):
+    /// the caller MUST NOT execute it and MUST NOT run any post-execution logic.
     /// </summary>
-    Deferred = 1
+    Deferred = 1,
+
+    /// <summary>
+    /// The task was terminally rejected (see <see cref="RateLimitRejectionKind"/>): the caller
+    /// must apply the terminal outcome — one-shot tasks are persisted as Failed with the typed
+    /// <see cref="RateLimitRejectedException"/> delivered to OnError; recurring tasks skip the
+    /// occurrence and keep the series alive.
+    /// </summary>
+    Rejected = 2
+}
+
+/// <summary>
+/// Reason of a <see cref="RateLimitGateOutcome.Rejected"/> outcome.
+/// </summary>
+public enum RateLimitRejectionKind
+{
+    /// <summary>No rejection.</summary>
+    None = 0,
+
+    /// <summary>
+    /// The next available slot lies beyond <see cref="RateLimitPolicy.MaxReservationHorizon"/>
+    /// (L3 bound: far-future slots are never parked).
+    /// </summary>
+    HorizonExceeded = 1,
+
+    /// <summary>
+    /// The policy uses <see cref="RateLimitOverflowBehavior.Discard"/> and no budget was
+    /// available.
+    /// </summary>
+    Discarded = 2,
+
+    /// <summary>
+    /// The reserved slot of a recurring occurrence falls past the series' RunUntil:
+    /// the occurrence is skipped (never fired late), the series stays alive.
+    /// </summary>
+    OccurrencePastRunUntil = 3
 }
 
 /// <summary>
@@ -30,11 +64,25 @@ public enum RateLimitGateOutcome
 /// Number of deferrals represented by this event (1 for the first of a window, more for a
 /// periodic summary). Meaningful only when <paramref name="EmitDeferralEvent"/> is true.
 /// </param>
+/// <param name="RejectionKind">The rejection reason when <paramref name="Outcome"/> is Rejected.</param>
+/// <param name="EmitFailOpenEvent">
+/// True when the caller should publish the mandatory tracked-keys fail-open monitoring event:
+/// the limiter exceeded <see cref="RateLimiterOptions.MaxTrackedKeys"/> and started executing
+/// tasks for new keys unthrottled. A silent fail-open under key-cardinality pressure would be
+/// invisible otherwise. Rate-limited at the source.
+/// </param>
+/// <param name="TotalFailOpenCount">
+/// Total fail-open acquisitions observed so far. Meaningful only when
+/// <paramref name="EmitFailOpenEvent"/> is true.
+/// </param>
 public readonly record struct RateLimitGateResult(
     RateLimitGateOutcome Outcome,
     DateTimeOffset SlotUtc = default,
     bool EmitDeferralEvent = false,
-    int AggregatedDeferrals = 0);
+    int AggregatedDeferrals = 0,
+    RateLimitRejectionKind RejectionKind = RateLimitRejectionKind.None,
+    bool EmitFailOpenEvent = false,
+    long TotalFailOpenCount = 0);
 
 /// <summary>
 /// Consumer-side rate-limit gate: decides — without ever blocking a worker on budget — whether a
@@ -63,4 +111,13 @@ public interface IRateLimitGate
     /// <param name="ct">The service cancellation token.</param>
     /// <returns>The gate decision; see <see cref="RateLimitGateResult"/>.</returns>
     ValueTask<RateLimitGateResult> TryPassAsync(TaskHandlerExecutor task, CancellationToken ct);
+
+    /// <summary>
+    /// L2 parking-lot backpressure: pauses the calling consumer (bounded) while the number of
+    /// parked rate-limited tasks is at the <see cref="RateLimiterOptions.MaxParkedTasks"/> cap
+    /// and the task's queue hosts parked tasks. Cheap no-op fast path when under the cap.
+    /// </summary>
+    /// <param name="task">The dequeued task (any task: the pause applies per queue).</param>
+    /// <param name="ct">The service cancellation token.</param>
+    ValueTask WaitForParkingCapacityAsync(TaskHandlerExecutor task, CancellationToken ct);
 }

@@ -24,10 +24,12 @@ public class Dispatcher(
     // Cache for compiled TaskHandlerWrapper constructors to avoid reflection overhead
     private static readonly ConcurrentDictionary<Type, Func<TaskHandlerWrapper>> WrapperFactoryCache = new();
 
-    // Resolved lazily: optional component (registered by AddEverTask, may be absent in
+    // Resolved lazily: optional components (registered by AddEverTask, may be absent in
     // hand-wired unit-test providers)
     private IGateInvalidationRegistry? _gateInvalidation;
     private bool _gateInvalidationResolved;
+    private RateLimitParkingLot? _parkingLot;
+    private bool _parkingLotResolved;
 
     private IGateInvalidationRegistry? GateInvalidation
     {
@@ -40,6 +42,20 @@ public class Dispatcher(
             }
 
             return _gateInvalidation;
+        }
+    }
+
+    private RateLimitParkingLot? ParkingLot
+    {
+        get
+        {
+            if (!_parkingLotResolved)
+            {
+                _parkingLot         = serviceProvider.GetService<RateLimitParkingLot>();
+                _parkingLotResolved = true;
+            }
+
+            return _parkingLot;
         }
     }
 
@@ -81,8 +97,10 @@ public class Dispatcher(
         scheduler.TryUnschedule(taskId);
 
         // Invalidate any rate-limit gate operation in flight for this task: a deferral
-        // being re-parked concurrently with this Cancel must not survive it.
+        // being re-parked concurrently with this Cancel must not survive it. The parking-lot
+        // entry is released too (a cancelled parked task never re-enters a channel).
         GateInvalidation?.Invalidate(taskId);
+        ParkingLot?.Remove(taskId);
     }
 
     /// <inheritdoc />

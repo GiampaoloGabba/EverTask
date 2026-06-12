@@ -29,6 +29,9 @@ public class RateLimitTestState
     /// <summary>Execution count of <see cref="RateLimitedSlowTask"/> handlers.</summary>
     public int SlowExecutions;
 
+    /// <summary>OnError callbacks received by rate-limited handlers (index, exception).</summary>
+    public ConcurrentBag<(int Index, Exception? Exception)> OnErrors { get; } = new();
+
     public void Record(string key, int index)
     {
         Executions.Add((key, index, DateTimeOffset.UtcNow));
@@ -300,6 +303,121 @@ public class RateLimitedThrowingKeyTaskHandler : EverTaskHandler<RateLimitedThro
 
     public override Task Handle(RateLimitedThrowingKeyTask backgroundTask, CancellationToken cancellationToken) =>
         Task.CompletedTask;
+}
+
+/// <summary>StartEmpty: 2 permits per 2 s, but a fresh bucket admits at the steady 1 s rate (no burst).</summary>
+public record RateLimitedStartEmptyTask(string Key, int Index) : IEverTask, IRateLimitedTask
+{
+    public string RateLimitKey => Key;
+}
+
+public class RateLimitedStartEmptyTaskHandler(RateLimitTestState state)
+    : EverTaskHandler<RateLimitedStartEmptyTask>
+{
+    public override RateLimitPolicy? RateLimitPolicy =>
+        new(2, TimeSpan.FromSeconds(2)) { Burst = 2, StartEmpty = true };
+
+    public override Task Handle(RateLimitedStartEmptyTask backgroundTask, CancellationToken cancellationToken)
+    {
+        state.Record(backgroundTask.Key, backgroundTask.Index);
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>One permit per 5 s with a 1 s reservation horizon: the second task is terminally rejected.</summary>
+public record RateLimitedHorizonTask(string Key, int Index) : IEverTask, IRateLimitedTask
+{
+    public string RateLimitKey => Key;
+}
+
+public class RateLimitedHorizonTaskHandler(RateLimitTestState state) : EverTaskHandler<RateLimitedHorizonTask>
+{
+    public override RateLimitPolicy? RateLimitPolicy =>
+        new(1, TimeSpan.FromSeconds(5)) { Burst = 1, MaxReservationHorizon = TimeSpan.FromSeconds(1) };
+
+    public override Task Handle(RateLimitedHorizonTask backgroundTask, CancellationToken cancellationToken)
+    {
+        state.Record(backgroundTask.Key, backgroundTask.Index);
+        return Task.CompletedTask;
+    }
+
+    public override ValueTask OnError(Guid taskId, Exception? exception, string? message)
+    {
+        state.OnErrors.Add((-1, exception));
+        return ValueTask.CompletedTask;
+    }
+}
+
+/// <summary>
+/// Recurring-friendly horizon type: 1 permit per 3.5 s, 1 s horizon — occurrences arriving while
+/// the budget is exhausted are skipped (series alive) unless their slot is near enough to wait.
+/// </summary>
+public record RateLimitedHorizonRecurringTask(string Key) : IEverTask, IRateLimitedTask
+{
+    public string RateLimitKey => Key;
+}
+
+public class RateLimitedHorizonRecurringTaskHandler(RateLimitTestState state)
+    : EverTaskHandler<RateLimitedHorizonRecurringTask>
+{
+    public override RateLimitPolicy? RateLimitPolicy =>
+        new(1, TimeSpan.FromMilliseconds(3500)) { Burst = 1, MaxReservationHorizon = TimeSpan.FromSeconds(1) };
+
+    public override Task Handle(RateLimitedHorizonRecurringTask backgroundTask, CancellationToken cancellationToken)
+    {
+        state.Record(backgroundTask.Key, 0);
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>Discard overflow: 1 permit per 5 s; an over-budget task fails immediately (no parking).</summary>
+public record RateLimitedDiscardTask(string Key, int Index) : IEverTask, IRateLimitedTask
+{
+    public string RateLimitKey => Key;
+}
+
+public class RateLimitedDiscardTaskHandler(RateLimitTestState state) : EverTaskHandler<RateLimitedDiscardTask>
+{
+    public override RateLimitPolicy? RateLimitPolicy =>
+        new(1, TimeSpan.FromSeconds(5))
+        {
+            Burst            = 1,
+            OverflowBehavior = RateLimitOverflowBehavior.Discard
+        };
+
+    public override Task Handle(RateLimitedDiscardTask backgroundTask, CancellationToken cancellationToken)
+    {
+        state.Record(backgroundTask.Key, backgroundTask.Index);
+        return Task.CompletedTask;
+    }
+
+    public override ValueTask OnError(Guid taskId, Exception? exception, string? message)
+    {
+        state.OnErrors.Add((-2, exception));
+        return ValueTask.CompletedTask;
+    }
+}
+
+/// <summary>
+/// Recurring rhythm type: every-second series with a 700 ms refill and a tiny MaxInSlotWait so
+/// throttled occurrences take the re-park path (rhythm must be preserved by QueueNextOccourrence).
+/// </summary>
+public record RateLimitedRecurringRhythmTask(string Key) : IEverTask, IRateLimitedTask
+{
+    public string RateLimitKey => Key;
+}
+
+public class RateLimitedRecurringRhythmTaskHandler(RateLimitTestState state)
+    : EverTaskHandler<RateLimitedRecurringRhythmTask>
+{
+    public override RateLimitPolicy? RateLimitPolicy =>
+        new(1, TimeSpan.FromMilliseconds(700)) { Burst = 1, MaxInSlotWait = TimeSpan.FromMilliseconds(50) };
+
+    public override Task Handle(RateLimitedRecurringRhythmTask backgroundTask, CancellationToken cancellationToken)
+    {
+        state.Record(backgroundTask.Key, 0);
+        return Task.CompletedTask;
+    }
 }
 
 /// <summary>One permit per 700 ms; the handler blocks until released (in-flight duplicate scenarios).</summary>

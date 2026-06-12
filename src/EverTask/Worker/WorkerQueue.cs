@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using EverTask.Configuration;
+using EverTask.RateLimiting;
 
 namespace EverTask.Worker;
 
@@ -31,6 +32,13 @@ public class WorkerQueue : IWorkerQueue
 
     /// <inheritdoc />
     public int Capacity => Configuration.ChannelOptions.Capacity;
+
+    /// <summary>
+    /// Optional parking-lot accounting hook (set by WorkerQueueManager): a successful channel
+    /// write un-parks the task — the consumer-independent decrement that keeps the L2
+    /// backpressure from wedging. No-op for tasks that were never parked.
+    /// </summary>
+    internal RateLimitParkingLot? ParkingLot { get; set; }
 
     /// <summary>
     /// Creates a new WorkerQueue with the specified queue configuration.
@@ -110,6 +118,7 @@ public class WorkerQueue : IWorkerQueue
         {
             _logger.LogDebug("Queuing task with id {TaskId} to queue '{QueueName}'", task.PersistenceId, Name);
             await _queue.Writer.WriteAsync(task, cancellationToken).ConfigureAwait(false);
+            ParkingLot?.OnTaskEnqueued(task.PersistenceId);
         }
         catch (OperationCanceledException)
         {
@@ -178,6 +187,7 @@ public class WorkerQueue : IWorkerQueue
         if (_queue.Writer.TryWrite(task))
         {
             _logger.LogDebug("Task {TaskId} successfully enqueued to queue '{QueueName}'", task.PersistenceId, Name);
+            ParkingLot?.OnTaskEnqueued(task.PersistenceId);
             return EnqueueResult.Enqueued;
         }
 

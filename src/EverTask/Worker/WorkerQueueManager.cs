@@ -1,4 +1,5 @@
 using EverTask.Configuration;
+using EverTask.RateLimiting;
 
 namespace EverTask.Worker;
 
@@ -16,7 +17,8 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
         IEverTaskLogger<WorkerQueueManager> logger,
         IWorkerBlacklist blacklist,
         ILoggerFactory loggerFactory,
-        ITaskStorage? taskStorage = null)
+        ITaskStorage? taskStorage = null,
+        RateLimitParkingLot? parkingLot = null)
     {
         _configurations = configurations ?? throw new ArgumentNullException(nameof(configurations));
         _logger         = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -29,7 +31,7 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
         foreach (var (name, config) in configurations)
         {
             var queueLogger = loggerFactory1.CreateLogger($"EverTask.Worker.WorkerQueue.{name}");
-            var queue       = new WorkerQueue(config, queueLogger, blacklist1, taskStorage);
+            var queue       = new WorkerQueue(config, queueLogger, blacklist1, taskStorage) { ParkingLot = parkingLot };
             _queues[name] = queue;
         }
 
@@ -46,7 +48,10 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
                 }
             };
             var queueLogger = loggerFactory1.CreateLogger("EverTask.Worker.WorkerQueue.default");
-            _queues[QueueNames.Default] = new WorkerQueue(defaultConfig, queueLogger, blacklist1, taskStorage);
+            _queues[QueueNames.Default] = new WorkerQueue(defaultConfig, queueLogger, blacklist1, taskStorage)
+            {
+                ParkingLot = parkingLot
+            };
         }
     }
 

@@ -62,6 +62,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IKeyedRateLimiter>(sp => new InMemoryKeyedRateLimiter(
             options.RateLimiterOptions,
             sp.GetRequiredService<IEverTaskLogger<InMemoryKeyedRateLimiter>>()));
+        services.TryAddSingleton(_ => new RateLimitParkingLot(options.RateLimiterOptions));
         services.TryAddSingleton<IRateLimitGate, RateLimitGate>();
 
         // Conditional scheduler registration
@@ -140,7 +141,8 @@ public static class ServiceCollectionExtensions
             var blacklist = provider.GetRequiredService<IWorkerBlacklist>();
             var loggerFactory = provider.GetRequiredService<ILoggerFactory>();
             var taskStorage = provider.GetService<ITaskStorage>();
-            return new WorkerQueueManager(options.Queues, logger, blacklist, loggerFactory, taskStorage);
+            var parkingLot = provider.GetService<RateLimitParkingLot>();
+            return new WorkerQueueManager(options.Queues, logger, blacklist, loggerFactory, taskStorage, parkingLot);
         });
 
         // Register backward compatibility IWorkerQueue (points to default queue)

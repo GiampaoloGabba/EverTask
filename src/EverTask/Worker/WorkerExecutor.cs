@@ -54,18 +54,38 @@ public class WorkerExecutor(
         if (IsTaskBlacklisted(task))
             return;
 
-        // Rate-limit gate (L0 fast path: tasks without a policy skip it entirely)
-        if (task.RateLimitPolicy != null && rateLimitGate != null)
+        if (rateLimitGate != null)
         {
-            var gateResult = await rateLimitGate.TryPassAsync(task, serviceToken).ConfigureAwait(false);
-            if (gateResult.Outcome == RateLimitGateOutcome.Deferred)
+            // L2 parking-lot backpressure: consumers of a queue whose parked tasks hit the cap
+            // pause (bounded) so the channel fills and backpressure reaches producers.
+            // Cheap fast path when the lot is under cap.
+            await rateLimitGate.WaitForParkingCapacityAsync(task, serviceToken).ConfigureAwait(false);
+
+            // Rate-limit gate (L0 fast path: tasks without a policy skip it entirely)
+            if (task.RateLimitPolicy != null)
             {
-                // HARD RULE: the Deferred path NEVER enters DoWorkCore — its finally would run
-                // QueueNextOccourrence (run-count corruption + lost occurrence). The gate already
-                // re-parked the task in the scheduler; nothing was written to storage and the
-                // status stays Queued (covered by startup recovery).
-                RegisterDeferralEvent(task, gateResult);
-                return;
+                var gateResult = await rateLimitGate.TryPassAsync(task, serviceToken).ConfigureAwait(false);
+
+                if (gateResult.EmitFailOpenEvent)
+                    RegisterFailOpenEvent(task, gateResult);
+
+                if (gateResult.Outcome == RateLimitGateOutcome.Deferred)
+                {
+                    // HARD RULE: the Deferred path NEVER enters DoWorkCore — its finally would
+                    // run QueueNextOccourrence (run-count corruption + lost occurrence). The gate
+                    // already re-parked the task in the scheduler; nothing was written to storage
+                    // and the status stays Queued (covered by startup recovery).
+                    RegisterDeferralEvent(task, gateResult);
+                    return;
+                }
+
+                if (gateResult.Outcome == RateLimitGateOutcome.Rejected)
+                {
+                    // Terminal outcome (horizon exceeded / Discard / occurrence past RunUntil):
+                    // never enters DoWorkCore either
+                    await HandleRateLimitRejectionAsync(task, gateResult, serviceToken).ConfigureAwait(false);
+                    return;
+                }
             }
         }
 
@@ -192,6 +212,14 @@ public class WorkerExecutor(
                 return;
             }
 
+            if (execution.RetryDeferral is { Outcome: RateLimitGateOutcome.Rejected } rejection)
+            {
+                // A retry attempt was terminally rejected (horizon exceeded or Discard):
+                // surface the typed exception through the standard failure path
+                // (SetStatus Failed + OnError) handled by the catch below
+                throw CreateRejectionException(task, rejection);
+            }
+
             if (taskStorage != null)
                 await taskStorage.SetCompleted(task.PersistenceId, executionTime, task.AuditLevel).ConfigureAwait(false);
 
@@ -265,6 +293,100 @@ public class WorkerExecutor(
             "Rate limit deferred task {0}: key={1} slotUtc={2:O} policy={3} deferredCount={4}",
             task.PersistenceId, task.RateLimitKey!, gateResult.SlotUtc, task.Task.GetType(),
             gateResult.AggregatedDeferrals);
+    }
+
+    /// <summary>
+    /// Publishes the mandatory tracked-keys fail-open monitoring event (L4): without it, a
+    /// limiter silently executing unthrottled tasks under key-cardinality pressure would be
+    /// invisible.
+    /// </summary>
+    private void RegisterFailOpenEvent(TaskHandlerExecutor task, RateLimitGateResult gateResult)
+    {
+        RegisterWarning(null, task,
+            "Rate limiter tracked-keys cap reached: new keys fail OPEN and execute unthrottled. " +
+            "Task {0} (policy={1}) totalFailOpenCount={2}",
+            task.PersistenceId, task.Task.GetType(), gateResult.TotalFailOpenCount);
+    }
+
+    /// <summary>
+    /// Builds the typed exception delivered to OnError (and persisted) for terminal rate-limit
+    /// rejections.
+    /// </summary>
+    private static RateLimitRejectedException CreateRejectionException(
+        TaskHandlerExecutor task, RateLimitGateResult gateResult)
+    {
+        var reason = gateResult.RejectionKind switch
+        {
+            RateLimitRejectionKind.Discarded =>
+                $"Rate limit discarded task {task.PersistenceId}: key={task.RateLimitKey} had no available budget " +
+                "and the policy overflow behavior is Discard",
+            RateLimitRejectionKind.OccurrencePastRunUntil =>
+                $"Rate limit skipped occurrence of recurring task {task.PersistenceId}: key={task.RateLimitKey} " +
+                $"reserved slot {gateResult.SlotUtc:O} falls past the series RunUntil",
+            _ =>
+                $"Rate limit rejected task {task.PersistenceId}: key={task.RateLimitKey} next available slot " +
+                $"{gateResult.SlotUtc:O} exceeds the {task.RateLimitPolicy!.MaxReservationHorizon} reservation horizon"
+        };
+
+        return new RateLimitRejectedException(task.RateLimitKey!, gateResult.SlotUtc, task.RateLimitPolicy!, reason);
+    }
+
+    /// <summary>
+    /// Applies a terminal rate-limit rejection: one-shot tasks are persisted as Failed — the
+    /// only mandatory storage write of the design, otherwise the task would stay Queued and be
+    /// re-rejected at every restart — with the typed <see cref="RateLimitRejectedException"/>
+    /// delivered to the handler's OnError. Recurring tasks skip the occurrence through the
+    /// normal next-occurrence path (the skip counts toward MaxRuns, same semantics as
+    /// downtime); the series stays alive and no callback is invoked.
+    /// </summary>
+    private async ValueTask HandleRateLimitRejectionAsync(TaskHandlerExecutor task, RateLimitGateResult gateResult,
+                                                          CancellationToken serviceToken)
+    {
+        var exception = CreateRejectionException(task, gateResult);
+
+        await using var scope = serviceScopeFactory.CreateAsyncScope();
+        var taskStorage = scope.ServiceProvider.GetService<ITaskStorage>();
+
+        if (task.RecurringTask != null)
+        {
+            RegisterWarning(exception, task,
+                "Rate limit skipped occurrence of recurring task {0} (key {1}): the series stays alive.",
+                task.PersistenceId, task.RateLimitKey!);
+
+            await QueueNextOccourrence(task, 0, taskStorage).ConfigureAwait(false);
+            return;
+        }
+
+        if (taskStorage != null)
+        {
+            await taskStorage.SetStatus(task.PersistenceId, QueuedTaskStatus.Failed, exception, task.AuditLevel,
+                null, serviceToken).ConfigureAwait(false);
+        }
+
+        // Resolve the handler once (rare terminal event, cost acceptable) to deliver OnError.
+        // The callback instance is NOT an executing instance: rejection happens pre-execution.
+        object? handler = null;
+        try
+        {
+            handler = task.GetOrResolveHandler(scope.ServiceProvider);
+        }
+        catch (Exception resolveEx)
+        {
+            logger.LogWarning(resolveEx,
+                "Unable to resolve handler for rejected task {TaskId}: OnError will not be invoked",
+                task.PersistenceId);
+        }
+
+        if (handler != null)
+        {
+            await ExecuteCallback(GetErrorCallback(task, handler), task, exception, exception.Message)
+                .ConfigureAwait(false);
+
+            if (!task.IsLazy)
+                await ExecuteDisposeHandler(handler);
+        }
+
+        RegisterError(exception, task, "Rate limit rejected task {0}: marked as Failed.", task.PersistenceId);
     }
 
     private bool IsTaskBlacklisted(TaskHandlerExecutor task)
@@ -365,10 +487,12 @@ public class WorkerExecutor(
                         && rateLimitGate != null)
                     {
                         var gateResult = await rateLimitGate.TryPassAsync(task, retryToken).ConfigureAwait(false);
-                        if (gateResult.Outcome == RateLimitGateOutcome.Deferred)
+                        if (gateResult.Outcome != RateLimitGateOutcome.Proceed)
                         {
-                            // Stop the retry loop without failing: the task was re-parked and
-                            // the attempt sequence restarts on redelivery (documented)
+                            // Deferred: stop the retry loop without failing — the task was
+                            // re-parked and the attempt sequence restarts on redelivery.
+                            // Rejected (horizon/Discard): captured and turned into the typed
+                            // terminal exception by DoWorkCore.
                             retryDeferral = gateResult;
                             return;
                         }

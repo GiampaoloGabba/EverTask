@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using EverTask.Configuration;
 
 namespace EverTask.RateLimiting;
 
@@ -9,9 +10,12 @@ internal sealed class RateLimitGate(
     IKeyedRateLimiter limiter,
     IScheduler scheduler,
     IGateInvalidationRegistry invalidationRegistry,
+    RateLimitParkingLot parkingLot,
     EverTaskServiceConfiguration configuration,
     IEverTaskLogger<RateLimitGate> logger) : IRateLimitGate
 {
+    private long _lastSeenFailOpenCount;
+    private long _lastFailOpenEventTicks;
     private sealed class DeferralAggregation
     {
         public long WindowStartTicks;
@@ -64,8 +68,21 @@ internal sealed class RateLimitGate(
         var epoch = invalidationRegistry.GetEpoch(task.PersistenceId);
 
         var decision = await AcquireFailOpenAsync(policy, taskType, key, task.PersistenceId, ct).ConfigureAwait(false);
+
+        // A previously-parked task delivered back to a worker is no longer parked (idempotent
+        // no-op otherwise); a re-deferral below re-registers it
+        parkingLot.Remove(task.PersistenceId);
+
         if (decision.Acquired)
-            return new RateLimitGateResult(RateLimitGateOutcome.Proceed);
+            return Proceed();
+
+        // L8 Discard: no waiting, no parking — the task is terminally rejected when no budget
+        // is immediately available. The freed reservation is released best-effort.
+        if (policy.OverflowBehavior == RateLimitOverflowBehavior.Discard)
+        {
+            _ = limiter.ReleaseAsync(taskType, key, task.PersistenceId, CancellationToken.None);
+            return Reject(RateLimitRejectionKind.Discarded, decision.RetryAt);
+        }
 
         // In-slot wait: a near slot is awaited inline and redeemed — closes the guard-overlap
         // edge (no redelivery racing the in-flight guard) and saves a scheduler round-trip.
@@ -81,11 +98,55 @@ internal sealed class RateLimitGate(
 
             decision = await AcquireFailOpenAsync(policy, taskType, key, task.PersistenceId, ct).ConfigureAwait(false);
             if (decision.Acquired)
-                return new RateLimitGateResult(RateLimitGateOutcome.Proceed);
+                return Proceed();
         }
 
         return Defer(task, taskType, key, decision.RetryAt, epoch);
     }
+
+    /// <inheritdoc />
+    public ValueTask WaitForParkingCapacityAsync(TaskHandlerExecutor task, CancellationToken ct)
+    {
+        // Fast path: the lot is under cap virtually always
+        if (parkingLot.Count < parkingLot.MaxParkedTasks)
+            return ValueTask.CompletedTask;
+
+        return parkingLot.WaitForCapacityAsync(EffectiveQueueName(task), ct);
+    }
+
+    private static string EffectiveQueueName(TaskHandlerExecutor task) =>
+        task.QueueName ?? (task.RecurringTask != null ? QueueNames.Recurring : QueueNames.Default);
+
+    /// <summary>
+    /// Builds a Proceed result, surfacing the mandatory tracked-keys fail-open monitoring event
+    /// when the in-memory limiter crossed the cap since the last check (rate-limited at source).
+    /// </summary>
+    private RateLimitGateResult Proceed()
+    {
+        if (limiter is InMemoryKeyedRateLimiter inMemoryLimiter)
+        {
+            var total = inMemoryLimiter.FailOpenCount;
+            var seen  = Interlocked.Read(ref _lastSeenFailOpenCount);
+
+            if (total > seen && Interlocked.CompareExchange(ref _lastSeenFailOpenCount, total, seen) == seen)
+            {
+                var nowTicks  = DateTimeOffset.UtcNow.UtcTicks;
+                var lastEvent = Interlocked.Read(ref _lastFailOpenEventTicks);
+
+                if (nowTicks - lastEvent >= DeferralEventWindow.Ticks
+                    && Interlocked.CompareExchange(ref _lastFailOpenEventTicks, nowTicks, lastEvent) == lastEvent)
+                {
+                    return new RateLimitGateResult(RateLimitGateOutcome.Proceed,
+                        EmitFailOpenEvent: true, TotalFailOpenCount: total);
+                }
+            }
+        }
+
+        return new RateLimitGateResult(RateLimitGateOutcome.Proceed);
+    }
+
+    private static RateLimitGateResult Reject(RateLimitRejectionKind kind, DateTimeOffset slot) =>
+        new(RateLimitGateOutcome.Rejected, slot, RejectionKind: kind);
 
     /// <summary>
     /// Limiter call with the documented fail policy: a throwing limiter (e.g. a distributed
@@ -118,6 +179,19 @@ internal sealed class RateLimitGate(
     {
         var now = DateTimeOffset.UtcNow;
 
+        // L3 horizon: far-future slots are never parked (the limiter did not book them either).
+        // The caller applies the terminal outcome: one-shot → persisted Failed + OnError with
+        // the typed exception; recurring → occurrence skipped, series alive.
+        if (slot - now > task.RateLimitPolicy!.MaxReservationHorizon)
+        {
+            logger.LogWarning(
+                "Rate limit: task {TaskId} (key {Key}) rejected — next available slot {SlotUtc:O} exceeds " +
+                "the {Horizon} reservation horizon",
+                task.PersistenceId, key, slot, task.RateLimitPolicy.MaxReservationHorizon);
+
+            return Reject(RateLimitRejectionKind.HorizonExceeded, slot);
+        }
+
         // Anti busy-spin floor, ONLY for slots not in the future
         if (slot <= now)
             slot = now + PastSlotFloor;
@@ -130,16 +204,17 @@ internal sealed class RateLimitGate(
             var runUntil = task.RecurringTask.RunUntil;
             if (runUntil.HasValue && slot > runUntil.Value)
             {
-                // Never fire late: the occurrence is dropped (skipped occurrences follow the
-                // same semantics as downtime). Free the reservation best-effort.
+                // Never fire late: the occurrence is skipped (same semantics as downtime; the
+                // caller routes it through the normal next-occurrence path so the series state
+                // is updated). Free the reservation best-effort.
                 logger.LogWarning(
-                    "Rate limit: occurrence of recurring task {TaskId} (key {Key}) dropped — reserved slot " +
+                    "Rate limit: occurrence of recurring task {TaskId} (key {Key}) skipped — reserved slot " +
                     "{SlotUtc:O} falls past RunUntil {RunUntil:O}",
                     task.PersistenceId, key, slot, runUntil.Value);
 
                 _ = limiter.ReleaseAsync(taskType, key, task.PersistenceId, CancellationToken.None);
 
-                return DeferralResult(taskType, key, slot, now);
+                return Reject(RateLimitRejectionKind.OccurrencePastRunUntil, slot);
             }
 
             // Recurring re-park: schedule the SAME occurrence at the reserved slot without
@@ -154,6 +229,9 @@ internal sealed class RateLimitGate(
             scheduler.Schedule(parked);
         }
 
+        // L2 accounting: distinct parked tasks (idempotent re-registration on re-park)
+        parkingLot.Park(task.PersistenceId, EffectiveQueueName(task), key, slot);
+
         // Set-then-check: a Cancel or same-taskKey immediate re-dispatch that happened while
         // this task sat in the dequeue→re-park limbo is invisible to TryUnschedule (nothing was
         // parked yet). If the epoch moved, drop OUR registration — conditionally, so a newer
@@ -165,6 +243,7 @@ internal sealed class RateLimitGate(
                 logger.LogDebug(
                     "Rate limit: parked registration of task {TaskId} dropped (cancelled or re-dispatched during re-park)",
                     task.PersistenceId);
+                parkingLot.Remove(task.PersistenceId);
                 _ = limiter.ReleaseAsync(taskType, key, task.PersistenceId, CancellationToken.None);
             }
         }

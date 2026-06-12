@@ -27,9 +27,17 @@ public class RateLimitGateTests
     private readonly Mock<IScheduler> _scheduler        = new();
     private readonly GateInvalidationRegistry _registry = new();
     private readonly EverTaskServiceConfiguration _configuration = new();
+    private readonly RateLimitParkingLot _parkingLot;
+
+    public RateLimitGateTests()
+    {
+        var options = new EverTask.RateLimiting.RateLimiterOptions();
+        options.ResolveDefaults(1000);
+        _parkingLot = new RateLimitParkingLot(options);
+    }
 
     private RateLimitGate CreateGate() =>
-        new(_limiter.Object, _scheduler.Object, _registry, _configuration,
+        new(_limiter.Object, _scheduler.Object, _registry, _parkingLot, _configuration,
             new Mock<IEverTaskLogger<RateLimitGate>>().Object);
 
     private static RateLimitPolicy Policy(TimeSpan? maxInSlotWait = null) =>
@@ -198,11 +206,72 @@ public class RateLimitGateTests
         var executor = CreateExecutor(Policy(), "k", recurring: recurring, executionTime: DateTimeOffset.UtcNow);
         var result   = await gate.TryPassAsync(executor, CancellationToken.None);
 
-        result.Outcome.ShouldBe(RateLimitGateOutcome.Deferred, "the occurrence must not execute");
+        result.Outcome.ShouldBe(RateLimitGateOutcome.Rejected, "the occurrence must not execute");
+        result.RejectionKind.ShouldBe(RateLimitRejectionKind.OccurrencePastRunUntil);
         _scheduler.Verify(s => s.Schedule(It.IsAny<TaskHandlerExecutor>(), It.IsAny<DateTimeOffset?>()), Times.Never,
-            "an occurrence past RunUntil is dropped, never fired late");
+            "an occurrence past RunUntil is skipped, never fired late");
         _limiter.Verify(l => l.ReleaseAsync(It.IsAny<Type>(), "k", executor.PersistenceId, It.IsAny<CancellationToken>()),
             Times.Once, "the unredeemable reservation is released best-effort");
+    }
+
+    [Fact]
+    public async Task Should_reject_when_slot_exceeds_reservation_horizon()
+    {
+        var policy = new RateLimitPolicy(1, TimeSpan.FromSeconds(10))
+        {
+            Burst                 = 1,
+            MaxReservationHorizon = TimeSpan.FromSeconds(5)
+        };
+        SetupDeferral(DateTimeOffset.UtcNow.AddSeconds(30));
+
+        var gate   = CreateGate();
+        var result = await gate.TryPassAsync(CreateExecutor(policy, "k"), CancellationToken.None);
+
+        result.Outcome.ShouldBe(RateLimitGateOutcome.Rejected);
+        result.RejectionKind.ShouldBe(RateLimitRejectionKind.HorizonExceeded);
+        _scheduler.Verify(s => s.Schedule(It.IsAny<TaskHandlerExecutor>(), It.IsAny<DateTimeOffset?>()), Times.Never,
+            "far-future slots are never parked (L3 bound)");
+    }
+
+    [Fact]
+    public async Task Should_reject_with_discard_kind_when_overflow_behavior_is_discard()
+    {
+        var policy = new RateLimitPolicy(1, TimeSpan.FromSeconds(10))
+        {
+            Burst            = 1,
+            OverflowBehavior = RateLimitOverflowBehavior.Discard
+        };
+        SetupDeferral(DateTimeOffset.UtcNow.AddSeconds(2));
+
+        var gate     = CreateGate();
+        var executor = CreateExecutor(policy, "k");
+        var result   = await gate.TryPassAsync(executor, CancellationToken.None);
+
+        result.Outcome.ShouldBe(RateLimitGateOutcome.Rejected, "Discard never waits and never parks");
+        result.RejectionKind.ShouldBe(RateLimitRejectionKind.Discarded);
+        _scheduler.Verify(s => s.Schedule(It.IsAny<TaskHandlerExecutor>(), It.IsAny<DateTimeOffset?>()), Times.Never);
+        _limiter.Verify(l => l.ReleaseAsync(It.IsAny<Type>(), "k", executor.PersistenceId, It.IsAny<CancellationToken>()),
+            Times.Once, "the unused reservation is released best-effort");
+    }
+
+    [Fact]
+    public async Task Should_track_parked_tasks_and_release_on_enqueue()
+    {
+        SetupDeferral(DateTimeOffset.UtcNow.AddSeconds(8));
+
+        var gate     = CreateGate();
+        var executor = CreateExecutor(Policy(), "k");
+
+        await gate.TryPassAsync(executor, CancellationToken.None);
+        _parkingLot.Count.ShouldBe(1, "a deferred task is registered in the parking lot");
+
+        // Re-park of the SAME task must not double-count (distinct tasks only)
+        await gate.TryPassAsync(executor, CancellationToken.None);
+        _parkingLot.Count.ShouldBe(1);
+
+        // The enqueue notification (slot fired, task re-entered a channel) releases the slot
+        _parkingLot.OnTaskEnqueued(executor.PersistenceId);
+        _parkingLot.Count.ShouldBe(0);
     }
 
     [Fact]
