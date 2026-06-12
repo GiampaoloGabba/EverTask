@@ -36,9 +36,9 @@ public class SyncTenantDataHandler : EverTaskHandler<SyncTenantData>
     public override RateLimitPolicy? RateLimitPolicy =>
         new RateLimitPolicy(15, TimeSpan.FromMinutes(1))
         {
-            Burst           = 15,    // back-to-back tolerance (default = Permits)
-            ThrottleRetries = true,  // retries respect the same budget (default)
-            StartEmpty      = false  // fresh keys start with the full burst (default)
+            Burst           = 15,    // how many may run back-to-back from saved-up budget (default: same as Permits)
+            ThrottleRetries = true,  // retry attempts consume budget too (default)
+            StartEmpty      = false  // a new key starts with the full Burst already saved up (default)
         };
 
     public override async Task Handle(SyncTenantData task, CancellationToken ct)
@@ -49,6 +49,52 @@ public class SyncTenantDataHandler : EverTaskHandler<SyncTenantData>
 ```
 
 That's it. No configuration-time registration: tasks of other types, or tasks of this type without a key, skip the gate entirely.
+
+### What the options mean
+
+`Permits` and `Period` set the *average* rate: 15 per minute means one execution every 4 seconds on average (`Period / Permits`, the *emission interval*). The limiter does not count executions in fixed one-minute windows.
+
+> **The mental model: a self-refilling token jar**
+>
+> Each key owns a jar of *execution tokens*. The jar refills by itself, continuously, at the steady rate: one token every 4 seconds (`Period / Permits`). Every task that executes spends one token; when the jar is empty, the next task waits for the next token to drip in. The three options are three questions about the jar:
+>
+> - `Burst`: *how many tokens does the jar hold?* That cap is how many tasks can run back-to-back when work arrives after a quiet stretch, because an idle key keeps collecting the dripping tokens until the jar is full.
+> - `ThrottleRetries`: *do retries also pay a token?*
+> - `StartEmpty`: *does a brand-new jar come full or empty?* A jar is brand new the first time its key is seen, and again after every process restart: the limiter is in-memory and forgets all jars.
+>
+> `Burst` never changes the average rate (the jar always refills at one token per 4 seconds); it only changes how bunched up executions can be.
+
+What that looks like on a timeline, with 20 tasks arriving at once for a key that has been idle for a while:
+
+```text
+Burst = 15 (default = Permits): the jar was full, 15 tokens ready
+
+  tasks  1..15 ───────────► run immediately, back-to-back
+  task   16 ─ 4s ─► 17 ─ 4s ─► 18 ─ 4s ─► ...   steady pace from here on
+
+Burst = 1: the jar holds a single token, no matter how long the key was idle
+
+  task   1 ─ 4s ─► 2 ─ 4s ─► 3 ─ 4s ─► ...      strictly one every 4 s, never two in a row
+```
+
+And what `StartEmpty` changes across a restart while a backlog is waiting:
+
+```text
+StartEmpty = false (default):
+  ...15 calls burst → ✖ restart ✖ → jar reborn FULL  → 15 more immediately
+                                                       (worst case ≈ 2 × Burst at the external API)
+
+StartEmpty = true:
+  ...steady pace    → ✖ restart ✖ → jar reborn EMPTY → first task now, then steady pace
+```
+
+In detail:
+
+- **`Burst`** is the cap on how much budget a key can save up while it sits idle, which makes it the number of tasks that may execute immediately, back-to-back, when work arrives after a quiet stretch. The default is the same value as `Permits` (here 15): a tenant that has been quiet for a minute or more can fire all 15 calls at once, and only then is paced down to one every 4 seconds. `Burst = 1` is the opposite extreme: no budget ever accumulates, so executions are strictly spaced 4 seconds apart no matter how long the key was idle. Values in between trade burstiness for smoothness (`Burst = 5`: at most 5 back-to-back, then steady pacing).
+
+- **`ThrottleRetries`** decides whether retry attempts also consume budget. Default `true`: if the task failed while calling the rate-limited API, its retries hit the same API, so they must respect the same limit. Set it to `false` only when retries don't touch the limited resource (e.g. retrying a cheap local failure).
+
+- **`StartEmpty`** decides how much saved-up budget a brand-new key begins with. Default `false`: a new key starts with the full `Burst` already saved up, so its first 15 tasks run immediately. With `true`, a new key starts with nothing saved: the first task runs immediately, but every following one is paced at the steady 4-second interval from the start. Use `StartEmpty = true` when a restart must not cause a spike of calls at the external API (see [Restart Semantics](#restart-semantics)).
 
 ## Declaring the Key
 
@@ -96,7 +142,7 @@ slot fires → task re-enters the queue (the usual SetQueued write) → gate red
 
 Key properties:
 
-- **GCRA math**: the steady emission interval is `T = Period / Permits`; `Burst` controls how many executions may happen back-to-back before the steady rate is enforced. With `Burst = 1` executions are strictly evenly spaced.
+- **GCRA math**: the steady emission interval is `T = Period / Permits`. The budget refills continuously at one execution per `T`; `Burst` caps how much unused budget a key can accumulate while idle, i.e. how many executions may happen back-to-back before the steady pace kicks in. With `Burst = 1` no budget accumulates and executions are strictly evenly spaced `T` apart.
 - **Reservations are per task**: the reserved slot is keyed by the task's persistence id, so a duplicate delivery of the same task *redeems* the same slot instead of consuming new budget.
 - **A deferral writes nothing to storage.** The only storage touch of a deferral cycle is the existing `SetQueued` when the slot fires. That write adds an audit row at `AuditLevel.Full`, so for heavily throttled task types we recommend `AuditLevel.Minimal`.
 - **Cancel works while parked**: `ITaskDispatcher.Cancel` drops the parked occurrence; a same-`taskKey` re-dispatch replaces the parked payload (latest wins, exactly once).
@@ -132,8 +178,8 @@ Deferrals are infrastructure routing: no handler callback fires for them (like t
 
 The limiter is in-memory: budgets and parked slots are lost on restart, while the tasks themselves are safe in storage (status `Queued`, covered by startup recovery).
 
-- After a restart, recovered tasks re-extract their policy/key on re-dispatch and **buckets restart full**: a backlog can burst up to ~2× `Burst` at the external API across the restart boundary (worst case).
-- Opt into `StartEmpty = true` to cap the post-restart burst: fresh buckets admit at the steady rate from the first execution. This also bounds the effect of a forward NTP clock jump.
+- After a restart, recovered tasks re-extract their policy/key on re-dispatch and **buckets restart full**: every key starts again with the whole `Burst` saved up. Worst case, a backlog can burst up to ~2× `Burst` at the external API across the restart boundary (full burst spent just before the restart + a fresh full burst right after).
+- Opt into `StartEmpty = true` to cap the post-restart burst: a fresh bucket starts with no saved-up budget, so the first execution runs immediately and every subsequent one is paced at the steady interval (`Period / Permits`). This also bounds the effect of a forward NTP clock jump.
 - A restart storm over a large parked backlog costs ~2 storage round-trips per task at `AuditLevel.Full`; it is bounded by the parking-lot cap, and `AuditLevel.Minimal` removes the audit rows.
 
 ## Multi-Instance
@@ -170,14 +216,24 @@ Per-handler policy (frozen API):
 public override RateLimitPolicy? RateLimitPolicy =>
     new RateLimitPolicy(permits: 15, period: TimeSpan.FromMinutes(1))
     {
-        Burst                 = 15,                       // ≥ 1, default = Permits
-        ThrottleRetries       = true,                     // retries re-acquire budget
-        StartEmpty            = false,                    // fresh buckets start full
+        Burst                 = 15,                       // max back-to-back executions (≥ 1, default: same as Permits)
+        ThrottleRetries       = true,                     // retry attempts consume budget too (default)
+        StartEmpty            = false,                    // new keys start with the full Burst saved up (default)
         MaxReservationHorizon = TimeSpan.FromHours(1),    // farther slots → terminal rejection
         MaxInSlotWait         = TimeSpan.FromSeconds(1),  // nearer slots → inline wait
         OverflowBehavior      = RateLimitOverflowBehavior.WaitForCapacity // or Discard
     };
 ```
+
+| Option | Default | What it does |
+|---|---|---|
+| `Permits` / `Period` | — (constructor) | The average rate: at most `Permits` executions per `Period` per key. Steady emission interval = `Period / Permits`. |
+| `Burst` | same value as `Permits` | Cap on the budget a key can save up while idle = max executions that may run back-to-back after a quiet stretch. `Permits` (default): the whole per-period budget can be spent at once; `1`: strictly even spacing, never two in a row. Does not change the average rate, only how bunched executions may be. |
+| `ThrottleRetries` | `true` | Retry attempts re-acquire budget before running, so retries of a rate-limited API call respect the same limit. `false`: retries bypass the limiter. |
+| `StartEmpty` | `false` | Budget of a brand-new bucket (first time a key is seen, or any key after a restart, since the limiter is in-memory). `false`: starts with the full `Burst` saved up, so the first `Burst` tasks run immediately. `true`: starts with nothing saved, so after the first task the steady pacing applies right away; this caps the post-restart spike. |
+| `MaxReservationHorizon` | 1 hour | If the next available slot for a key is farther away than this, the task is rejected instead of parked: one-shot tasks fail with `RateLimitRejectedException` (delivered to `OnError`), recurring occurrences are skipped. |
+| `MaxInSlotWait` | 1 second | If the reserved slot is at most this close, the consumer waits inline instead of re-parking through the scheduler. |
+| `OverflowBehavior` | `WaitForCapacity` | What happens when a key has no budget: `WaitForCapacity` reserves a slot and defers; `Discard` fails the task immediately (terminal `Failed`, typed exception to `OnError`). |
 
 Global infrastructure knobs:
 
