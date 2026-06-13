@@ -194,6 +194,10 @@ public class WorkerService(
             if (page.Length == 0)
                 break;
 
+            // The cutoff is a cheap first pass, not the correctness defense: a re-delivery that
+            // slips past it (same-instant tie, stale page) is rejected deterministically at the
+            // channel write by the TaskDeliveryRegistry, and a row that terminally finished
+            // since the page read is refused by the conditional SetQueued (QueueForRecovery).
             var pendingTasks = page.Where(t => t.CreatedAtUtc <= recoveryCutoff).ToArray();
 
             logger.LogInformation("Processing batch with {Count} pending tasks (lastCreatedAt={LastCreatedAt}, lastId={LastId})",

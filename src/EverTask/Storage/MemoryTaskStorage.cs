@@ -50,15 +50,9 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         {
             var now = DateTimeOffset.UtcNow;
 
-            // Recoverable statuses: same rules as EfCoreTaskStorage.RetrievePending (see comments there)
+            // Recoverable statuses: canonical predicate shared with every provider (QueuedTask.IsRecoverable)
             var pending = _pendingTasks
-                .Where(t => (t.MaxRuns == null || t.CurrentRunCount <= t.MaxRuns)
-                            && (t.RunUntil == null || t.RunUntil >= now)
-                            && (t.Status is QueuedTaskStatus.WaitingQueue or QueuedTaskStatus.Queued
-                                    or QueuedTaskStatus.Pending or QueuedTaskStatus.ServiceStopped
-                                    or QueuedTaskStatus.InProgress
-                                || (t.IsRecurring && t.NextRunUtc != null &&
-                                    t.Status is QueuedTaskStatus.Completed or QueuedTaskStatus.Failed)));
+                .Where(t => t.IsRecoverable(now));
 
             if (lastCreatedAt.HasValue)
             {
@@ -79,6 +73,31 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
     /// <inheritdoc />
     public Task SetQueued(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default) =>
         SetStatus(taskId, QueuedTaskStatus.Queued, null, auditLevel, null, ct);
+
+    /// <inheritdoc />
+    public Task<bool> TrySetQueuedIfRecoverable(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default)
+    {
+        // Atomic check-and-set under the store lock: the startup recovery must never resurrect a
+        // task that terminally finished after its page was read. Uses the canonical recoverable
+        // predicate (QueuedTask.IsRecoverable) so the MaxRuns/RunUntil guards can never drift from
+        // RetrievePending.
+        lock (_pendingTasksLock)
+        {
+            var task = _pendingTasks.FirstOrDefault(t => t.Id == taskId);
+
+            var recoverable = task != null && task.IsRecoverable(DateTimeOffset.UtcNow);
+
+            if (!recoverable)
+            {
+                logger.LogDebug("Task {taskId} is no longer recoverable, skipping SetQueued", taskId);
+                return Task.FromResult(false);
+            }
+
+            task!.Status = QueuedTaskStatus.Queued;
+        }
+
+        return Task.FromResult(true);
+    }
 
     /// <inheritdoc />
     public Task SetInProgress(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default) =>

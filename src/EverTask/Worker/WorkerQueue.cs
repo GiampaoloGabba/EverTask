@@ -12,10 +12,13 @@ public class WorkerQueue : IWorkerQueue
     private readonly IWorkerBlacklist _workerBlacklist;
     private readonly ITaskStorage? _taskStorage;
 
-    // PersistenceIds currently written to the channel and not yet dequeued.
-    // Prevents double execution when the same task is enqueued twice in this process
-    // (e.g. startup recovery racing a live dispatch of the same persisted task).
-    private readonly ConcurrentDictionary<Guid, byte> _inChannel = new();
+    // Per-process delivery registry: an id is registered from the channel write until its
+    // delivery terminally ends (WorkerExecutor.DoWork outer finally). A second write of the
+    // same id is rejected here, which makes in-process double delivery impossible by
+    // construction (startup recovery racing a live dispatch, scheduler slot fires, taskKey
+    // re-dispatch). Shared across all queues of the host; hand-constructed queues (tests)
+    // fall back to a private instance.
+    private readonly TaskDeliveryRegistry _deliveryRegistry;
 
     /// <summary>
     /// Gets the name of this queue.
@@ -47,15 +50,22 @@ public class WorkerQueue : IWorkerQueue
         QueueConfiguration configuration,
         ILogger logger,
         IWorkerBlacklist workerBlacklist,
-        ITaskStorage? taskStorage = null)
+        ITaskStorage? taskStorage = null,
+        TaskDeliveryRegistry? deliveryRegistry = null)
     {
         Configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _workerBlacklist = workerBlacklist ?? throw new ArgumentNullException(nameof(workerBlacklist));
         _taskStorage = taskStorage;
+        _deliveryRegistry = deliveryRegistry ?? new TaskDeliveryRegistry();
 
         Name = configuration.Name;
-        _queue = Channel.CreateBounded<TaskHandlerExecutor>(configuration.ChannelOptions);
+        // The itemDropped callback releases the delivery registration for items silently dropped
+        // by the Drop* full modes (never invoked under FullMode.Wait): without it a dropped item
+        // would leave its id permanently registered, blocking later re-deliveries
+        _queue = Channel.CreateBounded<TaskHandlerExecutor>(
+            configuration.ChannelOptions,
+            dropped => _deliveryRegistry.End(dropped.PersistenceId));
     }
 
     /// <summary>
@@ -83,18 +93,30 @@ public class WorkerQueue : IWorkerQueue
         };
     }
 
-    public async ValueTask Queue(TaskHandlerExecutor task, CancellationToken cancellationToken = default)
+    public ValueTask Queue(TaskHandlerExecutor task, CancellationToken cancellationToken = default)
+        => QueueCore(task, enforceRecoverable: false, cancellationToken);
+
+    /// <summary>
+    /// Blocking enqueue used by the startup recovery: the SetQueued transition is CONDITIONAL on
+    /// the row still being in a recoverable status, so a task whose live copy terminally finished
+    /// after the recovery's page read is never resurrected.
+    /// </summary>
+    internal ValueTask QueueForRecovery(TaskHandlerExecutor task, CancellationToken cancellationToken = default)
+        => QueueCore(task, enforceRecoverable: true, cancellationToken);
+
+    private async ValueTask QueueCore(TaskHandlerExecutor task, bool enforceRecoverable, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(task);
 
         if (_workerBlacklist.IsBlacklisted(task.PersistenceId))
             return;
 
-        // Already pending in the channel (duplicate enqueue of the same persisted task,
-        // e.g. recovery racing a live dispatch): idempotent no-op, single execution.
-        if (!_inChannel.TryAdd(task.PersistenceId, 0))
+        // A delivery of this id is already in flight in this process (in a channel or executing):
+        // idempotent no-op, single execution. This is the write-boundary defense against the
+        // recovery-vs-live-dispatch double delivery.
+        if (!_deliveryRegistry.TryBegin(task.PersistenceId))
         {
-            _logger.LogDebug("Task {TaskId} is already pending in queue '{QueueName}', skipping duplicate enqueue",
+            _logger.LogDebug("Task {TaskId} already has a delivery in flight, skipping duplicate enqueue to queue '{QueueName}'",
                 task.PersistenceId, Name);
             return;
         }
@@ -103,13 +125,27 @@ public class WorkerQueue : IWorkerQueue
         {
             try
             {
-                await _taskStorage.SetQueued(task.PersistenceId, task.AuditLevel, cancellationToken).ConfigureAwait(false);
+                if (enforceRecoverable)
+                {
+                    // Refused transition = the row terminally finished since the recovery read it:
+                    // release the registration and skip (nothing was written anywhere)
+                    if (!await _taskStorage.TrySetQueuedIfRecoverable(task.PersistenceId, task.AuditLevel, cancellationToken).ConfigureAwait(false))
+                    {
+                        _deliveryRegistry.End(task.PersistenceId);
+                        _logger.LogDebug("Task {TaskId} is no longer recoverable, recovery enqueue skipped", task.PersistenceId);
+                        return;
+                    }
+                }
+                else
+                {
+                    await _taskStorage.SetQueued(task.PersistenceId, task.AuditLevel, cancellationToken).ConfigureAwait(false);
+                }
             }
             catch
             {
                 // Storage failure before the write: the task was never enqueued, the status is
                 // untouched (still recoverable). Propagate without marking Failed.
-                _inChannel.TryRemove(task.PersistenceId, out _);
+                _deliveryRegistry.End(task.PersistenceId);
                 throw;
             }
         }
@@ -125,7 +161,7 @@ public class WorkerQueue : IWorkerQueue
             // The caller abandoned the wait (aborted request or host shutdown).
             // The task is persisted with status Queued and is re-enqueued by startup recovery,
             // so it must NOT be marked as failed here.
-            _inChannel.TryRemove(task.PersistenceId, out _);
+            _deliveryRegistry.End(task.PersistenceId);
             _logger.LogWarning(
                 "Enqueue of task {TaskId} to queue '{QueueName}' was cancelled while waiting for space. " +
                 "The task remains persisted and will be recovered at startup", task.PersistenceId, Name);
@@ -133,7 +169,7 @@ public class WorkerQueue : IWorkerQueue
         }
         catch (Exception e)
         {
-            _inChannel.TryRemove(task.PersistenceId, out _);
+            _deliveryRegistry.End(task.PersistenceId);
             _logger.LogError(e, "Unable to queue task with id {TaskId} to queue '{QueueName}'", task.PersistenceId, Name);
             if (_taskStorage != null)
                 await _taskStorage.SetStatus(task.PersistenceId, QueuedTaskStatus.Failed, e, task.AuditLevel).ConfigureAwait(false);
@@ -158,13 +194,15 @@ public class WorkerQueue : IWorkerQueue
             return EnqueueResult.QueueFull;
         }
 
-        // Already pending in the channel (duplicate enqueue of the same persisted task):
-        // idempotent success, single execution.
-        if (!_inChannel.TryAdd(task.PersistenceId, 0))
+        // A delivery of this id is already in flight in this process: NOT a success lie — the
+        // caller decides (schedulers retry shortly like QueueFull, because their slot may have
+        // fired while the previous delivery of the same task was still unwinding; live dispatch
+        // treats it as idempotent success).
+        if (!_deliveryRegistry.TryBegin(task.PersistenceId))
         {
-            _logger.LogDebug("Task {TaskId} is already pending in queue '{QueueName}', skipping duplicate enqueue",
+            _logger.LogDebug("Task {TaskId} already has a delivery in flight, not enqueued to queue '{QueueName}'",
                 task.PersistenceId, Name);
-            return EnqueueResult.Enqueued;
+            return EnqueueResult.DuplicateInProcess;
         }
 
         // Mark as Queued BEFORE writing: once the task is in the channel a consumer can execute it
@@ -179,7 +217,7 @@ public class WorkerQueue : IWorkerQueue
             catch
             {
                 // Storage failure before the write: nothing was enqueued, status untouched (recoverable)
-                _inChannel.TryRemove(task.PersistenceId, out _);
+                _deliveryRegistry.End(task.PersistenceId);
                 throw;
             }
         }
@@ -193,7 +231,7 @@ public class WorkerQueue : IWorkerQueue
 
         // The queue filled up between the capacity check and the write: revert to WaitingQueue
         // so the task stays visible to startup recovery instead of looking enqueued forever.
-        _inChannel.TryRemove(task.PersistenceId, out _);
+        _deliveryRegistry.End(task.PersistenceId);
         _logger.LogDebug("Queue '{QueueName}' is full, cannot enqueue task {TaskId}", Name, task.PersistenceId);
 
         if (_taskStorage != null)
@@ -215,20 +253,16 @@ public class WorkerQueue : IWorkerQueue
         return EnqueueResult.QueueFull;
     }
 
+    // NOTE: dequeue does NOT release the delivery registration. The registration survives the
+    // dequeue->execution window on purpose (it is what makes a concurrent recovery re-delivery
+    // impossible) and is released as the LAST act of WorkerExecutor.DoWork.
     public async Task<TaskHandlerExecutor> Dequeue(CancellationToken cancellationToken)
     {
-        var item = await _queue.Reader.ReadAsync(cancellationToken).ConfigureAwait(false);
-        _inChannel.TryRemove(item.PersistenceId, out _);
-        return item;
+        return await _queue.Reader.ReadAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async IAsyncEnumerable<TaskHandlerExecutor> DequeueAll(
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+    public IAsyncEnumerable<TaskHandlerExecutor> DequeueAll(CancellationToken cancellationToken)
     {
-        await foreach (var item in _queue.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
-        {
-            _inChannel.TryRemove(item.PersistenceId, out _);
-            yield return item;
-        }
+        return _queue.Reader.ReadAllAsync(cancellationToken);
     }
 }

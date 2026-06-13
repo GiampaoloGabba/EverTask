@@ -155,6 +155,81 @@ public abstract class EfCoreTaskStorageTestsBase
     }
 
     [Fact]
+    public async Task Should_TrySetQueuedIfRecoverable_transition_only_recoverable_tasks()
+    {
+        var queued = QueuedTasks[0];
+        await _storage.Persist(queued);
+        var taskId = (await _storage.Get(x => x.Id == queued.Id))[0].Id;
+
+        // Recoverable status: the conditional transition succeeds
+        (await _storage.TrySetQueuedIfRecoverable(taskId, AuditLevel.Full)).ShouldBeTrue();
+        (await _storage.Get(x => x.Id == taskId))[0].Status.ShouldBe(QueuedTaskStatus.Queued);
+
+        // Terminal status (non-recurring Completed): the transition is REFUSED and the status
+        // stays untouched — the startup recovery must never resurrect a finished task
+        await _storage.SetCompleted(taskId, 10.0, AuditLevel.Full);
+        (await _storage.TrySetQueuedIfRecoverable(taskId, AuditLevel.Full)).ShouldBeFalse();
+        (await _storage.Get(x => x.Id == taskId))[0].Status.ShouldBe(QueuedTaskStatus.Completed);
+    }
+
+    [Fact]
+    public async Task Should_TrySetQueuedIfRecoverable_apply_RunUntil_and_MaxRuns_guards()
+    {
+        // The conditional transition must apply the SAME MaxRuns/RunUntil guards as RetrievePending
+        // (canonical QueuedTask.IsRecoverable), on every provider: the atomic UPDATE on SQL Server,
+        // the client-side override on SQLite, the client-side fallback on EF Core InMemory.
+        var now = DateTimeOffset.UtcNow;
+
+        // Recurring task between runs but past its RunUntil: must NOT be resurrected
+        var pastRunUntil = new QueuedTask
+        {
+            Id           = GetGuidForProvider(),
+            CreatedAtUtc = now,
+            Type         = "RecPastRunUntil", Request = "{}", Handler = "H",
+            Status       = QueuedTaskStatus.Completed,
+            IsRecurring  = true,
+            NextRunUtc   = now.AddMinutes(5),
+            RunUntil     = now.AddMinutes(-5)
+        };
+        await _storage.Persist(pastRunUntil);
+        (await _storage.TrySetQueuedIfRecoverable(pastRunUntil.Id, AuditLevel.Full)).ShouldBeFalse();
+        (await _storage.Get(x => x.Id == pastRunUntil.Id))[0].Status.ShouldBe(QueuedTaskStatus.Completed);
+
+        // Recurring task that exhausted MaxRuns: must NOT be resurrected
+        var exhausted = new QueuedTask
+        {
+            Id              = GetGuidForProvider(),
+            CreatedAtUtc    = now,
+            Type            = "RecMaxRuns", Request = "{}", Handler = "H",
+            Status          = QueuedTaskStatus.Completed,
+            IsRecurring     = true,
+            NextRunUtc      = now.AddMinutes(5),
+            MaxRuns         = 3,
+            CurrentRunCount = 4
+        };
+        await _storage.Persist(exhausted);
+        (await _storage.TrySetQueuedIfRecoverable(exhausted.Id, AuditLevel.Full)).ShouldBeFalse();
+        (await _storage.Get(x => x.Id == exhausted.Id))[0].Status.ShouldBe(QueuedTaskStatus.Completed);
+
+        // Recurring task within both bounds: recoverable
+        var recoverable = new QueuedTask
+        {
+            Id              = GetGuidForProvider(),
+            CreatedAtUtc    = now,
+            Type            = "RecOk", Request = "{}", Handler = "H",
+            Status          = QueuedTaskStatus.Completed,
+            IsRecurring     = true,
+            NextRunUtc      = now.AddMinutes(5),
+            RunUntil        = now.AddMinutes(10),
+            MaxRuns         = 10,
+            CurrentRunCount = 1
+        };
+        await _storage.Persist(recoverable);
+        (await _storage.TrySetQueuedIfRecoverable(recoverable.Id, AuditLevel.Full)).ShouldBeTrue();
+        (await _storage.Get(x => x.Id == recoverable.Id))[0].Status.ShouldBe(QueuedTaskStatus.Queued);
+    }
+
+    [Fact]
     public async Task Should_SetTaskInProgress()
     {
         var queued = QueuedTasks[0];

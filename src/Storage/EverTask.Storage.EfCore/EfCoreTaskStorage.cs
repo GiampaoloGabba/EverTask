@@ -14,6 +14,25 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     /// </summary>
     private static DateTimeOffset UtcNowNormalized => new(DateTime.UtcNow, TimeSpan.Zero);
 
+    /// <summary>
+    /// Canonical recoverable predicate as an EF-translatable expression: the server-side mirror of
+    /// <see cref="QueuedTask.IsRecoverable"/>, shared by <see cref="RetrievePending"/> and
+    /// <see cref="TrySetQueuedIfRecoverable"/> so the two queries can never drift. SQLite cannot
+    /// translate the <c>RunUntil</c> DateTimeOffset comparison and overrides both methods to
+    /// evaluate the predicate client-side.
+    /// </summary>
+    private static Expression<Func<QueuedTask, bool>> RecoverableQuery(DateTimeOffset now) =>
+        t => (t.MaxRuns == null || t.CurrentRunCount <= t.MaxRuns)
+             && (t.RunUntil == null || t.RunUntil >= now)
+             && (t.Status == QueuedTaskStatus.WaitingQueue ||
+                 t.Status == QueuedTaskStatus.Queued ||
+                 t.Status == QueuedTaskStatus.Pending ||
+                 t.Status == QueuedTaskStatus.ServiceStopped ||
+                 t.Status == QueuedTaskStatus.InProgress ||
+                 (t.IsRecurring && t.NextRunUtc != null &&
+                  (t.Status == QueuedTaskStatus.Completed ||
+                   t.Status == QueuedTaskStatus.Failed)));
+
     public virtual async Task<QueuedTask[]> Get(Expression<Func<QueuedTask, bool>> where,
                                                 CancellationToken ct = default)
     {
@@ -58,7 +77,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
         var now = UtcNowNormalized;
 
-        // Recoverable statuses:
+        // Recoverable statuses (see QueuedTask.IsRecoverable for the canonical definition):
         // - WaitingQueue: persisted but never delivered to a worker queue (parked in the in-memory
         //   scheduler at shutdown, or dropped by a full queue) - without it delayed tasks are lost on restart
         // - Queued: written to the in-memory channel but not executed before shutdown
@@ -68,16 +87,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         //   them a recurring task not re-registered at startup dies after the first restart
         var query = dbContext.QueuedTasks
                              .AsNoTracking()
-                             .Where(t => (t.MaxRuns == null || t.CurrentRunCount <= t.MaxRuns)
-                                         && (t.RunUntil == null || t.RunUntil >= now)
-                                         && (t.Status == QueuedTaskStatus.WaitingQueue ||
-                                             t.Status == QueuedTaskStatus.Queued ||
-                                             t.Status == QueuedTaskStatus.Pending ||
-                                             t.Status == QueuedTaskStatus.ServiceStopped ||
-                                             t.Status == QueuedTaskStatus.InProgress ||
-                                             (t.IsRecurring && t.NextRunUtc != null &&
-                                              (t.Status == QueuedTaskStatus.Completed ||
-                                               t.Status == QueuedTaskStatus.Failed))));
+                             .Where(RecoverableQuery(now));
 
         if (lastCreatedAt.HasValue)
         {
@@ -99,6 +109,95 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
     public async Task SetQueued(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default) =>
         await SetStatus(taskId, QueuedTaskStatus.Queued, null, auditLevel, null, ct).ConfigureAwait(false);
+
+    /// <inheritdoc />
+    public virtual async Task<bool> TrySetQueuedIfRecoverable(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default)
+    {
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+
+        var now = UtcNowNormalized;
+
+        // Atomic conditional UPDATE: the startup recovery must never resurrect a task that
+        // terminally finished after its page was read (SetQueued over Completed would cause a
+        // second execution). Recoverable predicate shared with RetrievePending (RecoverableQuery).
+        bool transitioned;
+        try
+        {
+            var rowsAffected = await dbContext.QueuedTasks
+                .Where(t => t.Id == taskId)
+                .Where(RecoverableQuery(now))
+                .ExecuteUpdateAsync(s => s.SetProperty(t => t.Status, QueuedTaskStatus.Queued), ct)
+                .ConfigureAwait(false);
+
+            transitioned = rowsAffected > 0;
+        }
+        catch (InvalidOperationException ex)
+        {
+            // Provider that cannot translate the conditional UPDATE (EF Core InMemory: no
+            // ExecuteUpdate). SQLite never reaches here — it overrides this method to skip the
+            // untranslatable RunUntil comparison. SQL Server keeps the atomic UPDATE above, so a
+            // fallback there would signal a real translation/provider problem worth surfacing.
+            logger.LogDebug(ex, "TrySetQueuedIfRecoverable falling back to client-side check for task {taskId}", taskId);
+            transitioned = await TrySetQueuedClientSideAsync(dbContext, taskId, now, ct).ConfigureAwait(false);
+        }
+
+        if (!transitioned)
+        {
+            logger.LogDebug("Task {taskId} is no longer recoverable, skipping SetQueued", taskId);
+            return false;
+        }
+
+        await WriteQueuedTransitionAuditAsync(dbContext, taskId, auditLevel, ct).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Non-atomic recoverable transition evaluated client-side, for providers that cannot translate
+    /// the conditional UPDATE (EF Core InMemory, SQLite). Loads the task, applies the canonical
+    /// <see cref="QueuedTask.IsRecoverable"/> predicate and, only if recoverable, sets it Queued.
+    /// </summary>
+    protected static async Task<bool> TrySetQueuedClientSideAsync(ITaskStoreDbContext dbContext, Guid taskId,
+                                                                  DateTimeOffset now, CancellationToken ct)
+    {
+        var tracked = await dbContext.QueuedTasks
+            .FirstOrDefaultAsync(t => t.Id == taskId, ct).ConfigureAwait(false);
+
+        if (tracked == null || !tracked.IsRecoverable(now))
+            return false;
+
+        tracked.Status = QueuedTaskStatus.Queued;
+        await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Writes the Queued status audit for a recovery transition. Audited only AFTER the transition
+    /// actually happened (unlike <see cref="SetStatus"/>, which audits optimistically): a refused
+    /// transition must leave no trace.
+    /// </summary>
+    protected async Task WriteQueuedTransitionAuditAsync(ITaskStoreDbContext dbContext, Guid taskId,
+                                                         AuditLevel auditLevel, CancellationToken ct)
+    {
+        if (!ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Queued, null))
+            return;
+
+        dbContext.StatusAudit.Add(new StatusAudit
+        {
+            QueuedTaskId = taskId,
+            UpdatedAtUtc = UtcNowNormalized,
+            NewStatus    = QueuedTaskStatus.Queued,
+            Exception    = null
+        });
+
+        try
+        {
+            await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception e)
+        {
+            logger.LogWarning(e, "Unable to save the audit status for taskId {taskId}", taskId);
+        }
+    }
 
     public async Task SetInProgress(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default) =>
         await SetStatus(taskId, QueuedTaskStatus.InProgress, null, auditLevel, null, ct).ConfigureAwait(false);

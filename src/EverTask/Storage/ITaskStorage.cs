@@ -54,6 +54,25 @@ public interface ITaskStorage
     Task SetQueued(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default);
 
     /// <summary>
+    /// Sets a task's status to queued ONLY if it is still in a recoverable status (the same
+    /// statuses <see cref="RetrievePending"/> returns). Used by the startup recovery so that a
+    /// row whose live copy terminally finished between the recovery's page read and its
+    /// re-dispatch is never resurrected (SetQueued over Completed = a second execution).
+    /// </summary>
+    /// <remarks>
+    /// Implementations should make the check-and-set atomic (a conditional UPDATE). The default
+    /// implementation falls back to an unconditional <see cref="SetQueued"/> (pre-existing
+    /// behavior) for custom storages that have not implemented it yet.
+    /// </remarks>
+    /// <returns>True when the task was set to queued; false when it was skipped because it is
+    /// no longer recoverable.</returns>
+    async Task<bool> TrySetQueuedIfRecoverable(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default)
+    {
+        await SetQueued(taskId, auditLevel, ct).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
     /// Sets a task's status to in progress.
     /// </summary>
     /// <param name="taskId">The ID of the task.</param>

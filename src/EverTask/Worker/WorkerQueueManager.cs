@@ -18,7 +18,8 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
         IWorkerBlacklist blacklist,
         ILoggerFactory loggerFactory,
         ITaskStorage? taskStorage = null,
-        RateLimitParkingLot? parkingLot = null)
+        RateLimitParkingLot? parkingLot = null,
+        TaskDeliveryRegistry? deliveryRegistry = null)
     {
         _configurations = configurations ?? throw new ArgumentNullException(nameof(configurations));
         _logger         = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -27,11 +28,16 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
         var blacklist1     = blacklist ?? throw new ArgumentNullException(nameof(blacklist));
         var loggerFactory1 = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
 
+        // ONE delivery registry shared by every queue of this host: the in-process
+        // double-delivery defense must be global (a task rerouted to another queue is the
+        // same task)
+        var registry = deliveryRegistry ?? new TaskDeliveryRegistry();
+
         // Initialize all configured queues
         foreach (var (name, config) in configurations)
         {
             var queueLogger = loggerFactory1.CreateLogger($"EverTask.Worker.WorkerQueue.{name}");
-            var queue       = new WorkerQueue(config, queueLogger, blacklist1, taskStorage) { ParkingLot = parkingLot };
+            var queue       = new WorkerQueue(config, queueLogger, blacklist1, taskStorage, registry) { ParkingLot = parkingLot };
             _queues[name] = queue;
         }
 
@@ -48,7 +54,7 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
                 }
             };
             var queueLogger = loggerFactory1.CreateLogger("EverTask.Worker.WorkerQueue.default");
-            _queues[QueueNames.Default] = new WorkerQueue(defaultConfig, queueLogger, blacklist1, taskStorage)
+            _queues[QueueNames.Default] = new WorkerQueue(defaultConfig, queueLogger, blacklist1, taskStorage, registry)
             {
                 ParkingLot = parkingLot
             };
@@ -88,6 +94,7 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
                     switch (await targetQueue.TryQueue(task, cancellationToken).ConfigureAwait(false))
                     {
                         case EnqueueResult.Enqueued:
+                        case EnqueueResult.DuplicateInProcess: // already in flight: idempotent success
                             return true;
                         case EnqueueResult.QueueFull:
                             throw new QueueFullException(targetQueueName, task.PersistenceId);
@@ -100,6 +107,8 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
                     switch (await targetQueue.TryQueue(task, cancellationToken).ConfigureAwait(false))
                     {
                         case EnqueueResult.Enqueued:
+                            return true;
+                        case EnqueueResult.DuplicateInProcess: // already in flight: must NOT be re-routed
                             return true;
                         case EnqueueResult.Discarded: // blacklisted: must not be re-routed
                             return false;
@@ -154,7 +163,15 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
     public async Task EnqueueBlocking(string? queueName, TaskHandlerExecutor task, CancellationToken cancellationToken = default)
     {
         var (targetQueue, _, _) = ResolveQueue(queueName, task);
-        await targetQueue.Queue(task, cancellationToken).ConfigureAwait(false);
+
+        // EnqueueBlocking is the startup-recovery entry point: the SetQueued transition must be
+        // conditional on the row still being recoverable (a live copy may have terminally
+        // finished after the recovery's page read). Custom IWorkerQueue implementations fall
+        // back to the plain blocking enqueue.
+        if (targetQueue is WorkerQueue workerQueue)
+            await workerQueue.QueueForRecovery(task, cancellationToken).ConfigureAwait(false);
+        else
+            await targetQueue.Queue(task, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>

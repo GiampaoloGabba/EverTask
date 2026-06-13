@@ -1,3 +1,4 @@
+using EverTask.Abstractions;
 using EverTask.Logger;
 using EverTask.Storage.EfCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -62,5 +63,25 @@ public class SqliteTaskStorage : EfCoreTaskStorage
             .ToArray();
 
         return filtered;
+    }
+
+    /// <summary>
+    /// Evaluates the recoverable predicate client-side. The base conditional UPDATE compares
+    /// <c>RunUntil</c> (DateTimeOffset), which SQLite cannot translate — the same limitation that
+    /// forces the RetrievePending override. Going through the base method would throw and fall back
+    /// on every single recovered task; this override skips the untranslatable query entirely.
+    /// </summary>
+    public override async Task<bool> TrySetQueuedIfRecoverable(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default)
+    {
+        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct);
+
+        if (!await TrySetQueuedClientSideAsync(dbContext, taskId, DateTimeOffset.UtcNow, ct).ConfigureAwait(false))
+        {
+            _logger.LogDebug("Task {taskId} is no longer recoverable, skipping SetQueued", taskId);
+            return false;
+        }
+
+        await WriteQueuedTransitionAuditAsync(dbContext, taskId, auditLevel, ct).ConfigureAwait(false);
+        return true;
     }
 }

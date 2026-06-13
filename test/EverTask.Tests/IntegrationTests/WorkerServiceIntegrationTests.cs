@@ -359,8 +359,21 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         var pt = await Storage.RetrievePending(null, null, 10);
         pt.Length.ShouldBe(2);
 
-        // NOW start the host - it should pick up the pending tasks and execute them
-        await Host!.StartAsync();
+        // The manual dequeues above simulate a process that persisted the tasks but lost them
+        // before executing (crash after dequeue). Their delivery registrations stay held in the
+        // first host (the startup recovery must not double-deliver an id whose delivery is in
+        // flight — see TaskDeliveryRegistry), so the rescue happens at the NEXT startup:
+        // simulate it with a fresh host on the same storage.
+        var sharedStorage = Storage;
+        await CreateIsolatedHostWithBuilderAsync(
+            b =>
+            {
+                b.AddMemoryStorage();
+                b.Services.AddSingleton<ITaskStorage>(sharedStorage);
+            },
+            configureEverTask: cfg => cfg
+                .SetChannelOptions(3)
+                .SetMaxDegreeOfParallelism(3));
 
         // Wait for both tasks to complete using intelligent polling
         await WaitForTaskStatusAsync(task1Id, QueuedTaskStatus.Completed);

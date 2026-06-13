@@ -33,7 +33,8 @@ public class WorkerQueueResilienceTests
         int capacity,
         ITaskStorage? storage = null,
         IWorkerBlacklist? blacklist = null,
-        QueueFullBehavior fullBehavior = QueueFullBehavior.Wait)
+        QueueFullBehavior fullBehavior = QueueFullBehavior.Wait,
+        TaskDeliveryRegistry? registry = null)
     {
         var config = new QueueConfiguration
         {
@@ -42,25 +43,58 @@ public class WorkerQueueResilienceTests
             ChannelOptions = new BoundedChannelOptions(capacity) { FullMode = BoundedChannelFullMode.Wait },
             QueueFullBehavior = fullBehavior
         };
-        return new WorkerQueue(config, Mock.Of<ILogger>(), blacklist ?? Mock.Of<IWorkerBlacklist>(), storage);
+        return new WorkerQueue(config, Mock.Of<ILogger>(), blacklist ?? Mock.Of<IWorkerBlacklist>(), storage, registry);
     }
 
     [Fact]
-    public async Task Should_skip_duplicate_try_enqueue_when_task_already_in_channel()
+    public async Task Should_reject_duplicate_try_enqueue_while_delivery_is_in_flight()
     {
-        var queue = CreateQueue(capacity: 5);
-        var task  = CreateExecutor();
+        var registry = new TaskDeliveryRegistry();
+        var queue    = CreateQueue(capacity: 5, registry: registry);
+        var task     = CreateExecutor();
 
         (await queue.TryQueue(task)).ShouldBe(EnqueueResult.Enqueued);
         // Duplicate delivery of the same persisted task (e.g. recovery racing a live dispatch):
-        // idempotent success, single channel entry.
-        (await queue.TryQueue(task)).ShouldBe(EnqueueResult.Enqueued);
+        // rejected at the write boundary, single channel entry.
+        (await queue.TryQueue(task)).ShouldBe(EnqueueResult.DuplicateInProcess);
         queue.Count.ShouldBe(1);
 
-        // Once dequeued, the same id can be legitimately enqueued again (e.g. next delivery).
+        // The registration SURVIVES the dequeue (it covers the dequeue->execution window):
+        // a re-delivery is still rejected while the task would be executing.
         await queue.Dequeue(CancellationToken.None);
         queue.Count.ShouldBe(0);
+        registry.IsDelivering(task.PersistenceId).ShouldBeTrue();
+        (await queue.TryQueue(task)).ShouldBe(EnqueueResult.DuplicateInProcess);
+
+        // Only the delivery's End (WorkerExecutor.DoWork outer finally) frees the id.
+        registry.End(task.PersistenceId);
         (await queue.TryQueue(task)).ShouldBe(EnqueueResult.Enqueued);
+        queue.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Should_release_registration_when_channel_drops_item_in_drop_mode()
+    {
+        // Drop* full modes silently discard items: the itemDropped callback must release the
+        // delivery registration, or the dropped id would stay registered forever and block
+        // every later re-delivery of the same task.
+        var registry = new TaskDeliveryRegistry();
+        var config = new QueueConfiguration
+        {
+            Name = "drop",
+            MaxDegreeOfParallelism = 1,
+            ChannelOptions = new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropOldest }
+        };
+        var queue = new WorkerQueue(config, Mock.Of<ILogger>(), Mock.Of<IWorkerBlacklist>(), null, registry);
+
+        var first  = CreateExecutor();
+        var second = CreateExecutor();
+
+        (await queue.TryQueue(first)).ShouldBe(EnqueueResult.Enqueued);
+        (await queue.TryQueue(second)).ShouldBe(EnqueueResult.Enqueued); // capacity 1: drops first
+
+        registry.IsDelivering(first.PersistenceId).ShouldBeFalse();  // released by itemDropped
+        registry.IsDelivering(second.PersistenceId).ShouldBeTrue();
         queue.Count.ShouldBe(1);
     }
 

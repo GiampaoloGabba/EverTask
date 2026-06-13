@@ -239,13 +239,15 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
 
             var result = await DispatchToWorkerQueue(item).ConfigureAwait(false);
 
-            if (result == EnqueueResult.QueueFull)
+            if (result is EnqueueResult.QueueFull or EnqueueResult.DuplicateInProcess)
             {
-                // Target queue saturated: park the task and retry later WITHOUT blocking the loop,
-                // so tasks targeting other queues keep flowing (no head-of-line blocking).
+                // QueueFull: target queue saturated. DuplicateInProcess: our slot fired while the
+                // previous delivery of the same task was still unwinding (its registration not
+                // yet released). Either way: park the task and retry later WITHOUT blocking the
+                // loop, so tasks targeting other queues keep flowing (no head-of-line blocking).
                 _logger.LogWarning(
-                    "Queue for task {TaskId} is full, retrying dispatch in {RetryDelay}",
-                    item.PersistenceId, FullQueueRetryDelay);
+                    "Task {TaskId} not enqueued ({Result}), retrying dispatch in {RetryDelay}",
+                    item.PersistenceId, result, FullQueueRetryDelay);
                 _queue.Enqueue(item, DateTimeOffset.UtcNow + FullQueueRetryDelay);
             }
             else

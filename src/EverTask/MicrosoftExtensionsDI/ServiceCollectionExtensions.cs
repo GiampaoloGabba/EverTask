@@ -97,6 +97,7 @@ public static class ServiceCollectionExtensions
         }
 
         services.TryAddSingleton<IGateInvalidationRegistry, GateInvalidationRegistry>();
+        services.TryAddSingleton<TaskDeliveryRegistry>();
         services.TryAddSingleton<ITaskDispatcherInternal, Dispatcher>();
         services.TryAddSingleton<ITaskDispatcher>(provider => provider.GetRequiredService<ITaskDispatcherInternal>());
         services.TryAddSingleton<ICancellationSourceProvider, CancellationSourceProvider>();
@@ -154,7 +155,8 @@ public static class ServiceCollectionExtensions
             var loggerFactory = provider.GetRequiredService<ILoggerFactory>();
             var taskStorage = provider.GetService<ITaskStorage>();
             var parkingLot = provider.GetService<RateLimitParkingLot>();
-            return new WorkerQueueManager(options.Queues, logger, blacklist, loggerFactory, taskStorage, parkingLot);
+            var deliveryRegistry = provider.GetRequiredService<TaskDeliveryRegistry>();
+            return new WorkerQueueManager(options.Queues, logger, blacklist, loggerFactory, taskStorage, parkingLot, deliveryRegistry);
         });
 
         // Register backward compatibility IWorkerQueue (points to default queue)

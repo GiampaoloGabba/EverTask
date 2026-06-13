@@ -212,12 +212,14 @@ public class ShardedScheduler : IScheduler, IDisposable
 
                 var result = await DispatchToWorkerQueue(item).ConfigureAwait(false);
 
-                if (result == EnqueueResult.QueueFull)
+                if (result is EnqueueResult.QueueFull or EnqueueResult.DuplicateInProcess)
                 {
-                    // Target queue saturated: retry later without stalling this shard
+                    // QueueFull: target queue saturated. DuplicateInProcess: slot fired while the
+                    // previous delivery of the same task was still unwinding. Retry later without
+                    // stalling this shard.
                     _logger.LogWarning(
-                        "Shard {ShardId}: Queue for task {TaskId} is full, retrying dispatch in {RetryDelay}",
-                        _shardId, item.PersistenceId, _owner.FullQueueRetryDelay);
+                        "Shard {ShardId}: task {TaskId} not enqueued ({Result}), retrying dispatch in {RetryDelay}",
+                        _shardId, item.PersistenceId, result, _owner.FullQueueRetryDelay);
                     _queue.Enqueue(item, DateTimeOffset.UtcNow + _owner.FullQueueRetryDelay);
                 }
                 else

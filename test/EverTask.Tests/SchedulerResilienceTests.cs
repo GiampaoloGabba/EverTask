@@ -183,6 +183,57 @@ public class SchedulerResilienceTests
     }
 
     [Fact]
+    public async Task Should_retry_dispatch_when_previous_delivery_is_still_unwinding()
+    {
+        // DuplicateInProcess: the slot fired while the previous delivery of the same task was
+        // still unwinding (its registration not yet released by DoWork's outer finally). The
+        // scheduler must retry like a full queue — treating it as success would consume the
+        // scheduler registration and strand the only live copy until restart.
+        var calls = 0;
+        var mock = CreateManagerMock(_ =>
+            Interlocked.Increment(ref calls) <= 2 ? EnqueueResult.DuplicateInProcess : EnqueueResult.Enqueued);
+
+        using var scheduler = new PeriodicTimerScheduler(
+            mock.Object,
+            new Mock<IEverTaskLogger<PeriodicTimerScheduler>>().Object,
+            TimeSpan.FromMilliseconds(50))
+        {
+            FullQueueRetryDelay = TimeSpan.FromMilliseconds(100)
+        };
+
+        scheduler.Schedule(CreateExecutor(DateTimeOffset.UtcNow.AddMilliseconds(50)));
+
+        await TaskWaitHelper.WaitForConditionAsync(() => calls >= 3, timeoutMs: 5000);
+
+        await Task.Delay(500);
+        calls.ShouldBe(3);
+    }
+
+    [Fact]
+    public async Task Should_retry_dispatch_when_previous_delivery_is_still_unwinding_on_sharded_scheduler()
+    {
+        var calls = 0;
+        var mock = CreateManagerMock(_ =>
+            Interlocked.Increment(ref calls) <= 2 ? EnqueueResult.DuplicateInProcess : EnqueueResult.Enqueued);
+
+        using var scheduler = new ShardedScheduler(
+            mock.Object,
+            new Mock<IEverTaskLogger<ShardedScheduler>>().Object,
+            null,
+            shardCount: 4)
+        {
+            FullQueueRetryDelay = TimeSpan.FromMilliseconds(100)
+        };
+
+        scheduler.Schedule(CreateExecutor(DateTimeOffset.UtcNow.AddMilliseconds(50)));
+
+        await TaskWaitHelper.WaitForConditionAsync(() => calls >= 3, timeoutMs: 5000);
+
+        await Task.Delay(500);
+        calls.ShouldBe(3);
+    }
+
+    [Fact]
     public async Task Should_not_retry_dispatch_when_cancelled_by_shutdown()
     {
         var calls = 0;

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using EverTask.Configuration;
+using EverTask.Dispatcher;
 using EverTask.Scheduler;
 using EverTask.Scheduler.Recurring;
 using EverTask.Scheduler.Recurring.Intervals;
@@ -456,5 +457,112 @@ public class QueueResilienceIntegrationTests : IsolatedIntegrationTestBase
         });
 
         await WaitForRecurringRunsAsync(taskId, expectedRuns: 2, timeoutMs: 20000);
+    }
+
+
+
+    [Fact]
+    public async Task Should_register_delivery_until_execution_ends()
+    {
+        await CreateIsolatedHostWithBuilderAsync(b =>
+            {
+                b.AddMemoryStorage();
+                b.Services.AddSingleton(_state);
+            },
+            startHost: false);
+
+        var registry = Host!.Services.GetRequiredService<TaskDeliveryRegistry>();
+        var taskId   = await Dispatcher.Dispatch(new ResilienceCounterTask(1));
+
+        // Written to the channel, not yet executed: the delivery is in flight
+        registry.IsDelivering(taskId).ShouldBeTrue();
+
+        await Host.StartAsync();
+        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed, timeoutMs: 10000);
+
+        // The delivery End is the LAST act of DoWork: poll briefly for the release
+        await TaskWaitHelper.WaitForConditionAsync(() => !registry.IsDelivering(taskId), timeoutMs: 5000);
+    }
+
+    [Fact]
+    public async Task Should_reject_recovery_redelivery_while_live_copy_is_executing()
+    {
+        // The write-boundary defense: a recovery-style re-dispatch of a task whose live copy is
+        // currently executing must be rejected at the channel write, deterministically, with no
+        // dependence on cutoff timestamps (the original recovery-race produced a duplicate
+        // delivery exactly in this state).
+        await CreateIsolatedHostWithBuilderAsync(b =>
+        {
+            b.AddMemoryStorage();
+            b.Services.AddSingleton(_state);
+        });
+
+        var taskId = await Dispatcher.Dispatch(new ResilienceBlockingTask());
+        (await _state.BlockingEntered.WaitAsync(TimeSpan.FromSeconds(5))).ShouldBeTrue();
+
+        // Simulate the startup recovery re-delivering the same persisted row (stale page read)
+        var dispatcherInternal = Host!.Services.GetRequiredService<ITaskDispatcherInternal>();
+        await dispatcherInternal.ExecuteDispatch(new ResilienceBlockingTask(),
+            executionTime: null, recurring: null, currentRun: null,
+            ct: CancellationToken.None, existingTaskId: taskId, isRecovery: true);
+
+        // The redelivery was rejected at the write: no second handler entered
+        (await _state.BlockingEntered.WaitAsync(TimeSpan.FromMilliseconds(500))).ShouldBeFalse();
+
+        _state.BlockingGate.Release(10);
+        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed, timeoutMs: 10000);
+        _state.BlockingCompleted.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Should_not_register_delivery_when_live_enqueue_fails_on_full_queue()
+    {
+        // A dispatch refused by a full ThrowException queue must leave NO delivery registration:
+        // the persisted row (WaitingQueue) stays free for the startup recovery to rescue.
+        await CreateIsolatedHostWithBuilderAsync(b =>
+            {
+                b.AddMemoryStorage();
+                b.AddQueue("blocked", q => q.SetChannelCapacity(1)
+                                            .SetMaxDegreeOfParallelism(1)
+                                            .SetFullBehavior(QueueFullBehavior.ThrowException));
+                b.Services.AddSingleton(_state);
+            },
+            startHost: false);
+
+        var registry = Host!.Services.GetRequiredService<TaskDeliveryRegistry>();
+
+        // No consumers (host not started): the first dispatch fills the channel
+        var firstId = await Dispatcher.Dispatch(new ResilienceBlockingTask());
+
+        var ex = await Should.ThrowAsync<QueueFullException>(
+            () => Dispatcher.Dispatch(new ResilienceBlockingTask()));
+
+        registry.IsDelivering(firstId).ShouldBeTrue();    // in channel: delivery in flight
+        registry.IsDelivering(ex.TaskId).ShouldBeFalse(); // refused write: no registration left
+    }
+
+    [Fact]
+    public async Task Should_release_registration_when_cancelled_task_is_dropped_at_dequeue()
+    {
+        // Cancel() of a task still sitting in the channel: the consumer drops it at dequeue
+        // (blacklist) and DoWork's outer finally must release the delivery registration —
+        // cancellations never leak registrations.
+        await CreateIsolatedHostWithBuilderAsync(b =>
+            {
+                b.AddMemoryStorage();
+                b.Services.AddSingleton(_state);
+            },
+            startHost: false);
+
+        var registry = Host!.Services.GetRequiredService<TaskDeliveryRegistry>();
+        var taskId   = await Dispatcher.Dispatch(new ResilienceCounterTask(42));
+        registry.IsDelivering(taskId).ShouldBeTrue();
+
+        await Dispatcher.Cancel(taskId);
+        await Host.StartAsync(); // the consumer dequeues, sees the blacklist, drops the task
+
+        await TaskWaitHelper.WaitForConditionAsync(() => !registry.IsDelivering(taskId), timeoutMs: 5000);
+        _state.ExecutedIndexes.ShouldNotContain(42);
+        (await Storage.GetAll()).Single(t => t.Id == taskId).Status.ShouldBe(QueuedTaskStatus.Cancelled);
     }
 }

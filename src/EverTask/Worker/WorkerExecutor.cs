@@ -21,7 +21,8 @@ public class WorkerExecutor(
     ICancellationSourceProvider cancellationSourceProvider,
     IEverTaskLogger<WorkerExecutor> logger,
     ILoggerFactory loggerFactory,
-    IRateLimitGate? rateLimitGate = null) : IEverTaskWorkerExecutor
+    IRateLimitGate? rateLimitGate = null,
+    TaskDeliveryRegistry? deliveryRegistry = null) : IEverTaskWorkerExecutor
 {
     // Performance optimization: Cache for event data to avoid repeated serialization
     private static readonly ConditionalWeakTable<IEverTask, string> TaskJsonCache = new();
@@ -52,6 +53,24 @@ public class WorkerExecutor(
 
 
     public async ValueTask DoWork(TaskHandlerExecutor task, CancellationToken serviceToken)
+    {
+        try
+        {
+            await DoWorkGuarded(task, serviceToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            // THE single End of this delivery (see TaskDeliveryRegistry's end discipline): the
+            // LAST act of every consumed delivery, covering every exit path of DoWorkGuarded
+            // (terminal completion, rate-limit deferral/rejection, retry re-park, blacklist
+            // drop) with no per-path enumeration. Because nothing runs after this, a successor
+            // delivery of the same id can only register after it — no delivery can ever release
+            // a successor's registration.
+            deliveryRegistry?.End(task.PersistenceId);
+        }
+    }
+
+    private async ValueTask DoWorkGuarded(TaskHandlerExecutor task, CancellationToken serviceToken)
     {
         // Blacklist check hoisted BEFORE the rate-limit gate: a cancelled task must be discarded
         // without burning rate-limit tokens (and without entering the execution path)

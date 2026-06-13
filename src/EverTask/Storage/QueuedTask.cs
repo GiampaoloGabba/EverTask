@@ -31,6 +31,26 @@ public class QueuedTask
     /// Only populated if log capture is enabled in configuration.
     /// </summary>
     public ICollection<TaskExecutionLog> ExecutionLogs { get; set; } = new List<TaskExecutionLog>();
+
+    /// <summary>
+    /// Canonical recoverable predicate (client-side) shared by every storage provider: a task is
+    /// recoverable on restart, and may be re-queued by <c>TrySetQueuedIfRecoverable</c>, only while
+    /// it has runs left (<see cref="MaxRuns"/>), is not past its <see cref="RunUntil"/>, and sits in
+    /// a non-terminal status (or is a recurring task between two runs).
+    /// <para>
+    /// THE single source of truth for the client-side evaluation. The EF Core server-side queries
+    /// (<c>RetrievePending</c> / <c>TrySetQueuedIfRecoverable</c>) mirror this as a translatable
+    /// LINQ expression — keep them in sync with this method.
+    /// </para>
+    /// </summary>
+    public bool IsRecoverable(DateTimeOffset now) =>
+        (MaxRuns == null || CurrentRunCount <= MaxRuns)
+        && (RunUntil == null || RunUntil >= now)
+        && (Status is QueuedTaskStatus.WaitingQueue or QueuedTaskStatus.Queued
+                or QueuedTaskStatus.Pending or QueuedTaskStatus.ServiceStopped
+                or QueuedTaskStatus.InProgress
+            || (IsRecurring && NextRunUtc != null &&
+                Status is QueuedTaskStatus.Completed or QueuedTaskStatus.Failed));
 }
 
 public class StatusAudit
