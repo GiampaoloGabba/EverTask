@@ -5,6 +5,24 @@ All notable changes to EverTask will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.0] - 2026-06-13
+
+### Recovery & double-delivery hardening
+
+Startup recovery and live dispatch could deliver the same persisted task to a worker queue twice and, on a capacity-1 queue, leave the producer blocked forever. The hang surfaced under .NET 10 timing, but the defect was structural on every target framework. Nothing changes for callers: the at-least-once contract, no task loss, and `taskKey` idempotency are the same — the runtime just honors them correctly now.
+
+#### Fixed
+
+- **Recovery/live duplicate-delivery race**: the recovery cutoff dropped same-instant ties and the old in-channel dedup forgot a task's id at dequeue, so a recovered copy could enter the channel while its live copy was still running. On a capacity-1 queue the producer then blocked indefinitely. Delivery dedup is now a per-host `TaskDeliveryRegistry` that holds each id from the channel write until the delivery terminally ends, so a second write of the same id is rejected at the boundary — double delivery is impossible by construction rather than by enumerating exit paths.
+- **In-memory storage could resurrect an exhausted recurring task**: `MemoryTaskStorage.TrySetQueuedIfRecoverable` checked only the status and skipped the `MaxRuns`/`RunUntil` guards its own `RetrievePending` applies. The recoverable rule now lives in one place — `QueuedTask.IsRecoverable` — shared across every provider, so the guards can no longer drift apart.
+- **SQLite threw once per recovered task**: the conditional recovery `UPDATE` compares `RunUntil` (a `DateTimeOffset`), which SQLite cannot translate, so every recovered task threw and fell back. `SqliteTaskStorage` now evaluates the recoverable predicate client-side directly, the same way it already overrides `RetrievePending`.
+
+#### Added
+
+- **`TaskDeliveryRegistry`** (per host, shared by all queues): registers each `PersistenceId` from the channel write until the delivery ends. The single `End` is the last act of `WorkerExecutor.DoWork`, plus the enqueue rollback paths and the channel drop callback.
+- **`EnqueueResult.DuplicateInProcess`**: returned when an id is already in flight. Recovery and live dispatch treat it as an idempotent skip; schedulers retry it like a full queue.
+- **`ITaskStorage.TrySetQueuedIfRecoverable`** (default interface member, non-breaking): an atomic conditional `SetQueued` used by recovery so a row that finished after its recovery page was read is never set back to `Queued`. The EF Core (atomic `UPDATE`), SQLite and In-Memory providers override it.
+
 ## [3.7.0] - 2026-06-12
 
 ### Keyed Rate Limiting
