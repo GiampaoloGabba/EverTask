@@ -50,6 +50,33 @@ public class DayIntervalTests
     }
 
     [Fact]
+    public void Should_not_skip_a_day_when_all_times_are_before_reference()
+    {
+        // L26: a DayInterval whose onTimes are ALL before the reference time-of-day must advance by ONE
+        // interval day (day+1) to the first time, not day+2 (the double day-bump).
+        var interval = new DayInterval(1) { OnTimes = [TimeOnly.Parse("09:00")] };
+        var current  = new DateTimeOffset(2025, 1, 6, 10, 0, 0, TimeSpan.Zero); // 10:00, after 09:00
+
+        var next = interval.GetNextOccurrence(current);
+
+        next.ShouldBe(new DateTimeOffset(2025, 1, 7, 9, 0, 0, TimeSpan.Zero)); // next day 09:00, NOT day+2
+    }
+
+    [Fact]
+    public void Should_fire_all_listed_days_within_the_week_for_onDays_day_interval()
+    {
+        // CU7 (DayInterval(0, OnDays), i.e. top-level OnDays(...)): must fire on EACH listed day of week.
+        var interval = new DayInterval(0, [DayOfWeek.Monday, DayOfWeek.Wednesday, DayOfWeek.Friday]);
+
+        var monday   = new DateTimeOffset(2025, 1, 6, 0, 0, 0, TimeSpan.Zero); // Monday
+        var afterMon = interval.GetNextOccurrence(monday);
+        afterMon.ShouldBe(new DateTimeOffset(2025, 1, 8, 0, 0, 0, TimeSpan.Zero), "Wednesday, same week");
+
+        var afterWed = interval.GetNextOccurrence(afterMon!.Value);
+        afterWed.ShouldBe(new DateTimeOffset(2025, 1, 10, 0, 0, 0, TimeSpan.Zero), "Friday, same week");
+    }
+
+    [Fact]
     public void Day_Validate_ThrowsArgumentException()
     {
         var interval = new DayInterval(0, Array.Empty<DayOfWeek>());
