@@ -98,6 +98,29 @@ public class AssemblyResolutionTests
         handlers[0].ShouldBeOfType<TestTaskHanlder>();
     }
 
+    [Fact]
+    public void Should_warn_or_throw_on_duplicate_closed_handler()
+    {
+        // G2: TestTaskRequest has two handlers (TestTaskHanlder + TestTaskHanlderDuplicate). First-wins
+        // registration stays, but the ambiguity must no longer be silent — a warning is recorded.
+        var config   = _provider.GetRequiredService<EverTaskServiceConfiguration>();
+        var warnings = config.HandlerRegistrationWarnings;
+
+        warnings.ShouldContain(w =>
+            w.Contains(nameof(TestTaskRequest)) && w.Contains(nameof(TestTaskHanlderDuplicate)));
+    }
+
+    [Fact]
+    public void Should_register_or_warn_for_open_generic_handler()
+    {
+        // G1: open-generic handlers were silently dropped (the closing path was dead code). They must
+        // be surfaced with a warning instead of vanishing without trace.
+        var config   = _provider.GetRequiredService<EverTaskServiceConfiguration>();
+        var warnings = config.HandlerRegistrationWarnings;
+
+        warnings.ShouldContain(w => w.Contains(nameof(OpenGenericRegistrationHandler<object>)));
+    }
+
 
     [Fact]
     public void CouldCloseTo_Should_ReturnFalse_ForIncompatibleTypes()
