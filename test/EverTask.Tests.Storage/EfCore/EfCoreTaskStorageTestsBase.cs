@@ -1670,6 +1670,76 @@ public abstract class EfCoreTaskStorageTestsBase
 
     #endregion
 
+    #region Audit consistency across providers (M8 batch A)
+
+    private async Task<Guid> SeedSimpleTask(
+        QueuedTaskStatus status = QueuedTaskStatus.InProgress, DateTimeOffset? lastExecutionUtc = null)
+    {
+        var task = new QueuedTask
+        {
+            Id               = GetGuidForProvider(),
+            Type             = "AuditConsistencyTask",
+            Request          = "{}",
+            Handler          = "H",
+            CreatedAtUtc     = DateTimeOffset.UtcNow.AddMinutes(-1),
+            Status           = status,
+            LastExecutionUtc = lastExecutionUtc
+        };
+        await _storage.Persist(task);
+        return task.Id;
+    }
+
+    [Fact]
+    public async Task Should_audit_servicestopped_consistently_across_providers()
+    {
+        // F19/L29: a ServiceStopped carrying an OperationCanceledException (expected shutdown) or a null
+        // exception must NOT be audited at Minimal/ErrorsOnly — same rule as MemoryTaskStorage.
+        var cancelled = await SeedSimpleTask();
+        await _storage.SetCancelledByService(cancelled, new OperationCanceledException(), AuditLevel.Minimal);
+
+        var nullEx = await SeedSimpleTask();
+        await _storage.SetStatus(nullEx, QueuedTaskStatus.ServiceStopped, null, AuditLevel.ErrorsOnly);
+
+        _mockedDbContext.StatusAudit
+            .Count(s => s.QueuedTaskId == cancelled && s.NewStatus == QueuedTaskStatus.ServiceStopped)
+            .ShouldBe(0);
+        _mockedDbContext.StatusAudit
+            .Count(s => s.QueuedTaskId == nullEx && s.NewStatus == QueuedTaskStatus.ServiceStopped)
+            .ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task Should_audit_recovery_queued_transition_consistently()
+    {
+        // L43: the recovery Queued transition is audited at Full on every provider.
+        var id = await SeedSimpleTask(QueuedTaskStatus.WaitingQueue);
+
+        (await _storage.TrySetQueuedIfRecoverable(id, AuditLevel.Full)).ShouldBeTrue();
+
+        _mockedDbContext.StatusAudit
+            .Count(s => s.QueuedTaskId == id && s.NewStatus == QueuedTaskStatus.Queued)
+            .ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Should_stamp_executedat_consistently()
+    {
+        // L28: RunsAudit.ExecutedAt is stamped at the moment of the update, not the older LastExecutionUtc.
+        var id = await SeedSimpleTask(QueuedTaskStatus.Completed, DateTimeOffset.UtcNow.AddHours(-1));
+
+        var before = DateTimeOffset.UtcNow.AddSeconds(-5);
+        await _storage.UpdateCurrentRun(id, 10.0, DateTimeOffset.UtcNow.AddMinutes(5), AuditLevel.Full);
+
+        var executedAt = _mockedDbContext.RunsAudit
+            .Where(r => r.QueuedTaskId == id)
+            .ToList()
+            .Select(r => r.ExecutedAt)
+            .ShouldHaveSingleItem();
+        executedAt.ShouldBeGreaterThan(before);
+    }
+
+    #endregion
+
     #region Audit cleanup retention (M6 G5/G6)
 
     private QueuedTask CompletedTask(DateTimeOffset finishedAt, params TaskExecutionLog[] logs)
