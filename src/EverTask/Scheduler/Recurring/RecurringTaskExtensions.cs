@@ -62,26 +62,30 @@ public static class RecurringTaskExtensions
             return new NextRunResult(nextRun, 0);
         }
 
-        var elapsed      = now - nextRun;
-        var skippedCount = (int)Math.Ceiling(elapsed.TotalMilliseconds / interval.TotalMilliseconds);
+        var elapsed = now - nextRun;
 
-        // Check MaxRuns constraint
-        if (recurringTask.MaxRuns.HasValue && currentRun + skippedCount >= recurringTask.MaxRuns.Value)
+        // long math + saturation: a sub-second interval over a huge elapsed span would overflow an int
+        // skip count and turn the forward-skip into an unbounded one-at-a-time loop (L36).
+        var skippedCountLong = (long)Math.Ceiling(elapsed.TotalMilliseconds / interval.TotalMilliseconds);
+        var skippedCount     = (int)Math.Min(skippedCountLong, int.MaxValue);
+
+        // Check MaxRuns constraint (long comparison so currentRun + skippedCount cannot overflow)
+        if (recurringTask.MaxRuns.HasValue && currentRun + skippedCountLong >= recurringTask.MaxRuns.Value)
         {
             return new NextRunResult(null, skippedCount);
         }
 
-        // Calculate the next future run directly
-        var skippedTime      = TimeSpan.FromMilliseconds(skippedCount * interval.TotalMilliseconds);
-        var candidateNextRun = nextRun.Add(skippedTime);
+        // Jump directly to the skipped time using the long count (no per-occurrence iteration)
+        var candidateNextRun = nextRun.AddMilliseconds(skippedCountLong * interval.TotalMilliseconds);
 
-        // Ensure it's actually in the future (due to floating point precision)
-        while (candidateNextRun <= now)
+        // Bounded floating-point correction only (never an unbounded skip-forward loop)
+        var corrections = 0;
+        while (candidateNextRun <= now && corrections++ < 1000)
         {
             candidateNextRun = candidateNextRun.Add(interval);
-            skippedCount++;
+            if (skippedCount < int.MaxValue) skippedCount++;
 
-            if (recurringTask.MaxRuns.HasValue && currentRun + skippedCount >= recurringTask.MaxRuns.Value)
+            if (recurringTask.MaxRuns.HasValue && currentRun + (long)skippedCount >= recurringTask.MaxRuns.Value)
             {
                 return new NextRunResult(null, skippedCount);
             }

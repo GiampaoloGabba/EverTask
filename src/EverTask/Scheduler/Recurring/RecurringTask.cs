@@ -27,6 +27,12 @@ public class RecurringTask
 
         if (RunUntil <= current) return null;
 
+        // The first occurrence (RunNow / SpecificRunTime / InitialDelay) must be validated against
+        // RunUntil too — only subsequent occurrences were, so a first run beyond RunUntil would fire
+        // anyway (CU8).
+        DateTimeOffset? FirstRunOrNull(DateTimeOffset? candidate) =>
+            candidate.HasValue && RunUntil.HasValue && candidate.Value >= RunUntil.Value ? null : candidate;
+
         DateTimeOffset? runtime = null;
 
         // For first run (currentRun == 0), check if we have initial run configuration
@@ -43,7 +49,7 @@ public class RecurringTask
             else if (InitialDelay.HasValue)
             {
                 // InitialDelay always takes precedence - it defines the absolute first run time
-                return current.Add(InitialDelay.Value);
+                return FirstRunOrNull(current.Add(InitialDelay.Value));
             }
         }
 
@@ -57,7 +63,7 @@ public class RecurringTask
 
         if (currentRun > 0) return next;
 
-        if (next == null) return runtime;
+        if (next == null) return FirstRunOrNull(runtime);
 
         // For RunNow or SpecificRunTime, use runtime if:
         // 1. It's in the future (always use future SpecificRunTime)
@@ -68,7 +74,7 @@ public class RecurringTask
             // If runtime is in the future, always use it
             if (runtime.Value > current)
             {
-                return runtime;
+                return FirstRunOrNull(runtime);
             }
 
             // If runtime is in the recent past, use it only if it's before next interval
@@ -77,7 +83,7 @@ public class RecurringTask
 
             if (runtimeIsBeforeNext && notTooFarInPast)
             {
-                return runtime;
+                return FirstRunOrNull(runtime);
             }
         }
 

@@ -44,7 +44,9 @@ public class QueuedTask
     /// </para>
     /// </summary>
     public bool IsRecoverable(DateTimeOffset now) =>
-        (MaxRuns == null || CurrentRunCount <= MaxRuns)
+        // < MaxRuns (not <=): a series at CurrentRunCount == MaxRuns is exhausted and terminal, matching
+        // CalculateNextRun's `currentRun >= MaxRuns` (CU11/L27). null CurrentRunCount counts as 0 (L34).
+        (MaxRuns == null || (CurrentRunCount ?? 0) < MaxRuns)
         && (RunUntil == null || RunUntil >= now)
         && (Status is QueuedTaskStatus.WaitingQueue or QueuedTaskStatus.Queued
                 or QueuedTaskStatus.Pending or QueuedTaskStatus.ServiceStopped

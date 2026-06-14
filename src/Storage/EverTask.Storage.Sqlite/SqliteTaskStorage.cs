@@ -39,7 +39,7 @@ public class SqliteTaskStorage : EfCoreTaskStorage
         // Recoverable statuses: same rules as EfCoreTaskStorage.RetrievePending (see comments there)
         var tasks = await dbContext.QueuedTasks
             .AsNoTracking()
-            .Where(t => (t.MaxRuns == null || t.CurrentRunCount <= t.MaxRuns)
+            .Where(t => (t.MaxRuns == null || (t.CurrentRunCount ?? 0) < t.MaxRuns)
                         && (t.Status == QueuedTaskStatus.WaitingQueue ||
                             t.Status == QueuedTaskStatus.Queued ||
                             t.Status == QueuedTaskStatus.Pending ||

@@ -28,7 +28,9 @@ public class MonthInterval : IInterval
         get => _onTimes;
         set => _onTimes = value.OrderBy(t => t).ToArray(); // Always keep sorted
     }
-    public int[]      OnMonths { get; } = [];
+    // Settable (like OnDays) so Newtonsoft repopulates it on deserialization — a get-only property is
+    // silently dropped on round-trip, losing the month constraint (F11).
+    public int[]      OnMonths { get; set; } = [];
 
     public void Validate()
     {

@@ -22,7 +22,9 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     /// evaluate the predicate client-side.
     /// </summary>
     private static Expression<Func<QueuedTask, bool>> RecoverableQuery(DateTimeOffset now) =>
-        t => (t.MaxRuns == null || t.CurrentRunCount <= t.MaxRuns)
+        // < MaxRuns (not <=): a series at CurrentRunCount == MaxRuns is exhausted (CU11/L27); null
+        // CurrentRunCount counts as 0 (L34). Mirrors QueuedTask.IsRecoverable.
+        t => (t.MaxRuns == null || (t.CurrentRunCount ?? 0) < t.MaxRuns)
              && (t.RunUntil == null || t.RunUntil >= now)
              && (t.Status == QueuedTaskStatus.WaitingQueue ||
                  t.Status == QueuedTaskStatus.Queued ||
