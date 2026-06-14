@@ -28,11 +28,15 @@ public static class RecurringTaskExtensions
         this RecurringTask recurringTask,
         DateTimeOffset scheduledTime,
         int currentRun,
-        DateTimeOffset? referenceTime = null)
+        DateTimeOffset? referenceTime = null,
+        bool isRecovery = false)
     {
         ArgumentNullException.ThrowIfNull(recurringTask);
 
-        var nextRun = recurringTask.CalculateNextRun(scheduledTime, currentRun);
+        // isRecovery: on the recovery path the first run's time was already decided at dispatch, so the
+        // initial-run configuration (InitialDelay/RunNow/SpecificRunTime) must not be re-applied while
+        // skipping forward (L25-firstrun).
+        var nextRun = recurringTask.CalculateNextRun(scheduledTime, currentRun, isRecovery);
         var now     = referenceTime ?? DateTimeOffset.UtcNow;
 
         // If nextRun is not significantly in the past, return as-is

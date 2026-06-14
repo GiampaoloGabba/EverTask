@@ -19,7 +19,7 @@ public class RecurringTask
     public RecurringTask() { }
 
 
-    public DateTimeOffset? CalculateNextRun(DateTimeOffset current, int currentRun)
+    public DateTimeOffset? CalculateNextRun(DateTimeOffset current, int currentRun, bool isRecovery = false)
     {
         if (currentRun >= MaxRuns) return null;
 
@@ -35,8 +35,11 @@ public class RecurringTask
 
         DateTimeOffset? runtime = null;
 
-        // For first run (currentRun == 0), check if we have initial run configuration
-        if (currentRun == 0)
+        // For first run (currentRun == 0), apply the initial run configuration — UNLESS this is a
+        // recovery recompute: the first run's absolute time was already decided at dispatch (and stored
+        // as NextRunUtc), so re-applying InitialDelay/RunNow/SpecificRunTime here would shift the entire
+        // grid forward by the delay at every restart (L25-firstrun).
+        if (currentRun == 0 && !isRecovery)
         {
             if (RunNow)
             {

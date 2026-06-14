@@ -284,13 +284,26 @@ public class Dispatcher(
                     executionTime = nextRun;
                     logger.LogInformation("Using preserved NextRunUtc {NextRun} for recurring task (still in future)", nextRun);
                 }
+                // L16: on recovery, if the pending occurrence slipped only just into the past (within one
+                // interval — the next occurrence is not due yet), execute IT now instead of skipping it.
+                // A short downtime across a scheduled occurrence must not silently lose it.
+                else if (isRecovery &&
+                         DateTimeOffset.UtcNow - existingNextRunUtc.Value <= recurring.GetMinimumInterval())
+                {
+                    nextRun       = existingNextRunUtc;
+                    executionTime = nextRun;
+                    logger.LogInformation(
+                        "Recovery: executing pending occurrence {NextRun} that slipped into the recent past (grace window)",
+                        nextRun);
+                }
                 else
                 {
-                    // NextRunUtc is in the past - use it as base to maintain schedule rhythm
-                    // Use CalculateNextValidRun with O(1) math to skip forward while preserving rhythm
+                    // NextRunUtc is (well) in the past - skip forward while preserving rhythm. On the
+                    // recovery path the initial-run config must NOT be re-applied (L25-firstrun).
                     var result = recurring.CalculateNextValidRun(
                         existingNextRunUtc.Value,
-                        existingCurrentRunCount ?? 0);
+                        existingCurrentRunCount ?? 0,
+                        isRecovery: isRecovery);
 
                     if (result.NextRun == null)
                         throw new ArgumentException("Invalid scheduler recurring expression", nameof(recurring));
