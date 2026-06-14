@@ -237,6 +237,60 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         return Task.CompletedTask;
     }
 
+    /// <inheritdoc />
+    public Task CompleteRecurringRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
+                                     int runsToAdvance, AuditLevel auditLevel)
+    {
+        logger.LogInformation("Complete recurring run for Task {taskId}", taskId);
+
+        if (runsToAdvance < 1)
+            runsToAdvance = 1;
+
+        lock (_pendingTasksLock)
+        {
+            var task = _pendingTasks.FirstOrDefault(x => x.Id == taskId);
+            if (task == null)
+                return Task.CompletedTask;
+
+            // Status -> Completed (+ status audit, LastExecutionUtc) AND the run-counter / next-run
+            // advance (+ runs audit) committed TOGETHER under the single store lock, so a crash cannot
+            // leave the row Completed but not advanced (CU14/L29).
+            var now = DateTimeOffset.UtcNow;
+
+            if (ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Completed, null))
+            {
+                task.StatusAudits.Add(new StatusAudit
+                {
+                    QueuedTaskId = taskId,
+                    UpdatedAtUtc = now,
+                    NewStatus    = QueuedTaskStatus.Completed,
+                    Exception    = null
+                });
+            }
+
+            if (ShouldCreateRunsAudit(auditLevel, QueuedTaskStatus.Completed, null))
+            {
+                task.RunsAudits.Add(new RunsAudit
+                {
+                    QueuedTaskId    = taskId,
+                    ExecutedAt      = now,
+                    ExecutionTimeMs = executionTimeMs,
+                    Status          = QueuedTaskStatus.Completed,
+                    Exception       = null
+                });
+            }
+
+            task.Status           = QueuedTaskStatus.Completed;
+            task.Exception        = null;
+            task.LastExecutionUtc = now;
+            task.ExecutionTimeMs  = executionTimeMs;
+            task.NextRunUtc       = nextRun;
+            task.CurrentRunCount  = (task.CurrentRunCount ?? 0) + runsToAdvance;
+        }
+
+        return Task.CompletedTask;
+    }
+
     private static bool ShouldCreateRunsAudit(AuditLevel auditLevel, QueuedTaskStatus status, string? exception) =>
         auditLevel switch
         {

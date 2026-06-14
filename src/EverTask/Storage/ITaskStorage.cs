@@ -170,6 +170,30 @@ public interface ITaskStorage
         UpdateCurrentRun(taskId, executionTimeMs, nextRun, auditLevel);
 
     /// <summary>
+    /// Marks a recurring occurrence <see cref="QueuedTaskStatus.Completed"/> AND advances the run
+    /// counter / next run in a SINGLE atomic operation. The two used to be separate writes
+    /// (<see cref="SetCompleted"/> then <see cref="UpdateCurrentRun(Guid,double,DateTimeOffset?,AuditLevel,int)"/>),
+    /// so a crash between them left the row Completed but not advanced — recovery then re-dispatched the
+    /// already-finished occurrence and a MaxRuns-bounded series ran one extra time (CU14/L29).
+    /// </summary>
+    /// <remarks>
+    /// Default interface member: the non-atomic two-write fallback, for custom storages that have not
+    /// overridden it (same behaviour as before — graceful degradation). Built-in providers override it
+    /// with a single transactional write.
+    /// </remarks>
+    /// <param name="taskId">The ID of the recurring task.</param>
+    /// <param name="executionTimeMs">The execution time in milliseconds.</param>
+    /// <param name="nextRun">The next run date (null when the series is exhausted).</param>
+    /// <param name="runsToAdvance">How many runs to add to the counter (1 + skipped occurrences).</param>
+    /// <param name="auditLevel">Audit level for this task.</param>
+    async Task CompleteRecurringRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
+                                    int runsToAdvance, AuditLevel auditLevel)
+    {
+        await SetCompleted(taskId, executionTimeMs, auditLevel).ConfigureAwait(false);
+        await UpdateCurrentRun(taskId, executionTimeMs, nextRun, auditLevel, runsToAdvance).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Retrieves a task by its unique task key.
     /// </summary>
     /// <param name="taskKey">The unique task key.</param>

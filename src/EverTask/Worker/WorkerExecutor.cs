@@ -179,6 +179,10 @@ public class WorkerExecutor(
         // (no storage write, no recurring re-scheduling — the parked occurrence is still alive)
         var rateLimitDeferred = false;
 
+        // Set when a RECURRING occurrence completed successfully: the finally then writes the Completed
+        // status AND the run-counter / next-run advance atomically (CU14/L29) instead of just advancing.
+        var recurringRunCompleted = false;
+
         try
         {
             serviceToken.ThrowIfCancellationRequested();
@@ -297,8 +301,13 @@ public class WorkerExecutor(
                 return;
             }
 
-            if (taskStorage != null)
+            // A recurring occurrence is marked Completed TOGETHER with its run-counter / next-run advance
+            // by the finally's atomic CompleteRecurringRun (CU14/L29); a separate SetCompleted here would
+            // re-open the crash window. Non-recurring tasks have no advance, so they complete here.
+            if (taskStorage != null && task.RecurringTask == null)
                 await taskStorage.SetCompleted(task.PersistenceId, executionTime, task.AuditLevel).ConfigureAwait(false);
+
+            recurringRunCompleted = task.RecurringTask != null;
 
             await ExecuteCallback(GetCompletedCallback(task, handler), task, "Completed").ConfigureAwait(false);
 
@@ -355,7 +364,7 @@ public class WorkerExecutor(
             // A rate-limit deferral must NOT schedule the next recurring occurrence: the
             // CURRENT occurrence is still parked in the scheduler (run-count integrity)
             if (!rateLimitDeferred)
-                await QueueNextOccourrence(task, executionTime, taskStorage);
+                await QueueNextOccourrence(task, executionTime, taskStorage, markCompleted: recurringRunCompleted);
         }
     }
 
@@ -831,7 +840,8 @@ public class WorkerExecutor(
         }
     }
 
-    private async Task QueueNextOccourrence(TaskHandlerExecutor task, double executionTimeMs, ITaskStorage? taskStorage)
+    private async Task QueueNextOccourrence(TaskHandlerExecutor task, double executionTimeMs, ITaskStorage? taskStorage,
+                                            bool markCompleted = false)
     {
         if (task.RecurringTask == null) return;
 
@@ -884,9 +894,17 @@ public class WorkerExecutor(
             // Advance the run counter by THIS run plus every occurrence skipped during downtime: the
             // recurring stop-check already accounts for skipped occurrences (currentRun + skippedCount
             // >= MaxRuns), so the persisted counter must stay consistent with it (F7/F8).
-            await taskStorage.UpdateCurrentRun(task.PersistenceId, executionTimeMs, result.NextRun, task.AuditLevel,
-                                               1 + result.SkippedCount)
-                             .ConfigureAwait(false);
+            // On a successful run the Completed status is written in the SAME atomic operation as the
+            // advance (CU14/L29); otherwise (failure/rejection) the status was already set and we only
+            // advance.
+            if (markCompleted)
+                await taskStorage.CompleteRecurringRun(task.PersistenceId, executionTimeMs, result.NextRun,
+                                                       1 + result.SkippedCount, task.AuditLevel)
+                                 .ConfigureAwait(false);
+            else
+                await taskStorage.UpdateCurrentRun(task.PersistenceId, executionTimeMs, result.NextRun, task.AuditLevel,
+                                                   1 + result.SkippedCount)
+                                 .ConfigureAwait(false);
 
             if (result.NextRun.HasValue)
             {

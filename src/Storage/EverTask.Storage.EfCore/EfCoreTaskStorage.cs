@@ -414,6 +414,78 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         }
     }
 
+    /// <summary>
+    /// Atomically marks a recurring occurrence Completed AND advances the run counter / next run in a
+    /// SINGLE tracked SaveChanges (= one transaction), so a crash can never split the two and resurrect
+    /// the finished occurrence at recovery (CU14/L29). Inherited unchanged by Sqlite and SQL Server:
+    /// this combined operation has no single-roundtrip stored-procedure equivalent, and atomicity — not
+    /// a saved roundtrip — is the priority here.
+    /// </summary>
+    public virtual async Task CompleteRecurringRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
+                                                   int runsToAdvance, AuditLevel auditLevel)
+    {
+        logger.LogInformation("Complete recurring run for Task {taskId}", taskId);
+
+        if (runsToAdvance < 1)
+            runsToAdvance = 1;
+
+        await using var dbContext = await contextFactory.CreateDbContextAsync();
+
+        try
+        {
+            var task = await dbContext.QueuedTasks
+                                      .Where(x => x.Id == taskId)
+                                      .FirstOrDefaultAsync()
+                                      .ConfigureAwait(false);
+
+            if (task == null)
+            {
+                logger.LogWarning("Task {taskId} not found for recurring completion", taskId);
+                return;
+            }
+
+            var now = UtcNowNormalized;
+
+            // Status audit (only when the level audits a successful Completed) + runs audit, the status
+            // transition, and the counter/next-run advance all flush in ONE SaveChanges.
+            if (ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Completed, null))
+            {
+                dbContext.StatusAudit.Add(new StatusAudit
+                {
+                    QueuedTaskId = taskId,
+                    UpdatedAtUtc = now,
+                    NewStatus    = QueuedTaskStatus.Completed,
+                    Exception    = null
+                });
+            }
+
+            if (ShouldCreateRunsAudit(auditLevel, QueuedTaskStatus.Completed, null))
+            {
+                task.RunsAudits.Add(new RunsAudit
+                {
+                    QueuedTaskId    = taskId,
+                    ExecutedAt      = now,
+                    ExecutionTimeMs = executionTimeMs,
+                    Status          = QueuedTaskStatus.Completed,
+                    Exception       = null
+                });
+            }
+
+            task.Status           = QueuedTaskStatus.Completed;
+            task.Exception        = null;
+            task.LastExecutionUtc = now;
+            task.ExecutionTimeMs  = executionTimeMs;
+            task.NextRunUtc       = nextRun;
+            task.CurrentRunCount  = (task.CurrentRunCount ?? 0) + runsToAdvance;
+
+            await dbContext.SaveChangesAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception e)
+        {
+            logger.LogCritical(e, "Unable to complete recurring run for taskId {taskId}", taskId);
+        }
+    }
+
     public virtual async Task<QueuedTask?> GetByTaskKey(string taskKey, CancellationToken ct = default)
     {
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
