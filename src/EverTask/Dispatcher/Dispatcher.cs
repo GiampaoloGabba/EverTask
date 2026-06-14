@@ -24,12 +24,33 @@ public class Dispatcher(
     // Cache for compiled TaskHandlerWrapper constructors to avoid reflection overhead
     private static readonly ConcurrentDictionary<Type, Func<TaskHandlerWrapper>> WrapperFactoryCache = new();
 
+    // Per-taskKey critical-section lock: serializes the GetByTaskKey -> decide -> Persist/Update of a
+    // single taskKey across concurrent dispatches so two dispatches can never both insert (or one
+    // delete under the other), the source of the taskKey dedup races (G13/G14/CU23/G17).
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _taskKeyLocks = new();
+
     // Resolved lazily: optional components (registered by AddEverTask, may be absent in
     // hand-wired unit-test providers)
     private IGateInvalidationRegistry? _gateInvalidation;
     private bool _gateInvalidationResolved;
     private RateLimitParkingLot? _parkingLot;
     private bool _parkingLotResolved;
+    private TaskDeliveryRegistry? _deliveryRegistry;
+    private bool _deliveryRegistryResolved;
+
+    private TaskDeliveryRegistry? DeliveryRegistry
+    {
+        get
+        {
+            if (!_deliveryRegistryResolved)
+            {
+                _deliveryRegistry         = serviceProvider.GetService<TaskDeliveryRegistry>();
+                _deliveryRegistryResolved = true;
+            }
+
+            return _deliveryRegistry;
+        }
+    }
 
     private IGateInvalidationRegistry? GateInvalidation
     {
@@ -130,6 +151,11 @@ public class Dispatcher(
     {
         ArgumentNullException.ThrowIfNull(task);
 
+        // Serialize the read-decide-write of this taskKey against concurrent dispatches (held for the
+        // whole dispatch, including the enqueue). No-op when there is no taskKey, no storage, or the id
+        // is already known (recovery / internal re-dispatch).
+        using var taskKeyLock = await AcquireTaskKeyLockAsync(taskKey, existingTaskId, ct).ConfigureAwait(false);
+
         // Track existing task's NextRunUtc and CurrentRunCount for recurring tasks to preserve schedule across restarts
         DateTimeOffset? existingNextRunUtc = null;
         int? existingCurrentRunCount = null;
@@ -143,6 +169,30 @@ public class Dispatcher(
             {
                 logger.LogInformation("Found existing task with key {TaskKey}, ID {TaskId}, Status {Status}",
                     taskKey, existingTask.Id, existingTask.Status);
+
+                // An IMMEDIATE one-shot re-dispatch of a row whose delivery is already in flight (in a
+                // channel or executing) would either lose the new payload (the in-flight delivery already
+                // captured the old one) or, on a terminal Remove, delete the row under the live delivery
+                // (double execution). Reject it and return the existing id (CU6/L31, G17). A delayed or
+                // recurring re-dispatch parks a fresh occurrence in the scheduler, so it is left to proceed.
+                if (executionTime == null && recurring == null && DeliveryRegistry?.IsDelivering(existingTask.Id) == true)
+                {
+                    logger.LogWarning(
+                        "Dispatch with task key {TaskKey} discarded: task {TaskId} has a delivery in flight; " +
+                        "the new dispatch is rejected to avoid losing the payload or double-executing.",
+                        taskKey, existingTask.Id);
+                    return existingTask.Id;
+                }
+
+                // A recurring row must not be converted to a one-shot by a taskKey re-dispatch that carries
+                // no recurring config — that would silently destroy its schedule and history (G16).
+                if (existingTask.IsRecurring && recurring == null)
+                {
+                    logger.LogWarning(
+                        "Dispatch with task key {TaskKey} discarded: task {TaskId} is recurring and cannot be " +
+                        "converted to a one-shot via taskKey.", taskKey, existingTask.Id);
+                    return existingTask.Id;
+                }
 
                 // For RECURRING tasks: preserve history and don't remove/recreate on terminal status
                 // Recurring tasks with Completed/Failed status are not truly "terminated" - they should continue
@@ -303,6 +353,21 @@ public class Dispatcher(
             }
             catch (Exception e)
             {
+                // A concurrent insert may have won the taskKey unique constraint (cross-process, or any
+                // path that bypassed the in-process keyed lock): re-read the winner and return its id
+                // instead of proceeding with our own duplicate PersistenceId (G14/CU23).
+                if (existingTaskId == null && !string.IsNullOrWhiteSpace(taskKey))
+                {
+                    var winner = await taskStorage.GetByTaskKey(taskKey, ct).ConfigureAwait(false);
+                    if (winner != null && winner.Id != taskEntity.Id)
+                    {
+                        logger.LogWarning(
+                            "Task key {TaskKey} was won by a concurrent dispatch ({WinnerId}); returning the winner id.",
+                            taskKey, winner.Id);
+                        return winner.Id;
+                    }
+                }
+
                 logger.LogError(e, "Unable to {Action} the task {FullType}",
                     existingTaskId == null ? "persist" : "update", task);
                 if (serviceConfiguration.ThrowIfUnableToPersist)
@@ -320,15 +385,12 @@ public class Dispatcher(
         }
         else
         {
-            // Immediate re-dispatch of an existing task (e.g. taskKey update of a previously
-            // delayed task): invalidate any registration still parked in the scheduler, or the
-            // stale occurrence would fire later causing a double execution. The gate invalidation
-            // additionally covers the dequeue→re-park limbo window the scheduler cannot see.
-            if (existingTaskId != null)
-            {
-                scheduler.TryUnschedule(executorToSchedule.PersistenceId);
-                GateInvalidation?.Invalidate(executorToSchedule.PersistenceId);
-            }
+            // Immediate re-dispatch of an existing task (e.g. taskKey update of a previously delayed
+            // task): invalidate any stale registration still parked in the scheduler — or in the
+            // dequeue->re-park gate limbo the scheduler cannot see — BEFORE enqueuing, so a concurrent
+            // re-park of the SAME id (e.g. a rate-limit deferral of the new delivery) is created
+            // afterwards and survives the invalidation.
+            InvalidateStaleRegistration(existingTaskId, executorToSchedule.PersistenceId);
 
             // Determine queue name with automatic routing for recurring tasks
             var queueName = executorToSchedule.QueueName ??
@@ -339,6 +401,22 @@ public class Dispatcher(
                 // Recovery path: never fail fast, wait for queue space (consumers are draining concurrently)
                 await queueManager.EnqueueBlocking(queueName, executorToSchedule, ct).ConfigureAwait(false);
             }
+            else if (existingTaskId != null)
+            {
+                try
+                {
+                    await queueManager.TryEnqueue(queueName, executorToSchedule, ct).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // The immediate enqueue of an already-accepted (parked) task failed (full
+                    // ThrowException queue, or a cancelled Wait that threw). Its parked occurrence was
+                    // just dropped above, so re-schedule it for retry instead of losing it / leaking its
+                    // parking-lot reservation, then propagate the failure (CU15).
+                    scheduler.Schedule(executorToSchedule with { ExecutionTime = DateTimeOffset.UtcNow });
+                    throw;
+                }
+            }
             else
             {
                 await queueManager.TryEnqueue(queueName, executorToSchedule, ct).ConfigureAwait(false);
@@ -346,6 +424,43 @@ public class Dispatcher(
         }
 
         return executor.PersistenceId;
+    }
+
+    /// <summary>
+    /// Immediate re-dispatch of an existing task: drop any registration still parked in the scheduler —
+    /// or in the dequeue→re-park gate limbo the scheduler cannot see — so a stale occurrence cannot fire
+    /// a duplicate. Done BEFORE the enqueue so a re-park of the same id (rate-limit deferral) survives.
+    /// </summary>
+    private void InvalidateStaleRegistration(Guid? existingTaskId, Guid persistenceId)
+    {
+        if (existingTaskId == null)
+            return;
+
+        scheduler.TryUnschedule(persistenceId);
+        GateInvalidation?.Invalidate(persistenceId);
+    }
+
+    private async ValueTask<IDisposable> AcquireTaskKeyLockAsync(string? taskKey, Guid? existingTaskId, CancellationToken ct)
+    {
+        // Only the taskKey resolution path needs serialization: no taskKey, no storage, or an
+        // already-known id (recovery / internal re-dispatch) never reads/decides on a taskKey.
+        if (string.IsNullOrWhiteSpace(taskKey) || taskStorage == null || existingTaskId != null)
+            return NoopDisposable.Instance;
+
+        var gate = _taskKeyLocks.GetOrAdd(taskKey, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct).ConfigureAwait(false);
+        return new SemaphoreReleaser(gate);
+    }
+
+    private sealed class SemaphoreReleaser(SemaphoreSlim gate) : IDisposable
+    {
+        public void Dispose() => gate.Release();
+    }
+
+    private sealed class NoopDisposable : IDisposable
+    {
+        public static readonly NoopDisposable Instance = new();
+        public void Dispose() { }
     }
 
     /// <summary>

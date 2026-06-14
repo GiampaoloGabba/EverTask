@@ -35,6 +35,17 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
 
         lock (_pendingTasksLock)
         {
+            // Mirror the relational unique index on TaskKey: reject a duplicate so two rows can never
+            // share a key — each would execute, since the delivery registry dedups only by PersistenceId,
+            // which are distinct (G13). Whitespace keys are treated as "no key" to match the dispatcher's
+            // dedup semantics (IsNullOrWhiteSpace).
+            if (!string.IsNullOrWhiteSpace(task.TaskKey) &&
+                _pendingTasks.Any(t => t.TaskKey == task.TaskKey))
+            {
+                throw new InvalidOperationException(
+                    $"A task with TaskKey '{task.TaskKey}' already exists (unique constraint violation).");
+            }
+
             _pendingTasks.Add(task);
         }
         return Task.FromResult(task.Id);
