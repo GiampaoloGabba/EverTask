@@ -380,6 +380,38 @@ public abstract class EfCoreTaskStorageTestsBase
     }
 
     [Fact]
+    public async Task UpdateCurrentRun_Should_advance_counter_by_runsToAdvance_with_audit()
+    {
+        // F7/F8: occurrences skipped during downtime must count toward CurrentRunCount, so the
+        // overload advances the counter by 1 + skipped (here 5) in ONE write (tracked path, audited).
+        // On SQL Server this is the path the stored procedure delegates to the base implementation for.
+        var queued = QueuedTasks[0];
+        await _storage.Persist(queued);
+        var taskId  = queued.Id;
+        var nextRun = DateTimeOffset.UtcNow.AddDays(1);
+
+        await _storage.UpdateCurrentRun(taskId, 100.0, nextRun, AuditLevel.Full, runsToAdvance: 5);
+
+        var task = await _storage.Get(x => x.Id == taskId);
+        task[0].CurrentRunCount.ShouldBe(5);
+        task[0].NextRunUtc.ShouldBe(nextRun);
+    }
+
+    [Fact]
+    public async Task UpdateCurrentRun_Should_advance_counter_by_runsToAdvance_without_audit()
+    {
+        // Same accounting on the AuditLevel.None server-side fast path (ExecuteUpdate, no SELECT).
+        var queued = QueuedTasks[0];
+        await _storage.Persist(queued);
+        var taskId = queued.Id;
+
+        await _storage.UpdateCurrentRun(taskId, 100.0, null, AuditLevel.None, runsToAdvance: 4);
+
+        var task = await _storage.Get(x => x.Id == taskId);
+        task[0].CurrentRunCount.ShouldBe(4);
+    }
+
+    [Fact]
     public async Task SaveExecutionLogsAsync_Should_PersistLogs()
     {
         // Arrange

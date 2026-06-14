@@ -74,6 +74,25 @@ public class RecurringAccountingTests
     }
 
     [Fact]
+    public void Should_count_real_cron_occurrences_skipped_after_downtime()
+    {
+        // F8: for an IRREGULAR cron schedule the skipped count must be the REAL number of missed cron
+        // occurrences (iterating the actual schedule), not the coarse elapsed/min-interval division
+        // that diverges on uneven gaps. Cron fires daily at 09:00 and 17:00 UTC (gaps 8h / 16h).
+        var task = new RecurringTask { CronInterval = new CronInterval("0 0 9,17 * * *") };
+
+        var scheduledTime = new DateTimeOffset(2025, 1, 6, 9, 0, 0, TimeSpan.Zero);  // occurrence that ran
+        var now           = new DateTimeOffset(2025, 1, 8, 10, 0, 0, TimeSpan.Zero); // ~41h later
+
+        var result = task.CalculateNextValidRun(scheduledTime, currentRun: 1, referenceTime: now);
+
+        // Missed occurrences in [Jan6 17:00, now): Jan6 17:00, Jan7 09:00, Jan7 17:00, Jan8 09:00 = 4.
+        // The coarse pre-fix estimate (elapsed / min-interval) is 2 or 5, never 4.
+        result.SkippedCount.ShouldBe(4);
+        result.NextRun.ShouldBe(new DateTimeOffset(2025, 1, 8, 17, 0, 0, TimeSpan.Zero));
+    }
+
+    [Fact]
     public void Should_validate_first_occurrence_against_rununtil()
     {
         // CU8: the first occurrence (from RunDelayed/InitialDelay) is returned WITHOUT validating it
