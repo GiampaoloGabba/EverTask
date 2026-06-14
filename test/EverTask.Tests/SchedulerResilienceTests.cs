@@ -2,6 +2,7 @@ using EverTask.Handler;
 using EverTask.Logger;
 using EverTask.Scheduler;
 using EverTask.Tests.TestHelpers;
+using Microsoft.Extensions.Logging;
 
 namespace EverTask.Tests;
 
@@ -474,5 +475,80 @@ public class SchedulerResilienceTests
         // Before the fix the wake-up signal used a racy check-then-act on a max-count-1
         // semaphore: concurrent Schedule() calls could throw SemaphoreFullException.
         Should.NotThrow(() => Parallel.For(0, 2000, _ => scheduler.Schedule(CreateExecutor(due))));
+    }
+
+    [Fact]
+    public async Task Should_not_log_objectdisposed_on_scheduler_dispose()
+    {
+        // F12: Dispose disposes the wake-up semaphore underneath the running loop. A WaitAsync racing
+        // that disposal throws ObjectDisposedException (not OperationCanceled), which the loop logged as
+        // an error on every shutdown. The loop must treat it as expected shutdown.
+        //
+        // Deterministic injection: park the loop on the empty-queue infinite WaitAsync, then dispose the
+        // wake-up semaphore directly (the same disposal Dispose() performs), forcing the pending
+        // WaitAsync to fault with ObjectDisposedException.
+        var logger          = new CapturingLogger<PeriodicTimerScheduler>();
+        var dispatchEntered = new TaskCompletionSource();
+        var dispatchGate    = new TaskCompletionSource();
+
+        // The manager holds the loop INSIDE dispatch (outside WaitAsync) until released, giving a
+        // deterministic moment to dispose the wake-up semaphore so the loop's NEXT WaitAsync hits it.
+        var mock = new Mock<IWorkerQueueManager>();
+        mock.Setup(x => x.TryEnqueueImmediate(It.IsAny<string?>(), It.IsAny<TaskHandlerExecutor>(),
+                It.IsAny<CancellationToken>()))
+            .Returns<string?, TaskHandlerExecutor, CancellationToken>(async (_, _, _) =>
+            {
+                dispatchEntered.TrySetResult();
+                await dispatchGate.Task;
+                return EnqueueResult.Enqueued;
+            });
+
+        var scheduler = new PeriodicTimerScheduler(mock.Object, logger, TimeSpan.FromMilliseconds(20));
+        try
+        {
+            scheduler.Schedule(CreateExecutor(DateTimeOffset.UtcNow)); // due now → loop enters dispatch
+            await dispatchEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            // Loop is parked inside dispatch. Dispose the wake-up semaphore now: when dispatch completes
+            // and the loop calls WaitAsync again, it hits a disposed semaphore.
+            var signal = (SemaphoreSlim)typeof(PeriodicTimerScheduler)
+                .GetField("_wakeUpSignal", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .GetValue(scheduler)!;
+            signal.Dispose();
+
+            dispatchGate.SetResult(); // release dispatch → loop loops back into WaitAsync(disposed)
+            await Task.Delay(250);
+
+            logger.Errors
+                .Where(e => e is ObjectDisposedException)
+                .ShouldBeEmpty("the scheduler loop must treat a disposed wake-up semaphore as shutdown");
+        }
+        finally
+        {
+            scheduler.Dispose();
+        }
+    }
+
+    private sealed class CapturingLogger<T> : IEverTaskLogger<T>
+    {
+        private readonly System.Collections.Concurrent.ConcurrentQueue<Exception?> _errors = new();
+
+        public IEnumerable<Exception?> Errors => _errors.ToArray();
+
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+                                Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Error || logLevel == LogLevel.Critical)
+                _errors.Enqueue(exception);
+        }
+
+        private sealed class NullScope : IDisposable
+        {
+            public static readonly NullScope Instance = new();
+            public void Dispose() { }
+        }
     }
 }
