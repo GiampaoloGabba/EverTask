@@ -51,6 +51,11 @@ public class WorkerExecutor(
     // recovery racing a live dispatch): the second delivery is skipped while the first runs.
     private readonly ConcurrentDictionary<Guid, byte> _inFlightTasks = new();
 
+    // In-memory run counter for recurring series when NO storage is registered: storage is the normal
+    // source of CurrentRunCount, but without it a recurring series must still advance and honor
+    // MaxRuns/RunUntil instead of dying after one run (F18). Entries are dropped when the series ends.
+    private readonly ConcurrentDictionary<Guid, int> _inMemoryRunCounts = new();
+
 
     public async ValueTask DoWork(TaskHandlerExecutor task, CancellationToken serviceToken)
     {
@@ -846,12 +851,22 @@ public class WorkerExecutor(
         if (task.RecurringTask == null) return;
 
         // A user-cancelled recurring series must STOP: do not advance the run counter nor schedule the
-        // next occurrence. The persisted Cancelled status makes this DURABLE beyond the in-memory
-        // blacklist's ~1h TTL (a series with an interval > the TTL would otherwise resurrect) (L23/CU10).
+        // next occurrence. The blacklist check works without storage too; the persisted Cancelled status
+        // makes this DURABLE beyond the in-memory blacklist's ~1h TTL (a series with an interval > the
+        // TTL would otherwise resurrect) (L23/CU10).
+        if (workerBlacklist.IsBlacklisted(task.PersistenceId))
+        {
+            _inMemoryRunCounts.TryRemove(task.PersistenceId, out _);
+            logger.LogInformation(
+                "Recurring task {TaskId} was cancelled: the series is stopped, no next occurrence scheduled.",
+                task.PersistenceId);
+            return;
+        }
+
         if (taskStorage != null)
         {
             var current = (await taskStorage.Get(t => t.Id == task.PersistenceId).ConfigureAwait(false)).FirstOrDefault();
-            if (current?.Status == QueuedTaskStatus.Cancelled || workerBlacklist.IsBlacklisted(task.PersistenceId))
+            if (current?.Status == QueuedTaskStatus.Cancelled)
             {
                 logger.LogInformation(
                     "Recurring task {TaskId} was cancelled: the series is stopped, no next occurrence scheduled.",
@@ -860,59 +875,69 @@ public class WorkerExecutor(
             }
         }
 
-        // If we reach here for a recurring task, it means an error occurred
-        // In that case, we still need to schedule the next run
+        // Run counter source: storage when present, otherwise an in-memory counter so the series keeps
+        // running and still honors MaxRuns/RunUntil without persistence (F18).
+        var currentRun = taskStorage != null
+            ? await taskStorage.GetCurrentRunCount(task.PersistenceId).ConfigureAwait(false)
+            : _inMemoryRunCounts.GetValueOrDefault(task.PersistenceId);
+
+        // Fix for schedule drift: Use the scheduled execution time as base for next calculation,
+        // not the current time. This ensures recurring tasks maintain their intended schedule
+        // even when execution is delayed due to system load or downtime.
+        // See: docs/recurring-task-schedule-drift-fix.md
+        //
+        // task.ExecutionTime is the scheduled execution time for THIS run:
+        // - For first dispatch: the original scheduled time from the builder
+        // - For tasks loaded from storage (after restart): NextRunUtc from the database
+        //   (set in WorkerService.cs when loading pending tasks)
+        var scheduledTime = task.ExecutionTime ?? DateTimeOffset.UtcNow;
+
+        // Use extension method to calculate next valid run and get skip information
+        var result = task.RecurringTask.CalculateNextValidRun(scheduledTime, currentRun + 1);
+
+        // Log skipped occurrences if any
+        if (result.SkippedCount > 0)
+        {
+            logger.LogInformation(
+                "Task {TaskId} skipped {SkippedCount} missed occurrence(s) to maintain schedule",
+                task.PersistenceId, result.SkippedCount);
+        }
+
+        // Advance the run counter by THIS run plus every occurrence skipped during downtime: the
+        // recurring stop-check already accounts for skipped occurrences (currentRun + skippedCount
+        // >= MaxRuns), so the counter must stay consistent with it (F7/F8). Persistence is gated on
+        // storage; without storage only the in-memory counter advances.
+        var advance = 1 + result.SkippedCount;
         if (taskStorage != null)
         {
-            var currentRun = await taskStorage.GetCurrentRunCount(task.PersistenceId);
-
-            // Fix for schedule drift: Use the scheduled execution time as base for next calculation,
-            // not the current time. This ensures recurring tasks maintain their intended schedule
-            // even when execution is delayed due to system load or downtime.
-            // See: docs/recurring-task-schedule-drift-fix.md
-
-            // task.ExecutionTime is the scheduled execution time for THIS run:
-            // - For first dispatch: the original scheduled time from the builder
-            // - For tasks loaded from storage (after restart): NextRunUtc from the database
-            //   (set in WorkerService.cs when loading pending tasks)
-            //
-            // We use this directly to calculate the next run. No reconstruction needed
-            // because task.ExecutionTime is already the correct scheduled time for THIS run.
-            var scheduledTime = task.ExecutionTime ?? DateTimeOffset.UtcNow;
-
-            // Use extension method to calculate next valid run and get skip information
-            var result = task.RecurringTask.CalculateNextValidRun(scheduledTime, currentRun + 1);
-
-            // Log skipped occurrences if any
-            if (result.SkippedCount > 0)
-            {
-                logger.LogInformation(
-                    "Task {TaskId} skipped {SkippedCount} missed occurrence(s) to maintain schedule",
-                    task.PersistenceId, result.SkippedCount);
-            }
-
-            // Advance the run counter by THIS run plus every occurrence skipped during downtime: the
-            // recurring stop-check already accounts for skipped occurrences (currentRun + skippedCount
-            // >= MaxRuns), so the persisted counter must stay consistent with it (F7/F8).
             // On a successful run the Completed status is written in the SAME atomic operation as the
             // advance (CU14/L29); otherwise (failure/rejection) the status was already set and we only
             // advance.
             if (markCompleted)
                 await taskStorage.CompleteRecurringRun(task.PersistenceId, executionTimeMs, result.NextRun,
-                                                       1 + result.SkippedCount, task.AuditLevel)
+                                                       advance, task.AuditLevel)
                                  .ConfigureAwait(false);
             else
                 await taskStorage.UpdateCurrentRun(task.PersistenceId, executionTimeMs, result.NextRun, task.AuditLevel,
-                                                   1 + result.SkippedCount)
+                                                   advance)
                                  .ConfigureAwait(false);
+        }
+        else
+        {
+            _inMemoryRunCounts[task.PersistenceId] = currentRun + advance;
+        }
 
-            if (result.NextRun.HasValue)
-            {
-                // Update ExecutionTime for the next run so that subsequent calculations
-                // use the correct scheduled time (not the original time from first dispatch)
-                var updatedTask = task with { ExecutionTime = result.NextRun };
-                scheduler.Schedule(updatedTask, result.NextRun);
-            }
+        if (result.NextRun.HasValue)
+        {
+            // Update ExecutionTime for the next run so that subsequent calculations
+            // use the correct scheduled time (not the original time from first dispatch)
+            var updatedTask = task with { ExecutionTime = result.NextRun };
+            scheduler.Schedule(updatedTask, result.NextRun);
+        }
+        else
+        {
+            // Series ended (MaxRuns/RunUntil reached): drop the in-memory counter, if any.
+            _inMemoryRunCounts.TryRemove(task.PersistenceId, out _);
         }
     }
 
