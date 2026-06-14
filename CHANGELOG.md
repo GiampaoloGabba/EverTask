@@ -5,6 +5,73 @@ All notable changes to EverTask will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Pipeline review hardening
+
+A review of the dispatch → recovery → scheduler → worker path found a batch of concurrency and accounting defects. Most live in recurring-task scheduling and recovery. One of them changes observable behavior; the rest fix cases that already contradicted the docs or only showed up after a crash or downtime.
+
+#### Changed (behavior)
+
+- **`OnDays(...)` now fires on every listed day instead of once a week.** `EveryWeek().OnDays(Monday, Wednesday, Friday)` advanced a full week after the first matching day, so it ran once a week rather than three times — even though the fluent-API docs already describe it as "multiple days per week", and the business-hours example there relies on every listed day firing. Week and day intervals now fire on each listed day and only advance by the configured number of weeks once that week's days are used up. If you depended on the old once-a-week behavior, list a single day or switch to a cron expression.
+- **Completed tasks are no longer hard-deleted the moment they have no audit rows.** With audit cleanup enabled, a finished non-recurring task that never wrote audits (for example `AuditLevel.None`, or `Minimal`/`ErrorsOnly` that succeeded) was deleted on the next cleanup cycle, regardless of any retention window. It is now deleted only once it is older than the longest configured retention window. The misleading `DeleteCompletedTasksWithAudits` option is renamed `DeleteCompletedTasksAfterRetention`; the old name still works as a deprecated alias.
+
+#### Fixed
+
+Recurring accounting and recovery:
+
+- **`MaxRuns` overran by one after a downtime** (F7/F8): the stop check counted the occurrences skipped while the host was down, but the persisted run counter only moved by one per real execution, so the two drifted. The counter now advances by `1 + skipped`. For cron schedules the skipped count is the real number of missed occurrences (walked from the cron expression) instead of an elapsed-over-interval estimate, which was wrong on uneven schedules like `0 9,17 * * *`.
+- **A crash between "completed" and "advanced" re-ran a recurring occurrence** (CU14): marking an occurrence `Completed` and advancing its run counter / next run were two writes, and a crash in between left the row completed but not advanced, so recovery re-dispatched the finished occurrence. They are now a single transaction.
+- **A short downtime across an occurrence could drop it** (L16): if the host was down while an occurrence came due and it ended up slightly in the past, recovery skipped to the next one. Recovery now runs an occurrence that slipped into the recent past (within one interval) instead of skipping it.
+- **Recovery re-applied the initial delay on every restart** (L25): a recurring task whose first run never happened, recovered with a stale `NextRunUtc`, had its `InitialDelay`/`RunNow`/`RunAt` applied again each time, shifting the whole schedule forward by the delay. The initial-run configuration is no longer re-applied on the recovery path.
+- **`DayInterval` skipped a day** (L26): when every configured time was earlier than the reference time of day, the next-occurrence math added an extra day and returned day+2 instead of day+1.
+- **A rate-limited re-park could fire an occurrence past `RunUntil`** (F14): the in-flight-redelivery re-park lacked the `RunUntil` guard the normal deferral path applies, so an occurrence could fire up to a second late. It now drops the occurrence.
+
+Queue, recovery and taskKey:
+
+- **A terminated recurring row could be resurrected from the scheduler path** (L11): recovered scheduled/recurring tasks re-entered through an unconditional `SetQueued`, so a row that finished after its recovery page was read could be set back to `Queued` when a stale scheduler slot fired. Every enqueue path now goes through the conditional `TrySetQueuedIfRecoverable`.
+- **The recovery `Queued` transition and its audit were not atomic** (L20): EF Core wrote the transition and then the audit in a separate `SaveChanges` outside a shared transaction, and an audit failure was swallowed. They now commit together.
+- **A taskKey re-dispatch while a delivery was in flight could lose the new payload or double-execute** (CU6/L31, G16, G17): an in-flight same-taskKey re-dispatch was treated as an idempotent success and dropped the new payload, and the terminal-status branch could `Remove` a row under a concurrent recovery. The read-decide-write of a taskKey is now serialized per key, an in-flight one-shot re-dispatch is rejected, a recurring row is never converted to a one-shot, and the remove is conditional on the current status.
+- **A concurrent same-taskKey insert behaved inconsistently across providers** (G13, G14/CU23): in-memory storage allowed two rows with the same key (both executed), and on SQL Server/SQLite the losing insert either threw a raw storage exception or carried on under its own id. The unique conflict is now caught, the winner re-read, and its id returned; in-memory storage enforces the same uniqueness.
+- **A failed taskKey enqueue leaked its scheduler/parking-lot registration** (CU15): the stale registration was dropped before the enqueue, so a failed enqueue left nothing scheduled and leaked the reservation. The drop now happens before the enqueue with a compensating re-schedule on failure.
+
+Cancellation:
+
+- **A user cancel racing shutdown was recoverable instead of terminal** (F17): the OperationCanceled branch checked the service token first and classified the task `ServiceStopped` (recoverable), so it re-ran at the next restart. A blacklisted (user-cancelled) id now persists `Cancelled` even when the service token also fired.
+- **A cancel landing just before the per-task token was created could write `Completed` over `Cancelled`** (CU9/L46): the general path did not re-check the blacklist after creating the token, so a handler that ignored the (uncancelled) token ran to completion and overwrote the user's status. It re-checks before writing the outcome.
+- **A disposed CTS aborted the rest of the cancel cleanup** (CU12): `CancelTokenForTask` could throw `ObjectDisposedException` and propagate out of `Cancel` before the blacklist, unschedule, gate-invalidation and parking-lot cleanup ran. The cancel is wrapped so the cleanup always completes.
+- **A racing enqueue could revive a cancelled task** (CU13): `Cancel` persisted `Cancelled` before adding the blacklist, so an enqueue in between wrote `SetQueued` over it. The blacklist is now set first and `Cancelled` persisted last.
+- **A cancelled recurring series could resurrect itself** (L23/CU10): the only suppression was the in-memory blacklist, swept after about an hour, so a series with an interval longer than the TTL came back. The persisted `Cancelled` status now stops the series durably.
+
+Configuration and logging:
+
+- **A queue with zero consumers deadlocked at startup** (F5): `SetMaxDegreeOfParallelism(0)` created no consumers, and with a waiting full-mode queue every producer blocked forever. Parallelism is clamped to at least one and validated up front.
+- **The default queue raised `QueueFullException` instead of applying backpressure** (G19): a `FallbackToDefault` default queue degenerated into a self-reference and threw at the caller. The default queue now waits (backpressure) as documented.
+- **A bad format specifier in a log call failed the task** (G9, CU18): the log-capture renderer applied the user's format string without a guard, so a specifier like `{0:Q}` (or `Math.Abs(int.MinValue)` on alignment) threw out of `Handle`, and a separate `OnError` template used `{1}` with a single argument and masked the real failure. Log capture no longer throws (it falls back to the raw template), and the `OnError` template is fixed.
+
+Retention:
+
+- **Cleanup cascade-deleted captured execution logs** (G6): a completed task with persisted execution logs but no audit rows was deleted, and the cascade took its logs with it, even though log persistence has no retention of its own. Cleanup now skips any task that still has execution logs (see also the age gate under "Changed").
+
+Handler registration:
+
+- **A manually registered singleton handler was shared across concurrent eager dispatches** (G3): the eager path resolved the handler through `IEverTaskHandler<T>`, so registering one with `AddSingleton` before `AddEverTask` handed the same instance to every dispatch, and the worker's per-execution log capture crossed between concurrent runs. The eager path now resolves a fresh instance per dispatch by concrete type, the way the lazy path already did.
+- **Duplicate and open-generic handlers were dropped without a word** (G1, G2): two handlers for the same task type were registered first-wins with no warning, and open-generic handlers were filtered out by unreachable code and never registered at all. Both cases now record a warning that is logged when the worker starts.
+
+Provider consistency and audit:
+
+- **The in-memory audit trail diverged from the relational providers** (F19/L29, L43, L28): in-memory storage audited every `ServiceStopped` — including the expected shutdown cancellation and a null exception — at `Minimal`/`ErrorsOnly` while the EF Core providers did not; it skipped the recovery `Queued` audit the EF providers write; and it stamped `RunsAudit.ExecutedAt` from the task's previous execution time instead of the moment of the update. A shared `AuditPolicy` now makes the decision for every provider, so the trail for an event is the same whichever backend you use.
+- **EF Core `SetStatus` wrote its audit and its row update non-atomically** (F20): the audit committed in its own `SaveChanges` before the row update, so a failure in between left an audit without the matching row change — unlike the transactional SQL Server stored procedure. They now commit together: one transaction on relational providers, a single tracked `SaveChanges` on EF Core InMemory.
+- **A recurring series stopped after one run when no storage was registered** (F18): the next occurrence was scheduled only inside the storage guard, so without a storage provider a recurring task ran once and the series died quietly. The next occurrence is now scheduled regardless of storage, backed by an in-memory run counter that still honors `MaxRuns` and `RunUntil`.
+- **The scheduler logged an error on every shutdown** (F12): `Dispose` disposed the wake-up semaphore under the running loop, and the loop's next `WaitAsync` threw `ObjectDisposedException`, which landed in the error log. Both schedulers now treat that as shutdown.
+
+#### Added
+
+- **`ITaskStorage.UpdateCurrentRun(..., int runsToAdvance)`** and **`ITaskStorage.CompleteRecurringRun(...)`**, both default interface members (non-breaking). The first advances the run counter by more than one (a downtime catching up); the second writes a recurring completion and its counter/next-run advance in one transaction. Custom storages that do not override them keep the previous one-step, two-write behavior; the built-in providers override both.
+- SQL Server migration `AddRunsToAdvanceToUpdateRunProcedure`: an optional `@RunsToAdvance` parameter (default 1) on `usp_UpdateCurrentRun`.
+- **`AuditPolicy`** (public, in `EverTask.Storage`): the shared audit-decision helper (`IsRealError`, `ShouldCreateStatusAudit`, `ShouldCreateRunsAudit`) used by every storage provider. Custom providers can use it to keep their audit trail consistent with the built-in ones.
+- **`AuditRetentionPolicy.DeleteCompletedTasksAfterRetention`**, replacing the misnamed `DeleteCompletedTasksWithAudits` (kept as a deprecated alias that forwards to it).
+
 ## [3.8.0] - 2026-06-13
 
 ### Recovery & double-delivery hardening
