@@ -38,11 +38,13 @@ public class WeekInterval : IInterval
     {
         Validate();
 
-        var nextWeek = current.AddDays(7 * Interval);
-
+        // OnDays: fire on EVERY listed day of the week, advancing by Interval weeks only when the
+        // current week's slots are exhausted (CU7) — not once per week on the first matching day.
         if (OnDays.Any())
-            nextWeek = nextWeek.NextValidDayOfWeek(OnDays);
+            return current.NextDayOfWeekSlot(OnDays, OnTimes, weekStride: Interval);
 
+        // No specific days: once every Interval weeks, on the same day-of-week, at the configured time.
+        var nextWeek = current.AddDays(7 * Interval);
         return nextWeek.GetNextRequestedTime(current, OnTimes, false);
     }
 }

@@ -37,14 +37,74 @@ public static class DateTimeOffsetExtensions
 
         if (nextTimeIndex == -1)
         {
-            if (addDays)
-                nextDay       = nextDay.AddDays(1);
+            // No matching onTime on the target day. Advance another day ONLY when we are still on the
+            // ORIGINAL day (same-day, no later slot). When nextDay is already a strictly-later day every
+            // onTime on it is valid, so use the earliest — bumping again would drop a whole day, which is
+            // what made a DayInterval whose onTimes were all before the reference time return day+2 (L26).
+            if (addDays && !isDifferentDay)
+                nextDay = nextDay.AddDays(1);
             nextTimeIndex = 0;
         }
 
         var nextTime = onTimes[nextTimeIndex];
         return nextDay.Adjust(hour: nextTime.Hour, minute: nextTime.Minute, second: nextTime.Second);
 
+    }
+
+    /// <summary>
+    /// Next calendar slot strictly after <paramref name="current"/> that falls on a day in
+    /// <paramref name="onDays"/> at a time in <paramref name="onTimes"/> (sorted ascending). Fires on
+    /// EVERY listed day of the current week, advancing by <paramref name="weekStride"/> weeks only once
+    /// the current week's remaining slots are exhausted — so e.g. OnDays(Mon, Wed, Fri) fires three
+    /// times a week, not once (CU7).
+    /// </summary>
+    public static DateTimeOffset NextDayOfWeekSlot(this DateTimeOffset current, DayOfWeek[] onDays,
+                                                   TimeOnly[] onTimes, int weekStride)
+    {
+        if (onDays.Length == 0)
+            throw new ArgumentException("onDays cannot be empty", nameof(onDays));
+
+        var times = onTimes.Length > 0 ? onTimes : [new TimeOnly(0, 0)];
+        if (weekStride < 1)
+            weekStride = 1;
+
+        // 1. Remaining slots in the CURRENT week (from current's day through Saturday): the first slot
+        //    strictly after `current`.
+        var daysToWeekEnd = DayOfWeek.Saturday - current.DayOfWeek; // Sunday=0 .. Saturday=6
+        for (var i = 0; i <= daysToWeekEnd; i++)
+        {
+            var slot = FirstSlotOnDay(current.AddDays(i), onDays, times, after: current);
+            if (slot.HasValue)
+                return slot.Value;
+        }
+
+        // 2. Current week exhausted → jump `weekStride` weeks and take the first slot of that week.
+        var nextWeekStart = current.AddDays(-(int)current.DayOfWeek + 7 * weekStride); // Sunday of target week
+        for (var i = 0; i < 7; i++)
+        {
+            var slot = FirstSlotOnDay(nextWeekStart.AddDays(i), onDays, times, after: null);
+            if (slot.HasValue)
+                return slot.Value;
+        }
+
+        // onDays is non-empty, so a slot is always found above; this only satisfies the compiler.
+        throw new InvalidOperationException("Could not compute the next day-of-week slot");
+    }
+
+    private static DateTimeOffset? FirstSlotOnDay(DateTimeOffset day, DayOfWeek[] onDays, TimeOnly[] onTimes,
+                                                  DateTimeOffset? after)
+    {
+        if (!onDays.Contains(day.DayOfWeek))
+            return null;
+
+        foreach (var time in onTimes) // sorted ascending
+        {
+            var slot = day.Adjust(hour: time.Hour, minute: time.Minute, second: time.Second);
+            if (after == null || slot > after.Value)
+                return slot;
+        }
+
+        return null;
     }
 
     public static DateTimeOffset NextValidDayOfWeek(this DateTimeOffset dateTime, DayOfWeek[] validDays)

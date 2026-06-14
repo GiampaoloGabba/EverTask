@@ -38,11 +38,13 @@ public class DayInterval : IInterval
     {
         Validate();
 
-        var nextDay = current.AddDays(Interval);
-
+        // OnDays (top-level OnDays(...) builds DayInterval(0, days)): fire on EVERY listed day of week,
+        // every week (CU7) — not once on the first matching day.
         if (OnDays.Any())
-            nextDay = nextDay.NextValidDayOfWeek(OnDays);
+            return current.NextDayOfWeekSlot(OnDays, OnTimes, weekStride: 1);
 
+        // No specific days: every Interval days, at the configured time(s).
+        var nextDay = current.AddDays(Interval);
         return nextDay.GetNextRequestedTime(current, OnTimes);
     }
 }

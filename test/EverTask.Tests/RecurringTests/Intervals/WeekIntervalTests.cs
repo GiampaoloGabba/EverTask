@@ -61,10 +61,29 @@ public class WeekIntervalTests
         // Act
         var next = interval.GetNextOccurrence(current);
 
-        // Assert
+        // Assert — CU7: fires on the NEXT listed day in the SAME week (Friday), not next week's first day
         next.ShouldNotBeNull();
-        next.Value.DayOfWeek.ShouldBe(DayOfWeek.Wednesday); // Next week Wednesday (first valid day in next week's cycle)
-        next.Value.Hour.ShouldBe(0); // Midnight (default)
+        next.Value.ShouldBe(new DateTimeOffset(2025, 11, 7, 0, 0, 0, TimeSpan.Zero)); // Friday, same week, midnight
+    }
+
+    [Fact]
+    public void Should_fire_all_listed_days_within_the_week_not_once_per_week()
+    {
+        // CU7: EveryWeek().OnDays(Mon,Wed,Fri) must fire on EACH listed day (3x/week), advancing to the
+        // next week only when the current week's days are exhausted — not jump a whole week after the
+        // first matching day.
+        var interval = new WeekInterval(1, [DayOfWeek.Monday, DayOfWeek.Wednesday, DayOfWeek.Friday]);
+
+        var monday = new DateTimeOffset(2025, 1, 6, 0, 0, 0, TimeSpan.Zero); // Monday (an occurrence)
+
+        var afterMon = interval.GetNextOccurrence(monday);
+        afterMon.ShouldBe(new DateTimeOffset(2025, 1, 8, 0, 0, 0, TimeSpan.Zero), "Wednesday, same week");
+
+        var afterWed = interval.GetNextOccurrence(afterMon!.Value);
+        afterWed.ShouldBe(new DateTimeOffset(2025, 1, 10, 0, 0, 0, TimeSpan.Zero), "Friday, same week");
+
+        var afterFri = interval.GetNextOccurrence(afterWed!.Value);
+        afterFri.ShouldBe(new DateTimeOffset(2025, 1, 13, 0, 0, 0, TimeSpan.Zero), "next Monday");
     }
 
     [Fact]
@@ -230,20 +249,19 @@ public class WeekIntervalTests
     }
 
     [Fact]
-    public void Should_move_to_next_week_when_all_times_passed_on_current_day()
+    public void Should_move_to_next_listed_day_when_all_times_passed_on_current_day()
     {
         // Arrange
         var interval = new WeekInterval(1, [DayOfWeek.Monday, DayOfWeek.Wednesday, DayOfWeek.Friday]);
         interval.OnTimes = [new TimeOnly(9, 0), new TimeOnly(15, 0)];
-        var current = new DateTimeOffset(2025, 1, 6, 16, 0, 0, TimeSpan.Zero); // Monday 16:00
+        var current = new DateTimeOffset(2025, 1, 6, 16, 0, 0, TimeSpan.Zero); // Monday 16:00 (all times passed)
 
         // Act
         var next = interval.GetNextOccurrence(current);
 
-        // Assert - Should return next Monday at 9:00 (every week schedule)
+        // Assert — CU7: moves to the NEXT listed day in the SAME week (Wednesday 9:00), not next Monday
         next.ShouldNotBeNull();
-        next.Value.DayOfWeek.ShouldBe(DayOfWeek.Monday);
-        next.Value.ShouldBe(new DateTimeOffset(2025, 1, 13, 9, 0, 0, TimeSpan.Zero)); // Next Monday 9:00
+        next.Value.ShouldBe(new DateTimeOffset(2025, 1, 8, 9, 0, 0, TimeSpan.Zero)); // Wednesday 9:00, same week
     }
 
     [Fact]

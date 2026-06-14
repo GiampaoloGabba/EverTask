@@ -189,9 +189,10 @@ public class RecurringTaskTests
 
         Assert.NotNull(nextRun);
 
-        // Calcola l'inizio del giorno successivo (mezzanotte)
+        // L26: the next interval day is day+1 at midnight (as the test name says), not day+2. The default
+        // onTime (00:00) is before "now"'s time-of-day, which previously bumped an extra day.
         var expectedNextRun =
-            new DateTimeOffset(current.Year, current.Month, current.Day, 0, 0, 0, TimeSpan.Zero).AddDays(2);
+            new DateTimeOffset(current.Year, current.Month, current.Day, 0, 0, 0, TimeSpan.Zero).AddDays(1);
         Assert.Equal(expectedNextRun, nextRun);
     }
 
