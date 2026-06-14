@@ -437,6 +437,89 @@ public class QueueResilienceIntegrationTests : IsolatedIntegrationTestBase
     }
 
     [Fact]
+    public async Task Should_execute_pending_occurrence_in_recent_past_on_recovery()
+    {
+        // L16: a recurring occurrence whose scheduled time slipped just into the past (a short downtime
+        // across it) must be EXECUTED on recovery, not skipped. Here the next occurrence is 28 s away,
+        // so before the grace-window fix nothing runs in the test window.
+        await CreateIsolatedHostWithBuilderAsync(b =>
+            {
+                b.AddMemoryStorage();
+                b.Services.AddSingleton(_state);
+            },
+            startHost: false);
+
+        var pendingOccurrence = DateTimeOffset.UtcNow.AddSeconds(-2); // just missed (within the 30 s grace)
+        var recurring         = new RecurringTask { SecondInterval = new SecondInterval(30) };
+
+        await Storage.Persist(new QueuedTask
+        {
+            Id              = Guid.NewGuid(),
+            Type            = typeof(ResilienceRecurringTask).AssemblyQualifiedName!,
+            Request         = JsonConvert.SerializeObject(new ResilienceRecurringTask()),
+            Handler         = "seeded-by-test",
+            Status          = QueuedTaskStatus.Completed, // between runs
+            IsRecurring     = true,
+            RecurringTask   = JsonConvert.SerializeObject(recurring),
+            NextRunUtc      = pendingOccurrence,
+            CurrentRunCount = 1,
+            CreatedAtUtc    = DateTimeOffset.UtcNow.AddMinutes(-5)
+        });
+
+        await Host!.StartAsync();
+
+        // With the grace window the missed occurrence runs (almost) immediately; without it, the next
+        // run is ~28 s out and nothing executes in this window.
+        await TaskWaitHelper.WaitForConditionAsync(() => _state.ExecutedIndexes.Contains(-1), timeoutMs: 6000);
+        _state.ExecutedIndexes.Count(i => i == -1).ShouldBeGreaterThanOrEqualTo(1,
+            "the pending occurrence in the recent past must be executed on recovery, not skipped");
+    }
+
+    [Fact]
+    public async Task Should_not_reapply_initial_delay_on_recovery()
+    {
+        // L25-firstrun: a recurring task whose first occurrence never ran (CurrentRunCount 0) with a
+        // stale NextRunUtc must NOT re-apply InitialDelay on recovery (which would shift the whole grid
+        // forward by the delay at every restart). With a 30 s InitialDelay, the buggy recompute schedules
+        // ~27 s out; the fix keeps it on the 1 s interval grid (runs almost immediately).
+        await CreateIsolatedHostWithBuilderAsync(b =>
+            {
+                b.AddMemoryStorage();
+                b.Services.AddSingleton(_state);
+            },
+            startHost: false);
+
+        var staleFirstOccurrence = DateTimeOffset.UtcNow.AddSeconds(-3); // never ran, slipped past the 1 s grace
+        var recurring            = new RecurringTask
+        {
+            InitialDelay   = TimeSpan.FromSeconds(30),
+            SecondInterval = new SecondInterval(1)
+        };
+
+        await Storage.Persist(new QueuedTask
+        {
+            Id              = Guid.NewGuid(),
+            Type            = typeof(ResilienceRecurringTask).AssemblyQualifiedName!,
+            Request         = JsonConvert.SerializeObject(new ResilienceRecurringTask()),
+            Handler         = "seeded-by-test",
+            Status          = QueuedTaskStatus.WaitingQueue, // never executed
+            IsRecurring     = true,
+            RecurringTask   = JsonConvert.SerializeObject(recurring),
+            NextRunUtc      = staleFirstOccurrence,
+            CurrentRunCount = 0,
+            CreatedAtUtc    = DateTimeOffset.UtcNow.AddMinutes(-5)
+        });
+
+        await Host!.StartAsync();
+
+        // The fix keeps the next run on the 1 s grid (runs within a couple of seconds); the bug shifts it
+        // ~27 s out (InitialDelay re-applied), so nothing executes in this 5 s window.
+        await TaskWaitHelper.WaitForConditionAsync(() => _state.ExecutedIndexes.Contains(-1), timeoutMs: 5000);
+        _state.ExecutedIndexes.Count(i => i == -1).ShouldBeGreaterThanOrEqualTo(1,
+            "recovery must not re-apply InitialDelay and push the next run a whole delay into the future");
+    }
+
+    [Fact]
     public async Task Should_resume_recurring_task_after_restart_without_reregistration()
     {
         // Host 1: dynamically created recurring task (no taskKey re-registration at startup).
