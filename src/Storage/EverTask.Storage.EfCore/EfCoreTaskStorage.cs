@@ -220,30 +220,8 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
 
-        if (AuditPolicy.ShouldCreateStatusAudit(auditLevel, status, exception))
-        {
-            var detailedException = exception.ToDetailedString();
-            var statusAudit = new StatusAudit
-            {
-                QueuedTaskId = taskId,
-                UpdatedAtUtc = UtcNowNormalized,
-                NewStatus    = status,
-                Exception    = detailedException
-            };
-            dbContext.StatusAudit.Add(statusAudit);
-
-            try
-            {
-                await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
-            }
-            catch (Exception e)
-            {
-                logger.LogWarning(e, "Unable to save the audit status for taskId {taskId}", taskId);
-            }
-        }
-
-        // Update task status using bulk update (no tracking overhead)
-        var ex = exception.ToDetailedString();
+        var createAudit = AuditPolicy.ShouldCreateStatusAudit(auditLevel, status, exception);
+        var ex          = exception.ToDetailedString();
 
         // LastExecutionUtc is written only on terminal transitions (a run actually finished).
         // Intermediate transitions (WaitingQueue, Queued, InProgress, Cancelled, Pending) PRESERVE
@@ -258,42 +236,109 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                                    ? UtcNowNormalized
                                    : (DateTimeOffset?)null;
 
+        // Non-relational providers (EF Core InMemory) can translate neither ExecuteUpdate nor an explicit
+        // transaction: run the audit insert and the column update as ONE tracked SaveChanges, which the
+        // provider applies atomically.
+        if (dbContext is not DbContext efContext || !efContext.Database.IsRelational())
+        {
+            await SetStatusClientSideAsync(dbContext, taskId, status, ex, executionTimeMs, lastExecutionUtc,
+                                           createAudit, ct).ConfigureAwait(false);
+            return;
+        }
+
+        // Relational: the StatusAudit insert and the row UPDATE must commit TOGETHER (F20), so a failure
+        // in between never leaves an audit without the row update (or vice versa) — matching the
+        // transactional usp_SetTaskStatus stored procedure. A failed update rolls the audit back too.
+        await using var transaction = await efContext.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
         try
         {
-            int rowsAffected;
+            if (createAudit)
+            {
+                dbContext.StatusAudit.Add(new StatusAudit
+                {
+                    QueuedTaskId = taskId,
+                    UpdatedAtUtc = UtcNowNormalized,
+                    NewStatus    = status,
+                    Exception    = ex
+                });
+            }
 
-            // Include ExecutionTimeMs in update if provided
-            if (executionTimeMs.HasValue)
-            {
-                rowsAffected = await dbContext.QueuedTasks
-                                               .Where(x => x.Id == taskId)
-                                               .ExecuteUpdateAsync(setters => setters
-                                                                              .SetProperty(t => t.Status, status)
-                                                                              .SetProperty(t => t.LastExecutionUtc, t => lastExecutionUtc ?? t.LastExecutionUtc)
-                                                                              .SetProperty(t => t.Exception, ex)
-                                                                              .SetProperty(t => t.ExecutionTimeMs, executionTimeMs.Value), ct)
-                                               .ConfigureAwait(false);
-            }
-            else
-            {
-                rowsAffected = await dbContext.QueuedTasks
-                                               .Where(x => x.Id == taskId)
-                                               .ExecuteUpdateAsync(setters => setters
-                                                                              .SetProperty(t => t.Status, status)
-                                                                              .SetProperty(t => t.LastExecutionUtc, t => lastExecutionUtc ?? t.LastExecutionUtc)
-                                                                              .SetProperty(t => t.Exception, ex), ct)
-                                               .ConfigureAwait(false);
-            }
+            var rowsAffected = await ExecuteStatusUpdateAsync(
+                dbContext, taskId, status, ex, executionTimeMs, lastExecutionUtc, ct).ConfigureAwait(false);
+
+            if (createAudit)
+                await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
+
+            await transaction.CommitAsync(ct).ConfigureAwait(false);
 
             if (rowsAffected == 0)
-            {
                 logger.LogWarning("Task {taskId} not found for status update to {status}", taskId, status);
-            }
         }
         catch (Exception e)
         {
-            logger.LogCritical(e, "Unable to update the status {status} for taskId {taskId}", status, taskId);
+            await transaction.RollbackAsync(ct).ConfigureAwait(false);
+            logger.LogCritical(e, "Unable to update the status {status} for taskId {taskId} atomically", status, taskId);
         }
+    }
+
+    /// <summary>
+    /// Status transition + audit for non-relational providers (EF Core InMemory): a single tracked
+    /// SaveChanges, which the provider applies atomically.
+    /// </summary>
+    private static async Task SetStatusClientSideAsync(
+        ITaskStoreDbContext dbContext, Guid taskId, QueuedTaskStatus status, string? exception,
+        double? executionTimeMs, DateTimeOffset? lastExecutionUtc, bool createAudit, CancellationToken ct)
+    {
+        var task = await dbContext.QueuedTasks.FirstOrDefaultAsync(t => t.Id == taskId, ct).ConfigureAwait(false);
+        if (task == null)
+            return;
+
+        task.Status    = status;
+        task.Exception = exception;
+        if (lastExecutionUtc.HasValue)
+            task.LastExecutionUtc = lastExecutionUtc.Value;
+        if (executionTimeMs.HasValue)
+            task.ExecutionTimeMs = executionTimeMs.Value;
+
+        if (createAudit)
+        {
+            dbContext.StatusAudit.Add(new StatusAudit
+            {
+                QueuedTaskId = taskId,
+                UpdatedAtUtc = new DateTimeOffset(DateTime.UtcNow, TimeSpan.Zero),
+                NewStatus    = status,
+                Exception    = exception
+            });
+        }
+
+        await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Applies the status/last-execution/exception columns for a task via a single bulk UPDATE.
+    /// A seam so the atomicity of audit + update can be exercised under fault injection.
+    /// </summary>
+    protected virtual Task<int> ExecuteStatusUpdateAsync(
+        ITaskStoreDbContext dbContext, Guid taskId, QueuedTaskStatus status, string? exception,
+        double? executionTimeMs, DateTimeOffset? lastExecutionUtc, CancellationToken ct)
+    {
+        if (executionTimeMs.HasValue)
+        {
+            return dbContext.QueuedTasks
+                            .Where(x => x.Id == taskId)
+                            .ExecuteUpdateAsync(setters => setters
+                                                           .SetProperty(t => t.Status, status)
+                                                           .SetProperty(t => t.LastExecutionUtc, t => lastExecutionUtc ?? t.LastExecutionUtc)
+                                                           .SetProperty(t => t.Exception, exception)
+                                                           .SetProperty(t => t.ExecutionTimeMs, executionTimeMs.Value), ct);
+        }
+
+        return dbContext.QueuedTasks
+                        .Where(x => x.Id == taskId)
+                        .ExecuteUpdateAsync(setters => setters
+                                                       .SetProperty(t => t.Status, status)
+                                                       .SetProperty(t => t.LastExecutionUtc, t => lastExecutionUtc ?? t.LastExecutionUtc)
+                                                       .SetProperty(t => t.Exception, exception), ct);
     }
 
 
