@@ -206,6 +206,33 @@ public class MemoryTaskStorageConcurrencyTests
     }
 
     [Fact]
+    public async Task Should_enforce_taskkey_uniqueness_in_memory_storage()
+    {
+        // G13: MemoryTaskStorage must reject a second Persist with the same (non-null) TaskKey, like the
+        // relational unique index — otherwise two rows share a key and both execute (the delivery
+        // registry dedups only by PersistenceId, which are distinct).
+        const string key = "dup-key";
+
+        var first = new QueuedTask
+        {
+            Id = TestGuidGenerator.New(), Type = "T", Request = "{}", Handler = "H",
+            CreatedAtUtc = DateTimeOffset.UtcNow, Status = QueuedTaskStatus.Queued, TaskKey = key
+        };
+        var second = new QueuedTask
+        {
+            Id = TestGuidGenerator.New(), Type = "T", Request = "{}", Handler = "H",
+            CreatedAtUtc = DateTimeOffset.UtcNow, Status = QueuedTaskStatus.Queued, TaskKey = key
+        };
+
+        await _storage.Persist(first);
+        await Should.ThrowAsync<Exception>(() => _storage.Persist(second));
+
+        var rows = (await _storage.GetAll()).Where(t => t.TaskKey == key).ToArray();
+        rows.Length.ShouldBe(1, "a duplicate taskKey must be rejected");
+        rows[0].Id.ShouldBe(first.Id);
+    }
+
+    [Fact]
     public async Task Should_Handle_Concurrent_GetByTaskKey_Operations()
     {
         // Arrange
