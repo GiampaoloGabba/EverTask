@@ -784,6 +784,29 @@ public class RateLimitGateTests
     }
 
     [Fact]
+    public void Should_not_repark_recurring_redelivery_past_run_until()
+    {
+        // F14: ReparkInFlightRedelivery must apply the same RunUntil guard as the Defer path — an
+        // in-flight redelivery whose re-park slot falls past RunUntil must be DROPPED (never fired late),
+        // not re-parked.
+        var recurring = new RecurringTask
+        {
+            SecondInterval = new SecondInterval(30),
+            RunUntil       = DateTimeOffset.UtcNow.AddMilliseconds(200) // the +1 s re-park slot exceeds this
+        };
+        var executor = CreateExecutor(Policy(), "k", recurring: recurring, executionTime: DateTimeOffset.UtcNow);
+
+        var gate = CreateGate();
+        gate.InFlightRedeliveryDelay = TimeSpan.FromSeconds(1);
+
+        gate.ReparkInFlightRedelivery(executor);
+
+        _scheduler.Verify(s => s.Schedule(It.IsAny<TaskHandlerExecutor>(), It.IsAny<DateTimeOffset?>()), Times.Never,
+            "an in-flight redelivery whose re-park slot falls past RunUntil must be dropped, not re-parked");
+        _parkingLot.Count.ShouldBe(0, "a dropped redelivery must not register a parking-lot entry");
+    }
+
+    [Fact]
     public void Should_not_overwrite_existing_registration_when_reparking_redelivery()
     {
         // A newer registration (e.g. a re-dispatched payload already re-parked) must never be
@@ -840,7 +863,7 @@ public class RateLimitGateTests
         storage.Verify(s => s.SetQueued(executor.PersistenceId, It.IsAny<AuditLevel>(), It.IsAny<CancellationToken>()),
             Times.Once, "the skipped occurrence returns to Queued like any parked occurrence");
         storage.Verify(s => s.UpdateCurrentRun(executor.PersistenceId, It.IsAny<double>(),
-                It.IsAny<DateTimeOffset?>(), It.IsAny<AuditLevel>()),
+                It.IsAny<DateTimeOffset?>(), It.IsAny<AuditLevel>(), It.IsAny<int>()),
             Times.Once, "the series must advance through the normal next-occurrence path");
     }
 
