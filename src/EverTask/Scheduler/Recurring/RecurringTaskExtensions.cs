@@ -106,30 +106,55 @@ public static class RecurringTaskExtensions
         DateTimeOffset now,
         int currentRun)
     {
-        if (recurringTask.CronInterval == null)
+        var cron = recurringTask.CronInterval;
+        if (cron == null)
         {
             return new NextRunResult(nextRun, 0);
         }
 
-        // Cronos.GetNextOccurrence is O(1) - calculates directly without iteration
-        var nextCronRun = recurringTask.CronInterval.GetNextOccurrence(now);
+        // Count the REAL number of cron occurrences missed between `nextRun` (the first missed
+        // occurrence, already in the past) and `now` by walking the actual cron schedule, instead of
+        // dividing the elapsed span by an approximate min-interval which diverges on uneven gaps (F8).
+        // Bounded so a sub-minute cron over a huge downtime cannot iterate unboundedly (sibling of
+        // L36): beyond the cap the next run falls back to the first occurrence after `now`.
+        const int maxCronSkipIterations = 100_000;
+
+        var             skippedCount = 1; // nextRun itself is a missed occurrence
+        var             occurrence   = nextRun;
+        DateTimeOffset? nextCronRun  = null;
+        var             hitCap       = true;
+
+        for (var i = 0; i < maxCronSkipIterations; i++)
+        {
+            var following = cron.GetNextOccurrence(occurrence);
+            if (following == null)
+            {
+                hitCap = false; // the cron schedule is exhausted (no further occurrence)
+                break;
+            }
+
+            if (following.Value > now)
+            {
+                nextCronRun = following; // first STRICTLY-future occurrence is the next valid run
+                hitCap      = false;
+                break;
+            }
+
+            // An occurrence falling exactly on `now` is treated as due/missed (counted as skipped),
+            // mirroring the simple-interval path's `candidate <= now` loop, so the next run is always
+            // strictly in the future.
+
+            occurrence = following.Value;
+            skippedCount++;
+        }
+
+        if (hitCap)
+            nextCronRun = cron.GetNextOccurrence(now);
 
         // Check RunUntil constraint
         if (nextCronRun.HasValue && recurringTask.RunUntil.HasValue && nextCronRun >= recurringTask.RunUntil)
         {
             nextCronRun = null;
-        }
-
-        // Estimate skipped count (not exact for cron, but gives an approximation)
-        var skippedCount = 0;
-        if (nextCronRun.HasValue)
-        {
-            var cronInterval = recurringTask.GetMinimumInterval();
-            if (cronInterval.TotalMilliseconds > 0)
-            {
-                var elapsed = now - nextRun;
-                skippedCount = Math.Max(0, (int)(elapsed.TotalMilliseconds / cronInterval.TotalMilliseconds));
-            }
         }
 
         // Check MaxRuns constraint

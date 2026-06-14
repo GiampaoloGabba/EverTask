@@ -194,9 +194,18 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         }
     }
 
-    public Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel)
+    public Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel) =>
+        UpdateCurrentRun(taskId, executionTimeMs, nextRun, auditLevel, 1);
+
+    public Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel,
+                                 int runsToAdvance)
     {
         logger.LogInformation("Update the current run counter for Task {taskId}", taskId);
+
+        // Skipped occurrences must count toward the run counter (F7/F8): advance by 1 + skipped,
+        // never below 1.
+        if (runsToAdvance < 1)
+            runsToAdvance = 1;
 
         lock (_pendingTasksLock)
         {
@@ -221,7 +230,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
                 task.NextRunUtc      = nextRun;
                 var currentRun       = task.CurrentRunCount ?? 0;
 
-                task.CurrentRunCount = currentRun + 1;
+                task.CurrentRunCount = currentRun + runsToAdvance;
             }
         }
 

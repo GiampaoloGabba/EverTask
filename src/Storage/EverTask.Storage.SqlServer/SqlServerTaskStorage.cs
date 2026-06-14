@@ -64,19 +64,29 @@ public class SqlServerTaskStorage : EfCoreTaskStorage
     }
 
     /// <summary>
-    /// Updates the current run counter using optimized stored procedure.
+    /// Updates the current run counter using the optimized stored procedure.
     /// Performs the audit decision (read of Status/Exception), the counter update and the
     /// RunsAudit insert (if required by AuditLevel) in a single atomic database roundtrip.
     /// </summary>
-    public override async Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel)
+    /// <remarks>
+    /// <paramref name="runsToAdvance"/> (1 + occurrences skipped during a downtime) is passed straight
+    /// to the proc's <c>@RunsToAdvance</c> parameter so skipped occurrences count toward
+    /// CurrentRunCount/MaxRuns (F7/F8) without leaving the single-roundtrip path.
+    /// </remarks>
+    public override async Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
+                                                AuditLevel auditLevel, int runsToAdvance)
     {
+        // Skipped occurrences must count toward the run counter; never advance by less than 1.
+        if (runsToAdvance < 1)
+            runsToAdvance = 1;
+
         _logger.LogInformation("Update the current run counter for Task {TaskId} using SQL Server stored procedure", taskId);
 
         await using var dbContext = await _contextFactory.CreateDbContextAsync();
 
         try
         {
-            var sql = $"EXEC [{_schema}].[usp_UpdateCurrentRun] @TaskId, @ExecutionTimeMs, @NextRunUtc, @AuditLevel";
+            var sql = $"EXEC [{_schema}].[usp_UpdateCurrentRun] @TaskId, @ExecutionTimeMs, @NextRunUtc, @AuditLevel, @RunsToAdvance";
 
             await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(
                 sql,
@@ -84,7 +94,8 @@ public class SqlServerTaskStorage : EfCoreTaskStorage
                     new SqlParameter("@TaskId", taskId),
                     new SqlParameter("@ExecutionTimeMs", executionTimeMs),
                     new SqlParameter("@NextRunUtc", (object?)nextRun ?? DBNull.Value),
-                    new SqlParameter("@AuditLevel", (int)auditLevel)
+                    new SqlParameter("@AuditLevel", (int)auditLevel),
+                    new SqlParameter("@RunsToAdvance", runsToAdvance)
                 ]
             ).ConfigureAwait(false);
         }

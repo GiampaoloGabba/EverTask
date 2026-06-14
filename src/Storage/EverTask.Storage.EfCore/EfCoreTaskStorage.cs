@@ -342,9 +342,18 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         return task?.CurrentRunCount ?? 0;
     }
 
-    public virtual async Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel)
+    public virtual Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel) =>
+        UpdateCurrentRun(taskId, executionTimeMs, nextRun, auditLevel, 1);
+
+    public virtual async Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
+                                               AuditLevel auditLevel, int runsToAdvance)
     {
         logger.LogInformation("Update the current run counter for Task {taskId}", taskId);
+
+        // Skipped occurrences must count toward the run counter (F7/F8): advance by 1 + skipped, never
+        // below 1.
+        if (runsToAdvance < 1)
+            runsToAdvance = 1;
 
         await using var dbContext = await contextFactory.CreateDbContextAsync();
 
@@ -359,7 +368,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                                                   .ExecuteUpdateAsync(setters => setters
                                                                                  .SetProperty(t => t.ExecutionTimeMs, executionTimeMs)
                                                                                  .SetProperty(t => t.NextRunUtc, nextRun)
-                                                                                 .SetProperty(t => t.CurrentRunCount, t => (t.CurrentRunCount ?? 0) + 1))
+                                                                                 .SetProperty(t => t.CurrentRunCount, t => (t.CurrentRunCount ?? 0) + runsToAdvance))
                                                   .ConfigureAwait(false);
 
                 if (rowsAffected == 0)
@@ -395,7 +404,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
             task.ExecutionTimeMs = executionTimeMs;
             task.NextRunUtc      = nextRun;
-            task.CurrentRunCount = (task.CurrentRunCount ?? 0) + 1;
+            task.CurrentRunCount = (task.CurrentRunCount ?? 0) + runsToAdvance;
 
             await dbContext.SaveChangesAsync(CancellationToken.None).ConfigureAwait(false);
         }

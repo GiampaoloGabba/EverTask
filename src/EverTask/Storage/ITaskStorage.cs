@@ -147,6 +147,29 @@ public interface ITaskStorage
     Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel);
 
     /// <summary>
+    /// Advances the run counter by <paramref name="runsToAdvance"/> in a single write, instead of by
+    /// a fixed 1. Used after a downtime so the occurrences skipped while the host was down also count
+    /// toward <c>CurrentRunCount</c> (and therefore toward <see cref="QueuedTask.MaxRuns"/>): the
+    /// recurring stop-check already accounts for skipped occurrences, so the persisted counter must
+    /// stay consistent with it (F7/F8).
+    /// </summary>
+    /// <remarks>
+    /// Default interface member: the built-in providers override it to honour an arbitrary increment;
+    /// custom storages that only implement the single-run
+    /// <see cref="UpdateCurrentRun(Guid,double,DateTimeOffset?,AuditLevel)"/> degrade gracefully to a
+    /// +1 advance (the pre-existing behaviour). <paramref name="runsToAdvance"/> is always &gt;= 1.
+    /// </remarks>
+    /// <param name="taskId">The ID of the task.</param>
+    /// <param name="executionTimeMs">The execution time in milliseconds.</param>
+    /// <param name="nextRun">The next run date.</param>
+    /// <param name="auditLevel">Audit level for this task (determines if audit record should be created).</param>
+    /// <param name="runsToAdvance">How many runs to add to the counter (1 + skipped occurrences).</param>
+    /// <returns>A task representing the asynchronous operation.</returns>
+    Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel,
+                          int runsToAdvance) =>
+        UpdateCurrentRun(taskId, executionTimeMs, nextRun, auditLevel);
+
+    /// <summary>
     /// Retrieves a task by its unique task key.
     /// </summary>
     /// <param name="taskKey">The unique task key.</param>

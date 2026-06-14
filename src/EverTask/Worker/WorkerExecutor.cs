@@ -881,7 +881,11 @@ public class WorkerExecutor(
                     task.PersistenceId, result.SkippedCount);
             }
 
-            await taskStorage.UpdateCurrentRun(task.PersistenceId, executionTimeMs, result.NextRun, task.AuditLevel)
+            // Advance the run counter by THIS run plus every occurrence skipped during downtime: the
+            // recurring stop-check already accounts for skipped occurrences (currentRun + skippedCount
+            // >= MaxRuns), so the persisted counter must stay consistent with it (F7/F8).
+            await taskStorage.UpdateCurrentRun(task.PersistenceId, executionTimeMs, result.NextRun, task.AuditLevel,
+                                               1 + result.SkippedCount)
                              .ConfigureAwait(false);
 
             if (result.NextRun.HasValue)
