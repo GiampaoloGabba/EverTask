@@ -412,6 +412,25 @@ public abstract class EfCoreTaskStorageTestsBase
     }
 
     [Fact]
+    public async Task CompleteRecurringRun_Should_set_completed_and_advance_atomically()
+    {
+        // CU14/L29: a recurring occurrence's Completed status AND the run-counter / next-run advance must
+        // be written in a single atomic operation (one transaction per provider).
+        var queued = QueuedTasks[0];
+        await _storage.Persist(queued);
+        var taskId  = queued.Id;
+        var nextRun = DateTimeOffset.UtcNow.AddMinutes(30);
+
+        await _storage.CompleteRecurringRun(taskId, 75.0, nextRun, runsToAdvance: 2, AuditLevel.Full);
+
+        var task = (await _storage.Get(x => x.Id == taskId))[0];
+        task.Status.ShouldBe(QueuedTaskStatus.Completed);
+        task.CurrentRunCount.ShouldBe(2);
+        task.NextRunUtc.ShouldBe(nextRun);
+        task.ExecutionTimeMs.ShouldBe(75.0);
+    }
+
+    [Fact]
     public async Task SaveExecutionLogsAsync_Should_PersistLogs()
     {
         // Arrange
