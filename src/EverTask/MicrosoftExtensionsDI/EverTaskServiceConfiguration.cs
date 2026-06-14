@@ -29,6 +29,12 @@ public class EverTaskServiceConfiguration
     internal int? ShardedSchedulerShardCount { get; private set; }
 
     /// <summary>
+    /// Diagnostics collected during handler assembly scanning (duplicate closed handlers,
+    /// unsupported open-generic handlers). Logged once at startup by <c>WorkerService</c>.
+    /// </summary>
+    internal List<string> HandlerRegistrationWarnings { get; } = new();
+
+    /// <summary>
     /// Enable adaptive lazy handler resolution.
     /// When enabled, handlers are recreated at execution time based on task scheduling:
     /// - Immediate tasks use lazy mode (the worker resolves a fresh handler in its per-task scope;

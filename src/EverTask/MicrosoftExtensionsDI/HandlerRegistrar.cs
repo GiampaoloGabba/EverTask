@@ -7,16 +7,28 @@
 internal static class HandlerRegistrar
 {
     public static void RegisterConnectedImplementations(IServiceCollection services,
-                                                        IEnumerable<Assembly> assembliesToScan)
+                                                        IEnumerable<Assembly> assembliesToScan,
+                                                        ICollection<string>? warnings = null)
     {
         var requestInterface = typeof(IEverTaskHandler<>);
         var concretions      = new List<Type>();
         var interfaces       = new List<Type>();
 
-        foreach (var type in assembliesToScan.SelectMany(a => a.DefinedTypes).Where(t => !t.IsOpenGeneric()))
+        foreach (var type in assembliesToScan.SelectMany(a => a.DefinedTypes))
         {
             var interfaceTypes = type.FindInterfacesThatClose(requestInterface).ToArray();
             if (!interfaceTypes.Any()) continue;
+
+            if (type.IsOpenGeneric())
+            {
+                // G1: open-generic handlers are not supported — the closing path below was dead code
+                // (open generics were filtered out before reaching it), so they were silently dropped.
+                // Surface them instead of letting the task type resolve to no handler at runtime.
+                warnings?.Add(
+                    $"Open-generic handler '{type.FullName}' implementing IEverTaskHandler<> is not supported " +
+                    "and was ignored. Register a closed handler for each concrete task type.");
+                continue;
+            }
 
             if (type.IsConcrete())
             {
@@ -37,6 +49,18 @@ internal static class HandlerRegistrar
                 exactMatches.RemoveAll(m => !IsMatchingWithInterface(m, @interface));
             }
 
+            if (exactMatches.Count > 1)
+            {
+                // G2: multiple concrete handlers for the same closed interface. Registration is
+                // first-wins (TryAdd), but the ambiguity must not be silent.
+                var chosen   = exactMatches[0];
+                var ignored  = string.Join(", ", exactMatches.Skip(1).Select(t => t.Name));
+                var taskName = @interface.GenericTypeArguments.FirstOrDefault()?.Name ?? @interface.Name;
+                warnings?.Add(
+                    $"Multiple handlers found for task '{taskName}': using '{chosen.Name}', ignoring [{ignored}]. " +
+                    "Register only one handler per task type.");
+            }
+
             foreach (var type in exactMatches)
             {
                 // Register handler by interface (IEverTaskHandler<TTask> → ConcreteHandler)
@@ -48,11 +72,6 @@ internal static class HandlerRegistrar
                 // when resolving handlers from their AssemblyQualifiedName stored in HandlerTypeName.
                 // Memory overhead: ~36 bytes per handler registration (negligible).
                 services.TryAddTransient(type, type);
-            }
-
-            if (!@interface.IsOpenGeneric())
-            {
-                AddConcretionsThatCouldBeClosed(@interface, concretions, services);
             }
         }
     }
@@ -77,28 +96,6 @@ internal static class HandlerRegistrar
         }
 
         return false;
-    }
-
-    private static void AddConcretionsThatCouldBeClosed(Type @interface, List<Type> concretions,
-                                                        IServiceCollection services)
-    {
-        foreach (var type in concretions.Where(x => x.IsOpenGeneric() && x.CouldCloseTo(@interface)))
-        {
-            try
-            {
-                var closedType = type.MakeGenericType(@interface.GenericTypeArguments);
-
-                // Register handler by interface (IEverTaskHandler<TTask> → ClosedGenericHandler)
-                services.TryAddTransient(@interface, closedType);
-
-                // Register handler by concrete type (ClosedGenericHandler → ClosedGenericHandler)
-                // This is used by lazy mode handler resolution in TaskHandlerExecutor.GetOrResolveHandler()
-                services.TryAddTransient(closedType, closedType);
-            }
-            catch (Exception)
-            {
-            }
-        }
     }
 
     internal static bool CouldCloseTo(this Type openConcretion, Type closedInterface)

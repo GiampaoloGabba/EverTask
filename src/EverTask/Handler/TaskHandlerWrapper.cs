@@ -76,6 +76,15 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
 
         ArgumentNullException.ThrowIfNull(handlerService);
 
+        // Resolve via the concrete type (registered transient by HandlerRegistrar), like the lazy path
+        // does, so a manual singleton registration of IEverTaskHandler<TTask> cannot hand the SAME
+        // mutable instance to concurrent dispatches: the worker sets per-execution state (log capture)
+        // on the carried handler, so a shared instance corrupts concurrent executions (G3).
+        if (serviceFactory.GetService(handlerService.GetType()) is IEverTaskHandler<TTask> concreteHandler)
+        {
+            handlerService = concreteHandler;
+        }
+
         var (eagerPolicy, eagerKey) = ExtractRateLimit(handlerService, (TTask)task, recurring, serviceFactory);
 
         return new TaskHandlerExecutor(

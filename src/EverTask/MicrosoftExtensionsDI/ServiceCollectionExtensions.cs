@@ -169,7 +169,8 @@ public static class ServiceCollectionExtensions
     private static void AddEverTaskHandlers(this IServiceCollection services, EverTaskServiceConfiguration configuration)
     {
         var assembliesToScan = configuration.AssembliesToRegister.Distinct().ToArray();
-        HandlerRegistrar.RegisterConnectedImplementations(services, assembliesToScan);
+        HandlerRegistrar.RegisterConnectedImplementations(
+            services, assembliesToScan, configuration.HandlerRegistrationWarnings);
     }
 
     /// <summary>

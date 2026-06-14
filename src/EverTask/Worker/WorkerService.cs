@@ -14,6 +14,13 @@ public class WorkerService(
     {
         logger.LogTrace("EverTask BackgroundService is running");
 
+        // Surface handler-registration diagnostics collected during assembly scanning (duplicate
+        // closed handlers, unsupported open-generic handlers) — see HandlerRegistrar (G1/G2).
+        foreach (var warning in configuration.HandlerRegistrationWarnings)
+        {
+            logger.LogWarning("Handler registration: {Warning}", warning);
+        }
+
         // Warn if using suboptimal MaxDegreeOfParallelism configuration
         if (configuration.MaxDegreeOfParallelism == 1)
         {
