@@ -187,7 +187,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     /// </summary>
     private static void AddQueuedTransitionAudit(ITaskStoreDbContext dbContext, Guid taskId, AuditLevel auditLevel)
     {
-        if (!ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Queued, null))
+        if (!AuditPolicy.ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Queued, null))
             return;
 
         dbContext.StatusAudit.Add(new StatusAudit
@@ -220,7 +220,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
 
-        if (ShouldCreateStatusAudit(auditLevel, status, exception))
+        if (AuditPolicy.ShouldCreateStatusAudit(auditLevel, status, exception))
         {
             var detailedException = exception.ToDetailedString();
             var statusAudit = new StatusAudit
@@ -296,38 +296,6 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         }
     }
 
-    private static bool ShouldCreateStatusAudit(AuditLevel auditLevel, QueuedTaskStatus status, Exception? exception) =>
-        auditLevel switch
-        {
-            AuditLevel.None => false,
-            AuditLevel.ErrorsOnly or AuditLevel.Minimal => IsRealError(status, exception),
-            AuditLevel.Full => true,
-            _ => true // Default to full audit for unknown levels
-        };
-
-    private static bool ShouldCreateRunsAudit(AuditLevel auditLevel, QueuedTaskStatus status, string? exception) =>
-        auditLevel switch
-        {
-            AuditLevel.None => false,
-            AuditLevel.ErrorsOnly => !string.IsNullOrEmpty(exception) || status == QueuedTaskStatus.Failed,
-            AuditLevel.Minimal => true, // Minimal creates runs audit for recurring tasks (tracks last run)
-            AuditLevel.Full => true,
-            _ => true // Default to full audit for unknown levels
-        };
-
-    /// <summary>
-    /// Determines if a task status represents a real error that should be audited.
-    /// Excludes expected shutdown scenarios (ServiceStopped with OperationCanceledException).
-    /// </summary>
-    private static bool IsRealError(QueuedTaskStatus status, Exception? exception) =>
-        status switch
-        {
-            // Always audit Failed status
-            QueuedTaskStatus.Failed => true,
-            // ServiceStopped with OperationCanceledException is expected shutdown behavior, not an error
-            QueuedTaskStatus.ServiceStopped when exception is OperationCanceledException => false,
-            _ => exception != null
-        };
 
     public virtual async Task<int> GetCurrentRunCount(Guid taskId)
     {
@@ -390,7 +358,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                 return;
             }
 
-            if (ShouldCreateRunsAudit(auditLevel, task.Status, task.Exception))
+            if (AuditPolicy.ShouldCreateRunsAudit(auditLevel, task.Status, task.Exception))
             {
                 task.RunsAudits.Add(new RunsAudit
                 {
@@ -448,7 +416,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
             // Status audit (only when the level audits a successful Completed) + runs audit, the status
             // transition, and the counter/next-run advance all flush in ONE SaveChanges.
-            if (ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Completed, null))
+            if (AuditPolicy.ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Completed, null))
             {
                 dbContext.StatusAudit.Add(new StatusAudit
                 {
@@ -459,7 +427,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                 });
             }
 
-            if (ShouldCreateRunsAudit(auditLevel, QueuedTaskStatus.Completed, null))
+            if (AuditPolicy.ShouldCreateRunsAudit(auditLevel, QueuedTaskStatus.Completed, null))
             {
                 task.RunsAudits.Add(new RunsAudit
                 {
