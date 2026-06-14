@@ -26,16 +26,16 @@
     "@radix-ui/react-tooltip": "^1.2.8",
     "@tanstack/react-query": "^5.90.16",
     "@types/react-syntax-highlighter": "^15.5.13",
-    "axios": "^1.13.2",
+    "axios": "^1.18.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
     "lucide-react": "^0.562.0",
-    "qs": "^6.14.1",
+    "qs": "^6.15.2",
     "react": "^18.3.1",
     "react-day-picker": "^9.13.0",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^7.12.0",
+    "react-router-dom": "^7.17.0",
     "react-syntax-highlighter": "^16.1.0",
     "recharts": "^3.6.0",
     "tailwind-merge": "^3.4.0",
@@ -45,18 +45,26 @@
     "@types/qs": "^6.14.0",
     "@types/react": "^18.3.27",
     "@types/react-dom": "^18.3.7",
-    "@typescript-eslint/eslint-plugin": "^8.52.0",
-    "@typescript-eslint/parser": "^8.52.0",
+    "@typescript-eslint/eslint-plugin": "^8.61.0",
+    "@typescript-eslint/parser": "^8.61.0",
     "@vitejs/plugin-react": "^5.1.2",
     "autoprefixer": "^10.4.23",
-    "eslint": "^9.39.2",
+    "eslint": "^9.39.4",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.26",
-    "postcss": "^8.5.6",
-    "rollup": "^4.55.1",
+    "postcss": "^8.5.15",
+    "rollup": "^4.62.0",
     "tailwindcss": "^3.4.19",
     "tailwindcss-animate": "^1.0.7",
     "typescript": "^5.9.3",
-    "vite": "^7.3.1"
+    "vite": "^7.3.5"
+  },
+  "pnpm": {
+    "overrides": {
+      "esbuild@<0.28.1": ">=0.28.1",
+      "flatted@<3.4.2": ">=3.4.2",
+      "picomatch@<2.3.2": ">=2.3.2",
+      "picomatch@>=4 <4.0.4": ">=4.0.4"
+    }
   }
 }
