@@ -58,7 +58,18 @@ internal sealed class CancellationSourceProvider : ICancellationSourceProvider
     public void CancelTokenForTask(Guid id)
     {
         if (!_sources.TryGetValue(id, out var cts)) return;
-        cts.Cancel();
+
+        try
+        {
+            cts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The worker disposed the CTS between the lookup and Cancel (the task already finished):
+            // there is nothing to cancel, but the caller's cleanup (blacklist / unschedule / invalidate
+            // / remove) must still proceed — the exception must NOT propagate (CU12).
+        }
+
         Delete(id);
     }
 

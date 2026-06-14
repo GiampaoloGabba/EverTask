@@ -285,6 +285,18 @@ public class WorkerExecutor(
                 throw CreateRejectionException(task, rejection);
             }
 
+            // A Cancel that landed AFTER the pre-gate blacklist check but BEFORE the per-task token was
+            // created left no token to cancel, so the handler ran to completion on a fresh token. Re-check
+            // the blacklist before writing the outcome so Completed never clobbers the user's persisted
+            // Cancelled status (CU9/L46). The persisted Cancelled status is the durable terminal state.
+            if (workerBlacklist.IsBlacklisted(task.PersistenceId))
+            {
+                workerBlacklist.Remove(task.PersistenceId);
+                RegisterInfo(task, "Task with id {0} was cancelled during execution; the completion is suppressed.",
+                    task.PersistenceId);
+                return;
+            }
+
             if (taskStorage != null)
                 await taskStorage.SetCompleted(task.PersistenceId, executionTime, task.AuditLevel).ConfigureAwait(false);
 
@@ -788,9 +800,13 @@ public class WorkerExecutor(
     {
         if (ex is OperationCanceledException oce)
         {
+            // A user cancel (blacklisted id) must classify as terminal Cancelled even when the service
+            // token is ALSO cancelled (shutdown racing the user cancel): otherwise it would be
+            // ServiceStopped (recoverable) and re-execute at the next restart (F17).
+            var userCancelled = workerBlacklist.IsBlacklisted(task.PersistenceId);
             if (taskStorage != null)
             {
-                if (serviceToken.IsCancellationRequested)
+                if (serviceToken.IsCancellationRequested && !userCancelled)
                     await taskStorage.SetCancelledByService(task.PersistenceId, oce, task.AuditLevel).ConfigureAwait(false);
                 else
                     await taskStorage.SetCancelledByUser(task.PersistenceId, task.AuditLevel).ConfigureAwait(false);
@@ -818,6 +834,21 @@ public class WorkerExecutor(
     private async Task QueueNextOccourrence(TaskHandlerExecutor task, double executionTimeMs, ITaskStorage? taskStorage)
     {
         if (task.RecurringTask == null) return;
+
+        // A user-cancelled recurring series must STOP: do not advance the run counter nor schedule the
+        // next occurrence. The persisted Cancelled status makes this DURABLE beyond the in-memory
+        // blacklist's ~1h TTL (a series with an interval > the TTL would otherwise resurrect) (L23/CU10).
+        if (taskStorage != null)
+        {
+            var current = (await taskStorage.Get(t => t.Id == task.PersistenceId).ConfigureAwait(false)).FirstOrDefault();
+            if (current?.Status == QueuedTaskStatus.Cancelled || workerBlacklist.IsBlacklisted(task.PersistenceId))
+            {
+                logger.LogInformation(
+                    "Recurring task {TaskId} was cancelled: the series is stopped, no next occurrence scheduled.",
+                    task.PersistenceId);
+                return;
+            }
+        }
 
         // If we reach here for a recurring task, it means an error occurred
         // In that case, we still need to schedule the next run

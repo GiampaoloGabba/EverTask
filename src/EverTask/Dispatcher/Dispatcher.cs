@@ -104,24 +104,30 @@ public class Dispatcher(
     /// <inheritdoc />
     public async Task Cancel(Guid taskId, CancellationToken cancellationToken = default)
     {
+        // Blacklist FIRST, before persisting Cancelled: a concurrent enqueue (scheduler slot / gate)
+        // racing this Cancel must see the blacklist and be discarded, instead of slipping through the
+        // (still-false) blacklist check and writing SetQueued over the Cancelled status we are about to
+        // persist (CU13).
+        workerBlacklist.Add(taskId);
+
+        // Must not abort the rest of the cleanup if the CTS was already disposed (CU12).
+        cancellationSourceProvider.CancelTokenForTask(taskId);
+
+        // Drop any occurrence still parked in the scheduler so it isn't even dispatched.
+        scheduler.TryUnschedule(taskId);
+
+        // Invalidate any rate-limit gate operation in flight for this task: a deferral being re-parked
+        // concurrently with this Cancel must not survive it. The parking-lot entry is released too
+        // (a cancelled parked task never re-enters a channel).
+        GateInvalidation?.Invalidate(taskId);
+        ParkingLot?.Remove(taskId);
+
+        // Persist Cancelled LAST so it is the final write of the cancel: any SetQueued a racing enqueue
+        // managed to issue before the blacklist took effect is overwritten by Cancelled.
         if (taskStorage != null)
         {
             await taskStorage.SetCancelledByUser(taskId, AuditLevel.ErrorsOnly).ConfigureAwait(false);
         }
-
-        cancellationSourceProvider.CancelTokenForTask(taskId);
-
-        workerBlacklist.Add(taskId);
-
-        // Drop any occurrence still parked in the scheduler so it isn't even dispatched
-        // (the blacklist would discard it at enqueue time anyway, this is just cleaner)
-        scheduler.TryUnschedule(taskId);
-
-        // Invalidate any rate-limit gate operation in flight for this task: a deferral
-        // being re-parked concurrently with this Cancel must not survive it. The parking-lot
-        // entry is released too (a cancelled parked task never re-enters a channel).
-        GateInvalidation?.Invalidate(taskId);
-        ParkingLot?.Remove(taskId);
     }
 
     /// <inheritdoc />
