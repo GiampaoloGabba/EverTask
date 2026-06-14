@@ -93,9 +93,9 @@ public class BackwardCompatibilityScheduleDriftTests : IsolatedIntegrationTestBa
     }
 
     [Fact]
-    public async Task Storage_Without_RecordSkippedOccurrences_Should_Degrade_Gracefully()
+    public async Task Minimal_legacy_storage_should_degrade_gracefully_on_skipped_occurrences()
     {
-        // Arrange: Use TestTaskStorage which doesn't implement RecordSkippedOccurrences properly
+        // Arrange: Use TestTaskStorage, a minimal legacy storage
         // This test needs custom storage (TestTaskStorage instead of MemoryStorage)
         // Use configureServices callback to register custom storage
         await CreateIsolatedHostAsync(

@@ -173,9 +173,8 @@ public class WorkerExecutorNextRunCalculationTests : IsolatedIntegrationTestBase
         task.ShouldNotBeNull();
 
         // Should have skipped approximately 4 occurrences (2 minutes / 30 seconds = 4)
-        // Note: Skipped occurrences are recorded via ITaskStorage.RecordSkippedOccurrences()
-        // but are not exposed as a direct property on QueuedTask. The task should be scheduled
-        // for the next valid future run.
+        // Note: skipped occurrences count toward the run counter but are not exposed as a direct
+        // property on QueuedTask. The task should be scheduled for the next valid future run.
     }
 
     [Fact]

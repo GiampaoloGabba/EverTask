@@ -115,11 +115,9 @@ The fix introduces a new extension method `CalculateNextValidRun` that encapsula
    - Collects all skipped occurrences in a list
    - Includes safety limit to prevent infinite loops (max 1000 iterations)
    - Returns `NextRunResult` containing next run time, skip count, and skipped times
-3. If occurrences were skipped:
-   - Log detailed information about skipped times
-   - Persist skip information to `RunsAudit` table (if using EfCore storage)
-4. Update the task's next run time
-5. Schedule the next occurrence
+3. If occurrences were skipped, log the count
+4. Advance the run counter by `1 + SkippedCount`, so a `MaxRuns`-bounded series stays consistent with the stop check after downtime
+5. Update the task's next run time and schedule the next occurrence
 
 ### Edge Cases Handled
 
@@ -136,39 +134,15 @@ The fix introduces a new extension method `CalculateNextValidRun` that encapsula
 - Maximum 1000 iterations provides safety without performance impact
 - Logging provides visibility without affecting hot path
 
-### Audit Trail for Skipped Occurrences
+### Skipped Occurrences
 
-All storage implementations (EfCore, Memory) persist skipped occurrences to the `RunsAudit` collection:
+When a recurring task skips missed occurrences (after downtime or a long-delayed run), the worker logs the count:
 
-**How It Works:**
-- When a recurring task skips missed occurrences, a special `RunsAudit` entry is created
-- The entry uses `QueuedTaskStatus.Completed` as the status
-- The `Exception` field contains skip details: `"Skipped N missed occurrence(s) to maintain schedule: [times]"`
-- This provides a permanent audit trail of skipped executions
-- **All implementations** of `ITaskStorage` support this via the `RecordSkippedOccurrences` method
-
-**Querying Skipped Occurrences:**
-```csharp
-// Find all skip audit entries for a task
-var skipAudits = task.RunsAudits
-    .Where(a => a.Exception != null && a.Exception.Contains("Skipped"))
-    .ToList();
-
-// Count total skipped occurrences
-var totalSkipped = skipAudits
-    .Sum(a => ExtractSkipCount(a.Exception));
+```
+Task {TaskId} skipped {SkippedCount} missed occurrence(s) to maintain schedule
 ```
 
-**Benefits:**
-- Permanent record of system downtime impact
-- Distinguish between "never ran" and "intentionally skipped"
-- Debugging and monitoring visibility
-- Audit compliance for scheduled jobs
-
-**Implementation:**
-- `EfCoreTaskStorage`: Persists to database `RunsAudit` table
-- `MemoryTaskStorage`: Stores in in-memory `RunsAudit` collection
-- Custom implementations: Must implement `RecordSkippedOccurrences` from `ITaskStorage`
+The skipped occurrences also count toward the run counter: it advances by `1 + SkippedCount`, so a `MaxRuns`-bounded series ends on the right occurrence after downtime instead of overrunning. There is no separate audit entry per skipped occurrence.
 
 ## Migration Notes
 
@@ -207,13 +181,10 @@ The fix includes comprehensive test coverage:
 5. **Infinite Loop Protection**: Tests max iteration safety limit
 6. **Edge Cases**: MaxRuns, RunUntil, null handling, chronological ordering
 
-### Integration Tests (`RecurringTaskSkipPersistenceTests.cs`)
+### Skip Behavior Tests (`RecurringTaskSkipPersistenceTests.cs`)
 
-1. **Persistence Verification**: Confirms skipped occurrences are saved to `RunsAudit`
-2. **Audit Entry Format**: Validates skip message format and status
-3. **No-Skip Scenarios**: Ensures no audit when nothing is skipped
-4. **Error Handling**: Tests graceful handling of nonexistent tasks
-5. **Storage Compatibility**: Verifies EfCore vs MemoryStorage behavior
+1. **Skip Count**: `CalculateNextValidRun` returns the number of occurrences skipped to reach the next future run
+2. **Null/Edge Handling**: Graceful handling of a null task and no-skip scenarios
 
 **Running Tests:**
 ```bash
@@ -230,6 +201,6 @@ dotnet test --filter "FullyQualifiedName~RecurringTaskSkipPersistence"
 - **Core Fix**: `src/EverTask/Worker/WorkerExecutor.cs` - `QueueNextOccourrence` method
 - **Extension Method**: `src/EverTask/Scheduler/Recurring/RecurringTaskExtensions.cs`
 - **Result Record**: `src/EverTask/Scheduler/Recurring/NextRunResult.cs`
-- **Persistence**: `src/Storage/EverTask.Storage.EfCore/EfCoreTaskStorage.cs` - `RecordSkippedOccurrences` method
+- **Run-counter advance**: `src/EverTask/Worker/WorkerExecutor.cs` - `QueueNextOccourrence` (advances by `1 + SkippedCount`)
 - **Unit Tests**: `test/EverTask.Tests/RecurringTests/RecurringTaskScheduleDriftTests.cs`
 - **Integration Tests**: `test/EverTask.Tests/IntegrationTests/RecurringTaskSkipPersistenceTests.cs`

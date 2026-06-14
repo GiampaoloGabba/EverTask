@@ -66,10 +66,8 @@ public class DispatcherRecurringSkipTests : IsolatedIntegrationTestBase
         // Next run should be in the future
         task.NextRunUtc.Value.ShouldBeGreaterThan(DateTimeOffset.UtcNow);
 
-        // Should have skipped occurrences - the RecordSkippedOccurrences method should have been called
-        // Note: We can't directly verify skipped occurrences as they're not exposed as a property,
-        // but the task should be scheduled for a future run
-        // The implementation calls ITaskStorage.RecordSkippedOccurrences() which creates audit entries
+        // Skipped occurrences count toward the run counter (the worker advances it by 1 + SkippedCount);
+        // they are not exposed as a property on QueuedTask, but the task should be scheduled for a future run.
     }
 
     [Fact]
