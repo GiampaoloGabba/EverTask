@@ -165,6 +165,12 @@ public class ShardedScheduler : IScheduler, IDisposable
                 {
                     break;
                 }
+                catch (ObjectDisposedException)
+                {
+                    // Dispose() cancelled the loop and disposed the wake-up semaphore: a WaitAsync racing
+                    // that disposal is expected shutdown, not an error (F12). Treat it like cancellation.
+                    break;
+                }
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Shard {ShardId}: Error processing scheduled tasks", _shardId);
