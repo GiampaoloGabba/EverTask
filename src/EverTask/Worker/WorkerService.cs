@@ -90,7 +90,16 @@ public class WorkerService(
             }
         };
 
+        // Clamp to at least one consumer: a queue with zero consumers and FullMode=Wait deadlocks
+        // every producer (dispatch, scheduler, recovery) once its channel fills (F5).
         var consumerCount = queueConfig.MaxDegreeOfParallelism;
+        if (consumerCount < 1)
+        {
+            logger.LogWarning(
+                "Queue '{QueueName}' is configured with MaxDegreeOfParallelism={Configured} (< 1): " +
+                "clamped to 1 consumer to avoid a startup deadlock", queueName, consumerCount);
+            consumerCount = 1;
+        }
 
         logger.LogTrace("Starting {ConsumerCount} dedicated consumer(s) for queue '{QueueName}'",
             consumerCount, queueName);
@@ -207,7 +216,9 @@ public class WorkerService(
             // Use configured MaxDegreeOfParallelism to respect user settings
             var options = new ParallelOptions
             {
-                MaxDegreeOfParallelism = configuration.MaxDegreeOfParallelism,
+                // Clamp to >= 1: ParallelOptions rejects 0, and a misconfigured zero must never abort
+                // recovery (F5).
+                MaxDegreeOfParallelism = Math.Max(1, configuration.MaxDegreeOfParallelism),
                 CancellationToken = ct
             };
 

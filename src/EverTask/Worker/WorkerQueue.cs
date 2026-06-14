@@ -60,12 +60,40 @@ public class WorkerQueue : IWorkerQueue
         _deliveryRegistry = deliveryRegistry ?? new TaskDeliveryRegistry();
 
         Name = configuration.Name;
-        // The itemDropped callback releases the delivery registration for items silently dropped
-        // by the Drop* full modes (never invoked under FullMode.Wait): without it a dropped item
-        // would leave its id permanently registered, blocking later re-deliveries
+        // The itemDropped callback fires for items silently dropped by the Drop* full modes (never
+        // invoked under FullMode.Wait): it releases the delivery registration (or the dropped id would
+        // stay registered forever, blocking later re-deliveries) AND reverts the victim's storage row
+        // to WaitingQueue so it stays recoverable instead of being silently lost (CU5/L12).
         _queue = Channel.CreateBounded<TaskHandlerExecutor>(
             configuration.ChannelOptions,
-            dropped => _deliveryRegistry.End(dropped.PersistenceId));
+            OnItemDropped);
+    }
+
+    private void OnItemDropped(TaskHandlerExecutor dropped)
+    {
+        _deliveryRegistry.End(dropped.PersistenceId);
+
+        // A Drop* full mode evicted a persisted task whose storage row is still Queued (it looks
+        // enqueued forever and never runs in this process). Revert it to WaitingQueue so startup
+        // recovery rescues it. Best-effort fire-and-forget — the channel drop callback is synchronous.
+        if (_taskStorage != null)
+            _ = RevertDroppedToWaitingQueueAsync(dropped);
+    }
+
+    private async Task RevertDroppedToWaitingQueueAsync(TaskHandlerExecutor dropped)
+    {
+        try
+        {
+            await _taskStorage!
+                  .SetStatus(dropped.PersistenceId, QueuedTaskStatus.WaitingQueue, null, dropped.AuditLevel)
+                  .ConfigureAwait(false);
+        }
+        catch (Exception e)
+        {
+            _logger.LogWarning(e,
+                "Failed to revert dropped task {TaskId} to WaitingQueue after a Drop* eviction on queue '{QueueName}'",
+                dropped.PersistenceId, Name);
+        }
     }
 
     /// <summary>

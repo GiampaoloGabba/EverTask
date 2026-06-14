@@ -122,12 +122,13 @@ public class TaskLogCaptureTests
         capture.LogInformation("Log 4 - should not be persisted");
         capture.LogInformation("Log 5 - should not be persisted");
 
-        // Assert
+        // Assert - the 3 kept logs plus a single non-silent truncation marker (G10)
         var logs = capture.GetPersistedLogs();
-        logs.Count.ShouldBe(3);
+        logs.Count.ShouldBe(4);
         logs[0].Message.ShouldBe("Log 1");
         logs[1].Message.ShouldBe("Log 2");
         logs[2].Message.ShouldBe("Log 3");
+        logs[^1].Message.ShouldContain("truncated");
         logs.ShouldNotContain(l => l.Message.Contains("Log 4"));
         logs.ShouldNotContain(l => l.Message.Contains("Log 5"));
 
@@ -140,6 +141,41 @@ public class TaskLogCaptureTests
                 It.IsAny<Exception>(),
                 It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
             Times.Exactly(5));
+    }
+
+    [Fact]
+    public void Should_emit_truncation_marker_when_log_cap_reached()
+    {
+        // G10: once MaxLogsPerTask is reached, extra logs must not be dropped SILENTLY — a single
+        // truncation marker reports how many entries were discarded.
+        var taskId = TestGuidGenerator.New();
+        var capture = new TaskLogCapture(
+            _mockLogger.Object,
+            taskId,
+            _mockGuidGenerator.Object,
+            persistLogs: true,
+            minPersistLevel: LogLevel.Trace,
+            maxPersistedLogs: 3);
+
+        capture.LogInformation("Log 1");
+        capture.LogInformation("Log 2");
+        capture.LogInformation("Log 3");
+        capture.LogInformation("Log 4"); // dropped
+        capture.LogInformation("Log 5"); // dropped
+
+        var logs = capture.GetPersistedLogs();
+
+        // 3 kept logs + a single truncation marker reporting the 2 dropped entries.
+        logs.Count.ShouldBe(4);
+        logs[0].Message.ShouldBe("Log 1");
+        logs[1].Message.ShouldBe("Log 2");
+        logs[2].Message.ShouldBe("Log 3");
+
+        var marker = logs[^1];
+        marker.Message.ShouldContain("truncated");
+        marker.Message.ShouldContain("2");
+        logs.ShouldNotContain(l => l.Message.Contains("Log 4"));
+        logs.ShouldNotContain(l => l.Message.Contains("Log 5"));
     }
 
     [Fact]

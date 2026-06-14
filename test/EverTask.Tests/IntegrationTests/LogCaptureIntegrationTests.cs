@@ -210,11 +210,13 @@ public class LogCaptureIntegrationTests : IsolatedIntegrationTestBase
         var storage = Host!.Services.GetRequiredService<ITaskStorage>();
         var logs = await storage.GetExecutionLogsAsync(taskId, CancellationToken.None);
 
-        // Assert - only first 10 logs should be captured (MaxLogsPerTask enforcement)
-        logs.Count.ShouldBe(10,
-            $"Expected 10 logs for task {taskId}, got {logs.Count}. First log: {logs.FirstOrDefault()?.Message ?? "none"}");
+        // Assert - first 10 logs captured (MaxLogsPerTask enforcement) plus a non-silent truncation
+        // marker reporting the discarded entries (G10)
+        logs.Count.ShouldBe(11,
+            $"Expected 10 logs + 1 truncation marker for task {taskId}, got {logs.Count}. First log: {logs.FirstOrDefault()?.Message ?? "none"}");
         logs[0].Message.ShouldBe("Log message 1 of 50");
         logs[9].Message.ShouldBe("Log message 10 of 50");
+        logs[10].Message.ShouldContain("truncated");
     }
 
     [Fact]

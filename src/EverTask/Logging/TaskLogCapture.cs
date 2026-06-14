@@ -20,6 +20,7 @@ internal sealed class TaskLogCapture : ITaskLogCaptureInternal
     private readonly List<TaskExecutionLog>? _logs;
     private readonly object? _lock;
     private int _sequenceNumber = 0;
+    private int _truncatedLogCount = 0;
 
     public TaskLogCapture(
         ILogger logger,
@@ -96,23 +97,44 @@ internal sealed class TaskLogCapture : ITaskLogCaptureInternal
 
         lock (_lock)
         {
-            return _logs.ToArray(); // Return defensive copy
+            // Non-silent truncation: when the cap was hit, append a single marker reporting how many
+            // entries were discarded (G10), so the buffer never drops logs without a trace.
+            if (_truncatedLogCount == 0)
+                return _logs.ToArray(); // Return defensive copy
+
+            var result = new List<TaskExecutionLog>(_logs.Count + 1);
+            result.AddRange(_logs);
+            result.Add(new TaskExecutionLog
+            {
+                Id             = _guidGenerator.NewDatabaseFriendly(),
+                TaskId         = _taskId,
+                TimestampUtc   = DateTimeOffset.UtcNow,
+                Level          = LogLevel.Warning.ToString(),
+                Message        = $"[EverTask] {_truncatedLogCount} log " +
+                                 $"entr{(_truncatedLogCount == 1 ? "y" : "ies")} truncated: " +
+                                 $"MaxLogsPerTask ({_maxPersistedLogs}) reached",
+                SequenceNumber = _sequenceNumber
+            });
+            return result.ToArray();
         }
     }
 
     private void LogWithPersistence(LogLevel level, string message, Exception? exception, object?[]? args)
     {
-        // ALWAYS log to ILogger infrastructure (console, file, Serilog, etc.)
-        // Use LoggerExtensions for structured logging support
-        if (args is { Length: > 0 })
+        // ALWAYS log to ILogger infrastructure (console, file, Serilog, etc.).
+        // A malformed template/format specifier in a handler's OWN log call must never fault the task,
+        // so forwarding is non-throwing: on a render failure fall back to the raw template (G9).
+        try
         {
-            // Use structured logging with parameters
-            _logger.Log(level, exception, message, args);
+            if (args is { Length: > 0 })
+                _logger.Log(level, exception, message, args); // structured logging with parameters
+            else
+                _logger.Log(level, new EventId(0), message, exception, s_messageFormatter);
         }
-        else
+        catch
         {
-            // Simple message without parameters
-            _logger.Log(level, new EventId(0), message, exception, s_messageFormatter);
+            try { _logger.Log(level, new EventId(0), message, exception, s_messageFormatter); }
+            catch { /* give up forwarding to ILogger; still persist the raw template below */ }
         }
 
         // Optionally persist to database
@@ -239,7 +261,8 @@ internal sealed class TaskLogCapture : ITaskLogCaptureInternal
 
         if (hasAlignment)
         {
-            var width = Math.Abs(alignment);
+            // Guard Math.Abs(int.MinValue), which overflows: a degenerate alignment means no padding.
+            var width = alignment == int.MinValue ? 0 : Math.Abs(alignment);
             if (formatted.Length < width)
             {
                 var padding = width - formatted.Length;
@@ -290,13 +313,25 @@ internal sealed class TaskLogCapture : ITaskLogCaptureInternal
             // Check if we've exceeded max persisted logs
             if (_maxPersistedLogs.HasValue && _logs!.Count >= _maxPersistedLogs.Value)
             {
-                // Stop persisting (keep oldest logs)
+                // Cap reached: keep the oldest logs but DON'T drop silently — count the discarded
+                // entries so GetPersistedLogs can append a truncation marker (G10).
+                _truncatedLogCount++;
                 return;
             }
 
-            var message = args is { Length: > 0 } capturedArgs
-                ? FormatMessage(template, capturedArgs)
-                : template;
+            string message;
+            try
+            {
+                message = args is { Length: > 0 } capturedArgs
+                    ? FormatMessage(template, capturedArgs)
+                    : template;
+            }
+            catch
+            {
+                // Malformed format specifier / alignment: persist the raw template instead of faulting
+                // the handler (G9).
+                message = template;
+            }
 
             var log = new TaskExecutionLog
             {

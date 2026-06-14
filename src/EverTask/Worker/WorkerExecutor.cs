@@ -776,7 +776,7 @@ public class WorkerExecutor(
         catch (Exception e)
         {
             RegisterError(e, task,
-                "Error occurred executing while executing the callback override OnError task with id {1}.",
+                "Error occurred executing the callback override OnError for task with id {0}.",
                 task.PersistenceId);
         }
     }

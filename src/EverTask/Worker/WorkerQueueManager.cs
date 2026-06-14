@@ -135,9 +135,11 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
                             "Target queue is full and default queue is unavailable");
                     }
 
-                    // Already using default queue - throw
-                    throw new QueueFullException(targetQueueName, task.PersistenceId,
-                        "Default queue is full and no fallback is available");
+                    // Already on the Default queue: FallbackToDefault here is a self-reference, so apply
+                    // Wait backpressure (block until space) instead of throwing QueueFullException at the
+                    // caller (G19).
+                    await targetQueue.Queue(task, cancellationToken).ConfigureAwait(false);
+                    return true;
 
                 case QueueFullBehavior.Wait:
                 default:
