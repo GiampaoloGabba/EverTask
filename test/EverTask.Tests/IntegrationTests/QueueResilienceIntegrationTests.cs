@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using EverTask.Configuration;
 using EverTask.Dispatcher;
+using EverTask.Handler;
 using EverTask.Scheduler;
 using EverTask.Scheduler.Recurring;
 using EverTask.Scheduler.Recurring.Intervals;
@@ -564,5 +565,120 @@ public class QueueResilienceIntegrationTests : IsolatedIntegrationTestBase
         await TaskWaitHelper.WaitForConditionAsync(() => !registry.IsDelivering(taskId), timeoutMs: 5000);
         _state.ExecutedIndexes.ShouldNotContain(42);
         (await Storage.GetAll()).Single(t => t.Id == taskId).Status.ShouldBe(QueuedTaskStatus.Cancelled);
+    }
+
+    // ---- L11 — scheduler boundary must respect the recoverable predicate -----------------------
+
+    /// <summary>
+    /// Builds the lazy recurring executor a stale scheduler slot would carry for an already-persisted
+    /// row (id), exactly as the recovery/scheduler path does.
+    /// </summary>
+    private static TaskHandlerExecutor StaleRecurringExecutor(Guid id, RecurringTask recurring) =>
+        new(new ResilienceRecurringTask(),
+            Handler: null,
+            HandlerTypeName: typeof(ResilienceRecurringTaskHandler).AssemblyQualifiedName,
+            ExecutionTime: DateTimeOffset.UtcNow.AddMilliseconds(-50),
+            RecurringTask: recurring,
+            HandlerCallback: null,
+            HandlerErrorCallback: null,
+            HandlerStartedCallback: null,
+            HandlerCompletedCallback: null,
+            PersistenceId: id,
+            QueueName: null,
+            TaskKey: null,
+            AuditLevel.Full);
+
+    [Fact]
+    public async Task Should_not_resurrect_terminally_finished_row_when_scheduler_slot_fires()
+    {
+        // L11: a SCHEDULED/RECURRING task re-enters via TryEnqueueImmediate -> TryQueue, which today
+        // does an UNCONDITIONAL SetQueued. If the row terminally finished after the recovery page-read,
+        // a stale scheduler slot resurrects it (SetQueued over Completed => a second execution).
+        await CreateIsolatedHostWithBuilderAsync(b =>
+        {
+            b.AddMemoryStorage();
+            b.Services.AddSingleton(_state);
+        });
+
+        // Seed a recurring row that has terminally finished: MaxRuns exhausted, no NextRunUtc.
+        // QueuedTask.IsRecoverable is false for it, so it must never be re-queued.
+        var recurring = new RecurringTask { SecondInterval = new SecondInterval(2), MaxRuns = 1 };
+        var terminalId = Guid.NewGuid();
+        await Storage.Persist(new QueuedTask
+        {
+            Id              = terminalId,
+            Type            = typeof(ResilienceRecurringTask).AssemblyQualifiedName!,
+            Request         = JsonConvert.SerializeObject(new ResilienceRecurringTask()),
+            Handler         = typeof(ResilienceRecurringTaskHandler).AssemblyQualifiedName!,
+            Status          = QueuedTaskStatus.Completed,
+            IsRecurring     = true,
+            RecurringTask   = JsonConvert.SerializeObject(recurring),
+            NextRunUtc      = null, // series ended
+            MaxRuns         = 1,
+            CurrentRunCount = 2,    // > MaxRuns => exhausted
+            CreatedAtUtc    = DateTimeOffset.UtcNow.AddMinutes(-5)
+        });
+
+        // Force the scheduler to dispatch a stale, already-due slot for that id.
+        var scheduler = Host!.Services.GetRequiredService<IScheduler>();
+        scheduler.Schedule(StaleRecurringExecutor(terminalId, recurring), DateTimeOffset.UtcNow.AddMilliseconds(-50));
+
+        // Margin: a resurrection (the pre-fix bug) would dispatch + execute within a scheduler tick.
+        await Task.Delay(1500);
+
+        _state.ExecutedIndexes.ShouldNotContain(-1);
+        var row = (await Storage.GetAll()).Single(t => t.Id == terminalId);
+        row.Status.ShouldBe(QueuedTaskStatus.Completed);
+        row.CurrentRunCount.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task Should_not_double_execute_recurring_at_maxruns_when_recovery_schedules_concurrently()
+    {
+        // L11 end-to-end at the MaxRuns boundary: a recurring task runs its last allowed occurrence
+        // (real recovery + scheduler), the series terminates, and a concurrently-registered recovery
+        // slot for the same id fires afterwards. The scheduler boundary must not resurrect it.
+        await CreateIsolatedHostWithBuilderAsync(b =>
+        {
+            b.AddMemoryStorage();
+            b.Services.AddSingleton(_state);
+        },
+        startHost: false);
+
+        var recurring = new RecurringTask { SecondInterval = new SecondInterval(2), MaxRuns = 1 };
+        var id = Guid.NewGuid();
+        await Storage.Persist(new QueuedTask
+        {
+            Id              = id,
+            Type            = typeof(ResilienceRecurringTask).AssemblyQualifiedName!,
+            Request         = JsonConvert.SerializeObject(new ResilienceRecurringTask()),
+            Handler         = typeof(ResilienceRecurringTaskHandler).AssemblyQualifiedName!,
+            Status          = QueuedTaskStatus.Completed,
+            IsRecurring     = true,
+            RecurringTask   = JsonConvert.SerializeObject(recurring),
+            NextRunUtc      = DateTimeOffset.UtcNow.AddMilliseconds(700), // last occurrence, recoverable
+            MaxRuns         = 1,
+            CurrentRunCount = 0,
+            CreatedAtUtc    = DateTimeOffset.UtcNow.AddMinutes(-5)
+        });
+
+        await Host!.StartAsync();
+
+        // Recovery runs the final occurrence exactly once; the series then exhausts (NextRunUtc cleared).
+        await TaskWaitHelper.WaitUntilAsync(
+            async () => (await Storage.GetAll()).Single(t => t.Id == id),
+            t => (t.CurrentRunCount ?? 0) >= 1 && t.NextRunUtc == null,
+            timeoutMs: 15000);
+        _state.ExecutedIndexes.Count(i => i == -1).ShouldBe(1);
+
+        // A concurrent recovery registration (read while the last run was still in flight) now fires
+        // its stale slot for the same — now exhausted — id.
+        var scheduler = Host.Services.GetRequiredService<IScheduler>();
+        scheduler.Schedule(StaleRecurringExecutor(id, recurring), DateTimeOffset.UtcNow.AddMilliseconds(-50));
+
+        await Task.Delay(1500); // margin for the (buggy) resurrection to land
+
+        _state.ExecutedIndexes.Count(i => i == -1).ShouldBe(1);
+        (await Storage.GetAll()).Single(t => t.Id == id).CurrentRunCount.ShouldBe(1);
     }
 }
