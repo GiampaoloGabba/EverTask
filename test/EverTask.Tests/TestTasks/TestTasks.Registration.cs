@@ -46,3 +46,20 @@ public class OpenGenericRegistrationHandler<T> : EverTaskHandler<OpenGenericRegi
         return Task.CompletedTask;
     }
 }
+
+// ── F18: a recurring series must keep running even with no storage registered ────────────────────
+
+public record NoStorageRecurringTask : IEverTask;
+
+public class NoStorageRecurringHandler : EverTaskHandler<NoStorageRecurringTask>
+{
+    public static int Executions;
+
+    public static void Reset() => Interlocked.Exchange(ref Executions, 0);
+
+    public override Task Handle(NoStorageRecurringTask backgroundTask, CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref Executions);
+        return Task.CompletedTask;
+    }
+}
