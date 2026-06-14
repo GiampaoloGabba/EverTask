@@ -1670,5 +1670,149 @@ public abstract class EfCoreTaskStorageTestsBase
 
     #endregion
 
+    #region Audit cleanup retention (M6 G5/G6)
+
+    private QueuedTask CompletedTask(DateTimeOffset finishedAt, params TaskExecutionLog[] logs)
+    {
+        var id = GetGuidForProvider();
+        foreach (var log in logs)
+            log.TaskId = id;
+
+        return new QueuedTask
+        {
+            Id               = id,
+            CreatedAtUtc     = finishedAt,
+            LastExecutionUtc = finishedAt,
+            Type             = "CleanupTask",
+            Request          = "{}",
+            Handler          = "CleanupHandler",
+            Status           = QueuedTaskStatus.Completed,
+            ExecutionLogs    = logs.ToList()
+        };
+    }
+
+    [Fact]
+    public async Task Should_not_delete_completed_task_within_retention_window()
+    {
+        // G5: a Completed non-recurring task with no audit rows must NOT be hard-deleted before it is
+        // older than the retention window. Pre-fix the cleanup had no age gate and deleted it on the
+        // very next cycle, losing the task record immediately.
+        var now    = DateTimeOffset.UtcNow;
+        var policy = new AuditRetentionPolicy
+        {
+            StatusAuditRetentionDays           = 30,
+            DeleteCompletedTasksAfterRetention = true
+        };
+
+        var recent = CompletedTask(now);                 // just finished → inside the 30-day window
+        var aged   = CompletedTask(now.AddDays(-40));     // past the cutoff → legitimately deletable
+
+        _mockedDbContext.QueuedTasks.AddRange(recent, aged);
+        await _mockedDbContext.SaveChangesAsync(CancellationToken.None);
+
+        await AuditCleanupHostedService.DeleteCompletedTasksAsync(_mockedDbContext, policy, now, CancellationToken.None);
+
+        _mockedDbContext.QueuedTasks.Count(x => x.Id == recent.Id).ShouldBe(1, "recent task is within retention");
+        _mockedDbContext.QueuedTasks.Count(x => x.Id == aged.Id).ShouldBe(0, "aged task past the cutoff is purged");
+    }
+
+    [Fact]
+    public async Task Should_not_cascade_delete_execution_logs()
+    {
+        // G6: a Completed task with captured execution logs (which have no retention of their own) must
+        // NOT be deleted, otherwise the cascade silently destroys its logs. Even past the audit cutoff.
+        var now    = DateTimeOffset.UtcNow;
+        var policy = new AuditRetentionPolicy
+        {
+            StatusAuditRetentionDays           = 1,
+            DeleteCompletedTasksAfterRetention = true
+        };
+
+        var logged = CompletedTask(now.AddDays(-10), new TaskExecutionLog
+        {
+            Id             = GetGuidForProvider(),
+            TimestampUtc   = now.AddDays(-10),
+            Level          = "Information",
+            Message        = "execution log that must survive",
+            SequenceNumber = 0
+        });
+
+        _mockedDbContext.QueuedTasks.Add(logged);
+        await _mockedDbContext.SaveChangesAsync(CancellationToken.None);
+
+        await AuditCleanupHostedService.DeleteCompletedTasksAsync(_mockedDbContext, policy, now, CancellationToken.None);
+
+        _mockedDbContext.QueuedTasks.Count(x => x.Id == logged.Id).ShouldBe(1, "task with logs must be preserved");
+        _mockedDbContext.TaskExecutionLogs.Count(x => x.TaskId == logged.Id).ShouldBe(1, "logs must not be cascaded away");
+    }
+
+    [Fact]
+    public async Task Should_not_delete_completed_tasks_when_no_retention_window_configured()
+    {
+        // G5 (core data-loss case): with the flag enabled but NO audit retention configured there is no
+        // age cutoff, so an AuditLevel.None completed task (no audit rows) must be preserved — pre-fix it
+        // was hard-deleted on the next cycle regardless of retention.
+        var now    = DateTimeOffset.UtcNow;
+        var policy = new AuditRetentionPolicy { DeleteCompletedTasksAfterRetention = true };
+
+        var task = CompletedTask(now.AddDays(-365)); // ancient, but no retention window means no cutoff
+
+        _mockedDbContext.QueuedTasks.Add(task);
+        await _mockedDbContext.SaveChangesAsync(CancellationToken.None);
+
+        await AuditCleanupHostedService.DeleteCompletedTasksAsync(_mockedDbContext, policy, now, CancellationToken.None);
+
+        _mockedDbContext.QueuedTasks.Count(x => x.Id == task.Id).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Should_delete_completed_task_past_retention_window()
+    {
+        // Safety/regression: the legitimate cleanup must keep working — a Completed task with no audits
+        // and no logs, older than the cutoff, is still purged after the fix.
+        var now    = DateTimeOffset.UtcNow;
+        var policy = new AuditRetentionPolicy
+        {
+            StatusAuditRetentionDays           = 7,
+            DeleteCompletedTasksAfterRetention = true
+        };
+
+        var aged = CompletedTask(now.AddDays(-30));
+
+        _mockedDbContext.QueuedTasks.Add(aged);
+        await _mockedDbContext.SaveChangesAsync(CancellationToken.None);
+
+        await AuditCleanupHostedService.DeleteCompletedTasksAsync(_mockedDbContext, policy, now, CancellationToken.None);
+
+        _mockedDbContext.QueuedTasks.Count(x => x.Id == aged.Id).ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task Should_use_longest_retention_window_as_age_cutoff()
+    {
+        // The cutoff is the MAX of the configured retention windows, so a task is preserved while ANY of
+        // its audit categories could still exist. Here success=5d but errors=30d → a 10-day-old task is
+        // still within the (30-day) cutoff and must survive.
+        var now    = DateTimeOffset.UtcNow;
+        var policy = new AuditRetentionPolicy
+        {
+            StatusAuditRetentionDays           = 5,
+            RunsAuditRetentionDays             = 5,
+            ErrorAuditRetentionDays            = 30,
+            DeleteCompletedTasksAfterRetention = true
+        };
+
+        var task = CompletedTask(now.AddDays(-10));
+
+        _mockedDbContext.QueuedTasks.Add(task);
+        await _mockedDbContext.SaveChangesAsync(CancellationToken.None);
+
+        await AuditCleanupHostedService.DeleteCompletedTasksAsync(_mockedDbContext, policy, now, CancellationToken.None);
+
+        _mockedDbContext.QueuedTasks.Count(x => x.Id == task.Id).ShouldBe(1);
+    }
+
+    #endregion
+
     protected abstract Task CleanUpDatabase();
 }
