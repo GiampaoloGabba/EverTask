@@ -47,16 +47,12 @@ public sealed class AuditRetentionPolicy
     /// has aged out. Disabled by default — task rows are preserved indefinitely.
     /// </summary>
     /// <remarks>
-    /// When true, a <c>Completed</c> non-recurring task is deleted only when ALL of the following hold:
-    /// <list type="bullet">
-    /// <item>it is older than the longest configured retention window — the maximum of
-    /// <see cref="StatusAuditRetentionDays"/>, <see cref="RunsAuditRetentionDays"/> and
-    /// <see cref="ErrorAuditRetentionDays"/> (measured against <c>LastExecutionUtc</c>, falling back to
-    /// <c>CreatedAtUtc</c>);</item>
-    /// <item>it has no remaining StatusAudit or RunsAudit rows;</item>
-    /// <item>it has no captured execution logs (those are cascade-deleted with the task and have no
-    /// retention of their own).</item>
-    /// </list>
+    /// When true, a <c>Completed</c> non-recurring task is deleted once it is older than the longest
+    /// configured retention window — the maximum of <see cref="StatusAuditRetentionDays"/>,
+    /// <see cref="RunsAuditRetentionDays"/> and <see cref="ErrorAuditRetentionDays"/> (measured against
+    /// <c>LastExecutionUtc</c>, falling back to <c>CreatedAtUtc</c>) — and has no remaining StatusAudit or
+    /// RunsAudit rows. Deleting the task cascades to everything it owns, including any captured execution
+    /// logs (those have no retention of their own yet).
     /// If no audit retention window is configured, no completed tasks are deleted (there is no age cutoff).
     /// Recurring tasks are never auto-deleted as they need to be rescheduled; Failed/Cancelled tasks are
     /// preserved for visibility.

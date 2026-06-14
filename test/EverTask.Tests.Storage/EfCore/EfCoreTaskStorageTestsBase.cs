@@ -1787,10 +1787,10 @@ public abstract class EfCoreTaskStorageTestsBase
     }
 
     [Fact]
-    public async Task Should_not_cascade_delete_execution_logs()
+    public async Task Should_cascade_delete_execution_logs_when_purging_an_aged_task()
     {
-        // G6: a Completed task with captured execution logs (which have no retention of their own) must
-        // NOT be deleted, otherwise the cascade silently destroys its logs. Even past the audit cutoff.
+        // Purging an aged-out completed task takes everything it owns with it, execution logs included —
+        // that is what cleanup is for. The age gate (not a log guard) is what protects recent tasks.
         var now    = DateTimeOffset.UtcNow;
         var policy = new AuditRetentionPolicy
         {
@@ -1803,7 +1803,7 @@ public abstract class EfCoreTaskStorageTestsBase
             Id             = GetGuidForProvider(),
             TimestampUtc   = now.AddDays(-10),
             Level          = "Information",
-            Message        = "execution log that must survive",
+            Message        = "execution log of an aged task",
             SequenceNumber = 0
         });
 
@@ -1812,8 +1812,8 @@ public abstract class EfCoreTaskStorageTestsBase
 
         await AuditCleanupHostedService.DeleteCompletedTasksAsync(_mockedDbContext, policy, now, CancellationToken.None);
 
-        _mockedDbContext.QueuedTasks.Count(x => x.Id == logged.Id).ShouldBe(1, "task with logs must be preserved");
-        _mockedDbContext.TaskExecutionLogs.Count(x => x.TaskId == logged.Id).ShouldBe(1, "logs must not be cascaded away");
+        _mockedDbContext.QueuedTasks.Count(x => x.Id == logged.Id).ShouldBe(0, "aged task past the cutoff is purged");
+        _mockedDbContext.TaskExecutionLogs.Count(x => x.TaskId == logged.Id).ShouldBe(0, "its logs cascade away with it");
     }
 
     [Fact]

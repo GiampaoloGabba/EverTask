@@ -49,10 +49,6 @@ Configuration and logging:
 - **The default queue raised `QueueFullException` instead of applying backpressure** (G19): a `FallbackToDefault` default queue degenerated into a self-reference and threw at the caller. The default queue now waits (backpressure) as documented.
 - **A bad format specifier in a log call failed the task** (G9, CU18): the log-capture renderer applied the user's format string without a guard, so a specifier like `{0:Q}` (or `Math.Abs(int.MinValue)` on alignment) threw out of `Handle`, and a separate `OnError` template used `{1}` with a single argument and masked the real failure. Log capture no longer throws (it falls back to the raw template), and the `OnError` template is fixed.
 
-Retention:
-
-- **Cleanup cascade-deleted captured execution logs** (G6): a completed task with persisted execution logs but no audit rows was deleted, and the cascade took its logs with it, even though log persistence has no retention of its own. Cleanup now skips any task that still has execution logs (see also the age gate under "Changed").
-
 Handler registration:
 
 - **A manually registered singleton handler was shared across concurrent eager dispatches** (G3): the eager path resolved the handler through `IEverTaskHandler<T>`, so registering one with `AddSingleton` before `AddEverTask` handed the same instance to every dispatch, and the worker's per-execution log capture crossed between concurrent runs. The eager path now resolves a fresh instance per dispatch by concrete type, the way the lazy path already did.

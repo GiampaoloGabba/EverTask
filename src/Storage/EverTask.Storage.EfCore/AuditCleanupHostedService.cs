@@ -230,18 +230,18 @@ public sealed class AuditCleanupHostedService : BackgroundService
 
         var cutoff = now.AddDays(-maxRetentionDays);
 
-        // Candidates: completed, non-recurring tasks with no surviving audit trail — no StatusAudit /
-        // RunsAudit rows AND no captured execution logs (G6: execution logs have no retention of their
-        // own and would otherwise be cascade-deleted with the task). The status/recurring/audit filters
-        // translate on every provider; the age gate is applied in memory because SQLite cannot translate
-        // DateTimeOffset comparisons (the same limitation that forces SqliteTaskStorage.RetrievePending
-        // to filter dates client-side).
+        // Candidates: completed, non-recurring tasks with no surviving audit trail (no StatusAudit /
+        // RunsAudit rows). Deleting a task cascades to everything it owns — audits AND captured execution
+        // logs — which is the point of cleanup. Execution logs have no retention of their own yet; until a
+        // dedicated execution-log retention exists (see docs/execution-log-retention.md), they are removed
+        // together with the aged-out task. The status/recurring/audit filters translate on every provider;
+        // the age gate is applied in memory because SQLite cannot translate DateTimeOffset comparisons (the
+        // same limitation that forces SqliteTaskStorage.RetrievePending to filter dates client-side).
         var candidates = await dbContext.QueuedTasks
             .Where(qt => qt.Status == QueuedTaskStatus.Completed
                       && !qt.IsRecurring
                       && !dbContext.StatusAudit.Any(sa => sa.QueuedTaskId == qt.Id)
-                      && !dbContext.RunsAudit.Any(ra => ra.QueuedTaskId == qt.Id)
-                      && !dbContext.TaskExecutionLogs.Any(el => el.TaskId == qt.Id))
+                      && !dbContext.RunsAudit.Any(ra => ra.QueuedTaskId == qt.Id))
             .Select(qt => new { qt.Id, qt.LastExecutionUtc, qt.CreatedAtUtc })
             .ToListAsync(ct)
             .ConfigureAwait(false);

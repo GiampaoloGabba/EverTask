@@ -271,11 +271,11 @@ builder.Services.AddAuditCleanup(policy, cleanupIntervalHours: 12);
 | `StatusAuditRetentionDays` | `int?` | `null` | Days to retain status audit records (Queued → InProgress → Completed/Failed) |
 | `RunsAuditRetentionDays` | `int?` | `null` | Days to retain execution audit records (recurring task runs) |
 | `ErrorAuditRetentionDays` | `int?` | `null` | Days to retain error audit records (overrides above for failures) |
-| `DeleteCompletedTasksAfterRetention` | `bool` | `false` | Hard-delete a completed non-recurring task once it is older than the longest retention window **and** has no audit rows **and** no execution logs |
+| `DeleteCompletedTasksAfterRetention` | `bool` | `false` | Hard-delete a completed non-recurring task once it is older than the longest retention window **and** has no audit rows |
 
 > `DeleteCompletedTasksWithAudits` is the deprecated alias of `DeleteCompletedTasksAfterRetention`; it still works but forwards to the new property.
 >
-> **When a completed task is deleted:** only when ALL hold — it is older than the longest of `StatusAuditRetentionDays`/`RunsAuditRetentionDays`/`ErrorAuditRetentionDays` (measured from `LastExecutionUtc`, falling back to `CreatedAtUtc`), it has no remaining StatusAudit/RunsAudit rows, and it has no captured execution logs (those are cascade-deleted with the task and have no retention of their own). If no retention window is configured, no completed tasks are deleted.
+> **When a completed task is deleted:** when it is older than the longest of `StatusAuditRetentionDays`/`RunsAuditRetentionDays`/`ErrorAuditRetentionDays` (measured from `LastExecutionUtc`, falling back to `CreatedAtUtc`) and has no remaining StatusAudit/RunsAudit rows. If no retention window is configured, no completed tasks are deleted. Deleting the task cascades to everything it owns, including any captured execution logs — execution logs have no retention of their own yet (see the execution-log retention note in the docs).
 
 **Cleanup Service Registration:**
 
