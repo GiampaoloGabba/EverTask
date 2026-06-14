@@ -99,9 +99,9 @@ public sealed class AuditCleanupHostedService : BackgroundService
         }
 
         // Clean up completed tasks if configured
-        if (_retentionPolicy.DeleteCompletedTasksWithAudits)
+        if (_retentionPolicy.DeleteCompletedTasksAfterRetention)
         {
-            var deletedTasks = await CleanupCompletedTasks(dbContext, ct).ConfigureAwait(false);
+            var deletedTasks = await CleanupCompletedTasks(dbContext, _retentionPolicy, ct).ConfigureAwait(false);
             _logger.LogInformation("Cleanup complete. Deleted {StatusCount} status audits, {RunsCount} runs audits, {TasksCount} completed tasks",
                 totalDeletedStatus, totalDeletedRuns, deletedTasks);
         }
@@ -190,36 +190,80 @@ public sealed class AuditCleanupHostedService : BackgroundService
         return totalDeleted;
     }
 
-    private async Task<int> CleanupCompletedTasks(ITaskStoreDbContext dbContext, CancellationToken ct)
+    private async Task<int> CleanupCompletedTasks(ITaskStoreDbContext dbContext, AuditRetentionPolicy policy, CancellationToken ct)
     {
-        var totalDeleted = 0;
-        var batchSize = 100; // Smaller batch for task deletion (cascade delete audits)
-
-        while (!ct.IsCancellationRequested)
-        {
-            // Delete non-recurring completed tasks that have no audit records
-            var deleted = await dbContext.QueuedTasks
-                .Where(qt => qt.Status == QueuedTaskStatus.Completed
-                          && !qt.IsRecurring
-                          && !qt.StatusAudits.Any()
-                          && !qt.RunsAudits.Any())
-                .Take(batchSize)
-                .ExecuteDeleteAsync(ct)
-                .ConfigureAwait(false);
-
-            totalDeleted += deleted;
-
-            if (deleted < batchSize)
-            {
-                break;
-            }
-
-            await Task.Delay(100, ct).ConfigureAwait(false);
-        }
+        var totalDeleted = await DeleteCompletedTasksAsync(dbContext, policy, DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
 
         if (totalDeleted > 0)
         {
-            _logger.LogInformation("Deleted {Count} completed tasks with no audit trail", totalDeleted);
+            _logger.LogInformation("Deleted {Count} completed tasks past their retention window", totalDeleted);
+        }
+
+        return totalDeleted;
+    }
+
+    /// <summary>
+    /// Hard-deletes completed, non-recurring tasks whose audit trail has aged out.
+    /// Testable seam: takes the context, policy and a caller-supplied <paramref name="now"/> so the
+    /// age cutoff is deterministic.
+    /// </summary>
+    internal static async Task<int> DeleteCompletedTasksAsync(
+        ITaskStoreDbContext dbContext, AuditRetentionPolicy policy, DateTimeOffset now, CancellationToken ct)
+    {
+        // Age gate (G5): only purge a completed task once it is older than the LONGEST configured
+        // retention window — by then every audit category that could exist for it has been pruned. With
+        // no retention configured there is no defined cutoff, so nothing is deleted (a completed task
+        // with no audits, e.g. AuditLevel.None, must not be hard-deleted immediately).
+        var maxRetentionDays = new[]
+            {
+                policy.StatusAuditRetentionDays,
+                policy.RunsAuditRetentionDays,
+                policy.ErrorAuditRetentionDays
+            }
+            .Where(d => d.HasValue)
+            .Select(d => d!.Value)
+            .DefaultIfEmpty(-1)
+            .Max();
+
+        if (maxRetentionDays < 0)
+            return 0;
+
+        var cutoff = now.AddDays(-maxRetentionDays);
+
+        // Candidates: completed, non-recurring tasks with no surviving audit trail — no StatusAudit /
+        // RunsAudit rows AND no captured execution logs (G6: execution logs have no retention of their
+        // own and would otherwise be cascade-deleted with the task). The status/recurring/audit filters
+        // translate on every provider; the age gate is applied in memory because SQLite cannot translate
+        // DateTimeOffset comparisons (the same limitation that forces SqliteTaskStorage.RetrievePending
+        // to filter dates client-side).
+        var candidates = await dbContext.QueuedTasks
+            .Where(qt => qt.Status == QueuedTaskStatus.Completed
+                      && !qt.IsRecurring
+                      && !dbContext.StatusAudit.Any(sa => sa.QueuedTaskId == qt.Id)
+                      && !dbContext.RunsAudit.Any(ra => ra.QueuedTaskId == qt.Id)
+                      && !dbContext.TaskExecutionLogs.Any(el => el.TaskId == qt.Id))
+            .Select(qt => new { qt.Id, qt.LastExecutionUtc, qt.CreatedAtUtc })
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+
+        // Age gate (G5): only purge a task once its age anchor — LastExecutionUtc, falling back to
+        // CreatedAtUtc when unset — is older than the cutoff.
+        var deletableIds = candidates
+            .Where(c => (c.LastExecutionUtc ?? c.CreatedAtUtc) < cutoff)
+            .Select(c => c.Id)
+            .ToList();
+
+        var totalDeleted = 0;
+        const int batchSize = 100; // chunk the DELETE to avoid oversized IN (...) and lock escalation
+
+        for (var i = 0; i < deletableIds.Count && !ct.IsCancellationRequested; i += batchSize)
+        {
+            var batch = deletableIds.GetRange(i, Math.Min(batchSize, deletableIds.Count - i));
+
+            totalDeleted += await dbContext.QueuedTasks
+                .Where(qt => batch.Contains(qt.Id))
+                .ExecuteDeleteAsync(ct)
+                .ConfigureAwait(false);
         }
 
         return totalDeleted;

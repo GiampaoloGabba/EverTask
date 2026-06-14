@@ -251,10 +251,10 @@ builder.Services.AddAuditCleanup(policy, cleanupIntervalHours: 24);
 ```csharp
 var policy = new AuditRetentionPolicy
 {
-    StatusAuditRetentionDays = 14,         // Status changes retained for 14 days
-    RunsAuditRetentionDays = 7,            // Execution history retained for 7 days
-    ErrorAuditRetentionDays = 90,          // Errors retained for 90 days
-    DeleteCompletedTasksWithAudits = true // Delete QueuedTask when audits are purged
+    StatusAuditRetentionDays = 14,             // Status changes retained for 14 days
+    RunsAuditRetentionDays = 7,                // Execution history retained for 7 days
+    ErrorAuditRetentionDays = 90,              // Errors retained for 90 days
+    DeleteCompletedTasksAfterRetention = true  // Purge completed task rows once aged out (see below)
 };
 
 builder.Services.AddEverTask(opt => opt
@@ -271,7 +271,11 @@ builder.Services.AddAuditCleanup(policy, cleanupIntervalHours: 12);
 | `StatusAuditRetentionDays` | `int?` | `null` | Days to retain status audit records (Queued → InProgress → Completed/Failed) |
 | `RunsAuditRetentionDays` | `int?` | `null` | Days to retain execution audit records (recurring task runs) |
 | `ErrorAuditRetentionDays` | `int?` | `null` | Days to retain error audit records (overrides above for failures) |
-| `DeleteCompletedTasksWithAudits` | `bool` | `false` | Delete completed tasks when their audit trail is purged |
+| `DeleteCompletedTasksAfterRetention` | `bool` | `false` | Hard-delete a completed non-recurring task once it is older than the longest retention window **and** has no audit rows **and** no execution logs |
+
+> `DeleteCompletedTasksWithAudits` is the deprecated alias of `DeleteCompletedTasksAfterRetention`; it still works but forwards to the new property.
+>
+> **When a completed task is deleted:** only when ALL hold — it is older than the longest of `StatusAuditRetentionDays`/`RunsAuditRetentionDays`/`ErrorAuditRetentionDays` (measured from `LastExecutionUtc`, falling back to `CreatedAtUtc`), it has no remaining StatusAudit/RunsAudit rows, and it has no captured execution logs (those are cascade-deleted with the task and have no retention of their own). If no retention window is configured, no completed tasks are deleted.
 
 **Cleanup Service Registration:**
 
@@ -287,9 +291,9 @@ builder.Services.AddAuditCleanup(
 
 1. **Policy Synchronization**: Pass the **same policy** to both `SetAuditRetentionPolicy()` and `AddAuditCleanup()`
 2. **Cleanup Service Required**: Retention is enforced by `AddAuditCleanup()` - without it, policy has no effect
-3. **Recurring Tasks**: Never auto-deleted, even with `DeleteCompletedTasksWithAudits = true` (they need to reschedule)
-4. **Failed/Cancelled Tasks**: Preserved for visibility, even with `DeleteCompletedTasksWithAudits = true`
-5. **Database Impact**: Cleanup runs in background, uses DELETE queries with date filters
+3. **Recurring Tasks**: Never auto-deleted, even with `DeleteCompletedTasksAfterRetention = true` (they need to reschedule)
+4. **Failed/Cancelled Tasks**: Preserved for visibility, even with `DeleteCompletedTasksAfterRetention = true`
+5. **Database Impact**: Cleanup runs in background, deletes only tasks past the retention cutoff (no immediate hard-delete)
 
 **Monitoring Cleanup:**
 

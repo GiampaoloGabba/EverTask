@@ -43,17 +43,41 @@ public sealed class AuditRetentionPolicy
     public int? ErrorAuditRetentionDays { get; set; }
 
     /// <summary>
-    /// Gets or sets whether to delete completed tasks when their audit trail is deleted.
-    /// When true, QueuedTask records with status Completed will be deleted when all
-    /// their audit records are purged (useful for preventing unbounded growth).
-    /// When false, QueuedTask records are preserved indefinitely (default).
+    /// Gets or sets whether completed, non-recurring tasks are hard-deleted once their audit trail
+    /// has aged out. Disabled by default — task rows are preserved indefinitely.
     /// </summary>
     /// <remarks>
-    /// Applies only to non-recurring tasks with status Completed.
-    /// Recurring tasks are never auto-deleted as they need to be rescheduled.
-    /// Failed/Cancelled tasks are also preserved for visibility.
+    /// When true, a <c>Completed</c> non-recurring task is deleted only when ALL of the following hold:
+    /// <list type="bullet">
+    /// <item>it is older than the longest configured retention window — the maximum of
+    /// <see cref="StatusAuditRetentionDays"/>, <see cref="RunsAuditRetentionDays"/> and
+    /// <see cref="ErrorAuditRetentionDays"/> (measured against <c>LastExecutionUtc</c>, falling back to
+    /// <c>CreatedAtUtc</c>);</item>
+    /// <item>it has no remaining StatusAudit or RunsAudit rows;</item>
+    /// <item>it has no captured execution logs (those are cascade-deleted with the task and have no
+    /// retention of their own).</item>
+    /// </list>
+    /// If no audit retention window is configured, no completed tasks are deleted (there is no age cutoff).
+    /// Recurring tasks are never auto-deleted as they need to be rescheduled; Failed/Cancelled tasks are
+    /// preserved for visibility.
     /// </remarks>
-    public bool DeleteCompletedTasksWithAudits { get; set; }
+    public bool DeleteCompletedTasksAfterRetention { get; set; }
+
+    /// <summary>
+    /// Deprecated alias for <see cref="DeleteCompletedTasksAfterRetention"/>. The original name and its
+    /// old behavior were misleading: it deleted completed tasks that had <em>no</em> audit rows
+    /// immediately, with no age cutoff and ignoring captured execution logs. It now forwards to
+    /// <see cref="DeleteCompletedTasksAfterRetention"/>, which enforces the retention-age gate and
+    /// preserves tasks that still have logs.
+    /// </summary>
+    [Obsolete("Renamed to DeleteCompletedTasksAfterRetention (which now also enforces an age cutoff and " +
+              "preserves tasks that still have execution logs). This alias forwards to it and will be " +
+              "removed in a future major version.")]
+    public bool DeleteCompletedTasksWithAudits
+    {
+        get => DeleteCompletedTasksAfterRetention;
+        set => DeleteCompletedTasksAfterRetention = value;
+    }
 
     /// <summary>
     /// Initializes a new instance of the <see cref="AuditRetentionPolicy"/> class
@@ -64,7 +88,7 @@ public sealed class AuditRetentionPolicy
         StatusAuditRetentionDays = null;
         RunsAuditRetentionDays = null;
         ErrorAuditRetentionDays = null;
-        DeleteCompletedTasksWithAudits = false;
+        DeleteCompletedTasksAfterRetention = false;
     }
 
     /// <summary>
