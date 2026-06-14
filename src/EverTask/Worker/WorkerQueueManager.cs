@@ -178,6 +178,14 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
     public async Task<EnqueueResult> TryEnqueueImmediate(string? queueName, TaskHandlerExecutor task, CancellationToken cancellationToken = default)
     {
         var (targetQueue, _, _) = ResolveQueue(queueName, task);
+
+        // Scheduler dispatch (a due slot fires): the SetQueued transition must be conditional on the
+        // row still being recoverable, so a stale slot for a row that terminally finished after the
+        // recovery page-read never resurrects it (L11). Custom IWorkerQueue implementations fall back
+        // to the plain non-blocking enqueue.
+        if (targetQueue is WorkerQueue workerQueue)
+            return await workerQueue.TryQueueForRecovery(task, cancellationToken).ConfigureAwait(false);
+
         return await targetQueue.TryQueue(task, cancellationToken).ConfigureAwait(false);
     }
 

@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using System.Threading.Channels;
 using EverTask.Configuration;
 using EverTask.Handler;
@@ -125,6 +126,9 @@ public class WorkerQueueResilienceTests
         storage.Setup(s => s.SetStatus(It.IsAny<Guid>(), It.IsAny<QueuedTaskStatus>(), It.IsAny<Exception?>(),
                    It.IsAny<AuditLevel>(), It.IsAny<double?>(), It.IsAny<CancellationToken>()))
                .Returns(Task.CompletedTask);
+        // The conditional revert reads the current status: the row is still Queued, so the revert proceeds.
+        storage.Setup(s => s.Get(It.IsAny<Expression<Func<QueuedTask, bool>>>(), It.IsAny<CancellationToken>()))
+               .ReturnsAsync(new[] { new QueuedTask { Id = outerTask.PersistenceId, Status = QueuedTaskStatus.Queued } });
 
         // While the outer TryQueue is between its capacity check and its TryWrite, another
         // writer fills the (capacity 1) channel: the outer TryWrite must fail and the status

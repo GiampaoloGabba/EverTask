@@ -177,7 +177,20 @@ public class WorkerQueue : IWorkerQueue
         }
     }
 
-    public async ValueTask<EnqueueResult> TryQueue(TaskHandlerExecutor task, CancellationToken cancellationToken = default)
+    public ValueTask<EnqueueResult> TryQueue(TaskHandlerExecutor task, CancellationToken cancellationToken = default)
+        => TryQueueCore(task, enforceRecoverable: false, cancellationToken);
+
+    /// <summary>
+    /// Non-blocking enqueue used by the schedulers (a due slot fires): the SetQueued transition is
+    /// CONDITIONAL on the row still being recoverable, so a stale slot for a row that terminally
+    /// finished after its registration is never resurrected (the scheduler-boundary analogue of the
+    /// startup-recovery defense). Returns <see cref="EnqueueResult.Discarded"/> when the row is no
+    /// longer recoverable (nothing is written anywhere).
+    /// </summary>
+    internal ValueTask<EnqueueResult> TryQueueForRecovery(TaskHandlerExecutor task, CancellationToken cancellationToken = default)
+        => TryQueueCore(task, enforceRecoverable: true, cancellationToken);
+
+    private async ValueTask<EnqueueResult> TryQueueCore(TaskHandlerExecutor task, bool enforceRecoverable, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(task);
 
@@ -212,7 +225,22 @@ public class WorkerQueue : IWorkerQueue
         {
             try
             {
-                await _taskStorage.SetQueued(task.PersistenceId, task.AuditLevel, cancellationToken).ConfigureAwait(false);
+                if (enforceRecoverable)
+                {
+                    // Scheduler slot fired: only transition if the row is still recoverable. Refused =
+                    // the row terminally finished since the slot was registered — release the
+                    // registration and skip (nothing was written anywhere).
+                    if (!await _taskStorage.TrySetQueuedIfRecoverable(task.PersistenceId, task.AuditLevel, cancellationToken).ConfigureAwait(false))
+                    {
+                        _deliveryRegistry.End(task.PersistenceId);
+                        _logger.LogDebug("Task {TaskId} is no longer recoverable, scheduler enqueue skipped", task.PersistenceId);
+                        return EnqueueResult.Discarded;
+                    }
+                }
+                else
+                {
+                    await _taskStorage.SetQueued(task.PersistenceId, task.AuditLevel, cancellationToken).ConfigureAwait(false);
+                }
             }
             catch
             {
@@ -229,18 +257,18 @@ public class WorkerQueue : IWorkerQueue
             return EnqueueResult.Enqueued;
         }
 
-        // The queue filled up between the capacity check and the write: revert to WaitingQueue
-        // so the task stays visible to startup recovery instead of looking enqueued forever.
-        _deliveryRegistry.End(task.PersistenceId);
+        // The queue filled up between the capacity check and the write: revert to WaitingQueue so the
+        // task stays visible to startup recovery instead of looking enqueued forever. The revert is
+        // CONDITIONAL (compare-and-set: only if the row is still Queued) and the delivery registration
+        // is released ONLY AFTER it — so a successor delivery in this window is rejected as a duplicate
+        // instead of racing the revert and being clobbered back to WaitingQueue (CU1/L21).
         _logger.LogDebug("Queue '{QueueName}' is full, cannot enqueue task {TaskId}", Name, task.PersistenceId);
 
         if (_taskStorage != null)
         {
             try
             {
-                await _taskStorage
-                      .SetStatus(task.PersistenceId, QueuedTaskStatus.WaitingQueue, null, task.AuditLevel, null, cancellationToken)
-                      .ConfigureAwait(false);
+                await RevertToWaitingQueueIfStillQueued(task, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception e)
             {
@@ -250,7 +278,28 @@ public class WorkerQueue : IWorkerQueue
             }
         }
 
+        _deliveryRegistry.End(task.PersistenceId);
         return EnqueueResult.QueueFull;
+    }
+
+    /// <summary>
+    /// Compare-and-set revert: downgrades the row to WaitingQueue ONLY if it is still Queued (the
+    /// status this enqueue wrote). A successor delivery that already advanced it to InProgress/
+    /// Completed must not be clobbered back to a recoverable status — that lost update would
+    /// re-execute it at the next startup recovery (CU1/L21).
+    /// </summary>
+    private async Task RevertToWaitingQueueIfStillQueued(TaskHandlerExecutor task, CancellationToken cancellationToken)
+    {
+        var current = (await _taskStorage!.Get(t => t.Id == task.PersistenceId, cancellationToken).ConfigureAwait(false))
+            .FirstOrDefault();
+
+        // Already advanced past Queued by a successor: leave it untouched.
+        if (current != null && current.Status != QueuedTaskStatus.Queued)
+            return;
+
+        await _taskStorage
+              .SetStatus(task.PersistenceId, QueuedTaskStatus.WaitingQueue, null, task.AuditLevel, null, cancellationToken)
+              .ConfigureAwait(false);
     }
 
     // NOTE: dequeue does NOT release the delivery registration. The registration survives the

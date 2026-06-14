@@ -117,47 +117,53 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
         var now = UtcNowNormalized;
 
-        // Atomic conditional UPDATE: the startup recovery must never resurrect a task that
-        // terminally finished after its page was read (SetQueued over Completed would cause a
-        // second execution). Recoverable predicate shared with RetrievePending (RecoverableQuery).
-        bool transitioned;
-        try
+        // Non-relational providers (EF Core InMemory) can translate neither the conditional UPDATE nor
+        // an explicit transaction: run the transition and its audit as ONE tracked SaveChanges, which
+        // the provider applies atomically. SQLite overrides this method (its client-side path is the
+        // same single-SaveChanges shape).
+        if (dbContext is not DbContext efContext || !efContext.Database.IsRelational())
         {
-            var rowsAffected = await dbContext.QueuedTasks
-                .Where(t => t.Id == taskId)
-                .Where(RecoverableQuery(now))
-                .ExecuteUpdateAsync(s => s.SetProperty(t => t.Status, QueuedTaskStatus.Queued), ct)
-                .ConfigureAwait(false);
-
-            transitioned = rowsAffected > 0;
-        }
-        catch (InvalidOperationException ex)
-        {
-            // Provider that cannot translate the conditional UPDATE (EF Core InMemory: no
-            // ExecuteUpdate). SQLite never reaches here — it overrides this method to skip the
-            // untranslatable RunUntil comparison. SQL Server keeps the atomic UPDATE above, so a
-            // fallback there would signal a real translation/provider problem worth surfacing.
-            logger.LogDebug(ex, "TrySetQueuedIfRecoverable falling back to client-side check for task {taskId}", taskId);
-            transitioned = await TrySetQueuedClientSideAsync(dbContext, taskId, now, ct).ConfigureAwait(false);
+            var transitionedClientSide = await TrySetQueuedClientSideAsync(dbContext, taskId, now, auditLevel, ct).ConfigureAwait(false);
+            if (!transitionedClientSide)
+                logger.LogDebug("Task {taskId} is no longer recoverable, skipping SetQueued", taskId);
+            return transitionedClientSide;
         }
 
-        if (!transitioned)
+        // Relational: the atomic conditional UPDATE and its Queued audit must commit TOGETHER (L20),
+        // so a recovery transition is never persisted without its audit (a refused transition leaves
+        // no trace; a failed audit rolls the transition back). The startup recovery must never
+        // resurrect a task that terminally finished after its page was read (SetQueued over Completed
+        // would cause a second execution). Recoverable predicate shared with RetrievePending.
+        await using var transaction = await efContext.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+
+        var rowsAffected = await dbContext.QueuedTasks
+            .Where(t => t.Id == taskId)
+            .Where(RecoverableQuery(now))
+            .ExecuteUpdateAsync(s => s.SetProperty(t => t.Status, QueuedTaskStatus.Queued), ct)
+            .ConfigureAwait(false);
+
+        if (rowsAffected == 0)
         {
+            await transaction.RollbackAsync(ct).ConfigureAwait(false);
             logger.LogDebug("Task {taskId} is no longer recoverable, skipping SetQueued", taskId);
             return false;
         }
 
-        await WriteQueuedTransitionAuditAsync(dbContext, taskId, auditLevel, ct).ConfigureAwait(false);
+        AddQueuedTransitionAudit(dbContext, taskId, auditLevel);
+        await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
+        await transaction.CommitAsync(ct).ConfigureAwait(false);
         return true;
     }
 
     /// <summary>
-    /// Non-atomic recoverable transition evaluated client-side, for providers that cannot translate
-    /// the conditional UPDATE (EF Core InMemory, SQLite). Loads the task, applies the canonical
-    /// <see cref="QueuedTask.IsRecoverable"/> predicate and, only if recoverable, sets it Queued.
+    /// Non-atomic-UPDATE recoverable transition evaluated client-side, for providers that cannot
+    /// translate the conditional UPDATE (EF Core InMemory, SQLite). Loads the task, applies the
+    /// canonical <see cref="QueuedTask.IsRecoverable"/> predicate and, only if recoverable, sets it
+    /// Queued AND stages its audit in the SAME SaveChanges, so the transition and its audit are
+    /// written atomically (L20).
     /// </summary>
     protected static async Task<bool> TrySetQueuedClientSideAsync(ITaskStoreDbContext dbContext, Guid taskId,
-                                                                  DateTimeOffset now, CancellationToken ct)
+                                                                  DateTimeOffset now, AuditLevel auditLevel, CancellationToken ct)
     {
         var tracked = await dbContext.QueuedTasks
             .FirstOrDefaultAsync(t => t.Id == taskId, ct).ConfigureAwait(false);
@@ -166,17 +172,18 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             return false;
 
         tracked.Status = QueuedTaskStatus.Queued;
+        AddQueuedTransitionAudit(dbContext, taskId, auditLevel);
         await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
         return true;
     }
 
     /// <summary>
-    /// Writes the Queued status audit for a recovery transition. Audited only AFTER the transition
-    /// actually happened (unlike <see cref="SetStatus"/>, which audits optimistically): a refused
-    /// transition must leave no trace.
+    /// Stages the Queued status audit for a recovery transition WITHOUT saving: it is committed in
+    /// the SAME unit of work as the transition (a single SaveChanges or the wrapping transaction), so
+    /// the pair is atomic. Audited only when the transition actually happens (unlike
+    /// <see cref="SetStatus"/>, which audits optimistically): a refused transition leaves no trace.
     /// </summary>
-    protected async Task WriteQueuedTransitionAuditAsync(ITaskStoreDbContext dbContext, Guid taskId,
-                                                         AuditLevel auditLevel, CancellationToken ct)
+    private static void AddQueuedTransitionAudit(ITaskStoreDbContext dbContext, Guid taskId, AuditLevel auditLevel)
     {
         if (!ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Queued, null))
             return;
@@ -188,15 +195,6 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             NewStatus    = QueuedTaskStatus.Queued,
             Exception    = null
         });
-
-        try
-        {
-            await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
-        }
-        catch (Exception e)
-        {
-            logger.LogWarning(e, "Unable to save the audit status for taskId {taskId}", taskId);
-        }
     }
 
     public async Task SetInProgress(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default) =>

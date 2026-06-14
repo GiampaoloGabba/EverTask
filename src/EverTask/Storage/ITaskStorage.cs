@@ -61,13 +61,22 @@ public interface ITaskStorage
     /// </summary>
     /// <remarks>
     /// Implementations should make the check-and-set atomic (a conditional UPDATE). The default
-    /// implementation falls back to an unconditional <see cref="SetQueued"/> (pre-existing
-    /// behavior) for custom storages that have not implemented it yet.
+    /// implementation is a best-effort, NON-atomic guard for custom storages that have not overridden
+    /// it: it reads the row and applies the canonical recoverable predicate
+    /// (<see cref="QueuedTask.IsRecoverable"/>), transitioning to Queued only if it is still
+    /// recoverable. It is deliberately NOT an unconditional <see cref="SetQueued"/> — that would
+    /// re-introduce the recovery double-execution (a row that terminally finished after the page-read
+    /// resurrected to Queued and executed a second time). Built-in providers override this with an
+    /// atomic check-and-set.
     /// </remarks>
     /// <returns>True when the task was set to queued; false when it was skipped because it is
     /// no longer recoverable.</returns>
     async Task<bool> TrySetQueuedIfRecoverable(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default)
     {
+        var existing = (await Get(t => t.Id == taskId, ct).ConfigureAwait(false)).FirstOrDefault();
+        if (existing is null || !existing.IsRecoverable(DateTimeOffset.UtcNow))
+            return false;
+
         await SetQueued(taskId, auditLevel, ct).ConfigureAwait(false);
         return true;
     }
