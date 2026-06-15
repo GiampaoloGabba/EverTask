@@ -41,3 +41,46 @@ The project is intentionally **outside `EverTask.sln`** so it never runs in the 
 Inline halves per-op allocation (260.88 KB → 128.84 KB) and roughly halves Gen0 pressure, on top of
 removing the unbounded retention entirely. The ~2.3× wall-clock gap is amplified by the ShortRun
 noise but is consistent with skipping the dictionary node + closure allocation per dispatch.
+
+---
+
+## P-B — WorkerExecutor hot path
+
+ShortRun (3 warmup + 3 iterations), same machine as P-A.
+
+### P-B.1 — F23: lifecycle MethodInfo resolution (`LifecycleResolutionBenchmark`)
+
+Per-call `GetMethod` ×3 vs a cached per-type lookup (the gate proves it resolves once per type).
+
+| Method | Mean | Ratio |
+|--------|-----:|------:|
+| GetMethod per call (pre-fix) | 51.75 ns | 1.00 |
+| Cached lookup (post-fix) | 9.63 ns | 0.19 |
+
+~5× faster per execution; the cache removes the lookup from the lazy hot path (plus the per-task
+`object[]` for `MethodInfo.Invoke` is now built only when a callback actually fires).
+
+### P-B.2 — L30: discarded-event formatting (`EventFormattingBenchmark`)
+
+The "nobody consumes it" case: level filtered out **and** no subscribers.
+
+| Method | Mean | Allocated |
+|--------|-----:|----------:|
+| Always format (pre-fix) | 107.95 ns | 176 B |
+| Guarded skip (post-fix) | ~0 ns | 0 B |
+
+Every discarded Info event previously paid a `string.Format` + arg-array boxing (176 B); the guard
+removes it entirely.
+
+### P-B.3 — F24: monitoring fan-out (`MonitoringFanoutBenchmark`, 1000 events × 8 subscribers)
+
+| Method | Mean | Completed work items | Allocated |
+|--------|-----:|---------------------:|----------:|
+| Unbounded Task.Run (pre-fix) | 2.31 ms | 8000 | 562.74 KB |
+| Semaphore-bounded (post-fix) | 2.91 ms | 5982 | 480.31 KB |
+
+With **fast no-op** subscribers the bounded version is slightly slower (semaphore contention) but
+already schedules ~25% fewer thread-pool work items and allocates less. The real win is the tail it
+cannot show: with a **slow/blocked** subscriber the pre-fix path spawns one fire-and-forget Task per
+subscriber per event without limit (thread-pool saturation), while the bounded path holds in-flight
+at the cap and drops the overflow — see the deterministic gate `Should_bound_monitoring_fanout_under_load`.
