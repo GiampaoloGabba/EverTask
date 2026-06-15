@@ -1,0 +1,16 @@
+<Project>
+  <!-- Standalone on purpose: this STOPS the Directory.Build.props chain so it does NOT inherit the
+       repo-root solution-wide multi-target (net8.0;net9.0;net10.0). BenchmarkDotNet generates an
+       auto-project under bin/ that inherits the nearest Directory.Build.props; if it picked up the
+       multi-target it would try net8.0 and fail to reference the net9.0-only benchmark project
+       (NU1201). Central Package Management still applies — NuGet finds the root Directory.Packages.props
+       independently. -->
+  <PropertyGroup>
+    <TargetFrameworks>net9.0</TargetFrameworks>
+    <LangVersion>12.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- BenchmarkDotNet's generated bootstrap does not honour warnings-as-errors. -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+</Project>
