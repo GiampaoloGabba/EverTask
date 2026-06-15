@@ -22,6 +22,25 @@ Integration tests for all EverTask storage implementations (InMemory, Sqlite, Sq
 
 **SQL Server Tests**: Require Docker to run Testcontainers. The container is started automatically and shared across tests in the same collection.
 
+### Docker IS available on this Windows dev machine — verify, don't assume
+
+Do **NOT** report "Docker is missing" without checking first. This box runs Docker Desktop (WSL2, **Linux engine**), which is exactly what the SQL Server image needs.
+
+**Verify before running** (all should succeed):
+```pwsh
+docker info --format '{{.OSType}}'   # -> linux  (engine in Linux-container mode)
+docker images mcr.microsoft.com/mssql/server:2022-latest   # image pre-pulled (~1.67 GB)
+```
+
+- `mcr.microsoft.com/mssql/server:2022-latest` is a **Linux** container — runs fine because the engine is in Linux mode. No "Windows containers" switch needed.
+- Active Docker context is `desktop-linux` (npipe `//./pipe/dockerDesktopLinuxEngine`). **Testcontainers auto-discovers it** from `~/.docker/config.json` — do **NOT** set `DOCKER_HOST`.
+- First run pulls the image (slow, ~1.67 GB); subsequent runs reuse it. Pre-pull with `docker pull mcr.microsoft.com/mssql/server:2022-latest` if needed.
+
+**Verified run** (net9.0, filtered by class to dodge the blame-hang; ~14 s for 66 + ~26 s for 3):
+```pwsh
+dotnet test test/EverTask.Tests.Storage/EverTask.Tests.Storage.csproj -c Release -f net9.0 --filter "FullyQualifiedName~SqlServer"
+```
+
 ## Quick Commands
 
 **All storage tests**:
