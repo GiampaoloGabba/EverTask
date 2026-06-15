@@ -41,7 +41,7 @@ Works great with ASP.NET Core, Windows Services, or any .NET project that needs 
 ### Monitoring & Observability
 - **Web Dashboard + REST API** — Embedded React UI for monitoring, analytics, and observability
 - **Real-Time Updates** — SignalR live monitoring with event-driven cache invalidation
-- **Task Execution Log Capture** — Proxy logger with optional database persistence for audit trails
+- **Task Execution Log Capture** — Proxy logger with optional database persistence and configurable retention for audit trails
 - **Configurable Audit Levels** — Control database bloat with granular audit trail settings
 
 ### Resilience & Error Handling
@@ -261,7 +261,7 @@ Monitor your tasks with a feature-complete web dashboard providing real-time ins
 
 ### Task Execution Log Capture
 
-Capture all logs written during task execution and persist them to the database for debugging and auditing:
+Capture all logs written during task execution and persist them to the database for debugging and auditing. Built-in retention (a time window plus a per-task cap) keeps log growth bounded for long-running and recurring tasks:
 
 <img src="assets/screenshots/5.png" style="width:100%;max-width:900px;display: block; margin:20px auto;" alt="Task Details" />
 <br />
