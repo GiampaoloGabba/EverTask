@@ -102,3 +102,23 @@ pinned by the deterministic gate `SchedulerOrphanHeapTests` (Count == 1 vs ~N). 
 `Allocated` is higher because each eviction rebuilds the heap, but that allocation is **transient and
 collectable** (the queue stays ~1 element), whereas the pre-fix 3.27 KB is **live and grows with K**.
 The rebuild is O(current size) and only runs when an already-parked id is re-registered.
+
+---
+
+## P-D — Rate limiting (L14, CU20, L22)
+
+These are **correctness / latency** fixes, not throughput micro-optimisations; the deterministic gates
+own the proof, so there are no headline BenchmarkDotNet tables here.
+
+- **L14 (in-slot wait → re-park):** the gate `Should_defer_near_slot_without_inslot_wait` pins the
+  invariant — a near slot is re-parked (Defer) and the limiter is hit exactly once, so the consumer is
+  never blocked by an inline `Task.Delay`. The benefit (no head-of-line blocking of ungated tasks on a
+  single-consumer queue) is a latency property; a wall-clock throughput micro would be flaky and is
+  intentionally omitted in favour of the deterministic gate.
+- **CU20 (atomic tracked-keys cap):** correctness of the cap under concurrency
+  (`Should_not_exceed_maxtrackedkeys_under_concurrent_distinct_acquisitions`). A contention benchmark
+  is optional and not informative — the value is the bound, not speed. The new-key slow path takes a
+  short lock only on first insertion; existing keys keep the lock-free fast path.
+- **L22 (reservation redemption under congested latency):** pure correctness
+  (`Should_redeem_reservation_after_realistic_congested_redelivery_latency`) — no throughput dimension.
+  The reservation expiry margin now also covers the parking-lot pause (5 s → 10 s).

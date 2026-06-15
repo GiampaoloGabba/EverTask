@@ -298,26 +298,35 @@ public class RateLimitGateTests
             "the floor must stay minimal (no flat clamp overshooting the GCRA slot)");
     }
 
-    // ---------------------------------------------------------------- in-slot wait
+    // ---------------------------------------------------------------- near slot (no in-slot wait, L14)
 
     [Fact]
-    public async Task Should_wait_in_slot_and_proceed_when_slot_is_near()
+    public async Task Should_defer_near_slot_without_inslot_wait()
     {
+        // L14: a near (within MaxInSlotWait) but unavailable slot must NOT be awaited inline on the
+        // consumer. The gate re-parks (Defer) and the limiter is hit EXACTLY ONCE (no in-slot
+        // re-acquire loop, no Task.Delay), so a single-consumer queue is never head-of-line blocked by
+        // the wait — not even tasks without any policy queued behind it. The task still fires at its
+        // slot via redelivery. Pre-fix this awaited the slot inline and returned Proceed after ~2 acquires.
         var calls = 0;
         _limiter.Setup(l => l.TryAcquireAsync(It.IsAny<RateLimitPolicy>(), It.IsAny<Type>(), It.IsAny<string>(),
                 It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync(() => ++calls == 1
-                    ? new RateLimitDecision(false, DateTimeOffset.UtcNow.AddMilliseconds(250))
-                    : new RateLimitDecision(true, default));
+                .ReturnsAsync(() =>
+                {
+                    Interlocked.Increment(ref calls);
+                    return new RateLimitDecision(false, DateTimeOffset.UtcNow.AddMilliseconds(250));
+                });
 
-        var gate    = CreateGate();
-        var started = DateTimeOffset.UtcNow;
-        var result  = await gate.TryPassAsync(CreateExecutor(Policy(), "k"), CancellationToken.None);
+        TaskHandlerExecutor? parked = null;
+        _scheduler.Setup(s => s.Schedule(It.IsAny<TaskHandlerExecutor>(), null))
+                  .Callback<TaskHandlerExecutor, DateTimeOffset?>((e, _) => parked = e);
 
-        result.Outcome.ShouldBe(RateLimitGateOutcome.Proceed, "a near slot is awaited inline and redeemed");
-        (DateTimeOffset.UtcNow - started).ShouldBeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(150),
-            "the gate must actually wait for the slot (lower-bound with tolerance)");
-        _scheduler.VerifyNoOtherCalls();
+        var gate   = CreateGate();
+        var result = await gate.TryPassAsync(CreateExecutor(Policy(), "k"), CancellationToken.None);
+
+        result.Outcome.ShouldBe(RateLimitGateOutcome.Deferred, "a near slot is re-parked, not awaited inline");
+        calls.ShouldBe(1, "the limiter is acquired exactly once — no in-slot re-acquire loop (L14)");
+        parked.ShouldNotBeNull("the task must be re-parked to the scheduler");
     }
 
     // ---------------------------------------------------------------- invalidation (set-then-check)

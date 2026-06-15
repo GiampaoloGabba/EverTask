@@ -437,4 +437,71 @@ public class KeyedRateLimiterTests
         // ...while a different long key gets its own bucket
         (await Acquire(limiter, policy, key: otherLongKey)).Acquired.ShouldBeTrue();
     }
+
+    [Fact]
+    public void Should_not_exceed_maxtrackedkeys_under_concurrent_distinct_acquisitions()
+    {
+        // CU20: N concurrent acquisitions of N distinct NEW keys must not overshoot the cap. The
+        // OnBeforeKeyAdd seam parks every acquirer past new-key detection until all are there, so they
+        // all observe Count < cap before any add — the exact race. [UNIT-necessario: race not pilotable end-to-end]
+        const int cap     = 4;
+        const int threads = 16;
+
+        var limiter = CreateLimiter(new RateLimiterOptions { MaxTrackedKeys = cap });
+        var policy  = Policy(permits: 1, period: TimeSpan.FromMinutes(1), burst: 1);
+
+        using var barrier = new Barrier(threads);
+        limiter.OnBeforeKeyAdd = () => barrier.SignalAndWait();
+
+        // Explicit threads (not the thread pool) so all `threads` participants reach the barrier
+        // simultaneously — a smaller pool would deadlock the barrier.
+        var workers = new Thread[threads];
+        for (var i = 0; i < threads; i++)
+        {
+            var key = $"key-{i}";
+            workers[i] = new Thread(() =>
+                limiter.TryAcquireAsync(policy, typeof(TaskA), key, Guid.NewGuid()).GetAwaiter().GetResult());
+        }
+        foreach (var w in workers) w.Start();
+        foreach (var w in workers) w.Join();
+
+        limiter.TrackedKeyCount.ShouldBeLessThanOrEqualTo(cap,
+            $"concurrent distinct new keys must never overshoot MaxTrackedKeys; tracked " +
+            $"{limiter.TrackedKeyCount} (cap {cap}) (CU20)");
+        limiter.FailOpenCount.ShouldBe(threads - cap,
+            "every over-cap acquisition must fail open exactly once");
+    }
+
+    [Fact]
+    public async Task Should_redeem_reservation_after_realistic_congested_redelivery_latency()
+    {
+        // L22: under congestion the redelivery latency (scheduler tick + full-queue retry +
+        // parking-lot pause) can exceed the reservation's expiry margin. The owner must still redeem
+        // the slot it booked, never re-book budget (double consumption / over-throttling).
+        var limiter = CreateLimiter();
+        limiter.ReservationExpiryMargin = TimeSpan.FromSeconds(5); // pin the pre-fix margin for a deterministic window
+        var policy = Policy(permits: 1, period: TimeSpan.FromSeconds(1), burst: 1); // short Period
+
+        // Exhaust the bucket so the next acquire reserves a slot.
+        (await Acquire(limiter, policy)).Acquired.ShouldBeTrue();
+
+        var id       = Guid.NewGuid();
+        var deferred = await Acquire(limiter, policy, id: id);
+        deferred.Acquired.ShouldBeFalse();
+        limiter.GetReservationCount(typeof(TaskA), "tenant-1").ShouldBe(1);
+
+        // Congested redelivery latency, well beyond the pinned 5 s margin:
+        // Period (1 s) + retry/tick budget (5 s) + parking-lot pause (5 s).
+        _clock.Advance(policy.Period + TimeSpan.FromSeconds(5) + TimeSpan.FromSeconds(5));
+
+        // The redelivery (same id): must redeem the reserved slot.
+        var redelivered = await Acquire(limiter, policy, id: id);
+        redelivered.Acquired.ShouldBeTrue("the owner must redeem its reserved slot despite congested latency (L22)");
+        limiter.GetReservationCount(typeof(TaskA), "tenant-1").ShouldBe(0, "the reservation was redeemed, not re-booked");
+
+        // No double consumption: redemption did not advance the TAT, so a fresh task at this instant
+        // still finds budget. Pre-fix the re-book advanced the TAT and this fresh task was deferred.
+        var fresh = await Acquire(limiter, policy, id: Guid.NewGuid());
+        fresh.Acquired.ShouldBeTrue("redemption must not double-consume budget (L22)");
+    }
 }
