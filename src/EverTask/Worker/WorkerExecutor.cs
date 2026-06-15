@@ -33,7 +33,50 @@ public class WorkerExecutor(
     // handler → queue → global is resolved per execution, NOT baked into the cache.
     private static readonly ConcurrentDictionary<Type, HandlerOptionsCache> HandlerOptionsInternalCache = new();
 
-    private record HandlerOptionsCache(IRetryPolicy? RetryPolicy, TimeSpan? Timeout, MethodInfo? OnRetryMethod);
+    // F23: the lifecycle MethodInfo (OnStarted/OnCompleted/OnError) are cached per handler type just
+    // like OnRetry, so lazy-mode executions no longer pay a GetMethod lookup per task on the hot path.
+    private record HandlerOptionsCache(
+        IRetryPolicy? RetryPolicy,
+        TimeSpan? Timeout,
+        MethodInfo? OnRetryMethod,
+        MethodInfo? OnStartedMethod,
+        MethodInfo? OnCompletedMethod,
+        MethodInfo? OnErrorMethod);
+
+    // Test seam (F23): counts per-type reflection resolutions. The factory runs once per handler type
+    // (GetOrAdd), so a single resolution across many lazy executions of the same type proves the cache
+    // hits. Keyed per type so the deterministic gate is immune to other handler types resolved
+    // concurrently elsewhere in the process. Not part of any production code path.
+    internal static readonly ConcurrentDictionary<Type, int> LifecycleResolutionsByType = new();
+
+    internal static int GetLifecycleResolutionCount(Type handlerType) =>
+        LifecycleResolutionsByType.GetValueOrDefault(handlerType);
+
+    private static HandlerOptionsCache ResolveHandlerOptions(Type _, object handlerInstance)
+    {
+        var type = handlerInstance.GetType();
+        LifecycleResolutionsByType.AddOrUpdate(type, 1, static (_, count) => count + 1);
+
+        // Resolve every per-type MethodInfo once and cache it together.
+        var onRetryMethod = type.GetMethod(
+            nameof(IEverTaskHandler<IEverTask>.OnRetry),
+            BindingFlags.Public | BindingFlags.Instance);
+        var onStartedMethod   = type.GetMethod("OnStarted");
+        var onCompletedMethod = type.GetMethod("OnCompleted");
+        var onErrorMethod     = type.GetMethod("OnError");
+
+        // Cast only once per handler type (first time): cache the RAW overrides
+        return handlerInstance is IEverTaskHandlerOptions handlerOpts
+            ? new HandlerOptionsCache(handlerOpts.RetryPolicy, handlerOpts.Timeout,
+                                      onRetryMethod, onStartedMethod, onCompletedMethod, onErrorMethod)
+            : new HandlerOptionsCache(null, null,
+                                      onRetryMethod, onStartedMethod, onCompletedMethod, onErrorMethod);
+    }
+
+    // GetOrAdd is idempotent, so callers may populate the cache in any order (ExecuteTask or the
+    // Get*Callback methods, whichever runs first for a given delivery).
+    private static HandlerOptionsCache GetHandlerOptions(object handler) =>
+        HandlerOptionsInternalCache.GetOrAdd(handler.GetType(), ResolveHandlerOptions, handler);
 
     /// <summary>
     /// Outcome of a task execution: elapsed time plus the gate result of a retry attempt that
@@ -516,23 +559,8 @@ public class WorkerExecutor(
 
         var taskToken = cancellationSourceProvider.CreateToken(task.PersistenceId, serviceToken);
 
-        // Performance optimization: Cache handler options to avoid repeated casts
-        // Use GetOrAdd overload with factoryArgument to avoid closure allocation
-        var handlerOptions = HandlerOptionsInternalCache.GetOrAdd(
-            handler.GetType(),  // Use resolved handler
-            static (_, handlerInstance) =>
-            {
-                // Resolve OnRetry method once and cache it
-                var onRetryMethod = handlerInstance.GetType().GetMethod(
-                    nameof(IEverTaskHandler<IEverTask>.OnRetry),
-                    BindingFlags.Public | BindingFlags.Instance);
-
-                // Cast only once per handler type (first time): cache the RAW overrides
-                return handlerInstance is IEverTaskHandlerOptions handlerOpts
-                    ? new HandlerOptionsCache(handlerOpts.RetryPolicy, handlerOpts.Timeout, onRetryMethod)
-                    : new HandlerOptionsCache(null, null, onRetryMethod);
-            },
-            handler);
+        // Performance optimization: Cache handler options to avoid repeated casts / reflection (F23)
+        var handlerOptions = GetHandlerOptions(handler);
 
         // Resolution chain: handler override → queue default → global default. The queue is
         // the task's DECLARED queue (a FallbackToDefault reroute keeps the declared queue's
@@ -674,9 +702,8 @@ public class WorkerExecutor(
         if (task.HandlerStartedCallback != null)
             return task.HandlerStartedCallback;
 
-        // Lazy mode: extract from handler using reflection
-        // All handlers implement IEverTaskHandler<T> which has OnStarted method
-        var onStartedMethod = handler.GetType().GetMethod("OnStarted");
+        // Lazy mode: read the MethodInfo from the per-type cache (resolved once, F23)
+        var onStartedMethod = GetHandlerOptions(handler).OnStartedMethod;
 
         return onStartedMethod != null
                    ? persistenceId => (ValueTask)onStartedMethod.Invoke(handler, [persistenceId])!
@@ -692,8 +719,8 @@ public class WorkerExecutor(
         if (task.HandlerCompletedCallback != null)
             return task.HandlerCompletedCallback;
 
-        // Lazy mode: extract from handler using reflection
-        var onCompletedMethod = handler.GetType().GetMethod("OnCompleted");
+        // Lazy mode: read the MethodInfo from the per-type cache (resolved once, F23)
+        var onCompletedMethod = GetHandlerOptions(handler).OnCompletedMethod;
 
         return onCompletedMethod != null
                    ? persistenceId => (ValueTask)onCompletedMethod.Invoke(handler, [persistenceId])!
@@ -709,8 +736,8 @@ public class WorkerExecutor(
         if (task.HandlerErrorCallback != null)
             return task.HandlerErrorCallback;
 
-        // Lazy mode: extract from handler using reflection
-        var onErrorMethod = handler.GetType().GetMethod("OnError");
+        // Lazy mode: read the MethodInfo from the per-type cache (resolved once, F23)
+        var onErrorMethod = GetHandlerOptions(handler).OnErrorMethod;
 
         return onErrorMethod != null
                    ? (persistenceId, exception, message) =>
@@ -946,7 +973,8 @@ public class WorkerExecutor(
     private void RegisterInfo(TaskHandlerExecutor executor, IReadOnlyList<TaskExecutionLog>? executionLogs, string message, params object[] messageArgs) =>
         RegisterEvent(SeverityLevel.Information, executor, message, null, executionLogs, messageArgs);
 
-    private void RegisterInfo(TaskHandlerExecutor executor, string message, params object[] messageArgs) =>
+    // internal (not private): the deterministic L30/F24 gates drive RegisterEvent through this overload.
+    internal void RegisterInfo(TaskHandlerExecutor executor, string message, params object[] messageArgs) =>
         RegisterEvent(SeverityLevel.Information, executor, message, null, null, messageArgs);
 
     private void RegisterWarning(Exception? exception, TaskHandlerExecutor executor, IReadOnlyList<TaskExecutionLog>? executionLogs, string message,
@@ -968,6 +996,19 @@ public class WorkerExecutor(
     private void RegisterEvent(SeverityLevel severity, TaskHandlerExecutor executor, string message,
                                Exception? exception = null, IReadOnlyList<TaskExecutionLog>? executionLogs = null, params object[] messageArgs)
     {
+        var logLevel = severity switch
+        {
+            SeverityLevel.Information => LogLevel.Information,
+            SeverityLevel.Warning     => LogLevel.Warning,
+            _                          => LogLevel.Error
+        };
+
+        // L30: when nobody consumes the event — the level is filtered out AND there are no monitoring
+        // subscribers — skip the string.Format + object[] boxing entirely. Otherwise that cost was paid
+        // per task even for a discarded Info event.
+        if (!logger.IsEnabled(logLevel) && TaskEventOccurredAsync == null)
+            return;
+
         // Format message once for both logging and event publishing
         // This avoids "Message template should be compile time constant" warning
         var formattedMessage = messageArgs.Length > 0
@@ -998,6 +1039,21 @@ public class WorkerExecutor(
         }
     }
 
+    // F24: cap concurrent in-flight monitoring callbacks. A slow/blocked subscriber (e.g. SignalR)
+    // under high throughput × events × subscribers would otherwise spawn an unbounded number of
+    // fire-and-forget Task.Run continuations and saturate the thread pool.
+    internal static readonly int MonitoringMaxConcurrency = Math.Max(4, Environment.ProcessorCount * 2);
+
+    private readonly SemaphoreSlim _monitoringConcurrency = new(MonitoringMaxConcurrency, MonitoringMaxConcurrency);
+
+    // Observable for tests/diagnostics: events dropped because the in-flight cap was full.
+    internal long MonitoringDroppedEvents;
+
+    // Currently admitted (in-flight) monitoring callbacks. Incremented synchronously when a permit is
+    // taken (in PublishEvent) and decremented when the callback finishes — so a test can read it
+    // deterministically without depending on thread-pool scheduling.
+    internal int MonitoringInFlightCount => MonitoringMaxConcurrency - _monitoringConcurrency.CurrentCount;
+
     private void PublishEvent(TaskHandlerExecutor task, SeverityLevel severity, string formattedMessage,
                               Exception? exception = null, IReadOnlyList<TaskExecutionLog>? executionLogs = null)
     {
@@ -1012,6 +1068,14 @@ public class WorkerExecutor(
         {
             var handler = (Func<EverTaskEventData, Task>)eventHandler;
 
+            // Never block DoWork: Wait(0) is a non-blocking acquire. Over-cap events are dropped —
+            // monitoring is fire-and-forget by contract (see CLAUDE.md "Fire-and-Forget Monitoring").
+            if (!_monitoringConcurrency.Wait(0))
+            {
+                Interlocked.Increment(ref MonitoringDroppedEvents);
+                continue;
+            }
+
             // Fire and forget with exception handling to prevent unobserved task exceptions
             _ = Task.Run(async () =>
             {
@@ -1022,6 +1086,10 @@ public class WorkerExecutor(
                 catch (Exception ex)
                 {
                     logger.LogError(ex, "Event handler failed for task {TaskId}", data.TaskId);
+                }
+                finally
+                {
+                    _monitoringConcurrency.Release();
                 }
             });
         }
