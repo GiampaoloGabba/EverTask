@@ -197,6 +197,33 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         }
     }
 
+    /// <inheritdoc />
+    public Task<int> IncrementRecoveryFailure(Guid taskId, CancellationToken ct = default)
+    {
+        lock (_pendingTasksLock)
+        {
+            var task = _pendingTasks.FirstOrDefault(x => x.Id == taskId);
+            if (task == null)
+                return Task.FromResult(0);
+
+            task.RecoveryDispatchFailureCount = (task.RecoveryDispatchFailureCount ?? 0) + 1;
+            return Task.FromResult(task.RecoveryDispatchFailureCount.Value);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task ClearRecoveryFailure(Guid taskId, CancellationToken ct = default)
+    {
+        lock (_pendingTasksLock)
+        {
+            var task = _pendingTasks.FirstOrDefault(x => x.Id == taskId);
+            if (task is { RecoveryDispatchFailureCount: > 0 })
+                task.RecoveryDispatchFailureCount = null;
+        }
+
+        return Task.CompletedTask;
+    }
+
     public Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel) =>
         UpdateCurrentRun(taskId, executionTimeMs, nextRun, auditLevel, 1);
 

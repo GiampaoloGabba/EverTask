@@ -194,6 +194,25 @@ public interface ITaskStorage
     }
 
     /// <summary>
+    /// Increments and returns the persistent count of failed startup-recovery re-dispatch attempts for
+    /// a task (L18). The caller poisons the task (marks it <see cref="QueuedTaskStatus.Failed"/>) once the
+    /// returned count reaches its configured limit, so a persistently failing re-dispatch is not retried
+    /// at every restart forever (and the failure is no longer masked by a success summary log).
+    /// </summary>
+    /// <remarks>
+    /// Default interface member: a no-op returning 0, so a custom storage that does not persist the
+    /// counter degrades gracefully to the previous behaviour (keeps retrying — no poison, no regression).
+    /// Built-in providers (Memory/EfCore/Sqlite/SqlServer) persist the counter.
+    /// </remarks>
+    Task<int> IncrementRecoveryFailure(Guid taskId, CancellationToken ct = default) => Task.FromResult(0);
+
+    /// <summary>
+    /// Clears the recovery-failure counter after a successful re-dispatch, so transient failures do not
+    /// accumulate across restarts toward the poison limit (L18). Default interface member: no-op.
+    /// </summary>
+    Task ClearRecoveryFailure(Guid taskId, CancellationToken ct = default) => Task.CompletedTask;
+
+    /// <summary>
     /// Retrieves a task by its unique task key.
     /// </summary>
     /// <param name="taskKey">The unique task key.</param>

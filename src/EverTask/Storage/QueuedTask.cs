@@ -22,6 +22,15 @@ public class QueuedTask
     public string?         TaskKey               { get; set; }
     public int?            AuditLevel            { get; set; }
 
+    /// <summary>
+    /// Number of consecutive failed startup-recovery re-dispatch attempts (L18). Incremented each time
+    /// recovery fails to re-dispatch this task; once it reaches the configured limit the task is
+    /// poisoned (marked <see cref="QueuedTaskStatus.Failed"/>) so a persistent failure stops being
+    /// retried at every restart. Reset after a successful re-dispatch. Not part of the recoverable
+    /// predicate.
+    /// </summary>
+    public int?            RecoveryDispatchFailureCount { get; set; }
+
     public QueuedTaskStatus         Status       { get; set; }
     public ICollection<StatusAudit> StatusAudits { get; set; } = new List<StatusAudit>();
     public ICollection<RunsAudit>   RunsAudits   { get; set; } = new List<RunsAudit>();

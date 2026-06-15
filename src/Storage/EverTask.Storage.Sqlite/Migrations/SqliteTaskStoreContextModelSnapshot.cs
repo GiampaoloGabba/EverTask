@@ -15,7 +15,7 @@ namespace EverTask.Storage.Sqlite.Migrations
         protected override void BuildModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
-            modelBuilder.HasAnnotation("ProductVersion", "7.0.20");
+            modelBuilder.HasAnnotation("ProductVersion", "9.0.17");
 
             modelBuilder.Entity("EverTask.Storage.QueuedTask", b =>
                 {
@@ -57,6 +57,9 @@ namespace EverTask.Storage.Sqlite.Migrations
 
                     b.Property<string>("QueueName")
                         .HasColumnType("TEXT");
+
+                    b.Property<int?>("RecoveryDispatchFailureCount")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("RecurringInfo")
                         .HasColumnType("TEXT");

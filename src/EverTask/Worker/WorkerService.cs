@@ -181,7 +181,14 @@ public class WorkerService(
             consumerId, queueName);
     }
 
-    private async Task ProcessPendingAsync(CancellationToken ct = default)
+    /// <summary>
+    /// Number of consecutive failed startup-recovery re-dispatch attempts after which a task is
+    /// poisoned (marked <see cref="QueuedTaskStatus.Failed"/>) instead of being retried at every
+    /// restart forever (L18). Internal for testing purposes.
+    /// </summary>
+    internal int MaxRecoveryDispatchAttempts { get; set; } = 5;
+
+    internal async Task ProcessPendingAsync(CancellationToken ct = default)
     {
         using var scope       = serviceScopeFactory.CreateScope();
         var       taskStorage = scope.ServiceProvider.GetService<ITaskStorage>();
@@ -198,6 +205,12 @@ public class WorkerService(
         DateTimeOffset? lastCreatedAt = null;
         Guid? lastId = null;
         int totalProcessed = 0;
+
+        // L18 outcome accounting: a persistent re-dispatch failure must NOT be masked by a success
+        // summary log. Tracked across pages, written to the summary at the end.
+        var recovered         = 0;
+        var transientFailures = 0;
+        var permanentFailures = 0;
 
         // Recovery runs concurrently with live dispatching: only recover tasks created BEFORE
         // this point, so tasks dispatched while recovery is paginating are not re-enqueued twice.
@@ -229,7 +242,41 @@ public class WorkerService(
                 CancellationToken = ct
             };
 
-            await Parallel.ForEachAsync(pendingTasks, options, async (taskInfo, token) =>
+            // L34: partition the fan-out PER TARGET QUEUE and recover each group concurrently. A single
+            // global Parallel.ForEachAsync let blocking enqueues toward one saturated queue occupy every
+            // global slot and head-of-line-block the recovery of other, idle queues. The partition key
+            // mirrors ExecuteDispatch's routing (stored QueueName, else Recurring/Default), so a group
+            // maps to exactly one worker queue: a wedged queue can only stall its own group's slots.
+            var byQueue = pendingTasks.GroupBy(t =>
+                t.QueueName ?? (t.IsRecurring ? Configuration.QueueNames.Recurring : Configuration.QueueNames.Default));
+
+            await Task.WhenAll(byQueue.Select(group =>
+                Parallel.ForEachAsync(group, options, ProcessRecoveredTaskAsync))).ConfigureAwait(false);
+
+            totalProcessed += pendingTasks.Length;
+
+            // Advance the keyset cursor using the RAW page (not the filtered one) so pagination
+            // always makes progress; stop once the page goes past the recovery cutoff.
+            var lastTask = page[^1];
+            lastCreatedAt = lastTask.CreatedAtUtc;
+            lastId = lastTask.Id;
+
+            if (lastTask.CreatedAtUtc > recoveryCutoff)
+                break;
+        }
+
+        // L18: the summary must reflect failures, never report plain success when re-dispatches failed.
+        if (transientFailures > 0 || permanentFailures > 0)
+            logger.LogWarning(
+                "Recovery processed {Total} pending task(s): {Recovered} re-dispatched, {Transient} failed " +
+                "(still recoverable, will retry at the next startup), {Permanent} marked Failed (poisoned/unprocessable)",
+                totalProcessed, recovered, transientFailures, permanentFailures);
+        else
+            logger.LogInformation("Completed processing {TotalCount} pending tasks", totalProcessed);
+
+        return;
+
+        async ValueTask ProcessRecoveredTaskAsync(QueuedTask taskInfo, CancellationToken token)
         {
             IEverTask?     task          = null;
             RecurringTask? scheduledTask = null;
@@ -277,6 +324,13 @@ public class WorkerService(
                     await taskDispatcher.ExecuteDispatch(task, executionTime, scheduledTask,
                         taskInfo.CurrentRunCount, token, taskInfo.Id, isRecovery: true)
                         .ConfigureAwait(false);
+
+                    // L18: a task that previously failed re-dispatch but now succeeded clears its failure
+                    // counter, so transient failures never accumulate toward the poison limit across restarts.
+                    if ((taskInfo.RecoveryDispatchFailureCount ?? 0) > 0)
+                        await taskStorage.ClearRecoveryFailure(taskInfo.Id, token).ConfigureAwait(false);
+
+                    Interlocked.Increment(ref recovered);
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested)
                 {
@@ -286,15 +340,29 @@ public class WorkerService(
                 }
                 catch (Exception ex)
                 {
-                    // Do NOT mark the task Failed: the typical failure here is transient
-                    // (storage hiccup) and Failed would make a one-shot task permanently
-                    // unrecoverable. Leaving the status untouched keeps the task visible to
-                    // the next startup recovery; genuinely poison tasks (broken payload) are
-                    // already marked Failed by the deserialization branch below.
-                    logger.LogError(ex,
-                        "Error occurred re-dispatching pending task with id {TaskId}. " +
-                        "The task remains in a recoverable status and will be retried at the next startup",
-                        taskInfo.Id);
+                    // L18: a re-dispatch failure is typically transient (storage hiccup) and must stay
+                    // recoverable — but a PERSISTENT failure used to be retried at every restart while the
+                    // summary logged success, masking a constant error. Count the failure durably and
+                    // poison the task (mark Failed) once it has failed too many times, so it stops being
+                    // retried forever; genuinely transient failures still recover (counter reset on success).
+                    var attempts = await taskStorage.IncrementRecoveryFailure(taskInfo.Id, token).ConfigureAwait(false);
+
+                    if (attempts >= MaxRecoveryDispatchAttempts)
+                    {
+                        await taskStorage.SetStatus(taskInfo.Id, QueuedTaskStatus.Failed, ex, auditLevel, null, token)
+                                         .ConfigureAwait(false);
+                        Interlocked.Increment(ref permanentFailures);
+                        logger.LogError(ex,
+                            "Pending task {TaskId} failed re-dispatch {Attempts} time(s) and is poisoned (marked Failed); " +
+                            "it will no longer be retried", taskInfo.Id, attempts);
+                    }
+                    else
+                    {
+                        Interlocked.Increment(ref transientFailures);
+                        logger.LogWarning(ex,
+                            "Error re-dispatching pending task {TaskId} (attempt {Attempts}/{Max}); the task remains " +
+                            "recoverable and will be retried at the next startup", taskInfo.Id, attempts, MaxRecoveryDispatchAttempts);
+                    }
                 }
             }
             else
@@ -313,22 +381,10 @@ public class WorkerService(
                         null,
                         token).ConfigureAwait(false);
                 }
+
+                Interlocked.Increment(ref permanentFailures);
             }
-        }).ConfigureAwait(false);
-
-            totalProcessed += pendingTasks.Length;
-
-            // Advance the keyset cursor using the RAW page (not the filtered one) so pagination
-            // always makes progress; stop once the page goes past the recovery cutoff.
-            var lastTask = page[^1];
-            lastCreatedAt = lastTask.CreatedAtUtc;
-            lastId = lastTask.Id;
-
-            if (lastTask.CreatedAtUtc > recoveryCutoff)
-                break;
         }
-
-        logger.LogInformation("Completed processing {TotalCount} pending tasks", totalProcessed);
     }
 
     public override async Task StopAsync(CancellationToken stoppingToken)

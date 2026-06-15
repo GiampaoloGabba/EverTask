@@ -355,6 +355,35 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         return task?.CurrentRunCount ?? 0;
     }
 
+    /// <inheritdoc />
+    public virtual async Task<int> IncrementRecoveryFailure(Guid taskId, CancellationToken ct = default)
+    {
+        // Client-side load + SaveChanges: works uniformly across all EF providers (InMemory cannot
+        // ExecuteUpdate). This is the rare recovery-failure path, not a hot path.
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+
+        var task = await dbContext.QueuedTasks.FirstOrDefaultAsync(x => x.Id == taskId, ct).ConfigureAwait(false);
+        if (task == null)
+            return 0;
+
+        task.RecoveryDispatchFailureCount = (task.RecoveryDispatchFailureCount ?? 0) + 1;
+        await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
+        return task.RecoveryDispatchFailureCount.Value;
+    }
+
+    /// <inheritdoc />
+    public virtual async Task ClearRecoveryFailure(Guid taskId, CancellationToken ct = default)
+    {
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+
+        var task = await dbContext.QueuedTasks.FirstOrDefaultAsync(x => x.Id == taskId, ct).ConfigureAwait(false);
+        if (task is { RecoveryDispatchFailureCount: > 0 })
+        {
+            task.RecoveryDispatchFailureCount = null;
+            await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
+        }
+    }
+
     public virtual Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel) =>
         UpdateCurrentRun(taskId, executionTimeMs, nextRun, auditLevel, 1);
 
