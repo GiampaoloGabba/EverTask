@@ -282,6 +282,40 @@ public class LinearRetryPolicyTests
         Assert.Equal(3, attemptCount); // 1 initial + 2 retries
     }
 
+    [Fact]
+    public async Task Execute_WhenCancelledDuringRetryDelay_PreservesAccumulatedCauses()
+    {
+        // G12: a cancel landing during the inter-retry delay used to discard the accumulated retryable
+        // causes — only the bare OperationCanceledException survived, so the failure record lost WHY the
+        // task had been retrying. The fix keeps the terminal Cancelled classification (it is still an
+        // OperationCanceledException) but carries the accumulated causes as an inner AggregateException.
+        var policy = new LinearRetryPolicy(3, TimeSpan.FromSeconds(10)); // long delay: cancel lands inside it
+        using var cts = new CancellationTokenSource();
+        var logger    = CreateMockLogger();
+        var attempts  = 0;
+
+        var oce = await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+        {
+            await policy.Execute(
+                ct =>
+                {
+                    attempts++;
+                    // Cancel BEFORE the upcoming inter-retry delay so Task.Delay(token) trips at once.
+                    cts.Cancel();
+                    throw new InvalidOperationException($"transient failure {attempts}");
+                },
+                logger,
+                cts.Token);
+        });
+
+        attempts.ShouldBe(1); // one attempt, then cancel during the delay before the second
+
+        oce.InnerException.ShouldBeOfType<AggregateException>(
+            "the accumulated retryable causes must be preserved as an inner AggregateException (G12)");
+        ((AggregateException)oce.InnerException!).InnerExceptions
+            .ShouldContain(e => e is InvalidOperationException);
+    }
+
     #endregion
 
     #region Group 7: Validation (2 tests)

@@ -15,6 +15,7 @@ A review of the dispatch → recovery → scheduler → worker path found a batc
 
 - **`OnDays(...)` now fires on every listed day instead of once a week.** `EveryWeek().OnDays(Monday, Wednesday, Friday)` advanced a full week after the first matching day, so it ran once a week rather than three times — even though the fluent-API docs already describe it as "multiple days per week", and the business-hours example there relies on every listed day firing. Week and day intervals now fire on each listed day and only advance by the configured number of weeks once that week's days are used up. If you depended on the old once-a-week behavior, list a single day or switch to a cron expression.
 - **Completed tasks are no longer hard-deleted the moment they have no audit rows.** With audit cleanup enabled, a finished non-recurring task that never wrote audits (for example `AuditLevel.None`, or `Minimal`/`ErrorsOnly` that succeeded) was deleted on the next cleanup cycle, regardless of any retention window. It is now deleted only once it is older than the longest configured retention window. The misleading `DeleteCompletedTasksWithAudits` option is renamed `DeleteCompletedTasksAfterRetention`; the old name still works as a deprecated alias.
+- **Eager-mode recurring tasks run lazily after their first occurrence** (L27/CU17). Eager handlers used to be resolved from the singleton dispatcher's root provider, where they stayed pinned until shutdown and were disposed twice. An eager handler is now resolved in an EverTask-owned scope that is disposed right after the task runs, every recurring occurrence after the first resolves a fresh handler (the lazy default), and `EverTaskHandler.DisposeAsync` is idempotent. The lazy path is unchanged.
 
 #### Fixed
 
@@ -26,6 +27,7 @@ Recurring accounting and recovery:
 - **Recovery re-applied the initial delay on every restart** (L25): a recurring task whose first run never happened, recovered with a stale `NextRunUtc`, had its `InitialDelay`/`RunNow`/`RunAt` applied again each time, shifting the whole schedule forward by the delay. The initial-run configuration is no longer re-applied on the recovery path.
 - **`DayInterval` skipped a day** (L26): when every configured time was earlier than the reference time of day, the next-occurrence math added an extra day and returned day+2 instead of day+1.
 - **A rate-limited re-park could fire an occurrence past `RunUntil`** (F14): the in-flight-redelivery re-park lacked the `RunUntil` guard the normal deferral path applies, so an occurrence could fire up to a second late. It now drops the occurrence.
+- **A recurring task with corrupt scheduling metadata was re-executed on every restart** (CU3/L44): if a recurring row's `RecurringTask` JSON stopped deserializing (after a serializer or type change), recovery quietly demoted it to a one-shot and ran it once. The row stayed recurring and recoverable, so this repeated at every restart and it was never poisoned. It is now marked `Failed` with the deserialization error instead of being run.
 
 Queue, recovery and taskKey:
 
@@ -49,8 +51,14 @@ Configuration and logging:
 - **The default queue raised `QueueFullException` instead of applying backpressure** (G19): a `FallbackToDefault` default queue degenerated into a self-reference and threw at the caller. The default queue now waits (backpressure) as documented.
 - **A bad format specifier in a log call failed the task** (G9, CU18): the log-capture renderer applied the user's format string without a guard, so a specifier like `{0:Q}` (or `Math.Abs(int.MinValue)` on alignment) threw out of `Handle`, and a separate `OnError` template used `{1}` with a single argument and masked the real failure. Log capture no longer throws (it falls back to the raw template), and the `OnError` template is fixed.
 
+Retry and callbacks:
+
+- **`OnError` received the retry `AggregateException` instead of the real exception** (G11): after retries were exhausted the policy threw an `AggregateException`, and `OnError` got that wrapper rather than the underlying failure, so type-based handling (dead-letter, compensation) silently missed it, which the non-retryable path never did. `OnError` now receives the underlying exception; the persisted failure still keeps the full aggregate.
+- **A cancel during the inter-retry delay dropped the accumulated causes** (G12): only the `OperationCanceledException` survived, so the record lost why the task had been retrying. The accumulated causes are now kept as an inner `AggregateException`. It is still a cancel, so the terminal classification does not change.
+
 Handler registration:
 
+- **Eager handlers were pinned in the root container and disposed twice** (L27/CU17): a short-delayed or short-interval recurring handler was resolved from the singleton dispatcher's root provider, so it accumulated in the root's disposables until shutdown and was disposed both by the worker and by the container. It is now resolved in a per-dispatch EverTask scope disposed after execution, and `DisposeAsync` is idempotent (see Changed above for the recurring-occurrence consequence).
 - **A manually registered singleton handler was shared across concurrent eager dispatches** (G3): the eager path resolved the handler through `IEverTaskHandler<T>`, so registering one with `AddSingleton` before `AddEverTask` handed the same instance to every dispatch, and the worker's per-execution log capture crossed between concurrent runs. The eager path now resolves a fresh instance per dispatch by concrete type, the way the lazy path already did.
 - **Duplicate and open-generic handlers were dropped without a word** (G1, G2): two handlers for the same task type were registered first-wins with no warning, and open-generic handlers were filtered out by unreachable code and never registered at all. Both cases now record a warning that is logged when the worker starts.
 
@@ -67,6 +75,10 @@ Provider consistency and audit:
 - SQL Server migration `AddRunsToAdvanceToUpdateRunProcedure`: an optional `@RunsToAdvance` parameter (default 1) on `usp_UpdateCurrentRun`.
 - **`AuditPolicy`** (public, in `EverTask.Storage`): the shared audit-decision helper (`IsRealError`, `ShouldCreateStatusAudit`, `ShouldCreateRunsAudit`) used by every storage provider. Custom providers can use it to keep their audit trail consistent with the built-in ones.
 - **`AuditRetentionPolicy.DeleteCompletedTasksAfterRetention`**, replacing the misnamed `DeleteCompletedTasksWithAudits` (kept as a deprecated alias that forwards to it).
+
+#### Security
+
+- **Task (de)serialization no longer honors the process-global Newtonsoft settings** (L33): EverTask used parameterless `JsonConvert`, so a host that set `JsonConvert.DefaultSettings`, for example opening `TypeNameHandling` globally, could corrupt the recovery round-trip or expose a gadget-deserialization surface when recovery deserialized a stored task. All task and recurring-metadata (de)serialization now uses an isolated `JsonSerializerSettings` with `TypeNameHandling.None`.
 
 ### Performance & stability hardening
 
@@ -93,6 +105,16 @@ A second pass over the same dispatch → scheduler → worker → rate-limit pat
 - **`QueuedTask.RecoveryDispatchFailureCount`** (nullable), with SQL Server and SQLite migrations, tracking consecutive failed recovery re-dispatches for the poison logic above.
 - **`ITaskStorage.IncrementRecoveryFailure` / `ClearRecoveryFailure`**, default interface members (non-breaking): custom storages that do not override them keep the previous retry-forever behavior; the built-in providers persist the counter.
 - **`benchmarks/EverTask.Benchmarks`**: a BenchmarkDotNet project (Central Package Management, kept out of `EverTask.sln` and the CI test run); the A/B measurements live in `benchmarks/RESULTS.md`.
+
+### Monitor UI dependency security update
+
+A dependency refresh of the SignalR monitoring dashboard (`src/Monitoring/EverTask.Monitor.Api/UI`) that clears all advisories reported by `pnpm audit` (54 total: 30 high, 22 moderate, 2 low). Vulnerable subtrees are bumped within their current majors, so there are no breaking changes; `tsc && vite build` passes with unchanged `wwwroot` output. This touches only the bundled monitoring UI, not the EverTask libraries.
+
+#### Security
+
+- Bump runtime deps: `axios` 1.13.2 → 1.18.0 (proxy MITM / NO_PROXY bypass), `qs` 6.14.1 → 6.15.2 (DoS), `react-router-dom` 7.12.0 → 7.17.0.
+- Bump build/dev deps: `vite` 7.3.1 → 7.3.5, `rollup` 4.55.1 → 4.62.0, `postcss` 8.5.6 → 8.5.15, `eslint` 9.39.2 → 9.39.4, `@typescript-eslint` 8.52.0 → 8.61.0.
+- Pin transitive fixes via `pnpm.overrides`: `esbuild` ≥0.28.1 (GHSA-gv7w-rqvm-qjhr), `flatted` ≥3.4.2, `picomatch` ≥2.3.2 / ≥4.0.4.
 
 ## [3.8.0] - 2026-06-13
 

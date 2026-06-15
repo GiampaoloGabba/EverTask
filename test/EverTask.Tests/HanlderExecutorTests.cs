@@ -13,18 +13,17 @@ public class HanlderExecutorTests
 
     public HanlderExecutorTests()
     {
-        var serviceProviderMock = new Mock<IServiceProvider>();
+        // Real DI provider (not a Mock): the eager handler-resolution path now resolves handlers inside
+        // an EverTask-owned scope (L27), which requires IServiceScopeFactory and a scope that can resolve
+        // the handler — exactly what a real provider gives, and what production always uses.
+        var services = new ServiceCollection();
+        services.AddTransient<IEverTaskHandler<TestTaskRequest>, TestTaskHanlder>();
+        services.AddTransient<TestTaskHanlder>();
+        services.AddTransient<IEverTaskHandler<TestTaskRequestNoSerializable>, TestTaskHandlertNoSerializable>();
+        services.AddTransient<TestTaskHandlertNoSerializable>();
+        services.AddSingleton<IGuidGenerator>(new DefaultGuidGenerator(UUIDNext.Database.Other));
 
-        serviceProviderMock.Setup(s => s.GetService(typeof(IEverTaskHandler<TestTaskRequest>)))
-                           .Returns(new TestTaskHanlder());
-
-        serviceProviderMock.Setup(s => s.GetService(typeof(IEverTaskHandler<TestTaskRequestNoSerializable>)))
-                           .Returns(new TestTaskHandlertNoSerializable());
-
-        serviceProviderMock.Setup(s => s.GetService(typeof(IGuidGenerator)))
-                           .Returns(new DefaultGuidGenerator(UUIDNext.Database.Other));
-
-        _provider = serviceProviderMock.Object;
+        _provider = services.BuildServiceProvider();
     }
 
     [Fact]

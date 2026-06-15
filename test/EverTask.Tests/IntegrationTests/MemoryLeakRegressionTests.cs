@@ -64,6 +64,59 @@ public class MemoryLeakRegressionTests : IsolatedIntegrationTestBase
     }
 
     [Fact]
+    public async Task Should_not_retain_eager_handler_instances_after_scheduled_tasks_complete()
+    {
+        // L27: a short-delayed task (< 30 min) takes the EAGER path, so the handler is resolved at
+        // dispatch and carried to execution. Pre-fix it was resolved from the singleton dispatcher's
+        // ROOT provider and pinned in the root disposables list until shutdown — so handlers
+        // accumulated proportionally to the number of dispatches. With the fix the handler lives in an
+        // EverTask-owned scope disposed right after execution, so nothing accumulates in the root.
+        await CreateIsolatedHostAsync(channelCapacity: 100, maxDegreeOfParallelism: 4);
+
+        TestTaskEagerTrackedHandler.Instances.Clear();
+
+        const int taskCount = 30;
+        await DispatchEagerAndAwaitCompletion(taskCount);
+
+        var total = TestTaskEagerTrackedHandler.Instances.Count;
+        total.ShouldBeGreaterThanOrEqualTo(taskCount);
+
+        // After execution + GC, count the instances still alive. An eager executor carries its handler,
+        // so the few idle consumers each transiently pin their LAST-processed executor (bounded by the
+        // degree of parallelism, released on the next dispatch). What must NOT happen is unbounded
+        // accumulation in the root container.
+        var alive = total;
+        for (var attempt = 0; attempt < 8 && alive >= taskCount; attempt++)
+        {
+            GC.Collect(2, GCCollectionMode.Forced, blocking: true);
+            GC.WaitForPendingFinalizers();
+            GC.Collect(2, GCCollectionMode.Forced, blocking: true);
+
+            alive = TestTaskEagerTrackedHandler.Instances.Count(wr => wr.IsAlive);
+
+            if (alive >= taskCount)
+                await Task.Delay(100);
+        }
+
+        // Pre-fix: ~all instances stay alive (proportional to taskCount) — pinned in the root container.
+        // Post-fix: only a bounded few survive (idle consumers' last executors), NOT proportional to count.
+        alive.ShouldBeLessThan(taskCount,
+            $"eager handlers must not accumulate in the root container (L27): {alive} of {total} still alive");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private async Task DispatchEagerAndAwaitCompletion(int taskCount)
+    {
+        var taskIds = new List<Guid>(taskCount);
+        for (var i = 0; i < taskCount; i++)
+            // 1-second delay (< 30 min) -> eager handler resolution at dispatch.
+            taskIds.Add(await Dispatcher.Dispatch(new TestTaskEagerTracked(), TimeSpan.FromSeconds(1)));
+
+        foreach (var id in taskIds)
+            await WaitForTaskStatusAsync(id, QueuedTaskStatus.Completed, timeoutMs: 15000);
+    }
+
+    [Fact]
     public async Task Should_dispose_dispatch_time_metadata_handler_when_dispatching_immediate_task()
     {
         // Host NOT started: only the dispatch runs, no execution.

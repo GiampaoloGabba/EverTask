@@ -117,10 +117,13 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
         TestTaskLazyModeDelayedWithAsyncDispose.WasDisposedDuringDispatch.ShouldBeFalse(
             "Handler should NOT be disposed during dispatch (only after execution)");
 
-        // Verify callback order: Handle -> DisposeAsyncCore
-        TestTaskLazyModeDelayedWithAsyncDispose.CallbackOrder.Count.ShouldBe(2);
+        // Eager mode resolves the handler in an EverTask-owned scope (L27): the discarded G3
+        // concrete-probe instance and the executing instance are BOTH disposed when that scope is
+        // disposed after execution -> Handle first, then two DisposeAsyncCore.
+        TestTaskLazyModeDelayedWithAsyncDispose.CallbackOrder.Count.ShouldBe(3);
         TestTaskLazyModeDelayedWithAsyncDispose.CallbackOrder[0].ShouldBe("Handle");
-        TestTaskLazyModeDelayedWithAsyncDispose.CallbackOrder[1].ShouldBe("DisposeAsyncCore");
+        TestTaskLazyModeDelayedWithAsyncDispose.CallbackOrder.Skip(1)
+            .ShouldAllBe(entry => entry == "DisposeAsyncCore");
 
         // Verify task completed successfully in storage
         var tasks = await Storage.GetAll();
@@ -267,10 +270,13 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
         TestTaskLazyModeDelayedWithAsyncDispose.WasDisposedDuringDispatch.ShouldBeFalse(
             "Handler should NOT have been disposed during dispatch");
 
-        // Verify callback order: Handle → DisposeAsyncCore
-        TestTaskLazyModeDelayedWithAsyncDispose.CallbackOrder.Count.ShouldBe(2);
+        // Eager mode resolves the handler in an EverTask-owned scope (L27): the discarded G3
+        // concrete-probe instance and the executing instance are BOTH disposed when that scope is
+        // disposed after execution -> Handle first, then two DisposeAsyncCore.
+        TestTaskLazyModeDelayedWithAsyncDispose.CallbackOrder.Count.ShouldBe(3);
         TestTaskLazyModeDelayedWithAsyncDispose.CallbackOrder[0].ShouldBe("Handle");
-        TestTaskLazyModeDelayedWithAsyncDispose.CallbackOrder[1].ShouldBe("DisposeAsyncCore");
+        TestTaskLazyModeDelayedWithAsyncDispose.CallbackOrder.Skip(1)
+            .ShouldAllBe(entry => entry == "DisposeAsyncCore");
     }
 
     [Fact]
@@ -396,7 +402,10 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
         }
 
         executionCount.ShouldBe(1, "Task should have executed once");
-        disposeCount.ShouldBe(1, "Handler should be disposed after execution (ALL modes dispose handlers)");
+        disposeCount.ShouldBe(2,
+            "Eager mode resolves the handler in an EverTask-owned scope (L27): the discarded G3 " +
+            "concrete-probe instance and the executing instance are both disposed when that scope is " +
+            "disposed after execution (like lazy mode disposes a metadata + an executing instance)");
 
         // Verify task has executed at least once
         var tasks = await Storage.GetAll();
@@ -479,7 +488,10 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
         }
 
         executionCount.ShouldBe(1, "Task should have executed once");
-        disposeCount.ShouldBe(1, "Handler should be disposed after execution (ALL modes dispose handlers)");
+        disposeCount.ShouldBe(2,
+            "Eager mode resolves the handler in an EverTask-owned scope (L27): the discarded G3 " +
+            "concrete-probe instance and the executing instance are both disposed when that scope is " +
+            "disposed after execution (like lazy mode disposes a metadata + an executing instance)");
 
         // Verify task has executed at least once
         var tasks = await Storage.GetAll();
@@ -526,7 +538,10 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
         }
 
         executionCount.ShouldBe(1, "Task should have executed once");
-        disposeCount.ShouldBe(1, "Handler should be disposed after execution (ALL modes dispose handlers)");
+        disposeCount.ShouldBe(2,
+            "Eager mode resolves the handler in an EverTask-owned scope (L27): the discarded G3 " +
+            "concrete-probe instance and the executing instance are both disposed when that scope is " +
+            "disposed after execution (like lazy mode disposes a metadata + an executing instance)");
 
         // Verify task has executed at least once
         var tasks = await Storage.GetAll();

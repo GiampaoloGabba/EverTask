@@ -371,11 +371,17 @@ public class WorkerExecutor(
         }
         finally
         {
-            // Dispose handler if created (BEFORE recurring scheduling)
-            // Only dispose explicitly in eager mode - lazy mode handlers are disposed by the async scope
-            if (handler != null && !task.IsLazy)
+            // Dispose the eager handler (BEFORE recurring scheduling). Lazy-mode handlers are disposed
+            // by the worker's per-task scope. Eager handlers are resolved into an EverTask-owned scope
+            // carried on the executor (L27): disposing that scope releases the handler exactly once and
+            // unpins it from the container. DisposeAsync is idempotent (CU17), so any extra dispose
+            // (e.g. a reused recurring executor) is harmless.
+            if (!task.IsLazy)
             {
-                await ExecuteDisposeHandler(handler);
+                if (task.HandlerScope != null)
+                    await ExecuteDisposeHandlerScope(task.HandlerScope);
+                else if (handler != null)
+                    await ExecuteDisposeHandler(handler);
             }
 
             // Save persisted logs (AFTER handler disposal, BEFORE recurring scheduling)
@@ -693,6 +699,20 @@ public class WorkerExecutor(
         }
     }
 
+    // Disposes the EverTask-owned scope an eager handler was resolved into (L27), releasing the handler
+    // instance(s) without pinning them in the root container. Disposal must never fail task execution.
+    private async Task ExecuteDisposeHandlerScope(IAsyncDisposable handlerScope)
+    {
+        try
+        {
+            await handlerScope.DisposeAsync();
+        }
+        catch (Exception e)
+        {
+            logger.LogError(e, "Error disposing eager handler scope");
+        }
+    }
+
     /// <summary>
     /// Gets the OnStarted callback from executor (eager mode) or extracts from handler (lazy mode)
     /// </summary>
@@ -865,12 +885,26 @@ public class WorkerExecutor(
                 await taskStorage.SetStatus(task.PersistenceId, QueuedTaskStatus.Failed, ex, task.AuditLevel, null, serviceToken)
                                  .ConfigureAwait(false);
 
-            await ExecuteCallback(GetErrorCallback(task, handler), task, ex,
+            // G11: the retry policy throws AggregateException("All retry attempts failed", ...) when
+            // retries are exhausted. The PERSISTED status and the error log keep that aggregate (full
+            // attempt history), but OnError must receive the REAL handler exception so type-based
+            // handling (dead-letter, compensation) keyed on the exception type works — consistent with
+            // the non-retryable path that delivers the raw exception.
+            await ExecuteCallback(GetErrorCallback(task, handler), task, UnwrapForCallback(ex),
                 $"Error occurred executing the task with id {task.PersistenceId}").ConfigureAwait(false);
 
             RegisterError(ex, task, executionLogs, "Error occurred executing task with id {0}.", task.PersistenceId);
         }
     }
+
+    // Unwraps a retry-policy AggregateException to the underlying handler failure for the OnError
+    // callback (G11), so OnError sees the real exception instead of the wrapper. The aggregate itself is
+    // still used for the persisted status and the error log. The last inner is the final attempt's
+    // failure — the analogue of the raw exception delivered on the non-retryable path.
+    private static Exception UnwrapForCallback(Exception ex) =>
+        ex is AggregateException { InnerExceptions.Count: > 0 } aggregate
+            ? aggregate.InnerExceptions[^1]
+            : ex;
 
     private async Task QueueNextOccourrence(TaskHandlerExecutor task, double executionTimeMs, ITaskStorage? taskStorage,
                                             bool markCompleted = false)
@@ -957,8 +991,12 @@ public class WorkerExecutor(
         if (result.NextRun.HasValue)
         {
             // Update ExecutionTime for the next run so that subsequent calculations
-            // use the correct scheduled time (not the original time from first dispatch)
-            var updatedTask = task with { ExecutionTime = result.NextRun };
+            // use the correct scheduled time (not the original time from first dispatch).
+            // Always continue LAZY: an eager first occurrence carries a single-use EverTask-owned
+            // handler scope (disposed in the finally above), so reusing the same eager executor would
+            // re-run on a disposed handler/scope. ToLazy() drops the carried instance and scope, so each
+            // subsequent occurrence resolves a fresh handler in the worker's per-task scope (L27).
+            var updatedTask = task.ToLazy() with { ExecutionTime = result.NextRun };
             scheduler.Schedule(updatedTask, result.NextRun);
         }
         else
@@ -1098,8 +1136,9 @@ public class WorkerExecutor(
     private EverTaskEventData CreateEventDataCached(TaskHandlerExecutor executor, SeverityLevel severity,
                                                      string message, Exception? exception, IReadOnlyList<TaskExecutionLog>? executionLogs = null)
     {
-        // Cache task JSON (weak reference - GC'd when task is collected)
-        var taskJson = TaskJsonCache.GetValue(executor.Task, JsonConvert.SerializeObject);
+        // Cache task JSON (weak reference - GC'd when task is collected). Isolated settings (L33) so a
+        // hostile global JsonConvert.DefaultSettings cannot alter the monitoring payload either.
+        var taskJson = TaskJsonCache.GetValue(executor.Task, EverTaskJson.Serialize);
 
         // Cache type strings (permanent cache - types never unload)
         var taskType = TypeStringCache.GetOrAdd(executor.Task.GetType(), type => type.ToString());

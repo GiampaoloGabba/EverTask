@@ -290,7 +290,22 @@ public class LinearRetryPolicy : IRetryPolicy
                         retryAttemptNumber, _retryDelays.Length, delay.TotalMilliseconds, ex.GetType().Name);
 
                     // Wait for retry delay
-                    await Task.Delay(delay, token).ConfigureAwait(false);
+                    try
+                    {
+                        await Task.Delay(delay, token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException oce) when (exceptions.Count > 0)
+                    {
+                        // G12: a cancel during the inter-retry delay would otherwise discard the
+                        // retryable causes accumulated so far, losing WHY the task had been retrying.
+                        // Preserve them as an inner AggregateException. This stays an
+                        // OperationCanceledException, so the terminal Cancelled classification is
+                        // unchanged — the causes are diagnostic only.
+                        throw new OperationCanceledException(
+                            $"Cancelled during the retry delay after {exceptions.Count} failed attempt(s)",
+                            new AggregateException(exceptions),
+                            oce.CancellationToken);
+                    }
 
                     // Invoke OnRetry callback if provided
                     if (onRetryCallback != null)

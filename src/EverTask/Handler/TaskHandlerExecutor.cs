@@ -31,7 +31,12 @@ public record TaskHandlerExecutor(
     string? TaskKey,
     AuditLevel AuditLevel,
     RateLimitPolicy? RateLimitPolicy = null,
-    string? RateLimitKey = null)
+    string? RateLimitKey = null,
+    // Eager mode only: the EverTask-owned DI scope the carried handler instance was resolved from.
+    // The worker disposes it right after execution so eager handlers are NOT pinned in the singleton
+    // dispatcher's root container until shutdown (L27). Memory-only; null for lazy executors and
+    // dropped by ToLazy(). Never persisted.
+    IAsyncDisposable? HandlerScope = null)
 {
 
     /// <summary>
@@ -226,7 +231,7 @@ public static class TaskHandlerExecutorExtensions
     {
         ArgumentNullException.ThrowIfNull(executor.Task);
 
-        var request = JsonConvert.SerializeObject(executor.Task);
+        var request = EverTaskJson.Serialize(executor.Task);
 
         // Use the shared assembly-qualified-name cache to avoid repeated string generation
         var requestType = TypeNameCache.GetAssemblyQualifiedName(executor.Task.GetType());
@@ -258,7 +263,7 @@ public static class TaskHandlerExecutorExtensions
 
         if (executor.RecurringTask != null)
         {
-            scheduleTask = JsonConvert.SerializeObject(executor.RecurringTask);
+            scheduleTask = EverTaskJson.Serialize(executor.RecurringTask);
             isRecurring  = true;
 
             // For a newly dispatched recurring task, NextRunUtc should be the time of the first execution

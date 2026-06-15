@@ -286,7 +286,7 @@ public class WorkerService(
                 var type = Type.GetType(taskInfo.Type);
                 if (type != null && typeof(IEverTask).IsAssignableFrom(type))
                 {
-                    task = (IEverTask?)JsonConvert.DeserializeObject(taskInfo.Request, type);
+                    task = (IEverTask?)EverTaskJson.Deserialize(taskInfo.Request, type);
                 }
             }
             catch (Exception e)
@@ -294,20 +294,41 @@ public class WorkerService(
                 logger.LogError(e, "Unable to deserialize task with id {TaskId}", taskInfo.Id);
             }
 
+            Exception? recurringMetadataError = null;
             try
             {
                 if (!string.IsNullOrEmpty(taskInfo.RecurringTask))
                 {
-                    scheduledTask = JsonConvert.DeserializeObject<RecurringTask>(taskInfo.RecurringTask);
+                    scheduledTask = EverTaskJson.Deserialize<RecurringTask>(taskInfo.RecurringTask);
                 }
             }
             catch (Exception e)
             {
+                recurringMetadataError = e;
                 logger.LogError(e, "Unable to deserialize recurring task info with id {TaskId}", taskInfo.Id);
             }
 
             // Get audit level from task info (null means Full for backward compatibility)
             var auditLevel = taskInfo.AuditLevel.HasValue ? (AuditLevel)taskInfo.AuditLevel.Value : AuditLevel.Full;
+
+            // CU3/L44: a recurring row whose RecurringTask metadata no longer deserializes must NOT be
+            // silently demoted to a one-shot. As a one-shot it would dispatch successfully (so the L18
+            // poison counter never fires), recovery would skip UpdateTask, the row would stay recurring
+            // and recoverable, and the same occurrence would be re-executed once per restart forever.
+            // Corrupt recurring metadata is not transient (it cannot heal across restarts), so poison the
+            // row immediately with an error record instead of running it.
+            if (taskInfo.IsRecurring && !string.IsNullOrEmpty(taskInfo.RecurringTask) && scheduledTask == null)
+            {
+                var error = recurringMetadataError
+                            ?? new InvalidOperationException("Recurring task metadata could not be deserialized");
+                await taskStorage.SetStatus(taskInfo.Id, QueuedTaskStatus.Failed, error, auditLevel, null, token)
+                                 .ConfigureAwait(false);
+                Interlocked.Increment(ref permanentFailures);
+                logger.LogError(error,
+                    "Recurring task {TaskId} has corrupt recurring metadata and was poisoned (marked Failed) " +
+                    "so it is not re-executed as a one-shot at every restart", taskInfo.Id);
+                return;
+            }
 
             if (task != null)
             {

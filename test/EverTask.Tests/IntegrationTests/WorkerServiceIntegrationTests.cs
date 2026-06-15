@@ -601,6 +601,34 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
     }
 
     [Fact]
+    public async Task Should_pass_unwrapped_exception_to_onerror_after_retry_exhaustion()
+    {
+        await CreateIsolatedHostAsync();
+
+        TestTaskLifecycleWithError.CallbackOrder  = new List<string>();
+        TestTaskLifecycleWithError.LastException   = null;
+        TestTaskLifecycleWithError.LastErrorMessage = null;
+
+        var taskId = await Dispatcher.Dispatch(new TestTaskLifecycleWithError());
+
+        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Failed, timeoutMs: 5000);
+        await Task.Delay(200); // OnError may complete shortly after the Failed status
+
+        // G11: after retries are exhausted the retry policy throws an AggregateException wrapper, but
+        // OnError must receive the REAL handler exception so type-based handling (dead-letter,
+        // compensation) keyed on `exception is InvalidOperationException` works — consistent with the
+        // non-retryable path that delivers the raw exception.
+        TestTaskLifecycleWithError.LastException.ShouldBeOfType<InvalidOperationException>(
+            "OnError must receive the unwrapped handler exception, not the retry AggregateException (G11)");
+
+        // Non-regression: the PERSISTED failure still keeps the full retry history (the aggregate text).
+        var stored = (await Storage.GetAll()).Single(t => t.Id == taskId);
+        stored.Exception.ShouldNotBeNull();
+        // the persisted failure must keep the full retry aggregate for diagnostics
+        stored.Exception!.ShouldContain("All retry attempts failed");
+    }
+
+    [Fact]
     public async Task Should_dispose_async_handler_after_execution()
     {
         await CreateIsolatedHostAsync();

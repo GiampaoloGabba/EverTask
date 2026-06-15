@@ -118,4 +118,82 @@ public class WorkerServiceRecoveryPoisonTests
             e => e.Level == LogLevel.Warning && e.Message.Contains("marked Failed"),
             "the recovery summary must surface the poisoned failure");
     }
+
+    /// <summary>
+    /// CU3/L44: a recurring row (IsRecurring=true, valid Request, NextRunUtc set) whose RecurringTask
+    /// metadata JSON no longer deserializes used to be silently demoted to a one-shot at every restart:
+    /// ExecuteDispatch(recurring=null, isRecovery:true) ran it once, recovery skipped UpdateTask so the
+    /// row stayed recurring/recoverable, and it was re-executed once per restart forever, never poisoned
+    /// (the L18 poison counter never fires because the one-shot dispatch SUCCEEDS). Corrupt metadata is
+    /// not transient, so the fix poisons the row (marks Failed) immediately and never re-dispatches it.
+    /// [UNIT-necessario: drives ProcessPendingAsync directly with a stub storage + a seeded corrupt row.]
+    /// </summary>
+    [Fact]
+    public async Task Should_poison_recurring_task_with_corrupt_recurring_metadata_instead_of_reexecuting_forever()
+    {
+        var row = new QueuedTask
+        {
+            Id              = Guid.NewGuid(),
+            Type            = typeof(RecoveryFailProbeTask).AssemblyQualifiedName!,
+            Request         = JsonConvert.SerializeObject(new RecoveryFailProbeTask()),
+            Handler         = "seeded-by-test",
+            Status          = QueuedTaskStatus.Completed,      // recurring task between two runs
+            IsRecurring     = true,
+            RecurringTask   = "{ this-is-corrupt-recurring-metadata-json",  // fails RecurringTask deserialization
+            NextRunUtc      = DateTimeOffset.UtcNow.AddMinutes(-1),
+            CurrentRunCount = 1,
+            CreatedAtUtc    = DateTimeOffset.UtcNow.AddMinutes(-5)
+        };
+
+        var storage = new Mock<ITaskStorage>();
+        // The row keeps coming back on the first page until it is poisoned (Failed).
+        storage.Setup(s => s.RetrievePending(It.IsAny<DateTimeOffset?>(), It.IsAny<Guid?>(), It.IsAny<int>(),
+                   It.IsAny<CancellationToken>()))
+               .ReturnsAsync((DateTimeOffset? last, Guid? id, int take, CancellationToken ct) =>
+                   last == null && row.Status != QueuedTaskStatus.Failed ? new[] { row } : Array.Empty<QueuedTask>());
+        storage.Setup(s => s.SetStatus(row.Id, QueuedTaskStatus.Failed, It.IsAny<Exception?>(), It.IsAny<AuditLevel>(),
+                   It.IsAny<double?>(), It.IsAny<CancellationToken>()))
+               .Callback(() => row.Status = QueuedTaskStatus.Failed)
+               .Returns(Task.CompletedTask);
+
+        var provider = new Mock<IServiceProvider>();
+        provider.Setup(p => p.GetService(typeof(ITaskStorage))).Returns(storage.Object);
+        var scope = new Mock<IServiceScope>();
+        scope.Setup(s => s.ServiceProvider).Returns(provider.Object);
+        var scopeFactory = new Mock<IServiceScopeFactory>();
+        scopeFactory.Setup(f => f.CreateScope()).Returns(scope.Object);
+
+        var dispatchCount = 0;
+        var dispatcher    = new Mock<ITaskDispatcherInternal>();
+        dispatcher.Setup(d => d.ExecuteDispatch(It.IsAny<IEverTask>(), It.IsAny<DateTimeOffset?>(),
+                      It.IsAny<RecurringTask?>(), It.IsAny<int?>(), It.IsAny<CancellationToken>(),
+                      It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<AuditLevel?>(), It.IsAny<bool>()))
+                  .Callback(() => Interlocked.Increment(ref dispatchCount))
+                  .ReturnsAsync(Guid.NewGuid());
+
+        var logger = new RecordingLogger<WorkerService>();
+
+        var service = new WorkerService(
+            new Mock<IWorkerQueueManager>().Object,
+            scopeFactory.Object,
+            dispatcher.Object,
+            new EverTaskServiceConfiguration(),
+            new Mock<IEverTaskWorkerExecutor>().Object,
+            logger);
+
+        // Restart #1: the corrupt recurring row must be poisoned, NOT dispatched as a one-shot.
+        await service.ProcessPendingAsync();
+        dispatchCount.ShouldBe(0,
+            "a recurring row with corrupt metadata must NOT be silently re-dispatched as a one-shot (CU3/L44)");
+        row.Status.ShouldBe(QueuedTaskStatus.Failed,
+            "corrupt recurring metadata is not transient -> the row must be poisoned (marked Failed) immediately");
+
+        // Restart #2: the poisoned row is no longer recoverable -> never re-executed again.
+        await service.ProcessPendingAsync();
+        dispatchCount.ShouldBe(0, "the poisoned recurring row must not be re-executed at the next restart (CU3/L44)");
+
+        logger.Entries.ShouldContain(
+            e => e.Level == LogLevel.Error && e.Message.Contains("corrupt recurring metadata"),
+            "the recovery log must surface the corrupt recurring metadata poison");
+    }
 }

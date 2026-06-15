@@ -35,7 +35,7 @@ public record EverTaskEventData(
             severity.ToString(),
             executor.Task.GetType().ToString(),
             handlerType,
-            JsonConvert.SerializeObject(executor.Task),
+            EverTaskJson.Serialize(executor.Task),
             message,
             exception?.ToDetailedString(),
             executionLogs);

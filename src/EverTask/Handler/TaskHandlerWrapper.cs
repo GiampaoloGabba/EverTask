@@ -71,39 +71,56 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
             );
         }
 
-        // Eager executor: the handler instance is carried to execution time.
-        var handlerService = serviceFactory.GetService<IEverTaskHandler<TTask>>();
+        // Eager executor: the handler instance is carried to execution time inside an EverTask-OWNED
+        // scope (NOT the singleton dispatcher's root provider). Resolving from the root would pin the
+        // IAsyncDisposable transient handler in the root container's disposables list until shutdown
+        // (L27 root-pinning leak) and have it disposed twice (worker + root). The worker disposes this
+        // scope right after execution, releasing the handler deterministically; recurring continuations
+        // go lazy (WorkerExecutor.QueueNextOccourrence) so the carried scope is always single-use.
+        var handlerScopeFactory = serviceFactory.GetRequiredService<IServiceScopeFactory>();
+        var handlerScope        = handlerScopeFactory.CreateAsyncScope();
 
-        ArgumentNullException.ThrowIfNull(handlerService);
-
-        // Resolve via the concrete type (registered transient by HandlerRegistrar), like the lazy path
-        // does, so a manual singleton registration of IEverTaskHandler<TTask> cannot hand the SAME
-        // mutable instance to concurrent dispatches: the worker sets per-execution state (log capture)
-        // on the carried handler, so a shared instance corrupts concurrent executions (G3).
-        if (serviceFactory.GetService(handlerService.GetType()) is IEverTaskHandler<TTask> concreteHandler)
+        try
         {
-            handlerService = concreteHandler;
+            var handlerService = handlerScope.ServiceProvider.GetService<IEverTaskHandler<TTask>>();
+            ArgumentNullException.ThrowIfNull(handlerService);
+
+            // Resolve via the concrete type (registered transient by HandlerRegistrar), like the lazy
+            // path does, so a manual singleton registration of IEverTaskHandler<TTask> cannot hand the
+            // SAME mutable instance to concurrent dispatches: the worker sets per-execution state (log
+            // capture) on the carried handler, so a shared instance corrupts concurrent executions (G3).
+            if (handlerScope.ServiceProvider.GetService(handlerService.GetType()) is IEverTaskHandler<TTask> concreteHandler)
+            {
+                handlerService = concreteHandler;
+            }
+
+            var (eagerPolicy, eagerKey) = ExtractRateLimit(handlerService, (TTask)task, recurring, serviceFactory);
+
+            return new TaskHandlerExecutor(
+                task,
+                handlerService,
+                TypeNameCache.GetAssemblyQualifiedName(handlerService.GetType()),
+                executionTime,
+                recurring,
+                (theTask, theToken) => handlerService.Handle((TTask)theTask, theToken),
+                (persistenceId, exception, message) => handlerService.OnError(persistenceId, exception, message),
+                persistenceId => handlerService.OnStarted(persistenceId),
+                persistenceId => handlerService.OnCompleted(persistenceId),
+                existingTaskId ?? guidGenerator.NewDatabaseFriendly(),
+                ResolveQueueName(handlerService, recurring),
+                taskKey,
+                auditLevel,
+                eagerPolicy,
+                eagerKey,
+                handlerScope
+            );
         }
-
-        var (eagerPolicy, eagerKey) = ExtractRateLimit(handlerService, (TTask)task, recurring, serviceFactory);
-
-        return new TaskHandlerExecutor(
-            task,
-            handlerService,
-            TypeNameCache.GetAssemblyQualifiedName(handlerService.GetType()),
-            executionTime,
-            recurring,
-            (theTask, theToken) => handlerService.Handle((TTask)theTask, theToken),
-            (persistenceId, exception, message) => handlerService.OnError(persistenceId, exception, message),
-            persistenceId => handlerService.OnStarted(persistenceId),
-            persistenceId => handlerService.OnCompleted(persistenceId),
-            existingTaskId ?? guidGenerator.NewDatabaseFriendly(),
-            ResolveQueueName(handlerService, recurring),
-            taskKey,
-            auditLevel,
-            eagerPolicy,
-            eagerKey
-        );
+        catch
+        {
+            // Never leak the scope if executor construction fails before it is handed off.
+            await handlerScope.DisposeAsync();
+            throw;
+        }
     }
 
     /// <summary>
