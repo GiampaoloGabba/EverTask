@@ -122,3 +122,20 @@ own the proof, so there are no headline BenchmarkDotNet tables here.
 - **L22 (reservation redemption under congested latency):** pure correctness
   (`Should_redeem_reservation_after_realistic_congested_redelivery_latency`) — no throughput dimension.
   The reservation expiry margin now also covers the parking-lot pause (5 s → 10 s).
+
+---
+
+## P-E — Recovery robustness (L18, L34)
+
+Robustness / correctness fixes — the deterministic gates own the proof, no headline benchmark.
+
+- **L18 (poison persistently-failing re-dispatch + honest summary):** a persisted
+  `RecoveryDispatchFailureCount` lets recovery poison a task (mark `Failed`) after a configurable number
+  of failed re-dispatches instead of retrying it every restart while the summary logged false success.
+  Pinned by `WorkerServiceRecoveryPoisonTests` (poison after K, no false success) and the cross-provider
+  storage contract `IncrementRecoveryFailure_should_count_and_ClearRecoveryFailure_should_reset`.
+- **L34 (per-queue recovery parallelism):** recovery is partitioned by target queue, so a blocking
+  enqueue toward one saturated queue can no longer occupy every global slot and head-of-line-block the
+  recovery of idle queues. Pinned by `RecoveryParallelismIntegrationTests` (a wedged queue does not
+  starve an idle queue's recovery). A wall-clock recovery-throughput micro would be flaky; the
+  TaskCompletionSource-gated integration test is the deterministic proof.

@@ -412,6 +412,25 @@ public abstract class EfCoreTaskStorageTestsBase
     }
 
     [Fact]
+    public async Task IncrementRecoveryFailure_should_count_and_ClearRecoveryFailure_should_reset()
+    {
+        // L18: persistent recovery re-dispatch failures are counted durably so the caller can poison
+        // the task after a limit; a successful re-dispatch clears the counter.
+        var queued = QueuedTasks[0];
+        await _storage.Persist(queued);
+        var taskId = queued.Id;
+
+        (await _storage.Get(x => x.Id == taskId))[0].RecoveryDispatchFailureCount.ShouldBeNull();
+
+        (await _storage.IncrementRecoveryFailure(taskId)).ShouldBe(1);
+        (await _storage.IncrementRecoveryFailure(taskId)).ShouldBe(2);
+        (await _storage.Get(x => x.Id == taskId))[0].RecoveryDispatchFailureCount.ShouldBe(2);
+
+        await _storage.ClearRecoveryFailure(taskId);
+        (await _storage.Get(x => x.Id == taskId))[0].RecoveryDispatchFailureCount.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task CompleteRecurringRun_Should_set_completed_and_advance_atomically()
     {
         // CU14/L29: a recurring occurrence's Completed status AND the run-counter / next-run advance must
