@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Execution log retention
+
+Captured execution logs (`TaskExecutionLog`, written when persistent logging is enabled) now have a retention of their own, so a long-running service (recurring tasks especially) no longer accumulates logs without bound.
+
+#### Added
+
+- **`AuditRetentionPolicy.ExecutionLogRetentionDays`** (`int?`, default `null` = unlimited): trims execution logs older than the window, independently of the parent task (anchored on `TimestampUtc`).
+- **`AuditRetentionPolicy.MaxExecutionLogsPerTask`** (`int?`, default `null` = disabled): a per-task, cross-run cap that keeps the latest N logs per task (by `TimestampUtc`, then `SequenceNumber`) and deletes the rest. It bounds total growth even without a time window, which matters for high-frequency recurring tasks. When both knobs are set, a log is deleted if it breaks either rule. Both are enforced by `AddAuditCleanup()` and default to off, so enabling persistent logging never starts deleting logs on its own. They are separate from `PersistentLoggerOptions.MaxLogsPerTask`, which caps a single execution's logs at capture time.
+- **`AuditCleanupOptions.InitialDelay`** (default 1 minute): the delay before the first cleanup cycle is now configurable.
+
+#### Fixed
+
+- **Audit retention never ran on SQLite.** The `StatusAudit`/`RunsAudit` cleanup compared `DateTimeOffset` server-side, which the EF Core SQLite provider can't translate, so every cleanup cycle threw (the hosted service swallowed it) and deleted nothing. Retention was effectively dead on SQLite, while it worked on SQL Server (native `datetimeoffset`). The cleanup now resolves the rows to delete client-side on SQLite and keeps the server-side delete on SQL Server. The new execution-log cleanup uses the same SQLite-safe path.
+- **Purging an aged-out completed task no longer cascade-deletes execution logs that are still inside their retention window** (data-loss). With `DeleteCompletedTasksAfterRetention` enabled, the purge used only the *audit* windows as its age cutoff and ignored the log windows, so a task aged past a short audit window was hard-deleted — and `ON DELETE CASCADE` took its logs with it, including logs a longer `ExecutionLogRetentionDays` (or `MaxExecutionLogsPerTask`) was meant to keep (e.g. `StatusAuditRetentionDays=7`, `ExecutionLogRetentionDays=90`). When a log retention is active, a completed task that still owns logs is now preserved and purged only once those logs have aged out on their own. With no log retention configured the historic cascade-on-purge behavior is unchanged.
+- **Non-positive retention knobs are treated as disabled instead of triggering a mass deletion.** A `0` or negative day value made the cutoff land on "now" or in the future, and `MaxExecutionLogsPerTask = 0` slipped past the old `< 0` guard so `Skip(0)` deleted every log of every task — so a single mis-set knob wiped a table on each cycle (easy to hit via a typo or a missing `IConfiguration` binding, where an absent env var binds to `0`). Every day/count knob `<= 0` is now a no-op, logged as a warning; use `null` to disable explicitly.
+- **The per-task log cap keeps a deterministic row on exact ties.** When two logs shared the same `(TimestampUtc, SequenceNumber)`, `MaxExecutionLogsPerTask` had no total order, so different providers (or query plans) could keep different rows. A final `Id` (UUIDv7) tie-breaker, the key the read path already orders by, makes the survivor deterministic and aligned with the reader's "most recent" log.
+- **Server-side audit/log deletes are batched again.** The cleanup deletes had been collapsed into a single unbounded `ExecuteDelete`, which on a large backlog (a first run, or a misconfigured window) could escalate to a table lock and stall the live audit/log inserts done by task execution. The base age-based deletes (status/runs/log-age and the completed-task purge) again delete in bounded batches; the SQLite client-side path was already batched.
+
+#### Removed
+
+- **`EverTaskServiceConfiguration.SetAuditRetentionPolicy(...)`** (breaking). It wrote a value the cleanup service never read (the policy is taken only from `AuditCleanupOptions`, populated by `AddAuditCleanup`), so configuring retention through it alone silently did nothing. The method has been removed; pass the policy to `AddAuditCleanup(policy, cleanupIntervalHours)`, the single entry-point. The XML samples and docs were updated to match.
+
 ### Pipeline review hardening
 
 A review of the dispatch → recovery → scheduler → worker path found a batch of concurrency and accounting defects. Most live in recurring-task scheduling and recovery. One of them changes observable behavior; the rest fix cases that already contradicted the docs or only showed up after a crash or downtime.

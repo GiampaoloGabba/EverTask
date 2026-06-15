@@ -711,6 +711,187 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                  .OrderBy(log => log.Id)      // UUIDv7 chronological order (database-friendly, SQLite-compatible)
                  .ThenBy(log => log.SequenceNumber); // preserve sequence within same timestamp
 
+    // ---- Retention cleanup ------------------------------------------------------------------------
+    // The base implementations are the optimized, server-side versions for transactional providers
+    // (SQL Server, and any future Postgres/MySQL provider that inherits this class). They run as
+    // set-based deletes / ordered offsets the database executes directly. SQLite cannot translate
+    // DateTimeOffset ordering comparisons, so SqliteTaskStorage overrides every method below with a
+    // client-side equivalent. The hosted AuditCleanupHostedService drives these from the policy.
+
+    /// <summary>
+    /// Deletes StatusAudit rows older than the cutoffs (errors keep <paramref name="errorCutoff"/>,
+    /// successes keep <paramref name="successCutoff"/>). Batched server-side delete (bounded by CleanupBatchSize to avoid lock escalation).
+    /// </summary>
+    public virtual async Task<int> CleanupStatusAudits(DateTimeOffset successCutoff, DateTimeOffset errorCutoff,
+                                                       CancellationToken ct = default)
+    {
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+
+        return await BatchDeleteAsync(dbContext.StatusAudit,
+            sa => (string.IsNullOrEmpty(sa.Exception) && sa.UpdatedAtUtc < successCutoff)
+               || (!string.IsNullOrEmpty(sa.Exception) && sa.UpdatedAtUtc < errorCutoff),
+            ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Deletes RunsAudit rows older than the cutoffs. Batched server-side delete (bounded by CleanupBatchSize to avoid lock escalation).
+    /// </summary>
+    public virtual async Task<int> CleanupRunsAudits(DateTimeOffset successCutoff, DateTimeOffset errorCutoff,
+                                                     CancellationToken ct = default)
+    {
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+
+        return await BatchDeleteAsync(dbContext.RunsAudit,
+            ra => (string.IsNullOrEmpty(ra.Exception) && ra.ExecutedAt < successCutoff)
+               || (!string.IsNullOrEmpty(ra.Exception) && ra.ExecutedAt < errorCutoff),
+            ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Deletes execution logs older than <paramref name="cutoff"/> (by <c>TimestampUtc</c>), independently
+    /// of the parent task. Batched server-side delete (bounded by CleanupBatchSize to avoid lock escalation).
+    /// </summary>
+    public virtual async Task<int> CleanupExecutionLogsByAge(DateTimeOffset cutoff, CancellationToken ct = default)
+    {
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+
+        return await BatchDeleteAsync(dbContext.TaskExecutionLogs, l => l.TimestampUtc < cutoff, ct)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Keeps at most <paramref name="maxPerTask"/> of the most recent logs per task (by <c>TimestampUtc</c>,
+    /// then <c>SequenceNumber</c>, then <c>Id</c>) and deletes the rest. Resolves the over-cap tasks with a
+    /// server-side GROUP BY / HAVING and trims each with a server-side ordered offset.
+    /// </summary>
+    /// <remarks>
+    /// The final <c>Id</c> tie-breaker (UUIDv7) gives a total order, so the survivor is deterministic and
+    /// matches the read path's <c>OrderBy(Id)</c> instead of depending on the query plan. Residual caveat:
+    /// the SQLite override sorts <c>Id</c> in memory (.NET <see cref="Guid"/> order) while this base sorts it
+    /// in the database (<c>uniqueidentifier</c>), so on an exact <c>(TimestampUtc, SequenceNumber)</c> tie the
+    /// two providers may keep different (but each internally deterministic) rows. The kept <em>count</em> is
+    /// always identical; chasing byte-order parity across providers is out of scope.
+    /// </remarks>
+    public virtual async Task<int> CleanupExecutionLogsByCount(int maxPerTask, CancellationToken ct = default)
+    {
+        // <= 0 is disabled (Cluster B): keeping zero logs would let Skip(0) delete every row of every task.
+        if (maxPerTask <= 0)
+            return 0;
+
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+
+        var overCapTasks = await dbContext.TaskExecutionLogs
+            .GroupBy(l => l.TaskId)
+            .Where(g => g.Count() > maxPerTask)
+            .Select(g => g.Key)
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+
+        var total = 0;
+        foreach (var taskId in overCapTasks)
+        {
+            if (ct.IsCancellationRequested)
+                break;
+
+            var deletableIds = await dbContext.TaskExecutionLogs
+                .Where(l => l.TaskId == taskId)
+                .OrderByDescending(l => l.TimestampUtc)
+                .ThenByDescending(l => l.SequenceNumber)
+                .ThenByDescending(l => l.Id)   // Cluster C: total order on (Timestamp, Seq) ties; aligns with the read path's OrderBy(Id)
+                .Skip(maxPerTask)
+                .Select(l => l.Id)
+                .ToListAsync(ct)
+                .ConfigureAwait(false);
+
+            total += await DeleteByIdsAsync(dbContext.TaskExecutionLogs, deletableIds,
+                (set, batch) => set.Where(l => batch.Contains(l.Id)), ct).ConfigureAwait(false);
+        }
+
+        return total;
+    }
+
+    /// <summary>
+    /// Hard-deletes completed, non-recurring tasks older than <paramref name="cutoff"/> that have no
+    /// surviving audit trail (deleting cascades to anything they own, execution logs included). The
+    /// status/recurring/audit filters and the age comparison all translate server-side.
+    /// </summary>
+    /// <param name="preserveTasksWithLogs">
+    /// When true, a task that still has any <c>TaskExecutionLog</c> row is NOT purged. The log-age/count
+    /// passes run earlier in the same cycle, so any surviving log is one a configured log-retention window
+    /// chose to keep — purging the task would cascade-delete it. The caller sets this only when a log
+    /// retention is actually active; with no log retention the historic cascade-on-purge behavior stands.
+    /// </param>
+    public virtual async Task<int> CleanupCompletedTasks(DateTimeOffset cutoff, bool preserveTasksWithLogs,
+                                                         CancellationToken ct = default)
+    {
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+
+        return await BatchDeleteAsync(dbContext.QueuedTasks,
+            qt => qt.Status == QueuedTaskStatus.Completed
+               && !qt.IsRecurring
+               && !dbContext.StatusAudit.Any(sa => sa.QueuedTaskId == qt.Id)
+               && !dbContext.RunsAudit.Any(ra => ra.QueuedTaskId == qt.Id)
+               && (!preserveTasksWithLogs || !dbContext.TaskExecutionLogs.Any(l => l.TaskId == qt.Id))
+               && (qt.LastExecutionUtc ?? qt.CreatedAtUtc) < cutoff,
+            ct).ConfigureAwait(false);
+    }
+
+    // Bounded delete batch: large enough to be efficient, small enough to avoid lock escalation on
+    // transactional providers (SQL Server escalates around ~5000 row locks per statement). Shared by the
+    // age-based base deletes (BatchDeleteAsync), the count-cap trim and the SQLite client-side overrides
+    // (DeleteByIdsAsync), so the whole storage layer deletes in one consistent granularity.
+    internal const int CleanupBatchSize = 100;
+
+    /// <summary>
+    /// Deletes rows matching <paramref name="predicate"/> in bounded batches of <see cref="CleanupBatchSize"/>
+    /// instead of a single unbounded <c>ExecuteDelete</c>, so a large backlog (a first run over an accumulated
+    /// table, or a misconfigured window) cannot escalate to a table lock that stalls the live audit/log
+    /// inserts done by task execution. The predicate is evaluated server-side; only matching rows are touched.
+    /// SQLite overrides every cleanup method with its own client-side batched path, so this base form runs on
+    /// transactional providers (SQL Server today, future Postgres/MySQL by inheritance).
+    /// </summary>
+    protected static async Task<int> BatchDeleteAsync<TEntity>(
+        DbSet<TEntity> set, Expression<Func<TEntity, bool>> predicate, CancellationToken ct)
+        where TEntity : class
+    {
+        var total = 0;
+        int deleted;
+        do
+        {
+            deleted = await set.Where(predicate).Take(CleanupBatchSize).ExecuteDeleteAsync(ct).ConfigureAwait(false);
+            total  += deleted;
+        } while (deleted == CleanupBatchSize && !ct.IsCancellationRequested);
+
+        return total;
+    }
+
+    /// <summary>
+    /// Deletes the supplied primary keys in chunks of <see cref="CleanupBatchSize"/>, to avoid an oversized
+    /// IN (...) list and lock escalation. Shared by the count-cap trim here and by the SQLite client-side
+    /// overrides.
+    /// </summary>
+    protected static async Task<int> DeleteByIdsAsync<TEntity, TKey>(
+        DbSet<TEntity> set,
+        IReadOnlyList<TKey> ids,
+        Func<DbSet<TEntity>, TKey[], IQueryable<TEntity>> batchQuery,
+        CancellationToken ct) where TEntity : class
+    {
+        var total = 0;
+        const int batchSize = CleanupBatchSize;
+
+        for (var i = 0; i < ids.Count && !ct.IsCancellationRequested; i += batchSize)
+        {
+            var count = Math.Min(batchSize, ids.Count - i);
+            var batch = new TKey[count];
+            for (var j = 0; j < count; j++)
+                batch[j] = ids[i + j];
+
+            total += await batchQuery(set, batch).ExecuteDeleteAsync(ct).ConfigureAwait(false);
+        }
+
+        return total;
+    }
+
     /// <inheritdoc />
     public virtual async Task<IReadOnlyDictionary<QueuedTaskStatus, int>> CountByStatusAsync(
         DateTimeOffset? createdAtOrAfterUtc = null, CancellationToken ct = default)

@@ -83,4 +83,113 @@ public class SqliteTaskStorage : EfCoreTaskStorage
 
         return transitioned;
     }
+
+    // ---- Retention cleanup (SQLite overrides) -----------------------------------------------------
+    // SQLite cannot translate DateTimeOffset ordering comparisons (the same limitation behind the
+    // RetrievePending override), so each cleanup resolves the rows to delete client-side and deletes
+    // them by primary key. The optimized server-side versions live in the EfCoreTaskStorage base.
+
+    /// <inheritdoc />
+    public override async Task<int> CleanupStatusAudits(DateTimeOffset successCutoff, DateTimeOffset errorCutoff,
+                                                        CancellationToken ct = default)
+    {
+        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct);
+
+        var ids = (await dbContext.StatusAudit
+                .Select(sa => new { sa.Id, sa.UpdatedAtUtc, HasException = sa.Exception != null && sa.Exception != "" })
+                .ToListAsync(ct).ConfigureAwait(false))
+            .Where(c => (!c.HasException && c.UpdatedAtUtc < successCutoff)
+                     || (c.HasException && c.UpdatedAtUtc < errorCutoff))
+            .Select(c => c.Id)
+            .ToList();
+
+        return await DeleteByIdsAsync(dbContext.StatusAudit, ids,
+            (set, batch) => set.Where(sa => batch.Contains(sa.Id)), ct).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public override async Task<int> CleanupRunsAudits(DateTimeOffset successCutoff, DateTimeOffset errorCutoff,
+                                                      CancellationToken ct = default)
+    {
+        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct);
+
+        var ids = (await dbContext.RunsAudit
+                .Select(ra => new { ra.Id, ra.ExecutedAt, HasException = ra.Exception != null && ra.Exception != "" })
+                .ToListAsync(ct).ConfigureAwait(false))
+            .Where(c => (!c.HasException && c.ExecutedAt < successCutoff)
+                     || (c.HasException && c.ExecutedAt < errorCutoff))
+            .Select(c => c.Id)
+            .ToList();
+
+        return await DeleteByIdsAsync(dbContext.RunsAudit, ids,
+            (set, batch) => set.Where(ra => batch.Contains(ra.Id)), ct).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public override async Task<int> CleanupExecutionLogsByAge(DateTimeOffset cutoff, CancellationToken ct = default)
+    {
+        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct);
+
+        var ids = (await dbContext.TaskExecutionLogs
+                .Select(l => new { l.Id, l.TimestampUtc })
+                .ToListAsync(ct).ConfigureAwait(false))
+            .Where(l => l.TimestampUtc < cutoff)
+            .Select(l => l.Id)
+            .ToList();
+
+        return await DeleteByIdsAsync(dbContext.TaskExecutionLogs, ids,
+            (set, batch) => set.Where(l => batch.Contains(l.Id)), ct).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public override async Task<int> CleanupExecutionLogsByCount(int maxPerTask, CancellationToken ct = default)
+    {
+        // <= 0 is disabled (Cluster B): keeping zero logs would let Skip(0) delete every row of every task.
+        if (maxPerTask <= 0)
+            return 0;
+
+        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct);
+
+        var rows = await dbContext.TaskExecutionLogs
+            .Select(l => new { l.Id, l.TaskId, l.TimestampUtc, l.SequenceNumber })
+            .ToListAsync(ct).ConfigureAwait(false);
+
+        var ids = rows
+            .GroupBy(r => r.TaskId)
+            .SelectMany(g => g
+                .OrderByDescending(x => x.TimestampUtc)
+                .ThenByDescending(x => x.SequenceNumber)
+                .ThenByDescending(x => x.Id)   // Cluster C: total order on (Timestamp, Seq) ties; aligns with the read path's OrderBy(Id)
+                .Skip(maxPerTask))
+            .Select(x => x.Id)
+            .ToList();
+
+        return await DeleteByIdsAsync(dbContext.TaskExecutionLogs, ids,
+            (set, batch) => set.Where(l => batch.Contains(l.Id)), ct).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public override async Task<int> CleanupCompletedTasks(DateTimeOffset cutoff, bool preserveTasksWithLogs,
+                                                          CancellationToken ct = default)
+    {
+        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct);
+
+        // The status/recurring/audit/log filters translate; the age gate runs in memory (DateTimeOffset).
+        var candidates = await dbContext.QueuedTasks
+            .Where(qt => qt.Status == QueuedTaskStatus.Completed
+                      && !qt.IsRecurring
+                      && !dbContext.StatusAudit.Any(sa => sa.QueuedTaskId == qt.Id)
+                      && !dbContext.RunsAudit.Any(ra => ra.QueuedTaskId == qt.Id)
+                      && (!preserveTasksWithLogs || !dbContext.TaskExecutionLogs.Any(l => l.TaskId == qt.Id)))
+            .Select(qt => new { qt.Id, qt.LastExecutionUtc, qt.CreatedAtUtc })
+            .ToListAsync(ct).ConfigureAwait(false);
+
+        var ids = candidates
+            .Where(c => (c.LastExecutionUtc ?? c.CreatedAtUtc) < cutoff)
+            .Select(c => c.Id)
+            .ToList();
+
+        return await DeleteByIdsAsync(dbContext.QueuedTasks, ids,
+            (set, batch) => set.Where(qt => batch.Contains(qt.Id)), ct).ConfigureAwait(false);
+    }
 }

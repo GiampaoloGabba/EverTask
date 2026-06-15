@@ -58,8 +58,6 @@ public class EverTaskServiceConfiguration
 
     internal RateLimiterOptions RateLimiterOptions { get; } = new();
 
-    internal AuditRetentionPolicy? RetentionPolicy { get; private set; }
-
     /// <summary>
     /// Sets the channel capacity for the default queue.
     /// This determines the maximum number of tasks that can be queued in memory before backpressure is applied.
@@ -310,30 +308,6 @@ public class EverTaskServiceConfiguration
     public EverTaskServiceConfiguration SetDefaultAuditLevel(AuditLevel auditLevel)
     {
         DefaultAuditLevel = auditLevel;
-        return this;
-    }
-
-    /// <summary>
-    /// Configures automatic audit trail retention policy.
-    /// Retention is enforced by the optional <see cref="AuditCleanupHostedService"/>.
-    /// </summary>
-    /// <param name="retentionPolicy">
-    /// The retention policy to apply. Set to null to disable retention (default).
-    /// Use <see cref="AuditRetentionPolicy.WithUniformRetention"/> for simple TTL or
-    /// <see cref="AuditRetentionPolicy.WithErrorPriority"/> to keep errors longer.
-    /// </param>
-    /// <returns>The configuration instance for method chaining.</returns>
-    /// <remarks>
-    /// Retention policy requires registering the cleanup service:
-    /// <code>
-    /// services.AddEverTask(opt => opt.SetAuditRetentionPolicy(
-    ///     AuditRetentionPolicy.WithErrorPriority(successRetentionDays: 7, errorRetentionDays: 90)
-    /// )).AddAuditCleanup(cleanupIntervalHours: 24);
-    /// </code>
-    /// </remarks>
-    public EverTaskServiceConfiguration SetAuditRetentionPolicy(AuditRetentionPolicy? retentionPolicy)
-    {
-        RetentionPolicy = retentionPolicy;
         return this;
     }
 

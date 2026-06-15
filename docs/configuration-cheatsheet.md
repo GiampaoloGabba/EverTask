@@ -20,7 +20,6 @@ Every EverTask configuration option at a glance: one row per option with its def
 | `SetDefaultRetryPolicy` | `IRetryPolicy` | `LinearRetryPolicy(3, 500ms)` | Global retry policy |
 | `SetDefaultTimeout` | `TimeSpan?` | `null` (no timeout) | Global per-attempt timeout |
 | `SetDefaultAuditLevel` | `AuditLevel` | `Full` | Audit trail verbosity (see table below) |
-| `SetAuditRetentionPolicy` | `AuditRetentionPolicy?` | `null` (unlimited) | Needs `services.AddAuditCleanup(policy, cleanupIntervalHours: 24)` (IServiceCollection extension, EF Core storage package) to take effect |
 | `SetThrowIfUnableToPersist` | `bool` | `true` | Throw on storage save failure |
 | `UseShardedScheduler` | `int shardCount = 0` | Off (`PeriodicTimerScheduler`); auto-scale when 0 | For >10k `Schedule()`/sec loads |
 | `SetUseLazyHandlerResolution` | `bool` | `true` (adaptive) | `DisableLazyHandlerResolution()` to opt out |
@@ -28,6 +27,8 @@ Every EverTask configuration option at a glance: one row per option with its def
 | `SetRateLimiterOptions` | `Action<RateLimiterOptions>` | See below | Keyed rate limiter global knobs (v3.7+) |
 | `RegisterTasksFromAssembly` | `Assembly` | — | Scan one assembly for handlers (required) |
 | `RegisterTasksFromAssemblies` | `params Assembly[]` | — | Scan multiple assemblies |
+
+> **Audit / execution-log retention** is not a builder method: register it with `services.AddAuditCleanup(policy, cleanupIntervalHours: 24)` (IServiceCollection extension, EF Core storage package). Trims audits and execution logs (`ExecutionLogRetentionDays` / `MaxExecutionLogsPerTask`); any knob `<= 0` is treated as disabled. See [Configuration Reference](configuration-reference.md).
 
 ## Rate Limiting (v3.7+)
 

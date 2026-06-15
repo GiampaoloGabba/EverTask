@@ -131,6 +131,35 @@ foreach (var log in logs)
 var page = await storage.GetExecutionLogsAsync(taskId, skip: 0, take: 50);
 ```
 
+## Log Retention
+
+Persisted logs don't clean up on their own. Without a policy they stay until their parent task is deleted, so a long-running service (recurring tasks above all) keeps piling them up. Two opt-in settings on `AuditRetentionPolicy` trim them independently of the task, enforced by the cleanup service:
+
+```csharp
+var policy = new AuditRetentionPolicy
+{
+    ExecutionLogRetentionDays = 30,   // drop logs older than 30 days
+    MaxExecutionLogsPerTask   = 1000  // keep at most the latest 1000 logs per task
+};
+
+services.AddEverTask(opt => opt
+    .RegisterTasksFromAssembly(typeof(Program).Assembly)
+    .WithPersistentLogger(log => log.SetMinimumLevel(LogLevel.Information)))
+    .AddSqlServerStorage(connectionString);
+
+// AddAuditCleanup is the single entry-point that applies the policy.
+services.AddAuditCleanup(policy, cleanupIntervalHours: 24);
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `ExecutionLogRetentionDays` | `null` (unlimited) | Delete logs older than this many days (by `TimestampUtc`) |
+| `MaxExecutionLogsPerTask` | `null` (disabled) | Keep at most the latest N logs per task, across all of its runs |
+
+When both are set, a log is removed if it breaks either rule. Both default to off, so turning on persistent logging never starts deleting logs by itself. The cleanup runs only when you register `AddAuditCleanup()`.
+
+**This is not the same as `SetMaxLogsPerTask`.** `SetMaxLogsPerTask` caps a *single* execution while it runs: past the limit it stops capturing and records how many entries it dropped. The retention settings above work across *every* past run, after the fact. Use the per-execution cap to keep one chatty run in check; use retention to stop the table growing forever.
+
 ## Retry Attempt Tracking
 
 Logs accumulate across ALL retry attempts:
@@ -168,9 +197,9 @@ This is **intentional** - it provides complete visibility into all execution att
 
 1. **Use Standard Log Levels**: `LogInformation` for normal flow, `LogWarning` for issues, `LogError` for failures
 2. **Include Context**: Log task parameters and key decision points
-3. **Set Reasonable Limits**: Default 1000 logs per task prevents unbounded growth
+3. **Set Reasonable Limits**: The default 1000 logs caps a single execution; pair it with retention to bound the total
 4. **Use for Debugging**: Don't rely on persisted logs for real-time monitoring (use ILogger infrastructure)
-5. **Clean Up Old Logs**: Implement retention policies to prevent database bloat
+5. **Set Log Retention**: Use `ExecutionLogRetentionDays` / `MaxExecutionLogsPerTask` (see [Log Retention](#log-retention)) so the table doesn't grow without bound
 
 ## Example: Audit Trail
 

@@ -1871,7 +1871,7 @@ public abstract class EfCoreTaskStorageTestsBase
         _mockedDbContext.QueuedTasks.AddRange(recent, aged);
         await _mockedDbContext.SaveChangesAsync(CancellationToken.None);
 
-        await AuditCleanupHostedService.DeleteCompletedTasksAsync(_mockedDbContext, policy, now, CancellationToken.None);
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
 
         _mockedDbContext.QueuedTasks.Count(x => x.Id == recent.Id).ShouldBe(1, "recent task is within retention");
         _mockedDbContext.QueuedTasks.Count(x => x.Id == aged.Id).ShouldBe(0, "aged task past the cutoff is purged");
@@ -1901,7 +1901,7 @@ public abstract class EfCoreTaskStorageTestsBase
         _mockedDbContext.QueuedTasks.Add(logged);
         await _mockedDbContext.SaveChangesAsync(CancellationToken.None);
 
-        await AuditCleanupHostedService.DeleteCompletedTasksAsync(_mockedDbContext, policy, now, CancellationToken.None);
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
 
         _mockedDbContext.QueuedTasks.Count(x => x.Id == logged.Id).ShouldBe(0, "aged task past the cutoff is purged");
         _mockedDbContext.TaskExecutionLogs.Count(x => x.TaskId == logged.Id).ShouldBe(0, "its logs cascade away with it");
@@ -1921,7 +1921,7 @@ public abstract class EfCoreTaskStorageTestsBase
         _mockedDbContext.QueuedTasks.Add(task);
         await _mockedDbContext.SaveChangesAsync(CancellationToken.None);
 
-        await AuditCleanupHostedService.DeleteCompletedTasksAsync(_mockedDbContext, policy, now, CancellationToken.None);
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
 
         _mockedDbContext.QueuedTasks.Count(x => x.Id == task.Id).ShouldBe(1);
     }
@@ -1943,7 +1943,7 @@ public abstract class EfCoreTaskStorageTestsBase
         _mockedDbContext.QueuedTasks.Add(aged);
         await _mockedDbContext.SaveChangesAsync(CancellationToken.None);
 
-        await AuditCleanupHostedService.DeleteCompletedTasksAsync(_mockedDbContext, policy, now, CancellationToken.None);
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
 
         _mockedDbContext.QueuedTasks.Count(x => x.Id == aged.Id).ShouldBe(0);
     }
@@ -1968,9 +1968,586 @@ public abstract class EfCoreTaskStorageTestsBase
         _mockedDbContext.QueuedTasks.Add(task);
         await _mockedDbContext.SaveChangesAsync(CancellationToken.None);
 
-        await AuditCleanupHostedService.DeleteCompletedTasksAsync(_mockedDbContext, policy, now, CancellationToken.None);
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
 
         _mockedDbContext.QueuedTasks.Count(x => x.Id == task.Id).ShouldBe(1);
+    }
+
+    #endregion
+
+    #region Audit + execution-log retention (cross-provider; proves the SQLite client-side fix)
+
+    private QueuedTask TaskWithStatusAudits(params StatusAudit[] audits)
+    {
+        var id = GetGuidForProvider();
+        foreach (var a in audits)
+            a.QueuedTaskId = id;
+
+        return new QueuedTask
+        {
+            Id           = id,
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            Type         = "CleanupTask",
+            Request      = "{}",
+            Handler      = "CleanupHandler",
+            Status       = QueuedTaskStatus.Completed,
+            StatusAudits = audits.ToList()
+        };
+    }
+
+    private QueuedTask TaskWithRunsAudits(params RunsAudit[] audits)
+    {
+        var id = GetGuidForProvider();
+        foreach (var a in audits)
+            a.QueuedTaskId = id;
+
+        return new QueuedTask
+        {
+            Id           = id,
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            Type         = "CleanupTask",
+            Request      = "{}",
+            Handler      = "CleanupHandler",
+            Status       = QueuedTaskStatus.Completed,
+            RunsAudits   = audits.ToList()
+        };
+    }
+
+    private static StatusAudit StatusAuditAt(DateTimeOffset at, string? exception = null) =>
+        new() { UpdatedAtUtc = at, NewStatus = QueuedTaskStatus.Completed, Exception = exception };
+
+    private static RunsAudit RunsAuditAt(DateTimeOffset at, string? exception = null) =>
+        new() { ExecutedAt = at, Status = QueuedTaskStatus.Completed, Exception = exception };
+
+    private TaskExecutionLog LogAt(DateTimeOffset at, int seq) =>
+        new()
+        {
+            Id             = GetGuidForProvider(),
+            TimestampUtc   = at,
+            Level          = "Information",
+            Message        = $"log {seq}",
+            SequenceNumber = seq
+        };
+
+    /// <summary>
+    /// Seeds tasks (with their audits/logs) and then clears the change tracker. The cleanup under test
+    /// deletes rows via ExecuteDelete (which bypasses the tracker); detaching the seeded graph keeps the
+    /// shared context consistent so the provider's tracker-based CleanUpDatabase doesn't try to
+    /// cascade-delete rows that were already removed.
+    /// </summary>
+    private async Task PersistAndDetach(params QueuedTask[] tasks)
+    {
+        _mockedDbContext.QueuedTasks.AddRange(tasks);
+        await _mockedDbContext.SaveChangesAsync(CancellationToken.None);
+        if (_mockedDbContext is Microsoft.EntityFrameworkCore.DbContext ef)
+            ef.ChangeTracker.Clear();
+    }
+
+    [Fact]
+    public async Task Should_delete_status_audits_past_retention_and_keep_recent()
+    {
+        // SQLite-fix regression: the date comparison runs server-side on SQL Server / InMemory but cannot
+        // be translated on SQLite, where the cleanup now resolves ids client-side. The same assertion runs
+        // on every provider, so it proves the fix on a real SQLite database.
+        var now  = DateTimeOffset.UtcNow;
+        var task = TaskWithStatusAudits(StatusAuditAt(now.AddDays(-40)), StatusAuditAt(now.AddDays(-1)));
+
+        await PersistAndDetach(task);
+
+        var policy = new AuditRetentionPolicy { StatusAuditRetentionDays = 30 };
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        var remaining = _mockedDbContext.StatusAudit.Where(x => x.QueuedTaskId == task.Id).ToList();
+        remaining.Count.ShouldBe(1, "the 40-day-old audit is past the 30-day window, the 1-day-old one survives");
+        remaining[0].UpdatedAtUtc.ShouldBeGreaterThan(now.AddDays(-30));
+    }
+
+    [Fact]
+    public async Task Should_keep_error_status_audits_longer_when_error_window_is_set()
+    {
+        var now  = DateTimeOffset.UtcNow;
+        var task = TaskWithStatusAudits(
+            StatusAuditAt(now.AddDays(-30)),                          // success, past 7d -> delete
+            StatusAuditAt(now.AddDays(-30), exception: "boom"),       // error, within 90d -> keep
+            StatusAuditAt(now.AddDays(-1)));                          // success, recent -> keep
+
+        await PersistAndDetach(task);
+
+        var policy = new AuditRetentionPolicy { StatusAuditRetentionDays = 7, ErrorAuditRetentionDays = 90 };
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        var remaining = _mockedDbContext.StatusAudit.Where(x => x.QueuedTaskId == task.Id).ToList();
+        remaining.Count.ShouldBe(2);
+        remaining.Count(x => !string.IsNullOrEmpty(x.Exception)).ShouldBe(1, "the error audit is kept for 90 days");
+    }
+
+    [Fact]
+    public async Task Should_delete_runs_audits_past_retention_and_keep_recent()
+    {
+        var now  = DateTimeOffset.UtcNow;
+        var task = TaskWithRunsAudits(RunsAuditAt(now.AddDays(-40)), RunsAuditAt(now.AddDays(-1)));
+
+        await PersistAndDetach(task);
+
+        var policy = new AuditRetentionPolicy { RunsAuditRetentionDays = 30 };
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        var remaining = _mockedDbContext.RunsAudit.Where(x => x.QueuedTaskId == task.Id).ToList();
+        remaining.Count.ShouldBe(1);
+        remaining[0].ExecutedAt.ShouldBeGreaterThan(now.AddDays(-30));
+    }
+
+    [Fact]
+    public async Task Should_not_delete_audits_when_no_retention_configured()
+    {
+        var now  = DateTimeOffset.UtcNow;
+        var task = TaskWithStatusAudits(StatusAuditAt(now.AddDays(-365)));
+
+        await PersistAndDetach(task);
+
+        var policy = new AuditRetentionPolicy(); // no windows set
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == task.Id).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Should_delete_execution_logs_older_than_retention_window()
+    {
+        var now    = DateTimeOffset.UtcNow;
+        var aged   = LogAt(now.AddDays(-10), 0);
+        var recent = LogAt(now.AddDays(-1), 1);
+        var task   = CompletedTask(now, aged, recent);
+
+        await PersistAndDetach(task);
+
+        var policy = new AuditRetentionPolicy { ExecutionLogRetentionDays = 7 };
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        _mockedDbContext.TaskExecutionLogs.Count(x => x.Id == aged.Id).ShouldBe(0, "the 10-day-old log is past the 7-day window");
+        _mockedDbContext.TaskExecutionLogs.Count(x => x.Id == recent.Id).ShouldBe(1, "the 1-day-old log survives");
+    }
+
+    [Fact]
+    public async Task Should_cap_execution_logs_per_task_keeping_most_recent()
+    {
+        var now  = DateTimeOffset.UtcNow;
+        var l0   = LogAt(now.AddMinutes(-50), 0); // oldest
+        var l1   = LogAt(now.AddMinutes(-40), 1);
+        var l2   = LogAt(now.AddMinutes(-30), 2);
+        var l3   = LogAt(now.AddMinutes(-20), 3);
+        var l4   = LogAt(now.AddMinutes(-10), 4); // newest
+        var taskA = CompletedTask(now, l0, l1, l2, l3, l4);
+
+        var bLog  = LogAt(now.AddMinutes(-5), 0);
+        var taskB = CompletedTask(now, bLog);
+
+        await PersistAndDetach(taskA, taskB);
+
+        var policy = new AuditRetentionPolicy { MaxExecutionLogsPerTask = 2 };
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        var remainingA = _mockedDbContext.TaskExecutionLogs.Where(x => x.TaskId == taskA.Id).Select(x => x.Id).ToList();
+        remainingA.Count.ShouldBe(2, "only the 2 most recent logs of task A are kept");
+        remainingA.ShouldContain(l4.Id);
+        remainingA.ShouldContain(l3.Id);
+
+        _mockedDbContext.TaskExecutionLogs.Count(x => x.TaskId == taskB.Id).ShouldBe(1, "task B is under the cap and untouched");
+    }
+
+    [Fact]
+    public async Task Should_apply_both_age_and_count_rules_to_execution_logs()
+    {
+        // age window = 7d, count cap = 2. Logs at -10 (aged), -5 (count-trimmed), -3 and -1 (kept).
+        // Age alone would delete {-10}; count alone would delete {-10,-5}; the union deletes {-10,-5}.
+        var now  = DateTimeOffset.UtcNow;
+        var d10  = LogAt(now.AddDays(-10), 0);
+        var d5   = LogAt(now.AddDays(-5), 1);
+        var d3   = LogAt(now.AddDays(-3), 2);
+        var d1   = LogAt(now.AddDays(-1), 3);
+        var task = CompletedTask(now, d10, d5, d3, d1);
+
+        await PersistAndDetach(task);
+
+        var policy = new AuditRetentionPolicy { ExecutionLogRetentionDays = 7, MaxExecutionLogsPerTask = 2 };
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        var remaining = _mockedDbContext.TaskExecutionLogs.Where(x => x.TaskId == task.Id).Select(x => x.Id).ToList();
+        remaining.Count.ShouldBe(2);
+        remaining.ShouldContain(d3.Id);
+        remaining.ShouldContain(d1.Id);
+    }
+
+    [Fact]
+    public async Task Should_not_delete_execution_logs_when_no_log_retention_configured()
+    {
+        var now  = DateTimeOffset.UtcNow;
+        var old  = LogAt(now.AddDays(-365), 0);
+        var task = CompletedTask(now, old);
+
+        await PersistAndDetach(task);
+
+        var policy = new AuditRetentionPolicy { StatusAuditRetentionDays = 1 }; // audit window set, but no log retention
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        _mockedDbContext.TaskExecutionLogs.Count(x => x.Id == old.Id).ShouldBe(1, "log retention is opt-in; null windows delete nothing");
+    }
+
+    [Fact]
+    public async Task Should_keep_error_runs_audits_longer_when_error_window_is_set()
+    {
+        var now  = DateTimeOffset.UtcNow;
+        var task = TaskWithRunsAudits(
+            RunsAuditAt(now.AddDays(-30)),                          // success, past 7d -> delete
+            RunsAuditAt(now.AddDays(-30), exception: "boom"),       // error, within 90d -> keep
+            RunsAuditAt(now.AddDays(-1)));                          // success, recent -> keep
+
+        await PersistAndDetach(task);
+
+        var policy = new AuditRetentionPolicy { RunsAuditRetentionDays = 7, ErrorAuditRetentionDays = 90 };
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        var remaining = _mockedDbContext.RunsAudit.Where(x => x.QueuedTaskId == task.Id).ToList();
+        remaining.Count.ShouldBe(2);
+        remaining.Count(x => !string.IsNullOrEmpty(x.Exception)).ShouldBe(1, "the error runs-audit is kept for 90 days");
+    }
+
+    [Fact]
+    public async Task Should_cap_execution_logs_across_multiple_tasks_and_batches()
+    {
+        // Exercises the multi-batch delete path (>100 ids per task) and the loop over several over-cap tasks.
+        var now = DateTimeOffset.UtcNow;
+
+        var aLogs = Enumerable.Range(0, 250).Select(i => LogAt(now.AddSeconds(i), i)).ToArray();
+        var bLogs = Enumerable.Range(0, 120).Select(i => LogAt(now.AddSeconds(i), i)).ToArray();
+        var taskA = CompletedTask(now, aLogs);
+        var taskB = CompletedTask(now, bLogs);
+
+        await PersistAndDetach(taskA, taskB);
+
+        var policy = new AuditRetentionPolicy { MaxExecutionLogsPerTask = 5 };
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        _mockedDbContext.TaskExecutionLogs.Count(x => x.TaskId == taskA.Id).ShouldBe(5, "task A trimmed to the cap across batches");
+        _mockedDbContext.TaskExecutionLogs.Count(x => x.TaskId == taskB.Id).ShouldBe(5, "task B trimmed to the cap across batches");
+    }
+
+    #endregion
+
+    #region Retention knob validation — 0/negative = disabled (Cluster B)
+
+    [Fact]
+    public async Task Should_treat_zero_execution_log_retention_as_disabled()
+    {
+        // B: ExecutionLogRetentionDays = 0 makes the cutoff `now`, so every cycle deletes logs written
+        // moments ago. 0 (and any <= 0) means "disabled": the pass must not run and nothing is deleted.
+        var now    = DateTimeOffset.UtcNow;
+        var recent = LogAt(now.AddMinutes(-1), 0);
+        var task   = CompletedTask(now, recent);
+
+        await PersistAndDetach(task);
+
+        var policy = new AuditRetentionPolicy { ExecutionLogRetentionDays = 0 };
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        _mockedDbContext.TaskExecutionLogs.Count(x => x.Id == recent.Id)
+            .ShouldBe(1, "0 disables log-age retention; nothing is deleted");
+    }
+
+    [Fact]
+    public async Task Should_treat_negative_execution_log_retention_as_disabled()
+    {
+        // B: ExecutionLogRetentionDays = -1 pushes the cutoff one day into the FUTURE, deleting even a
+        // log just written. Negative is disabled, not a future cutoff.
+        var now   = DateTimeOffset.UtcNow;
+        var fresh = LogAt(now, 0);
+        var task  = CompletedTask(now, fresh);
+
+        await PersistAndDetach(task);
+
+        var policy = new AuditRetentionPolicy { ExecutionLogRetentionDays = -1 };
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        _mockedDbContext.TaskExecutionLogs.Count(x => x.Id == fresh.Id)
+            .ShouldBe(1, "negative retention is disabled, not a future cutoff");
+    }
+
+    [Fact]
+    public async Task Should_treat_zero_max_execution_logs_per_task_as_disabled()
+    {
+        // B: MaxExecutionLogsPerTask = 0 slipped past the `< 0` guard and Skip(0) deleted EVERY log of
+        // every task. 0 means "disabled": the cap does not run.
+        var now  = DateTimeOffset.UtcNow;
+        var l0   = LogAt(now.AddMinutes(-30), 0);
+        var l1   = LogAt(now.AddMinutes(-20), 1);
+        var l2   = LogAt(now.AddMinutes(-10), 2);
+        var task = CompletedTask(now, l0, l1, l2);
+
+        await PersistAndDetach(task);
+
+        var policy = new AuditRetentionPolicy { MaxExecutionLogsPerTask = 0 };
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        _mockedDbContext.TaskExecutionLogs.Count(x => x.TaskId == task.Id)
+            .ShouldBe(3, "0 disables the count cap; no logs are deleted");
+    }
+
+    [Fact]
+    public async Task Should_treat_zero_status_audit_retention_as_disabled()
+    {
+        // B: StatusAuditRetentionDays = 0 makes the cutoff `now`, emptying the StatusAudit table every cycle.
+        var now  = DateTimeOffset.UtcNow;
+        var task = TaskWithStatusAudits(StatusAuditAt(now.AddMinutes(-1)), StatusAuditAt(now.AddDays(-1)));
+
+        await PersistAndDetach(task);
+
+        var policy = new AuditRetentionPolicy { StatusAuditRetentionDays = 0 };
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == task.Id)
+            .ShouldBe(2, "0 disables status-audit retention; nothing is deleted");
+    }
+
+    [Fact]
+    public async Task Should_treat_zero_runs_audit_retention_as_disabled()
+    {
+        // B (symmetry with status audits): RunsAuditRetentionDays = 0 must not empty the RunsAudit table.
+        var now  = DateTimeOffset.UtcNow;
+        var task = TaskWithRunsAudits(RunsAuditAt(now.AddMinutes(-1)), RunsAuditAt(now.AddDays(-1)));
+
+        await PersistAndDetach(task);
+
+        var policy = new AuditRetentionPolicy { RunsAuditRetentionDays = 0 };
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        _mockedDbContext.RunsAudit.Count(x => x.QueuedTaskId == task.Id)
+            .ShouldBe(2, "0 disables runs-audit retention; nothing is deleted");
+    }
+
+    [Fact]
+    public async Task Should_treat_zero_error_audit_retention_as_unset()
+    {
+        // B (error-cutoff path): ErrorAuditRetentionDays = 0 made the error cutoff `now`, deleting even
+        // recent error audits. 0 means "no separate error window": errors fall back to the success window.
+        var now  = DateTimeOffset.UtcNow;
+        var task = TaskWithStatusAudits(StatusAuditAt(now.AddDays(-1), exception: "boom")); // recent error
+
+        await PersistAndDetach(task);
+
+        var policy = new AuditRetentionPolicy { StatusAuditRetentionDays = 7, ErrorAuditRetentionDays = 0 };
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == task.Id)
+            .ShouldBe(1, "0 error window falls back to the 7-day success window; the 1-day-old error survives");
+    }
+
+    [Fact]
+    public async Task Should_not_purge_completed_tasks_when_only_retention_window_is_zero()
+    {
+        // B: a single StatusAuditRetentionDays = 0 must not become a `now` cutoff that purges every aged
+        // completed task. With 0 disabled there is no active window, so no completed task is purged.
+        var now    = DateTimeOffset.UtcNow;
+        var policy = new AuditRetentionPolicy
+        {
+            StatusAuditRetentionDays           = 0,
+            DeleteCompletedTasksAfterRetention = true
+        };
+
+        var aged = CompletedTask(now.AddDays(-365));
+
+        await PersistAndDetach(aged);
+
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        _mockedDbContext.QueuedTasks.Count(x => x.Id == aged.Id)
+            .ShouldBe(1, "0 disables the only retention window, so there is no age cutoff and nothing is purged");
+    }
+
+    #endregion
+
+    #region Completed-task purge respects log retention (Cluster A, P0)
+
+    [Fact]
+    public async Task Should_preserve_completed_task_with_logs_inside_the_log_retention_window()
+    {
+        // P0 (Cluster A): the completed-task purge used the MAX of the AUDIT windows as its cutoff and
+        // ignored the log windows, so a task aged past the (short) audit window was hard-deleted —
+        // cascading away logs that the (longer) ExecutionLogRetentionDays window was meant to keep. With a
+        // log window configured, a task that still has surviving logs must NOT be purged.
+        var now    = DateTimeOffset.UtcNow;
+        var policy = new AuditRetentionPolicy
+        {
+            StatusAuditRetentionDays           = 7,
+            ExecutionLogRetentionDays          = 90,
+            DeleteCompletedTasksAfterRetention = true
+        };
+
+        // Completed 8 days ago (past the 7-day audit window), no audits, logs from -8d..-1d (all within 90d).
+        var logs = new[] { LogAt(now.AddDays(-8), 0), LogAt(now.AddDays(-5), 1), LogAt(now.AddDays(-1), 2) };
+        var task = CompletedTask(now.AddDays(-8), logs);
+
+        await PersistAndDetach(task);
+
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        _mockedDbContext.QueuedTasks.Count(x => x.Id == task.Id)
+            .ShouldBe(1, "the task still owns logs inside the 90-day window");
+        _mockedDbContext.TaskExecutionLogs.Count(x => x.TaskId == task.Id)
+            .ShouldBe(3, "all logs within the 90-day window survive");
+    }
+
+    [Fact]
+    public async Task Should_preserve_completed_task_with_logs_protected_by_the_count_cap()
+    {
+        // P0 (Cluster A), count-cap variant: no time window need be set — if a count cap is configured and
+        // the task still has logs the cap chose to keep, the task must not be purged (cascading them away).
+        var now    = DateTimeOffset.UtcNow;
+        var policy = new AuditRetentionPolicy
+        {
+            StatusAuditRetentionDays           = 7,
+            MaxExecutionLogsPerTask            = 10,
+            DeleteCompletedTasksAfterRetention = true
+        };
+
+        // 5 logs, under the cap of 10, so the cap deletes nothing → all 5 survive and must protect the task.
+        var logs = Enumerable.Range(0, 5).Select(i => LogAt(now.AddDays(-8).AddMinutes(i), i)).ToArray();
+        var task = CompletedTask(now.AddDays(-8), logs);
+
+        await PersistAndDetach(task);
+
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        _mockedDbContext.QueuedTasks.Count(x => x.Id == task.Id)
+            .ShouldBe(1, "the task still owns logs the count cap kept");
+        _mockedDbContext.TaskExecutionLogs.Count(x => x.TaskId == task.Id)
+            .ShouldBe(5, "logs under the cap survive");
+    }
+
+    [Fact]
+    public async Task Should_purge_completed_task_after_its_logs_age_out_of_the_window()
+    {
+        // Complement to the P0 fix: once the log-age pass has removed all of a task's logs (they fell
+        // outside ExecutionLogRetentionDays), the task has no surviving logs, so the purge proceeds and
+        // removes the now-empty completed task. The guard preserves tasks with logs, it does not freeze them.
+        var now    = DateTimeOffset.UtcNow;
+        var policy = new AuditRetentionPolicy
+        {
+            StatusAuditRetentionDays           = 7,
+            ExecutionLogRetentionDays          = 5,
+            DeleteCompletedTasksAfterRetention = true
+        };
+
+        // Completed 30 days ago, single log also 30 days old → outside the 5-day window → deleted first,
+        // leaving the task with no logs → purged.
+        var task = CompletedTask(now.AddDays(-30), LogAt(now.AddDays(-30), 0));
+
+        await PersistAndDetach(task);
+
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        _mockedDbContext.QueuedTasks.Count(x => x.Id == task.Id)
+            .ShouldBe(0, "no surviving logs and past the window → purged");
+        _mockedDbContext.TaskExecutionLogs.Count(x => x.TaskId == task.Id).ShouldBe(0);
+    }
+
+    #endregion
+
+    #region Count-cap total order — deterministic survivor on ties (Cluster C)
+
+    [Fact]
+    public async Task Should_keep_a_deterministic_survivor_when_capping_logs_with_identical_timestamp_and_sequence()
+    {
+        // Cluster C: with two logs sharing the exact (TimestampUtc, SequenceNumber), the count cap had no
+        // total order, so the base (SQL OFFSET) and the SQLite (in-memory Skip) paths could keep DIFFERENT
+        // rows. The Id tie-breaker (UUIDv7, the same key the read path orders by) makes the survivor
+        // deterministic and equal to the log the reader ranks most-recent.
+        var now = DateTimeOffset.UtcNow;
+        var ts  = now.AddMinutes(-10);
+
+        var a = new TaskExecutionLog { Id = GetGuidForProvider(), TimestampUtc = ts, Level = "Information", Message = "tie a", SequenceNumber = 7 };
+        var b = new TaskExecutionLog { Id = GetGuidForProvider(), TimestampUtc = ts, Level = "Information", Message = "tie b", SequenceNumber = 7 };
+        var task = CompletedTask(now, a, b);
+
+        await PersistAndDetach(task);
+
+        // The reader's "most recent" (tail of the GetExecutionLogsQuery order) is the survivor the cap must
+        // keep. Deriving it from the real read path makes the assertion provider-native, not hard-coded.
+        var readOrder = await _storage.GetExecutionLogsAsync(task.Id, CancellationToken.None);
+        readOrder.Count.ShouldBe(2);
+        var expectedSurvivor = readOrder[^1].Id;
+
+        var policy = new AuditRetentionPolicy { MaxExecutionLogsPerTask = 1 };
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        var remaining = _mockedDbContext.TaskExecutionLogs.Where(x => x.TaskId == task.Id).Select(x => x.Id).ToList();
+        remaining.Count.ShouldBe(1, "the count cap keeps exactly one");
+        remaining[0].ShouldBe(expectedSurvivor, "the survivor is deterministic and matches the read order's most-recent log");
+    }
+
+    #endregion
+
+    #region Batched age-based deletes — correct across many batches (Blocco 5)
+
+    [Fact]
+    public async Task Should_delete_status_audits_across_multiple_batches()
+    {
+        // Blocco 5 (perf/robustness): the base age-based deletes must batch, not run as a single unbounded
+        // ExecuteDelete that can escalate to a table lock. Correctness gate: seeding far more rows than one
+        // batch and asserting they are ALL deleted proves the batched loop iterates and stays correct.
+        var now = DateTimeOffset.UtcNow;
+
+        var audits = Enumerable.Range(0, 250).Select(_ => StatusAuditAt(now.AddDays(-40)))
+            .Append(StatusAuditAt(now.AddDays(-1)))
+            .ToArray();
+        var task = TaskWithStatusAudits(audits);
+
+        await PersistAndDetach(task);
+
+        var policy = new AuditRetentionPolicy { StatusAuditRetentionDays = 30 };
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        var remaining = _mockedDbContext.StatusAudit.Where(x => x.QueuedTaskId == task.Id).ToList();
+        remaining.Count.ShouldBe(1, "all 250 aged audits are deleted across batches; the recent one survives");
+        remaining[0].UpdatedAtUtc.ShouldBeGreaterThan(now.AddDays(-30));
+    }
+
+    [Fact]
+    public async Task Should_delete_runs_audits_across_multiple_batches()
+    {
+        var now = DateTimeOffset.UtcNow;
+
+        var audits = Enumerable.Range(0, 250).Select(_ => RunsAuditAt(now.AddDays(-40)))
+            .Append(RunsAuditAt(now.AddDays(-1)))
+            .ToArray();
+        var task = TaskWithRunsAudits(audits);
+
+        await PersistAndDetach(task);
+
+        var policy = new AuditRetentionPolicy { RunsAuditRetentionDays = 30 };
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        var remaining = _mockedDbContext.RunsAudit.Where(x => x.QueuedTaskId == task.Id).ToList();
+        remaining.Count.ShouldBe(1, "all 250 aged runs audits are deleted across batches; the recent one survives");
+        remaining[0].ExecutedAt.ShouldBeGreaterThan(now.AddDays(-30));
+    }
+
+    [Fact]
+    public async Task Should_delete_execution_logs_by_age_across_multiple_batches()
+    {
+        var now = DateTimeOffset.UtcNow;
+
+        var aged   = Enumerable.Range(0, 250).Select(i => LogAt(now.AddDays(-40), i)).ToArray();
+        var recent = LogAt(now.AddDays(-1), 250);
+        var task   = CompletedTask(now, aged.Append(recent).ToArray());
+
+        await PersistAndDetach(task);
+
+        var policy = new AuditRetentionPolicy { ExecutionLogRetentionDays = 30 };
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        var remaining = _mockedDbContext.TaskExecutionLogs.Where(x => x.TaskId == task.Id).ToList();
+        remaining.Count.ShouldBe(1, "all 250 aged logs are deleted across batches; the recent one survives");
+        remaining[0].Id.ShouldBe(recent.Id);
     }
 
     #endregion

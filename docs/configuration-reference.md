@@ -194,17 +194,13 @@ opt.SetDefaultAuditLevel(AuditLevel.None)
 - Use lower levels (Minimal/ErrorsOnly/None) for high-frequency recurring tasks
 - See [Audit Configuration](storage/audit-configuration.md) for detailed usage guide
 
-### SetAuditRetentionPolicy
+### Audit & Execution-Log Retention (`AddAuditCleanup`)
 
-Configures automatic audit trail retention policies to prevent unbounded growth of audit tables. Retention is enforced by the optional `AuditCleanupHostedService` that periodically deletes old audit records.
+Configure automatic retention to prevent unbounded growth of the audit and execution-log tables. Retention is enforced by the optional `AuditCleanupHostedService`, registered with **`AddAuditCleanup(policy, cleanupIntervalHours)`** — the single entry-point that actually applies the policy.
 
-**Signature:**
-```csharp
-SetAuditRetentionPolicy(AuditRetentionPolicy? retentionPolicy)
-```
+> **Note:** retention is applied **only** by `AddAuditCleanup(policy, cleanupIntervalHours)`. An earlier `SetAuditRetentionPolicy(...)` on the builder never took effect (the service reads its policy only from `AuditCleanupOptions`) and has been removed; if you used it, pass the policy to `AddAuditCleanup` instead.
 
-**Parameters:**
-- `retentionPolicy` (AuditRetentionPolicy?): The retention policy to apply. Set to null to disable retention (default).
+> **Non-positive knobs are disabled.** Every day/count knob uses the same convention: `null` = unlimited/disabled, and any value `<= 0` is **also** treated as disabled (a no-op, logged as a warning), never as a "now"/future cutoff. This keeps a typo or a missing `IConfiguration` binding (an absent env var binds to `0`) from turning a cleanup cycle into a mass deletion.
 
 **Default:** `null` (unlimited retention)
 
@@ -224,12 +220,12 @@ AuditRetentionPolicy.WithErrorPriority(int successRetentionDays, int errorRetent
 var policy = AuditRetentionPolicy.WithUniformRetention(30);
 
 builder.Services.AddEverTask(opt => opt
-    .RegisterTasksFromAssembly(typeof(Program).Assembly)
-    .SetAuditRetentionPolicy(policy))
+    .RegisterTasksFromAssembly(typeof(Program).Assembly))
     .AddSqlServerStorage(connectionString);
 
 // AddAuditCleanup extends IServiceCollection (EverTask.Storage.EfCore package),
-// NOT the EverTask builder: call it as a separate statement
+// NOT the EverTask builder: call it as a separate statement. It is the only
+// entry-point that applies the policy.
 builder.Services.AddAuditCleanup(policy, cleanupIntervalHours: 24);
 ```
 
@@ -240,8 +236,7 @@ var policy = AuditRetentionPolicy.WithErrorPriority(
     errorRetentionDays: 90);
 
 builder.Services.AddEverTask(opt => opt
-    .RegisterTasksFromAssembly(typeof(Program).Assembly)
-    .SetAuditRetentionPolicy(policy))
+    .RegisterTasksFromAssembly(typeof(Program).Assembly))
     .AddSqlServerStorage(connectionString);
 
 builder.Services.AddAuditCleanup(policy, cleanupIntervalHours: 24);
@@ -254,11 +249,13 @@ var policy = new AuditRetentionPolicy
     StatusAuditRetentionDays = 14,             // Status changes retained for 14 days
     RunsAuditRetentionDays = 7,                // Execution history retained for 7 days
     ErrorAuditRetentionDays = 90,              // Errors retained for 90 days
+    ExecutionLogRetentionDays = 30,            // Captured execution logs trimmed after 30 days
+    MaxExecutionLogsPerTask = 1000,            // Keep at most the latest 1000 logs per task
     DeleteCompletedTasksAfterRetention = true  // Purge completed task rows once aged out (see below)
 };
 
 builder.Services.AddEverTask(opt => opt
-    .SetAuditRetentionPolicy(policy))
+    .RegisterTasksFromAssembly(typeof(Program).Assembly))
     .AddSqlServerStorage(connectionString);
 
 builder.Services.AddAuditCleanup(policy, cleanupIntervalHours: 12);
@@ -271,11 +268,15 @@ builder.Services.AddAuditCleanup(policy, cleanupIntervalHours: 12);
 | `StatusAuditRetentionDays` | `int?` | `null` | Days to retain status audit records (Queued → InProgress → Completed/Failed) |
 | `RunsAuditRetentionDays` | `int?` | `null` | Days to retain execution audit records (recurring task runs) |
 | `ErrorAuditRetentionDays` | `int?` | `null` | Days to retain error audit records (overrides above for failures) |
+| `ExecutionLogRetentionDays` | `int?` | `null` | Days to retain captured execution logs (`TaskExecutionLog`), trimmed independently of the parent task (anchored on `TimestampUtc`) |
+| `MaxExecutionLogsPerTask` | `int?` | `null` | Per-task, cross-run cap: keep at most the latest N execution logs per task and delete the oldest beyond N |
 | `DeleteCompletedTasksAfterRetention` | `bool` | `false` | Hard-delete a completed non-recurring task once it is older than the longest retention window **and** has no audit rows |
 
 > `DeleteCompletedTasksWithAudits` is the deprecated alias of `DeleteCompletedTasksAfterRetention`; it still works but forwards to the new property.
 >
-> **When a completed task is deleted:** when it is older than the longest of `StatusAuditRetentionDays`/`RunsAuditRetentionDays`/`ErrorAuditRetentionDays` (measured from `LastExecutionUtc`, falling back to `CreatedAtUtc`) and has no remaining StatusAudit/RunsAudit rows. If no retention window is configured, no completed tasks are deleted. Deleting the task cascades to everything it owns, including any captured execution logs — execution logs have no retention of their own yet (see the execution-log retention note in the docs).
+> **When a completed task is deleted:** when it is older than the longest of `StatusAuditRetentionDays`/`RunsAuditRetentionDays`/`ErrorAuditRetentionDays` (measured from `LastExecutionUtc`, falling back to `CreatedAtUtc`) and has no remaining StatusAudit/RunsAudit rows. If no retention window is configured, no completed tasks are deleted (a non-positive window counts as disabled). **When a log-retention window or cap (`ExecutionLogRetentionDays` / `MaxExecutionLogsPerTask`) is active, a task that still has surviving logs is preserved**, so its logs are never cascade-deleted before their own window expires; once those logs age out the task is purged. With no log retention configured, deleting the task cascades to everything it owns, captured execution logs included.
+>
+> **Execution-log retention.** `ExecutionLogRetentionDays` and `MaxExecutionLogsPerTask` trim `TaskExecutionLog` rows on their own, without deleting the task, so a long-running service (recurring tasks especially) never accumulates logs without bound. Both default to `null` (unlimited), so enabling persistent logging never starts deleting logs on its own. They are separate from `PersistentLoggerOptions.MaxLogsPerTask`, which caps a single execution's logs at capture time; these two trim logs across all past runs. When both are set, a log is deleted if it breaks either rule. Both are enforced by `AddAuditCleanup()`.
 
 **Cleanup Service Registration:**
 
@@ -283,13 +284,13 @@ The `AddAuditCleanup()` method (an `IServiceCollection` extension from the `Ever
 
 ```csharp
 builder.Services.AddAuditCleanup(
-    retentionPolicy,              // Same policy passed to SetAuditRetentionPolicy (required)
+    retentionPolicy,              // The retention policy to apply (required)
     cleanupIntervalHours: 24);    // Cleanup frequency (default: 24 hours)
 ```
 
 **Important Notes:**
 
-1. **Policy Synchronization**: Pass the **same policy** to both `SetAuditRetentionPolicy()` and `AddAuditCleanup()`
+1. **Single Entry-Point**: `AddAuditCleanup(policy, ...)` is the only place that applies the policy. (The former `SetAuditRetentionPolicy()` builder method, which never applied it, has been removed.)
 2. **Cleanup Service Required**: Retention is enforced by `AddAuditCleanup()` - without it, policy has no effect
 3. **Recurring Tasks**: Never auto-deleted, even with `DeleteCompletedTasksAfterRetention = true` (they need to reschedule)
 4. **Failed/Cancelled Tasks**: Preserved for visibility, even with `DeleteCompletedTasksAfterRetention = true`
