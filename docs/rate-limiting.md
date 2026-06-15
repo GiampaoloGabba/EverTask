@@ -162,7 +162,7 @@ The `OnRetry` callback still fires as usual; throttled waits are visible through
 Recurring tasks are throttled per occurrence, and the series rhythm is preserved: a deferred occurrence executes late, but the *next* occurrence is still computed from the original schedule (the re-park never touches the occurrence's scheduled time).
 
 - An occurrence whose reserved slot would fall past `RunUntil` is skipped, never fired late.
-- An occurrence rejected by the reservation horizon (see below) is skipped through the normal next-occurrence path: the skip counts toward `MaxRuns` (same semantics as downtime) and the series stays alive.
+- An occurrence rejected by the reservation horizon (see below) is skipped through the normal next-occurrence path: it only advances the schedule and does not consume the `MaxRuns` budget, the same as a downtime skip (`MaxRuns` counts real executions). The series stays alive and still runs its full `MaxRuns` of real executions, so a rate-limited series is never cut short of its run budget by occurrences it could not fit within the horizon. The next occurrence skips ahead to the limiter's next available slot rather than re-checking every occurrence at the cadence, so a recurrence configured far faster than the policy's refill rate re-checks about once per refill interval instead of once per occurrence.
 - A recurrence faster than the policy refill rate logs a warning at first dispatch (occurrences would pile up behind the limiter).
 
 ## Observability

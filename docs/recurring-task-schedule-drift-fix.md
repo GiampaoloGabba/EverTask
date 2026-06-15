@@ -116,7 +116,7 @@ The fix introduces a new extension method `CalculateNextValidRun` that encapsula
    - Includes safety limit to prevent infinite loops (max 1000 iterations)
    - Returns `NextRunResult` containing next run time, skip count, and skipped times
 3. If occurrences were skipped, log the count
-4. Advance the run counter by `1 + SkippedCount`, so a `MaxRuns`-bounded series stays consistent with the stop check after downtime
+4. Advance the run counter by exactly 1 (one real execution); skipped occurrences are logged but don't count toward `MaxRuns`
 5. Update the task's next run time and schedule the next occurrence
 
 ### Edge Cases Handled
@@ -142,7 +142,7 @@ When a recurring task skips missed occurrences (after downtime or a long-delayed
 Task {TaskId} skipped {SkippedCount} missed occurrence(s) to maintain schedule
 ```
 
-The skipped occurrences also count toward the run counter: it advances by `1 + SkippedCount`, so a `MaxRuns`-bounded series ends on the right occurrence after downtime instead of overrunning. There is no separate audit entry per skipped occurrence.
+Skipped occurrences are reported for logging only and do not count toward the run counter: `MaxRuns` counts real executions, so the counter advances by exactly 1 per run and `CurrentRunCount` always equals the number of `RunsAudit` rows. A downtime realigns the schedule without consuming the `MaxRuns` budget. There is no separate audit entry per skipped occurrence.
 
 ## Migration Notes
 
@@ -201,6 +201,6 @@ dotnet test --filter "FullyQualifiedName~RecurringTaskSkipPersistence"
 - **Core Fix**: `src/EverTask/Worker/WorkerExecutor.cs` - `QueueNextOccourrence` method
 - **Extension Method**: `src/EverTask/Scheduler/Recurring/RecurringTaskExtensions.cs`
 - **Result Record**: `src/EverTask/Scheduler/Recurring/NextRunResult.cs`
-- **Run-counter advance**: `src/EverTask/Worker/WorkerExecutor.cs` - `QueueNextOccourrence` (advances by `1 + SkippedCount`)
+- **Run-counter advance**: `src/EverTask/Worker/WorkerExecutor.cs` - `QueueNextOccourrence` (advances by exactly 1 per real execution; skipped occurrences are logging-only)
 - **Unit Tests**: `test/EverTask.Tests/RecurringTests/RecurringTaskScheduleDriftTests.cs`
 - **Integration Tests**: `test/EverTask.Tests/IntegrationTests/RecurringTaskSkipPersistenceTests.cs`
