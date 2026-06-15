@@ -55,8 +55,9 @@ public class EventFormattingBenchmark
     private readonly object[] _args = [Guid.NewGuid(), 12.5d];
 
     // Simulates "nobody consumes the event": level filtered out and no monitoring subscribers.
-    private const bool LevelEnabled = false;
-    private const bool HasSubscribers = false;
+    // static readonly (not const) so the unconsumed branch is not folded away as unreachable code.
+    private static readonly bool LevelEnabled = false;
+    private static readonly bool HasSubscribers = false;
 
     [Benchmark(Baseline = true, Description = "Always format (pre-fix)")]
     public string AlwaysFormat() => string.Format(Template, _args);
