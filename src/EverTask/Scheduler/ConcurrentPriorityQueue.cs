@@ -107,6 +107,46 @@ internal sealed class ConcurrentPriorityQueue<TElement, TPriority>
     }
 
     /// <summary>
+    ///  Removes, with thread safety, the first element that is reference-equal to <paramref name="element"/>.
+    /// </summary>
+    /// <remarks>
+    ///  <see cref="PriorityQueue{TElement, TPriority}"/> has no keyed removal, so the heap is rebuilt
+    ///  without the target. O(n), bounded by the queue size — used only for the schedulers' latest-wins
+    ///  replacement, to drop the stale node instead of letting it linger until its (possibly far-future)
+    ///  due time (CU19). Reference identity, not value equality: <typeparamref name="TElement"/> may be
+    ///  a record whose value-equality would match unrelated entries.
+    /// </remarks>
+    /// <returns><see langword="true"/> if an element was removed.</returns>
+    public bool Remove(TElement element)
+    {
+        lock (_lock)
+        {
+            var snapshot = _queue.UnorderedItems.ToArray();
+            var removed = false;
+            var remaining = new List<(TElement Element, TPriority Priority)>(snapshot.Length);
+
+            foreach (var pair in snapshot)
+            {
+                if (!removed && ReferenceEquals(pair.Element, element))
+                {
+                    removed = true;
+                    continue;
+                }
+
+                remaining.Add(pair);
+            }
+
+            if (removed)
+            {
+                _queue.Clear();
+                _queue.EnqueueRange(remaining);
+            }
+
+            return removed;
+        }
+    }
+
+    /// <summary>
     ///  Gets, with thread safety, the number of elements contained in the <see cref="PriorityQueue{TElement, TPriority}"/>.
     /// </summary>
     public int Count

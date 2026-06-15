@@ -97,6 +97,12 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
         // Latest-wins registration per PersistenceId: a previously parked entry for the same task
         // (e.g. recovery racing with a taskKey re-registration at startup) becomes stale and is
         // discarded at dequeue time, so the task executes only once per occurrence.
+        // CU19: also evict the stale node from the heap now, so repeated far-future re-registrations
+        // of the same id do not accumulate orphans retained until their due time. Best-effort: if a
+        // concurrent Schedule races this, the dequeue-time staleness check is still the safety net.
+        if (_scheduledItems.TryGetValue(item.PersistenceId, out var previous) && !ReferenceEquals(previous, item))
+            _queue.Remove(previous);
+
         _scheduledItems[item.PersistenceId] = item;
         _queue.Enqueue(item, scheduledTime);
 

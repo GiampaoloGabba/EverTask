@@ -90,6 +90,12 @@ public class ShardedScheduler : IScheduler, IDisposable
 
             // Latest-wins registration per PersistenceId: a previously parked entry for the same
             // task becomes stale and is discarded at dequeue time (single execution per occurrence).
+            // CU19: also evict the stale node from the heap now, so repeated far-future
+            // re-registrations of the same id do not accumulate orphans (symmetric with
+            // PeriodicTimerScheduler). Best-effort; the dequeue-time staleness check remains the net.
+            if (_scheduledItems.TryGetValue(item.PersistenceId, out var previous) && !ReferenceEquals(previous, item))
+                _queue.Remove(previous);
+
             _scheduledItems[item.PersistenceId] = item;
             _queue.Enqueue(item, scheduledTime);
 
@@ -132,6 +138,9 @@ public class ShardedScheduler : IScheduler, IDisposable
         /// True when any registration is parked in this shard for the given task.
         /// </summary>
         public bool IsScheduled(Guid persistenceId) => _scheduledItems.ContainsKey(persistenceId);
+
+        /// <summary>Test seam (CU19): number of entries currently in this shard's priority queue.</summary>
+        internal int QueueCount => _queue.Count;
 
         /// <summary>
         /// Background loop that processes scheduled tasks for this shard.
@@ -354,6 +363,9 @@ public class ShardedScheduler : IScheduler, IDisposable
 
     /// <inheritdoc />
     public bool IsScheduled(Guid persistenceId) => GetShard(persistenceId).IsScheduled(persistenceId);
+
+    /// <summary>Test seam (CU19): entries in the priority queue of the shard owning this task id.</summary>
+    internal int GetQueueCount(Guid persistenceId) => GetShard(persistenceId).QueueCount;
 
     private Shard GetShard(Guid persistenceId)
     {
