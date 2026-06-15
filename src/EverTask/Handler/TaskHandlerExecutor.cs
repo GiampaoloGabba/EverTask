@@ -222,9 +222,6 @@ public record TaskHandlerExecutor(
 
 public static class TaskHandlerExecutorExtensions
 {
-    // Performance optimization: Cache type metadata strings to avoid repeated generation
-    private static readonly ConcurrentDictionary<RecurringTask, string> RecurringTaskToStringCache = new();
-
     public static QueuedTask ToQueuedTask(this TaskHandlerExecutor executor)
     {
         ArgumentNullException.ThrowIfNull(executor.Task);
@@ -280,10 +277,10 @@ public static class TaskHandlerExecutorExtensions
                 nextRun = result.NextRun;
             }
 
-            // Cache RecurringTask.ToString() result to avoid repeated string generation
-            scheduleTaskInfo = RecurringTaskToStringCache.GetOrAdd(
-                executor.RecurringTask,
-                rt => rt.ToString() ?? "Recurring Task");
+            // Computed inline (F22): the previous static cache was keyed by RecurringTask reference
+            // identity, but every persisted dispatch builds a fresh instance, so it never hit between
+            // distinct dispatches — it only retained one entry per dispatch forever (an unbounded leak).
+            scheduleTaskInfo = executor.RecurringTask.ToString() ?? "Recurring Task";
 
             maxRuns  = executor.RecurringTask.MaxRuns;
             runUntil = executor.RecurringTask.RunUntil;
