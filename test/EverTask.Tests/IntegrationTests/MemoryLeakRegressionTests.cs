@@ -1,6 +1,9 @@
+using System.Reflection;
 using System.Runtime.CompilerServices;
+using EverTask.Scheduler.Recurring;
 using EverTask.Storage;
 using EverTask.Tests.TestHelpers;
+using Newtonsoft.Json;
 
 namespace EverTask.Tests.IntegrationTests;
 
@@ -99,5 +102,93 @@ public class MemoryLeakRegressionTests : IsolatedIntegrationTestBase
         TestTaskMem2DisposeProbeHandler.Created.ShouldBe(2);
         TestTaskMem2DisposeProbeHandler.Disposed.ShouldBe(2);
         TestTaskMem2DisposeProbeHandler.Executed.ShouldBe(1);
+    }
+
+    // ---- P-A / F22: the recurring ToString cache leak ----
+    //
+    // ToQueuedTask used to memoise RecurringTask.ToString() in a process-wide static
+    // ConcurrentDictionary keyed by RecurringTask *reference identity*. Every persisted recurring
+    // dispatch builds a fresh RecurringTask, so GetOrAdd never hit and every distinct dispatch added
+    // a permanent entry (no TTL/sweep/WeakReference) — an unbounded leak in long-running processes
+    // that re-dispatch recurring tasks dynamically. The fix computes ToString() inline, so nothing
+    // is retained; this gate reads the cache count by reflection so it stays green once the field is
+    // gone (no field -> nothing retained).
+
+    private const int RecurringDispatchCount = 500;
+
+    [Fact]
+    public async Task Should_not_grow_recurring_tostring_cache_unbounded_across_distinct_dispatches()
+    {
+        // Storage is required: ToQueuedTask (and the cache GetOrAdd) only runs on a persisted dispatch.
+        // Host NOT started: we only need the dispatch path to populate the cache, not execution.
+        await CreateIsolatedHostWithBuilderAsync(
+            builder => builder.AddMemoryStorage(),
+            startHost: false);
+
+        // Delta, never absolute: the cache is static and shared across the parallel test process.
+        var before = GetRecurringToStringCacheCount();
+
+        await DispatchDistinctRecurringTasks(RecurringDispatchCount);
+
+        // Strong references in a dictionary survive GC, so a real leak does NOT shrink here.
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true);
+        GC.WaitForPendingFinalizers();
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true);
+
+        var retained = GetRecurringToStringCacheCount() - before;
+
+        // Pre-fix: ~RecurringDispatchCount entries retained (one per distinct dispatch) -> fails.
+        // Post-fix: the cache is gone (or never grows) -> 0 retained.
+        retained.ShouldBeLessThan(RecurringDispatchCount / 5,
+            $"the recurring ToString cache must not retain ~one entry per distinct dispatch (F22 leak); " +
+            $"retained {retained} of {RecurringDispatchCount}");
+    }
+
+    [Fact]
+    public async Task Should_produce_identical_recurring_info_after_inlining()
+    {
+        // Non-regression: the RecurringInfo string persisted on the QueuedTask must be exactly the
+        // RecurringTask.ToString() value the cache used to produce — i.e. the ToString() of the very
+        // RecurringTask that was serialised onto the row.
+        await CreateIsolatedHostWithBuilderAsync(
+            builder => builder.AddMemoryStorage(),
+            startHost: false);
+
+        var runAt = DateTimeOffset.UtcNow.AddHours(1);
+        var taskId = await Dispatcher.Dispatch(
+            new TestTaskRecurringSeconds(),
+            r => r.RunAt(runAt).Then().Every(7).Seconds().MaxRuns(3));
+
+        var stored = (await Storage.GetAll()).Single(t => t.Id == taskId);
+
+        stored.RecurringInfo.ShouldNotBeNullOrWhiteSpace();
+        stored.RecurringTask.ShouldNotBeNull();
+
+        var expected = JsonConvert.DeserializeObject<RecurringTask>(stored.RecurringTask!)!.ToString();
+        stored.RecurringInfo.ShouldBe(expected);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private async Task DispatchDistinctRecurringTasks(int count)
+    {
+        var future = DateTimeOffset.UtcNow.AddHours(1);
+        for (var i = 0; i < count; i++)
+        {
+            // Distinct config per dispatch -> distinct RecurringTask instances (each a cache miss).
+            await Dispatcher.Dispatch(
+                new TestTaskRecurringSeconds(),
+                r => r.RunAt(future).Then().Every(i + 1).Seconds());
+        }
+    }
+
+    private static int GetRecurringToStringCacheCount()
+    {
+        var field = typeof(EverTask.Handler.TaskHandlerExecutorExtensions)
+            .GetField("RecurringTaskToStringCache", BindingFlags.NonPublic | BindingFlags.Static);
+
+        if (field?.GetValue(null) is not System.Collections.ICollection cache)
+            return 0; // cache removed by the F22 fix -> nothing retained
+
+        return cache.Count;
     }
 }
