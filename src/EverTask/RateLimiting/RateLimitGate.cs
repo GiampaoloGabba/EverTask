@@ -97,23 +97,14 @@ internal sealed class RateLimitGate(
             return Reject(RateLimitRejectionKind.Discarded, decision.RetryAt);
         }
 
-        // In-slot wait: a near slot is awaited inline and redeemed — closes the guard-overlap
-        // edge (no redelivery racing the in-flight guard) and saves a scheduler round-trip.
-        // Bounded: redemption at/after the slot returns Acquired by the limiter contract.
-        for (var attempt = 0; attempt < 2; attempt++)
-        {
-            var wait = decision.RetryAt - DateTimeOffset.UtcNow;
-            if (wait > policy.MaxInSlotWait)
-                break;
-
-            if (wait > TimeSpan.Zero)
-                await Task.Delay(wait, ct).ConfigureAwait(false);
-
-            decision = await AcquireFailOpenAsync(policy, taskType, key, task.PersistenceId, ct).ConfigureAwait(false);
-            if (decision.Acquired)
-                return Proceed();
-        }
-
+        // L14: never wait inline on the consumer. A near slot is re-parked to the scheduler (Defer)
+        // exactly like a far slot, so the consumer is immediately free for the next item — on a
+        // single-consumer queue an inline Task.Delay here head-of-line-blocked every following item,
+        // INCLUDING tasks without any policy. The task still fires at its reserved slot via redelivery
+        // (the reservation is redeemed then, see InMemoryKeyedRateLimiter; honored even under congested
+        // redelivery latency, L22). The previous in-slot wait only saved a scheduler round-trip for
+        // near slots — a latency optimisation not worth blocking the consumer. (RateLimitPolicy.
+        // MaxInSlotWait is retained for binary compatibility but no longer drives an inline wait.)
         return Defer(task, taskType, key, decision.RetryAt, epoch);
     }
 

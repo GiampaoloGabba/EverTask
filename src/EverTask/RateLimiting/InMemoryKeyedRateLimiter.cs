@@ -43,6 +43,11 @@ public sealed class InMemoryKeyedRateLimiter : IKeyedRateLimiter, IDisposable
     private readonly record struct Reservation(long SlotTicks, long ExpiryTicks, long TatAfterTicks, long TTicks);
 
     private readonly ConcurrentDictionary<RateLimiterKey, KeyState> _keys = new();
+
+    // CU20: serializes the cap-check-and-add slow path so concurrent new keys cannot overshoot the
+    // tracked-keys cap. Existing keys take the lock-free fast path; only first-time adds contend here.
+    private readonly object _keyAddGate = new();
+
     private readonly RateLimiterOptions _options;
     private readonly IEverTaskLogger<InMemoryKeyedRateLimiter> _logger;
     private readonly TimeProvider _timeProvider;
@@ -53,16 +58,25 @@ public sealed class InMemoryKeyedRateLimiter : IKeyedRateLimiter, IDisposable
 
     /// <summary>
     /// Extra slack added to a reservation's natural lifetime (slot + period) before it lapses,
-    /// covering the scheduler check interval (1 s) and the full-queue retry delay (2 s).
-    /// Internal for testing purposes.
+    /// covering the worst-case congested redelivery latency: scheduler check interval (~1 s) +
+    /// full-queue retry delay (2 s) + parking-lot consumer pause (<c>MaxOverflowPause</c>, default 5 s).
+    /// Previously 5 s, which missed the parking-lot pause, so a short-Period reservation could lapse
+    /// before its redelivery redeemed it (L22). Internal for testing purposes.
     /// </summary>
-    internal TimeSpan ReservationExpiryMargin { get; set; } = TimeSpan.FromSeconds(5);
+    internal TimeSpan ReservationExpiryMargin { get; set; } = TimeSpan.FromSeconds(10);
 
     /// <summary>Total acquisitions that failed open due to the tracked-keys cap. Internal: read by the gate for monitoring.</summary>
     internal long FailOpenCount => Interlocked.Read(ref _failOpenCount);
 
     /// <summary>Number of tracked (task type, key) buckets. Internal for testing/monitoring purposes.</summary>
     internal int TrackedKeyCount => _keys.Count;
+
+    /// <summary>
+    /// Test seam (CU20): invoked when a new key is detected, BEFORE the atomic cap-check-and-add.
+    /// No-op in production. Lets a test release several acquirers past new-key detection at once to
+    /// exercise the cap race.
+    /// </summary>
+    internal Action? OnBeforeKeyAdd;
 
     /// <summary>
     /// Creates the limiter.
@@ -109,15 +123,28 @@ public sealed class InMemoryKeyedRateLimiter : IKeyedRateLimiter, IDisposable
         {
             if (!_keys.TryGetValue(limiterKey, out var state))
             {
-                // L4 key-cardinality bound: a new key beyond the cap fails OPEN (fresh untracked
-                // bucket → execute) rather than failing the task or exhausting memory.
-                if (_keys.Count >= _options.MaxTrackedKeys)
-                {
-                    RegisterFailOpen(taskType, nowTicks);
-                    return new ValueTask<RateLimitDecision>(new RateLimitDecision(true, default));
-                }
+                OnBeforeKeyAdd?.Invoke();
 
-                state = _keys.GetOrAdd(limiterKey, static _ => new KeyState());
+                // CU20: the cap check and the add must be atomic, or N concurrent acquisitions of N
+                // distinct new keys each pass `Count < cap` before any add and overshoot the cap by
+                // up to N-1. Serialize only the new-key slow path (existing keys already returned via
+                // the lock-free fast path above); eviction lowering Count concurrently only frees room.
+                lock (_keyAddGate)
+                {
+                    if (!_keys.TryGetValue(limiterKey, out state))
+                    {
+                        // L4 key-cardinality bound: a new key beyond the cap fails OPEN (fresh
+                        // untracked bucket → execute) rather than failing the task or exhausting memory.
+                        if (_keys.Count >= _options.MaxTrackedKeys)
+                        {
+                            RegisterFailOpen(taskType, nowTicks);
+                            return new ValueTask<RateLimitDecision>(new RateLimitDecision(true, default));
+                        }
+
+                        state = new KeyState();
+                        _keys[limiterKey] = state;
+                    }
+                }
             }
 
             lock (state.Gate)
@@ -168,9 +195,11 @@ public sealed class InMemoryKeyedRateLimiter : IKeyedRateLimiter, IDisposable
             tTicks = 1;
         var tauTicks = tTicks * (policy.Burst - 1);
 
-        PurgeExpiredReservations(state, nowTicks);
-
-        // 1) Idempotent redemption: this task already holds a reserved slot
+        // 1) Idempotent redemption FIRST, before any purge (L22): honor the OWNER's reserved slot
+        // even if it is now past its expiry margin. A congested redelivery (scheduler tick +
+        // full-queue retry + parking-lot pause) must redeem the slot it already booked instead of
+        // re-booking budget (double consumption / over-throttling). Orphan reservations from OTHER
+        // ids are still reclaimed by the purge below and by the periodic sweep.
         if (state.Reservations != null && state.Reservations.TryGetValue(reservationId, out var reservation))
         {
             if (nowTicks >= reservation.SlotTicks)
@@ -183,6 +212,9 @@ public sealed class InMemoryKeyedRateLimiter : IKeyedRateLimiter, IDisposable
             // Early redelivery (guard overlap): same slot, no extra capacity consumed
             return new RateLimitDecision(false, new DateTimeOffset(reservation.SlotTicks, TimeSpan.Zero));
         }
+
+        // Not our reservation: reclaim expired orphans before booking new budget.
+        PurgeExpiredReservations(state, nowTicks);
 
         // Fresh key: a default bucket starts full (burst available); StartEmpty starts at the
         // steady rate (no accumulated burst)
