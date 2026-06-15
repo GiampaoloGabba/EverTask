@@ -22,7 +22,11 @@ public static class RecurringTaskExtensions
     /// <param name="referenceTime">Optional reference time for "now" comparison. If null, uses DateTimeOffset.UtcNow</param>
     /// <returns>A NextRunResult containing the next valid run time and the count of skipped occurrences</returns>
     /// <remarks>
-    /// Uses O(1) math for both simple intervals and cron expressions (via Cronos.GetNextOccurrence).
+    /// Realignment is calendar-aware via the single <see cref="RecurringTask.NextOccurrenceStrictlyAfter"/>
+    /// primitive: O(1) for cron (Cronos) and for uniform arithmetic grids (every N seconds/minutes/…), and a
+    /// bounded calendar walk for non-uniform schedules (OnDays, OnHours, Month, multi-OnTimes, combinations),
+    /// which are coarse by nature. It never uses the approximate flat <see cref="RecurringTask.GetMinimumInterval"/>,
+    /// which diverges on uneven schedules (F8).
     /// </remarks>
     public static NextRunResult CalculateNextValidRun(
         this RecurringTask recurringTask,
@@ -46,128 +50,20 @@ public static class RecurringTaskExtensions
             return new NextRunResult(nextRun, 0);
         }
 
-        // nextRun is in the past - need to skip forward. computeSkippedCount=false (the rate-limit
-        // skip-ahead path, where `now` is the limiter's far-future slot) suppresses the LOGGING-ONLY
-        // cron occurrence walk: counting "missed" occurrences up to a far slot is meaningless noise
-        // and, on a sub-minute cron skipped hours ahead, up to maxCronSkipIterations of pure waste (O).
-        return HasCronExpression(recurringTask)
-                   ? CalculateNextValidRunForCron(recurringTask, nextRun.Value, now, computeSkippedCount)
-                   : CalculateNextValidRunForSimpleInterval(recurringTask, nextRun.Value, now);
+        // nextRun is significantly in the past — realign past the downtime. ONE primitive for every schedule
+        // kind (cron, uniform interval, calendar): the next run is the first real occurrence strictly after
+        // `now` (calendar-aware, never flat-interval arithmetic that diverges on uneven schedules — F8). The
+        // skip count is LOGGING ONLY (Option B: it never consumes MaxRuns) and is suppressed on the
+        // rate-limit skip-ahead path (computeSkippedCount=false), where `now` is the limiter's far-future
+        // slot and a "missed" count up to it is meaningless noise (O).
+        var next = recurringTask.NextOccurrenceStrictlyAfter(nextRun.Value, now);
+
+        // Skip-count anchor (logging-only): on RECOVERY `scheduledTime` IS the stored slipped occurrence
+        // (itself missed during the downtime), so count from it to include it; otherwise it is the
+        // just-executed occurrence (not missed), so count from the next occurrence (U12).
+        var countAnchor = isRecovery ? scheduledTime : nextRun.Value;
+        var skipped     = computeSkippedCount ? recurringTask.CountMissedOccurrences(countAnchor, now) : 0;
+
+        return new NextRunResult(next, skipped);
     }
-
-    /// <summary>
-    /// Calculates next valid run for simple intervals (Second/Minute/Hour/Day/Week/Month) using O(1) math.
-    /// </summary>
-    /// <remarks>
-    /// The returned <see cref="NextRunResult.SkippedCount"/> is reported for logging only: occurrences
-    /// skipped to realign the schedule after a downtime do NOT consume the <c>MaxRuns</c> budget
-    /// (Option B accounting — only real executions count). The single <c>MaxRuns</c> gate lives in
-    /// <see cref="RecurringTask.CalculateNextRun"/>, evaluated on the real run count alone before any
-    /// skip-forward begins.
-    /// </remarks>
-    private static NextRunResult CalculateNextValidRunForSimpleInterval(
-        RecurringTask recurringTask,
-        DateTimeOffset nextRun,
-        DateTimeOffset now)
-    {
-        var interval = recurringTask.GetMinimumInterval();
-        if (interval.TotalMilliseconds <= 0)
-        {
-            return new NextRunResult(nextRun, 0);
-        }
-
-        var elapsed = now - nextRun;
-
-        // long math + saturation: a sub-second interval over a huge elapsed span would overflow an int
-        // skip count and turn the forward-skip into an unbounded one-at-a-time loop (L36).
-        var skippedCountLong = (long)Math.Ceiling(elapsed.TotalMilliseconds / interval.TotalMilliseconds);
-        var skippedCount     = (int)Math.Min(skippedCountLong, int.MaxValue);
-
-        // Jump directly to the skipped time using the long count (no per-occurrence iteration)
-        var candidateNextRun = nextRun.AddMilliseconds(skippedCountLong * interval.TotalMilliseconds);
-
-        // Bounded floating-point correction only (never an unbounded skip-forward loop)
-        var corrections = 0;
-        while (candidateNextRun <= now && corrections++ < 1000)
-        {
-            candidateNextRun = candidateNextRun.Add(interval);
-            if (skippedCount < int.MaxValue) skippedCount++;
-        }
-
-        // Check RunUntil constraint
-        return recurringTask.RunUntil.HasValue && candidateNextRun >= recurringTask.RunUntil.Value
-                   ? new NextRunResult(null, skippedCount)
-                   : new NextRunResult(candidateNextRun, skippedCount);
-    }
-
-    /// <summary>
-    /// Calculates next valid run for cron expressions using Cronos.GetNextOccurrence (O(1)).
-    /// </summary>
-    /// <remarks>
-    /// As with the simple-interval path, the returned skip count is logging-only and does NOT consume
-    /// the <c>MaxRuns</c> budget (Option B accounting). The exact cron occurrence walk is kept so the
-    /// skip count logged after a downtime is accurate even on uneven schedules.
-    /// </remarks>
-    private static NextRunResult CalculateNextValidRunForCron(
-        RecurringTask recurringTask,
-        DateTimeOffset nextRun,
-        DateTimeOffset now,
-        bool computeSkippedCount = true)
-    {
-        var cron = recurringTask.CronInterval;
-        if (cron == null)
-        {
-            return new NextRunResult(nextRun, 0);
-        }
-
-        // The next valid run is O(1): the first cron occurrence strictly after `now` (which on the
-        // rate-limit skip-ahead path is the limiter's far-future slot). Computing it directly keeps the
-        // next run independent of the missed-occurrence count below — walking the whole schedule from
-        // `nextRun` up to a far `now` just to FIND the next run would be O(occurrences-until-now).
-        var nextCronRun = cron.GetNextOccurrence(now);
-
-        // Count the missed cron occurrences in (nextRun, now] by walking the actual schedule, instead of
-        // dividing the elapsed span by an approximate min-interval which diverges on uneven gaps (F8).
-        // This count is LOGGING ONLY under Option B (it never affects MaxRuns), so the cap is a pure cost
-        // bound — beyond it the count is under-reported but the next run (above) is unaffected. Bounded so
-        // a sub-minute cron skipped to a far slot cannot iterate unboundedly (sibling of L36).
-        // O: on the rate-limit skip-ahead path (computeSkippedCount=false) the walk is skipped entirely —
-        // the "missed" count up to the limiter's far slot is meaningless and the walk would be pure waste.
-        const int maxCronSkipIterations = 10_000;
-
-        var skippedCount = 1; // nextRun itself is a missed occurrence
-        var occurrence   = nextRun;
-
-        for (var i = 0; computeSkippedCount && i < maxCronSkipIterations; i++)
-        {
-            var following = cron.GetNextOccurrence(occurrence);
-            // Stop at the schedule end or the first occurrence past `now` (an occurrence exactly on `now`
-            // is treated as due/missed, mirroring the simple-interval `candidate <= now` loop).
-            if (following == null || following.Value > now)
-                break;
-
-            occurrence = following.Value;
-            skippedCount++;
-        }
-
-        if (!computeSkippedCount)
-            skippedCount = 0;
-
-        // Check RunUntil constraint
-        if (nextCronRun.HasValue && recurringTask.RunUntil.HasValue && nextCronRun >= recurringTask.RunUntil)
-        {
-            nextCronRun = null;
-        }
-
-        // Skipped occurrences are reported for logging only and do NOT consume the MaxRuns budget
-        // (Option B): the MaxRuns gate is evaluated on real executions in CalculateNextRun.
-        return new NextRunResult(nextCronRun, skippedCount);
-    }
-
-    /// <summary>
-    /// Checks if the recurring task uses a cron expression.
-    /// </summary>
-    private static bool HasCronExpression(RecurringTask recurringTask) =>
-        recurringTask.CronInterval != null &&
-        !string.IsNullOrEmpty(recurringTask.CronInterval.CronExpression);
 }

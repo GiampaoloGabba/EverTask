@@ -50,6 +50,37 @@ Tasks auto-stop when:
 ### 6. Restart Revival Preserves Stored NextRunUtc
 On startup recovery a recurring task is re-dispatched with `isRecovery: true`. When the stored `NextRunUtc` is still in the **future** it is used **as-is** as the next occurrence — it must NOT be fed to `CalculateNextValidRun` as a bare base time, which computes the occurrence strictly *after* it, skipping one occurrence per restart (and dropping the last occurrence before `RunUntil`). Recalculation (skip-forward) applies only when `NextRunUtc` is in the past. See `Dispatcher.ExecuteDispatch` (recovery branch) and the `RunUntil`/`NextRunUtc`-preservation tests in `QueueResilienceIntegrationTests` / `SqlServerRecoveryIntegrationTests`.
 
+### 7. Skip-Forward Realignment is Calendar-Aware (NOT flat-interval math)
+After a downtime, `CalculateNextValidRun` realigns past missed occurrences via the single
+`RecurringTask.NextOccurrenceStrictlyAfter(anchor, after)` primitive — the calendar-aware generalization of
+the cron path. It computes the **first real occurrence strictly after `now`**:
+- **cron** → `GetNextOccurrence(now)` (Cronos, O(1));
+- **uniform arithmetic grid** (`IsUniformGrid()`: no calendar structure — no `OnDays`/`OnHours`/Month/Cron, ≤1
+  `OnTimes` — checked on **every field regardless of `Interval`** because `OnDays` rides on `DayInterval(Interval=0)`;
+  one or MORE pure-cadence fields, e.g. `Minute+Second`) → O(1) jump. The step is measured from the **steady grid**
+  (`first→second`, never the irregular `anchor→first` first-run gap) and the candidate is **self-verified** on-grid
+  (else it falls back to the walk);
+- **everything else** (`OnDays`, `OnHours`, `MonthInterval`, multi-`OnTimes`, non-constant combinations) → a bounded
+  calendar walk reusing `GetNextOccurrence`. These schedules are always coarse, so the walk is cheap.
+
+**RunUntil is applied ONCE by the caller** (`NextOccurrenceStrictlyAfter`): a top guard returns null when
+`after >= RunUntil`, and the uniform jump's self-verify is **skipped at/after RunUntil** (else `GetNextOccurrence`
+would null the candidate and force a needless walk to the cap). The walk's cap-hit fallback **never returns a value
+`<= after`** (a stale past next-run would be scheduled immediately and consume `MaxRuns`). Recovery's grace-window
+(`Dispatcher`) decides via `RecurringTask.IsOccurrenceStillCurrent` (calendar-exact), **not** `GetMinimumInterval`,
+which is wrong for OnDays/Month/Week. These are the round-2 hardening invariants — see
+`RecurringSkipForwardHardeningTests` and `review/recurring-skipforward-deep-review.md`.
+
+**Do NOT reintroduce flat `GetMinimumInterval()` arithmetic for skip-forward** — it returns an approximate flat
+value (30 days for Month, the 5-minute default for `DayInterval(Interval=0)` from `OnDays`, the granular field
+for combos) that **diverges on uneven schedules** and lands on invalid days/times (F8). `GetMinimumInterval` is
+still legitimately used elsewhere as a rough "≈ one period" heuristic (Dispatcher recovery grace-window,
+lazy-resolution threshold) — that is fine; only skip-forward must stay calendar-exact.
+
+**Invariant**: skip-forward must equal the result of stepping the normal path (`CalculateNextRun(occ, 1)`) one
+occurrence at a time until strictly after `now`. The `RecurringCalendarSkipForwardTests` ground-truth property
+test pins exactly this. Skipped occurrences remain **logging-only** (Option B — see gotcha #5).
+
 ## 🔗 Test Coverage
 
 **When modifying interval calculation**:

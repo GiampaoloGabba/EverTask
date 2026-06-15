@@ -284,11 +284,13 @@ public class Dispatcher(
                     executionTime = nextRun;
                     logger.LogInformation("Using preserved NextRunUtc {NextRun} for recurring task (still in future)", nextRun);
                 }
-                // L16: on recovery, if the pending occurrence slipped only just into the past (within one
-                // interval — the next occurrence is not due yet), execute IT now instead of skipping it.
-                // A short downtime across a scheduled occurrence must not silently lose it.
+                // L16: on recovery, if the pending occurrence slipped into the past but is still the CURRENT
+                // one (the next occurrence is not due yet), execute IT now instead of skipping it — a short
+                // downtime across a scheduled occurrence must not silently lose it. Calendar-exact: uses the
+                // real next occurrence, not the flat GetMinimumInterval heuristic, which is wrong for
+                // OnDays/Month/Week (too narrow drops a just-due slot; too wide runs a stale one) — U4/U5.
                 else if (isRecovery &&
-                         DateTimeOffset.UtcNow - existingNextRunUtc.Value <= recurring.GetMinimumInterval())
+                         recurring.IsOccurrenceStillCurrent(existingNextRunUtc.Value, DateTimeOffset.UtcNow))
                 {
                     nextRun       = existingNextRunUtc;
                     executionTime = nextRun;
