@@ -84,3 +84,21 @@ already schedules ~25% fewer thread-pool work items and allocates less. The real
 cannot show: with a **slow/blocked** subscriber the pre-fix path spawns one fire-and-forget Task per
 subscriber per event without limit (thread-pool saturation), while the bounded path holds in-flight
 at the cap and drops the overflow — see the deterministic gate `Should_bound_monitoring_fanout_under_load`.
+
+---
+
+## P-C — CU19: scheduler orphan heap entries
+
+`SchedulerReplacementBenchmark` — 50 latest-wins replacements of the same id.
+
+| Method | Mean | Allocated | Retained entries |
+|--------|-----:|----------:|-----------------:|
+| Enqueue only (pre-fix) | 341.9 ns | 3.27 KB | 50 (all orphans, live) |
+| Evict-then-enqueue (post-fix) | 2,920.8 ns | 6.78 KB | 1 |
+
+The headline is **retained entries**: pre-fix the heap keeps one node per replacement (each holding an
+executor + payload + policy until its possibly far-future due time); post-fix it keeps exactly one,
+pinned by the deterministic gate `SchedulerOrphanHeapTests` (Count == 1 vs ~N). The post-fix
+`Allocated` is higher because each eviction rebuilds the heap, but that allocation is **transient and
+collectable** (the queue stays ~1 element), whereas the pre-fix 3.27 KB is **live and grows with K**.
+The rebuild is O(current size) and only runs when an already-parked id is re-registered.
