@@ -7,15 +7,16 @@ using EverTask.Tests.TestHelpers;
 namespace EverTask.Tests.IntegrationTests;
 
 /// <summary>
-/// M5 (batch B) — F7: downtime-skipped occurrences must count toward <c>CurrentRunCount</c> (and
-/// therefore toward <c>MaxRuns</c>). The stop-check in <c>CalculateNextValidRun</c> already accounts
-/// for skipped occurrences (<c>currentRun + skippedCount &gt;= MaxRuns</c>), but the persisted counter
-/// is advanced by only 1 per real run, so the two drift apart after a downtime.
+/// Option B accounting semantics (f7-f8 tech-debt paydown): <c>MaxRuns</c> counts REAL executions only.
+/// Occurrences skipped while the host was down keep the schedule aligned (and are logged) but do NOT
+/// consume the <c>MaxRuns</c> budget, so <c>CurrentRunCount</c> always equals the number of real runs
+/// (== RunsAudit rows). This replaces the previous "downtime consumes the budget" behavior (advance by
+/// 1 + skipped), which overloaded the meaning of <c>CurrentRunCount</c>.
 ///
 /// Deterministic seam: build a lazy recurring executor whose scheduled <c>ExecutionTime</c> is fixed
 /// well in the past and drive <c>WorkerExecutor.DoWork</c> directly (no timing-as-gate). The single
-/// run's <c>QueueNextOccourrence</c> skips forward over the past occurrences and must advance the
-/// counter by <c>1 + SkippedCount</c>.
+/// run's <c>QueueNextOccourrence</c> skips forward over the past occurrences but advances the counter
+/// by exactly 1.
 /// </summary>
 public class RecurringMaxRunsAccountingTests : IsolatedIntegrationTestBase
 {
@@ -36,11 +37,11 @@ public class RecurringMaxRunsAccountingTests : IsolatedIntegrationTestBase
             AuditLevel: AuditLevel.None);
 
     [Fact]
-    public async Task Should_count_skipped_occurrences_toward_currentruncount_after_downtime()
+    public async Task Should_count_only_real_executions_toward_currentruncount_after_downtime()
     {
-        // F7: a run scheduled 60 s in the past with a 1 s interval skips ~59 occurrences before the
-        // next future one. They must all be reflected in CurrentRunCount (advance by 1 + SkippedCount),
-        // not lost (advance by exactly 1).
+        // Option B: a run scheduled 60 s in the past with a 1 s interval skips ~59 occurrences before the
+        // next future one. Those skips keep the schedule aligned but must NOT inflate the run counter:
+        // exactly one real execution happened, so CurrentRunCount must be 1 (not 1 + ~59).
         await CreateIsolatedHostAsync();
 
         var id        = Guid.NewGuid();
@@ -53,20 +54,20 @@ public class RecurringMaxRunsAccountingTests : IsolatedIntegrationTestBase
 
         var task = (await Storage.Get(t => t.Id == id)).Single();
 
-        // Pre-fix: advanced by exactly 1. Post-fix: 1 + ~59 skipped. The greater-than margin is robust
-        // against the exact (timing-sensitive) skip count and against an extra rescheduled run.
-        task.CurrentRunCount.ShouldNotBeNull();
-        task.CurrentRunCount!.Value.ShouldBeGreaterThan(10);
+        // Exactly one real execution: the advance is a fixed 1 regardless of how many occurrences were
+        // skipped to realign the schedule.
+        task.CurrentRunCount.ShouldBe(1);
         task.NextRunUtc.ShouldNotBeNull(); // the series keeps going (no MaxRuns)
     }
 
     [Fact]
-    public async Task Should_account_skipped_occurrences_against_maxruns_when_exhausted_by_downtime()
+    public async Task Should_keep_series_alive_when_downtime_skips_more_than_maxruns()
     {
-        // F7 (MaxRuns variant): when the skipped occurrences consume the remaining MaxRuns budget the
-        // series must stop AND the persisted counter must reflect the consumed budget (>= MaxRuns), so
-        // the recoverable predicate sees the series as exhausted. Pre-fix CurrentRunCount stays at 1,
-        // far below MaxRuns, making the exhausted series look like it still has budget.
+        // Option B (MaxRuns variant): downtime occurrences do NOT consume the MaxRuns budget. After a
+        // single real run, a MaxRuns=3 series still has 2 runs of budget left even though ~59 occurrences
+        // were skipped to realign — so the series stays alive and the counter reflects only the 1 real run.
+        // (Pre-fix behavior: the skipped occurrences exhausted MaxRuns, NextRunUtc went null and
+        // CurrentRunCount jumped to ~60.)
         await CreateIsolatedHostAsync();
 
         var id        = Guid.NewGuid();
@@ -79,8 +80,7 @@ public class RecurringMaxRunsAccountingTests : IsolatedIntegrationTestBase
 
         var task = (await Storage.Get(t => t.Id == id)).Single();
 
-        task.NextRunUtc.ShouldBeNull(); // exhausted: no next occurrence
-        task.CurrentRunCount.ShouldNotBeNull();
-        task.CurrentRunCount!.Value.ShouldBeGreaterThanOrEqualTo(3);
+        task.NextRunUtc.ShouldNotBeNull();      // not exhausted: 2 real runs of budget remain
+        task.CurrentRunCount.ShouldBe(1);       // only the one real execution counts
     }
 }

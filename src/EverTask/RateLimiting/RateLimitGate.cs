@@ -145,7 +145,10 @@ internal sealed class RateLimitGate(
             // RunUntil must never be fired late. Drop this redelivery; the in-flight original advances
             // the series (its next-occurrence calculation lands past RunUntil and ends the series).
             var runUntil = task.RecurringTask.RunUntil;
-            if (runUntil.HasValue && slot > runUntil.Value)
+            // H: RunUntil is EXCLUSIVE for the recurrence (CalculateNextRun drops an occurrence whose time
+            // is >= RunUntil), so the gate drops a reserved slot AT or past RunUntil for consistency — an
+            // occurrence the recurrence would consider ended must not be fired by the limiter at the boundary tick.
+            if (runUntil.HasValue && slot >= runUntil.Value)
             {
                 logger.LogWarning(
                     "Rate limit: in-flight redelivery of recurring task {TaskId} (key {Key}) dropped — re-park " +
@@ -294,7 +297,10 @@ internal sealed class RateLimitGate(
         if (task.RecurringTask != null)
         {
             var runUntil = task.RecurringTask.RunUntil;
-            if (runUntil.HasValue && slot > runUntil.Value)
+            // H: RunUntil is EXCLUSIVE for the recurrence (CalculateNextRun drops an occurrence whose time
+            // is >= RunUntil), so the gate drops a reserved slot AT or past RunUntil for consistency — an
+            // occurrence the recurrence would consider ended must not be fired by the limiter at the boundary tick.
+            if (runUntil.HasValue && slot >= runUntil.Value)
             {
                 // Never fire late: the occurrence is skipped (same semantics as downtime; the
                 // caller routes it through the normal next-occurrence path so the series state

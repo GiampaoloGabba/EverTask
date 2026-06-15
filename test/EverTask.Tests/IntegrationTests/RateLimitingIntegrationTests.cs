@@ -374,30 +374,33 @@ public class RateLimitingIntegrationTests : IsolatedIntegrationTestBase
     }
 
     [Fact]
-    public async Task Should_skip_recurring_occurrence_and_keep_series_alive_when_horizon_exceeded()
+    public async Task Should_skip_recurring_occurrence_without_consuming_maxruns_when_horizon_exceeded()
     {
         await CreateRateLimitHostAsync();
 
-        // Every-second series, 1 permit per 3.5 s, 1 s horizon: occurrences finding the budget
-        // exhausted and the next slot beyond the horizon are SKIPPED (counting toward MaxRuns),
-        // the series never fails
+        // Every-second series, 1 permit per 3.5 s, 1 s horizon: between real runs the intermediate
+        // occurrences find the next slot beyond the horizon and are SKIPPED. Under Option B a skipped
+        // occurrence does NOT consume the MaxRuns budget — only real executions do — so the series runs
+        // its full MaxRuns REAL times (CurrentRunCount == executions), never fails. (Pre-fix the skips
+        // counted toward MaxRuns, so the series ended with fewer than MaxRuns real executions.)
+        const int maxRuns = 3;
         var seriesId = await Dispatcher.Dispatch(new RateLimitedHorizonRecurringTask("hr-key"),
-            builder => builder.Schedule().Every(1).Seconds().MaxRuns(4));
+            builder => builder.Schedule().Every(1).Seconds().MaxRuns(maxRuns));
 
+        // Wait until the series has performed all its REAL executions (skips do not shortcut it).
         await TaskWaitHelper.WaitUntilAsync(
             async () => (await Storage.GetAll()).Single(t => t.Id == seriesId),
-            t => t.CurrentRunCount >= 4,
-            timeoutMs: 30000);
+            t => (t.CurrentRunCount ?? 0) >= maxRuns,
+            timeoutMs: 45000);
 
         var series = (await Storage.GetAll()).Single(t => t.Id == seriesId);
         series.Status.ShouldNotBe(QueuedTaskStatus.Failed, "a skipped occurrence must never fail the series");
-        series.CurrentRunCount.ShouldBe(4);
+        series.CurrentRunCount.ShouldBe(maxRuns);
 
-        // With a 3.5 s refill against a 1 s cadence, some occurrences executed and some were
-        // skipped — but every occurrence advanced the series
+        // Every counted run was a REAL execution: the run counter equals the number of executions, with
+        // no skip-inflation. A rate-limited series still gets its full MaxRuns of real executions.
         var executed = _state.TimestampsForKey("hr-key").Length;
-        executed.ShouldBeGreaterThanOrEqualTo(1, "the series keeps executing when budget allows");
-        executed.ShouldBeLessThan(4, "occurrences beyond the horizon are skipped, not executed late");
+        executed.ShouldBe(maxRuns, "MaxRuns counts real executions only — the series runs its full real budget");
     }
 
     [Fact]

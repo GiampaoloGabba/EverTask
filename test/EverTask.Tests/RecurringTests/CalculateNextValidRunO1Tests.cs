@@ -512,22 +512,45 @@ public class CalculateNextValidRunO1Tests
     }
 
     [Fact]
-    public void MaxRuns_Constraint_ReturnsNull()
+    public void MaxRuns_Constraint_ReturnsNull_When_RealRunsReachLimit()
     {
-        // Arrange: Task with MaxRuns = 5, already at run 4
+        // Option B accounting: MaxRuns counts REAL executions. The series stops once the real run count
+        // reaches the limit — NOT because of occurrences skipped during a downtime. Here the real run
+        // count already equals MaxRuns, so no further occurrence is scheduled.
         var task = new RecurringTask
         {
             HourInterval = new HourInterval(1),
             MaxRuns = 5
         };
         var referenceTime = new DateTimeOffset(2026, 1, 10, 12, 0, 0, TimeSpan.Zero);
-        var scheduledTime = referenceTime.AddHours(-10); // Would skip ~10 runs
+        var scheduledTime = referenceTime.AddHours(-10);
 
-        // Act
+        // Act: currentRun == MaxRuns -> exhausted
+        var result = task.CalculateNextValidRun(scheduledTime, 5, referenceTime);
+
+        result.NextRun.ShouldBeNull();
+    }
+
+    [Fact]
+    public void MaxRuns_NotConsumed_By_SkippedOccurrences()
+    {
+        // Option B accounting: occurrences skipped to realign after a downtime do NOT consume the MaxRuns
+        // budget. With the real run count still below MaxRuns, the series continues to a future run even
+        // though ~10 occurrences are skipped (pre-fix: currentRun + skippedCount >= MaxRuns returned null).
+        var task = new RecurringTask
+        {
+            HourInterval = new HourInterval(1),
+            MaxRuns = 5
+        };
+        var referenceTime = new DateTimeOffset(2026, 1, 10, 12, 0, 0, TimeSpan.Zero);
+        var scheduledTime = referenceTime.AddHours(-10); // skips ~10 occurrences
+
+        // Act: only 4 real runs so far, below MaxRuns(5)
         var result = task.CalculateNextValidRun(scheduledTime, 4, referenceTime);
 
-        // Assert: currentRun (4) + skippedCount would exceed MaxRuns (5)
-        result.NextRun.ShouldBeNull();
+        result.NextRun.ShouldNotBeNull();
+        result.NextRun!.Value.ShouldBeGreaterThan(referenceTime);
+        result.SkippedCount.ShouldBeGreaterThan(1); // still reported for logging
     }
 
     [Fact]

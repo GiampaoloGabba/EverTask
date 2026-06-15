@@ -849,11 +849,15 @@ public class RateLimitGateTests
         var scopeFactory = new Mock<IServiceScopeFactory>();
         scopeFactory.Setup(f => f.CreateScope()).Returns(() => provider.CreateScope());
 
+        // The rejection's reserved slot is far in the future (2 h): the next occurrence must SKIP AHEAD
+        // to it rather than being rescheduled one cadence (30 s) later, which would just re-reject.
+        var farSlot = DateTimeOffset.UtcNow.AddHours(2);
+
         var gate = new Mock<IRateLimitGate>();
         gate.SetupSequence(g => g.TryPassAsync(It.IsAny<TaskHandlerExecutor>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new RateLimitGateResult(RateLimitGateOutcome.Proceed))     // delivery pass
             .ReturnsAsync(new RateLimitGateResult(RateLimitGateOutcome.Rejected,     // retry re-acquire
-                DateTimeOffset.UtcNow.AddHours(2), RejectionKind: RateLimitRejectionKind.HorizonExceeded));
+                farSlot, RejectionKind: RateLimitRejectionKind.HorizonExceeded));
 
         var recurring = new RecurringTask { SecondInterval = new SecondInterval(30) };
         var executor = CreateExecutor(Policy(), "k", task: new GateTaskD(),
@@ -871,9 +875,117 @@ public class RateLimitGateTests
             Times.Never, "a rejected retry of a recurring task must never fail the series");
         storage.Verify(s => s.SetQueued(executor.PersistenceId, It.IsAny<AuditLevel>(), It.IsAny<CancellationToken>()),
             Times.Once, "the skipped occurrence returns to Queued like any parked occurrence");
+        // Option B: a skipped occurrence did NOT execute, so it must NOT advance the run counter (it does
+        // not consume the MaxRuns budget — only real executions do).
         storage.Verify(s => s.UpdateCurrentRun(executor.PersistenceId, It.IsAny<double>(),
-                It.IsAny<DateTimeOffset?>(), It.IsAny<AuditLevel>(), It.IsAny<int>()),
-            Times.Once, "the series must advance through the normal next-occurrence path");
+                It.IsAny<DateTimeOffset?>(), It.IsAny<AuditLevel>()),
+            Times.Never, "a skipped occurrence must not consume MaxRuns");
+        // The series still advances its SCHEDULE to the next occurrence (just without counting the skip),
+        // and SKIPS AHEAD to the limiter's reserved slot (~2 h out) instead of grinding occurrence by
+        // occurrence at the 30 s cadence — so a cadence far faster than the refill rate does not churn.
+        // Bound on BOTH sides: it lands at the first 30 s grid point AT/AFTER farSlot, not earlier (would
+        // re-reject) and not far past it (an overshoot bug that still satisfied a >= farSlot check).
+        _scheduler.Verify(s => s.Schedule(It.IsAny<TaskHandlerExecutor>(),
+                It.Is<DateTimeOffset?>(d => d.HasValue && d.Value >= farSlot && d.Value < farSlot.AddSeconds(60))),
+            Times.Once, "the skipped occurrence is rescheduled at the first grid slot at/after the limiter's next available slot");
+    }
+
+    [Fact]
+    public async Task Should_clear_NextRunUtc_when_a_rate_limit_skip_ends_the_recurring_series()
+    {
+        // Bug A: when a rate-limit skip advances the schedule PAST RunUntil the series ends, and the
+        // terminal write must leave a NON-recoverable row. SetCompleted alone leaves NextRunUtc populated,
+        // and QueuedTask.IsRecoverable revives a Completed recurring row while NextRunUtc != null and
+        // RunUntil >= now -> the "finished" series is resurrected on the next restart.
+        var storage = new MemoryTaskStorage(Mock.Of<IEverTaskLogger<MemoryTaskStorage>>());
+
+        var services = new ServiceCollection();
+        services.AddSingleton<ITaskStorage>(storage);
+        services.AddSingleton<IGuidGenerator>(new DefaultGuidGenerator(UUIDNext.Database.Other));
+        await using var provider = services.BuildServiceProvider();
+
+        var scopeFactory = new Mock<IServiceScopeFactory>();
+        scopeFactory.Setup(f => f.CreateScope()).Returns(() => provider.CreateScope());
+
+        // The rejection's reserved slot (2 h out) is past RunUntil (1 min out): skipping ahead to it lands
+        // beyond RunUntil, so CalculateNextValidRun returns null and the series ENDS on the skip path.
+        var now       = DateTimeOffset.UtcNow;
+        var farSlot   = now.AddHours(2);
+        var recurring = new RecurringTask
+        {
+            SecondInterval = new SecondInterval(30),
+            RunUntil       = now.AddMinutes(1)
+        };
+
+        var gate = new Mock<IRateLimitGate>();
+        gate.Setup(g => g.TryPassAsync(It.IsAny<TaskHandlerExecutor>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new RateLimitGateResult(RateLimitGateOutcome.Rejected, farSlot,
+                RejectionKind: RateLimitRejectionKind.HorizonExceeded));
+
+        var executor = CreateExecutor(Policy(), "k", task: new GateTaskD(),
+            recurring: recurring, executionTime: now) with
+        {
+            Handler         = null,
+            HandlerTypeName = typeof(AlwaysFailingRecurringHandler).AssemblyQualifiedName
+        };
+
+        // Persist the row: RunUntil >= now so a Completed-with-NextRunUtc row would be recoverable.
+        var row = executor.ToQueuedTask();
+        row.Status     = QueuedTaskStatus.Queued;
+        row.NextRunUtc = now;
+        row.RunUntil   = recurring.RunUntil;
+        await storage.Persist(row);
+
+        var workerExecutor = CreateWorkerExecutor(scopeFactory, gate);
+        await workerExecutor.DoWork(executor, CancellationToken.None);
+
+        var ended = (await storage.GetAll()).Single(t => t.Id == executor.PersistenceId);
+        ended.Status.ShouldBe(QueuedTaskStatus.Completed, "a series ended by a skip is terminal");
+        ended.NextRunUtc.ShouldBeNull(
+            "a series ended by a rate-limit skip must clear NextRunUtc, else IsRecoverable resurrects it (bug A)");
+        ended.IsRecoverable(DateTimeOffset.UtcNow).ShouldBeFalse(
+            "the terminally skipped series must not be revived by recovery");
+        (ended.CurrentRunCount ?? 0).ShouldBe(0, "a skipped occurrence must not consume MaxRuns (Option B)");
+    }
+
+    [Fact]
+    public async Task Should_not_anchor_skip_ahead_in_the_past_when_gate_returns_a_default_slot()
+    {
+        // I: a misbehaving custom gate that returns default(DateTimeOffset) as SlotUtc must not anchor the
+        // skip-ahead reference in the past. With an OLD ExecutionTime, a MinValue "now" would skip the
+        // forward-realign (every time looks future vs MinValue) and reschedule the occurrence in the PAST —
+        // an immediate re-fire / re-rejection loop. The guard floors it so the series lands on a FUTURE slot.
+        var storage = new MemoryTaskStorage(Mock.Of<IEverTaskLogger<MemoryTaskStorage>>());
+
+        var services = new ServiceCollection();
+        services.AddSingleton<ITaskStorage>(storage);
+        services.AddSingleton<IGuidGenerator>(new DefaultGuidGenerator(UUIDNext.Database.Other));
+        await using var provider = services.BuildServiceProvider();
+
+        var scopeFactory = new Mock<IServiceScopeFactory>();
+        scopeFactory.Setup(f => f.CreateScope()).Returns(() => provider.CreateScope());
+
+        var gate = new Mock<IRateLimitGate>();
+        gate.Setup(g => g.TryPassAsync(It.IsAny<TaskHandlerExecutor>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new RateLimitGateResult(RateLimitGateOutcome.Rejected, default(DateTimeOffset),
+                RejectionKind: RateLimitRejectionKind.HorizonExceeded));
+
+        var recurring = new RecurringTask { SecondInterval = new SecondInterval(30) }; // no RunUntil -> continuing skip
+        var executor = CreateExecutor(Policy(), "k", task: new GateTaskD(),
+            recurring: recurring, executionTime: DateTimeOffset.UtcNow.AddMinutes(-5)) with
+        {
+            Handler         = null,
+            HandlerTypeName = typeof(AlwaysFailingRecurringHandler).AssemblyQualifiedName
+        };
+        await storage.Persist(executor.ToQueuedTask());
+
+        var workerExecutor = CreateWorkerExecutor(scopeFactory, gate);
+        await workerExecutor.DoWork(executor, CancellationToken.None);
+
+        // The series advances to a real FUTURE slot, never DateTimeOffset.MinValue / the past.
+        _scheduler.Verify(s => s.Schedule(It.IsAny<TaskHandlerExecutor>(),
+                It.Is<DateTimeOffset?>(d => d.HasValue && d.Value > DateTimeOffset.UtcNow)),
+            Times.Once, "a default/past slot must not anchor the skip-ahead in the past");
     }
 
     public sealed record GateTaskD : IEverTask;

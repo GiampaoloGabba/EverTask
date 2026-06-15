@@ -93,6 +93,46 @@ public class RecurringAccountingTests
     }
 
     [Fact]
+    public void Should_suppress_the_logging_only_cron_count_walk_on_the_rate_limit_skip_path()
+    {
+        // O: on the rate-limit skip-ahead path (computeSkippedCount=false, `now` = the limiter's far slot)
+        // the LOGGING-ONLY missed-occurrence walk is pure waste — the next run is computed O(1) regardless.
+        // The walk must be suppressed (SkippedCount=0) while the next run stays correct.
+        var task = new RecurringTask { CronInterval = new CronInterval("0 0 9,17 * * *") };
+
+        var scheduledTime = new DateTimeOffset(2025, 1, 6, 9, 0, 0, TimeSpan.Zero);
+        var farSlot       = new DateTimeOffset(2025, 1, 8, 10, 0, 0, TimeSpan.Zero);
+
+        var result = task.CalculateNextValidRun(scheduledTime, currentRun: 1, referenceTime: farSlot,
+            isRecovery: true, computeSkippedCount: false);
+
+        result.SkippedCount.ShouldBe(0, "the logging-only walk is suppressed on the skip-ahead path");
+        // The next run is unaffected: first cron occurrence strictly after the far slot.
+        result.NextRun.ShouldBe(new DateTimeOffset(2025, 1, 8, 17, 0, 0, TimeSpan.Zero));
+    }
+
+    [Fact]
+    public void Should_not_stop_series_for_skipped_occurrences_under_maxruns()
+    {
+        // Option B (f7-f8 tech-debt paydown): occurrences skipped during a downtime must NOT consume the
+        // MaxRuns budget. With currentRun (real executions) still below MaxRuns, the series stays alive
+        // and returns a future occurrence no matter how many occurrences were skipped to realign — the
+        // only MaxRuns gate is on real runs. (Pre-fix: currentRun + skippedCount >= MaxRuns returned null.)
+        var task = new RecurringTask { SecondInterval = new SecondInterval(1), MaxRuns = 3 };
+
+        var baseTime = new DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var now      = baseTime.AddHours(1); // ~3600 occurrences skipped to realign
+
+        var result = task.CalculateNextValidRun(baseTime, currentRun: 1, referenceTime: now);
+
+        // 1 real run < MaxRuns(3): the series must continue with a strictly-future next run.
+        result.NextRun.ShouldNotBeNull();
+        result.NextRun!.Value.ShouldBeGreaterThan(now);
+        // The skip count is still reported (for logging), it just no longer gates MaxRuns.
+        result.SkippedCount.ShouldBeGreaterThan(1);
+    }
+
+    [Fact]
     public void Should_validate_first_occurrence_against_rununtil()
     {
         // CU8: the first occurrence (from RunDelayed/InitialDelay) is returned WITHOUT validating it

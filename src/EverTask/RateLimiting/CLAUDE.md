@@ -65,7 +65,14 @@ first-wins; key per dispatch, fail-safe) and stamped on `TaskHandlerExecutor`
 - Floor a past slot only (`slot <= now → now + PastSlotFloor`); no flat clamp (it would
   overshoot the GCRA slot).
 - Recurring occurrence past `RunUntil` → skipped (never fired late), routed through the normal
-  next-occurrence path (skip counts toward `MaxRuns`, same as downtime).
+  next-occurrence path. A rate-limit-rejected occurrence **does NOT consume the `MaxRuns` budget** —
+  it only advances the schedule, exactly like a downtime skip (`MaxRuns` counts real executions only,
+  Option B). `QueueNextOccourrence(countsAsRun: false)` writes no run-counter/audit (mirroring the
+  deferral's no-storage-write invariant); the series still runs its full `MaxRuns` of real executions.
+  **Skip-ahead**: the rejected occurrence reschedules to the limiter's next available slot
+  (`skipAheadTo: gateResult.SlotUtc`, used as the skip-forward "now") instead of grinding occurrence by
+  occurrence — a cadence far faster than the refill rate re-checks ≈ once per refill interval, not once
+  per occurrence, so it never busy-churns. A correctly-configured series (near slot) barely moves.
 - Set-then-check after `Schedule`: if the invalidation epoch moved, conditional
   `TryUnschedule(id, parked)` + best-effort `ReleaseAsync`.
 

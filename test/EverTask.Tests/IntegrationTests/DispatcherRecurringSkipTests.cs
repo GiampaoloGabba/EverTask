@@ -66,8 +66,9 @@ public class DispatcherRecurringSkipTests : IsolatedIntegrationTestBase
         // Next run should be in the future
         task.NextRunUtc.Value.ShouldBeGreaterThan(DateTimeOffset.UtcNow);
 
-        // Skipped occurrences count toward the run counter (the worker advances it by 1 + SkippedCount);
-        // they are not exposed as a property on QueuedTask, but the task should be scheduled for a future run.
+        // Downtime-skipped occurrences are logged but do NOT count toward the run counter (Option B: the
+        // counter advances by exactly 1 per real execution); they are not exposed as a property on
+        // QueuedTask, but the task should be scheduled for a future run.
     }
 
     [Fact]

@@ -137,7 +137,10 @@ public interface ITaskStorage
     Task<int> GetCurrentRunCount(Guid taskId);
 
     /// <summary>
-    /// Add the current run to the run counter for this task.
+    /// Advances the run counter by exactly one real execution and updates the next run / execution time.
+    /// Occurrences skipped to realign the schedule after a downtime do NOT count toward the counter:
+    /// <c>CurrentRunCount</c> tracks real executions only (== <see cref="QueuedTask.RunsAudits"/> rows),
+    /// so <see cref="QueuedTask.MaxRuns"/> means "run this many times".
     /// </summary>
     /// <param name="taskId">The ID of the task.</param>
     /// <param name="executionTimeMs">The execution time in milliseconds.</param>
@@ -147,32 +150,9 @@ public interface ITaskStorage
     Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel);
 
     /// <summary>
-    /// Advances the run counter by <paramref name="runsToAdvance"/> in a single write, instead of by
-    /// a fixed 1. Used after a downtime so the occurrences skipped while the host was down also count
-    /// toward <c>CurrentRunCount</c> (and therefore toward <see cref="QueuedTask.MaxRuns"/>): the
-    /// recurring stop-check already accounts for skipped occurrences, so the persisted counter must
-    /// stay consistent with it (F7/F8).
-    /// </summary>
-    /// <remarks>
-    /// Default interface member: the built-in providers override it to honour an arbitrary increment;
-    /// custom storages that only implement the single-run
-    /// <see cref="UpdateCurrentRun(Guid,double,DateTimeOffset?,AuditLevel)"/> degrade gracefully to a
-    /// +1 advance (the pre-existing behaviour). <paramref name="runsToAdvance"/> is always &gt;= 1.
-    /// </remarks>
-    /// <param name="taskId">The ID of the task.</param>
-    /// <param name="executionTimeMs">The execution time in milliseconds.</param>
-    /// <param name="nextRun">The next run date.</param>
-    /// <param name="auditLevel">Audit level for this task (determines if audit record should be created).</param>
-    /// <param name="runsToAdvance">How many runs to add to the counter (1 + skipped occurrences).</param>
-    /// <returns>A task representing the asynchronous operation.</returns>
-    Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel,
-                          int runsToAdvance) =>
-        UpdateCurrentRun(taskId, executionTimeMs, nextRun, auditLevel);
-
-    /// <summary>
     /// Marks a recurring occurrence <see cref="QueuedTaskStatus.Completed"/> AND advances the run
     /// counter / next run in a SINGLE atomic operation. The two used to be separate writes
-    /// (<see cref="SetCompleted"/> then <see cref="UpdateCurrentRun(Guid,double,DateTimeOffset?,AuditLevel,int)"/>),
+    /// (<see cref="SetCompleted"/> then <see cref="UpdateCurrentRun(Guid,double,DateTimeOffset?,AuditLevel)"/>),
     /// so a crash between them left the row Completed but not advanced — recovery then re-dispatched the
     /// already-finished occurrence and a MaxRuns-bounded series ran one extra time (CU14/L29).
     /// </summary>
@@ -184,13 +164,45 @@ public interface ITaskStorage
     /// <param name="taskId">The ID of the recurring task.</param>
     /// <param name="executionTimeMs">The execution time in milliseconds.</param>
     /// <param name="nextRun">The next run date (null when the series is exhausted).</param>
-    /// <param name="runsToAdvance">How many runs to add to the counter (1 + skipped occurrences).</param>
     /// <param name="auditLevel">Audit level for this task.</param>
     async Task CompleteRecurringRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
-                                    int runsToAdvance, AuditLevel auditLevel)
+                                    AuditLevel auditLevel)
     {
         await SetCompleted(taskId, executionTimeMs, auditLevel).ConfigureAwait(false);
-        await UpdateCurrentRun(taskId, executionTimeMs, nextRun, auditLevel, runsToAdvance).ConfigureAwait(false);
+        await UpdateCurrentRun(taskId, executionTimeMs, nextRun, auditLevel).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Finalizes a recurring series that ENDED on a skipped occurrence (its next slot fell past
+    /// <see cref="QueuedTask.RunUntil"/>): sets <see cref="QueuedTaskStatus.Completed"/> AND clears
+    /// <see cref="QueuedTask.NextRunUtc"/> in ONE atomic write, WITHOUT advancing the run counter and
+    /// WITHOUT writing a runs-audit row (the skipped occurrence never executed — Option B).
+    /// </summary>
+    /// <remarks>
+    /// A Completed recurring row left with a non-null <see cref="QueuedTask.NextRunUtc"/> stays
+    /// <see cref="QueuedTask.IsRecoverable"/> and is resurrected by recovery while <c>RunUntil &gt;= now</c> —
+    /// so a plain <see cref="SetCompleted"/> here would revive the finished series. This is the terminal
+    /// counterpart of <see cref="CompleteRecurringRun"/> for the no-run skip path.
+    /// <para>
+    /// Default interface member: a non-atomic two-write fallback (<see cref="SetCompleted"/> then clear
+    /// <see cref="QueuedTask.NextRunUtc"/> via <see cref="UpdateTask"/>) for custom storages that have not
+    /// overridden it. Built-in providers override it with a single transactional write.
+    /// </para>
+    /// </remarks>
+    /// <param name="taskId">The ID of the recurring task.</param>
+    /// <param name="executionTimeMs">The execution time in milliseconds.</param>
+    /// <param name="auditLevel">Audit level for this task.</param>
+    async Task SetRecurringSeriesCompleted(Guid taskId, double executionTimeMs, AuditLevel auditLevel)
+    {
+        await SetCompleted(taskId, executionTimeMs, auditLevel).ConfigureAwait(false);
+
+        var rows = await Get(t => t.Id == taskId).ConfigureAwait(false);
+        var row  = rows.Length > 0 ? rows[0] : null;
+        if (row is { NextRunUtc: not null })
+        {
+            row.NextRunUtc = null;
+            await UpdateTask(row).ConfigureAwait(false);
+        }
     }
 
     /// <summary>

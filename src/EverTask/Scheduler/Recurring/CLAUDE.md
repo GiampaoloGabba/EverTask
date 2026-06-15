@@ -40,10 +40,12 @@ Multiple intervals refine each other: Month → Day → Hour → Minute → Seco
 
 ### 5. Stop Conditions
 Tasks auto-stop when:
-- `MaxRuns` reached (`.MaxRuns(10)` stops after 10 executions)
+- `MaxRuns` reached (`.MaxRuns(10)` stops after **10 real executions**)
 - `RunUntil` exceeded (`.RunUntil(endDate)` stops after date)
 
-**Location**: `RecurringTask.CalculateNextRun()` returns `null` to signal termination.
+**Location**: `RecurringTask.CalculateNextRun()` returns `null` to signal termination (the single `MaxRuns` gate, `currentRun >= MaxRuns`).
+
+**`MaxRuns` counts real executions only (Option B accounting).** Occurrences skipped to realign the schedule after a downtime are reported by `CalculateNextValidRun` (`NextRunResult.SkippedCount`) **for logging only** — they do NOT consume the `MaxRuns` budget. So `CurrentRunCount` always equals the number of `RunsAudit` rows, and `UpdateCurrentRun` / `CompleteRecurringRun` advance the counter by exactly 1 per run (there is intentionally no "advance by N" path). Do not reintroduce `currentRun + skippedCount >= MaxRuns` in `RecurringTaskExtensions`.
 
 ### 6. Restart Revival Preserves Stored NextRunUtc
 On startup recovery a recurring task is re-dispatched with `isRecovery: true`. When the stored `NextRunUtc` is still in the **future** it is used **as-is** as the next occurrence — it must NOT be fed to `CalculateNextValidRun` as a bare base time, which computes the occurrence strictly *after* it, skipping one occurrence per restart (and dropping the last occurrence before `RunUntil`). Recalculation (skip-forward) applies only when `NextRunUtc` is in the past. See `Dispatcher.ExecuteDispatch` (recovery branch) and the `RunUntil`/`NextRunUtc`-preservation tests in `QueueResilienceIntegrationTests` / `SqlServerRecoveryIntegrationTests`.

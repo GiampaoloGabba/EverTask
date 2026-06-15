@@ -55,8 +55,15 @@ public class RecurringCompletionAtomicityTests : IsolatedIntegrationTestBase
 
         var row = (await inner.GetAll()).Single(t => t.Id == id);
 
-        // The row must NOT be Completed while the run counter is still un-advanced: completion and the
-        // advance have to be atomic, otherwise recovery resurrects the finished occurrence (CU14/L29).
+        // The atomic CompleteRecurringRun crashed, so NEITHER half may have landed: the row must still be
+        // in its pre-completion InProgress state with the counter un-advanced (not Completed, not advanced)
+        // — a split write that persisted Completed-without-advance would let recovery resurrect the
+        // finished occurrence (CU14/L29). Asserting the exact durable state keeps this from passing
+        // vacuously (e.g. if the row were simply never written).
+        row.Status.ShouldBe(QueuedTaskStatus.InProgress,
+            "the crashed atomic completion must leave the row in its pre-completion InProgress state, not Completed");
+        (row.CurrentRunCount ?? 0).ShouldBe(0, "the run counter must not advance when the completion crashed");
+
         var completedButNotAdvanced = row.Status == QueuedTaskStatus.Completed && (row.CurrentRunCount ?? 0) == 0;
         completedButNotAdvanced.ShouldBeFalse(
             "completion and run-counter advance must be atomic: a crash must not persist Completed without the advance");
@@ -64,19 +71,16 @@ public class RecurringCompletionAtomicityTests : IsolatedIntegrationTestBase
 
     /// <summary>
     /// <see cref="ITaskStorage"/> decorator that simulates a process crash by throwing on the run-counter
-    /// advance writes (the 5-arg <see cref="ITaskStorage.UpdateCurrentRun(Guid,double,DateTimeOffset?,AuditLevel,int)"/>
+    /// advance writes (<see cref="ITaskStorage.UpdateCurrentRun(Guid,double,DateTimeOffset?,AuditLevel)"/>
     /// and <see cref="ITaskStorage.CompleteRecurringRun"/>). Everything else delegates to the inner store.
     /// </summary>
     private sealed class CrashOnAdvanceStorage(MemoryTaskStorage inner) : ITaskStorage
     {
-        public Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel, int runsToAdvance)
-            => throw new InvalidOperationException("simulated crash during run-counter advance");
-
-        public Task CompleteRecurringRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, int runsToAdvance, AuditLevel auditLevel)
+        public Task CompleteRecurringRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel)
             => throw new InvalidOperationException("simulated crash during recurring completion");
 
         public Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel)
-            => inner.UpdateCurrentRun(taskId, executionTimeMs, nextRun, auditLevel);
+            => throw new InvalidOperationException("simulated crash during run-counter advance");
 
         public Task<QueuedTask[]> Get(Expression<Func<QueuedTask, bool>> where, CancellationToken ct = default) => inner.Get(where, ct);
         public Task<QueuedTask[]> GetAll(CancellationToken ct = default) => inner.GetAll(ct);

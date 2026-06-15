@@ -384,18 +384,10 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         }
     }
 
-    public virtual Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel) =>
-        UpdateCurrentRun(taskId, executionTimeMs, nextRun, auditLevel, 1);
-
     public virtual async Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
-                                               AuditLevel auditLevel, int runsToAdvance)
+                                               AuditLevel auditLevel)
     {
         logger.LogInformation("Update the current run counter for Task {taskId}", taskId);
-
-        // Skipped occurrences must count toward the run counter (F7/F8): advance by 1 + skipped, never
-        // below 1.
-        if (runsToAdvance < 1)
-            runsToAdvance = 1;
 
         await using var dbContext = await contextFactory.CreateDbContextAsync();
 
@@ -403,6 +395,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         {
             // Fast path: with AuditLevel.None no audit is ever created and the run counter can be
             // incremented server-side, so the whole update is a single roundtrip with no SELECT.
+            // Advance by exactly one real execution (Option B): skipped occurrences never count.
             if (auditLevel == AuditLevel.None)
             {
                 var rowsAffected = await dbContext.QueuedTasks
@@ -410,7 +403,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                                                   .ExecuteUpdateAsync(setters => setters
                                                                                  .SetProperty(t => t.ExecutionTimeMs, executionTimeMs)
                                                                                  .SetProperty(t => t.NextRunUtc, nextRun)
-                                                                                 .SetProperty(t => t.CurrentRunCount, t => (t.CurrentRunCount ?? 0) + runsToAdvance))
+                                                                                 .SetProperty(t => t.CurrentRunCount, t => (t.CurrentRunCount ?? 0) + 1))
                                                   .ConfigureAwait(false);
 
                 if (rowsAffected == 0)
@@ -446,13 +439,17 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
             task.ExecutionTimeMs = executionTimeMs;
             task.NextRunUtc      = nextRun;
-            task.CurrentRunCount = (task.CurrentRunCount ?? 0) + runsToAdvance;
+            task.CurrentRunCount = (task.CurrentRunCount ?? 0) + 1; // one real execution (Option B)
 
             await dbContext.SaveChangesAsync(CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception e)
         {
+            // Residual D: do NOT swallow. A failed counter persist must propagate so WorkerExecutor does
+            // not advance the schedule on unpersisted state; the recoverable row is re-run instead. The
+            // consumer (WorkerService.ConsumeAsync) catches this defensively and continues with other tasks.
             logger.LogCritical(e, "Update the current run counter for Task for taskId {taskId}", taskId);
+            throw;
         }
     }
 
@@ -464,12 +461,9 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     /// a saved roundtrip — is the priority here.
     /// </summary>
     public virtual async Task CompleteRecurringRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
-                                                   int runsToAdvance, AuditLevel auditLevel)
+                                                   AuditLevel auditLevel)
     {
         logger.LogInformation("Complete recurring run for Task {taskId}", taskId);
-
-        if (runsToAdvance < 1)
-            runsToAdvance = 1;
 
         await using var dbContext = await contextFactory.CreateDbContextAsync();
 
@@ -518,13 +512,75 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             task.LastExecutionUtc = now;
             task.ExecutionTimeMs  = executionTimeMs;
             task.NextRunUtc       = nextRun;
-            task.CurrentRunCount  = (task.CurrentRunCount ?? 0) + runsToAdvance;
+            task.CurrentRunCount  = (task.CurrentRunCount ?? 0) + 1; // one real execution (Option B)
 
             await dbContext.SaveChangesAsync(CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception e)
         {
+            // Residual D: propagate (do not swallow) so a failed completion does not advance the schedule
+            // on unpersisted state — the row stays recoverable (the transaction rolled back) and is re-run.
             logger.LogCritical(e, "Unable to complete recurring run for taskId {taskId}", taskId);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Finalizes a recurring series that ended on a SKIPPED occurrence (next slot past RunUntil): sets
+    /// Completed AND clears <see cref="QueuedTask.NextRunUtc"/> in ONE tracked SaveChanges, WITHOUT
+    /// advancing the run counter and WITHOUT a runs-audit row — the skipped occurrence never executed
+    /// (Option B). Clearing NextRunUtc is what keeps the terminal row out of
+    /// <see cref="QueuedTask.IsRecoverable"/>. Inherited unchanged by Sqlite and SQL Server (the
+    /// counter/next-run procs are not involved here — this is a once-per-series terminal write).
+    /// </summary>
+    public virtual async Task SetRecurringSeriesCompleted(Guid taskId, double executionTimeMs, AuditLevel auditLevel)
+    {
+        logger.LogInformation("Finalize recurring series (terminal skip) for Task {taskId}", taskId);
+
+        await using var dbContext = await contextFactory.CreateDbContextAsync();
+
+        try
+        {
+            var task = await dbContext.QueuedTasks
+                                      .Where(x => x.Id == taskId)
+                                      .FirstOrDefaultAsync()
+                                      .ConfigureAwait(false);
+
+            if (task == null)
+            {
+                logger.LogWarning("Task {taskId} not found for recurring series completion", taskId);
+                return;
+            }
+
+            var now = UtcNowNormalized;
+
+            // Status audit (when the level audits a Completed) + the status transition + the NextRunUtc
+            // clear flush in ONE SaveChanges. No runs audit and no counter advance: the occurrence was
+            // skipped, not executed (Option B).
+            if (AuditPolicy.ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Completed, null))
+            {
+                dbContext.StatusAudit.Add(new StatusAudit
+                {
+                    QueuedTaskId = taskId,
+                    UpdatedAtUtc = now,
+                    NewStatus    = QueuedTaskStatus.Completed,
+                    Exception    = null
+                });
+            }
+
+            task.Status           = QueuedTaskStatus.Completed;
+            task.Exception        = null;
+            task.LastExecutionUtc = now;
+            task.ExecutionTimeMs  = executionTimeMs;
+            task.NextRunUtc       = null;
+
+            await dbContext.SaveChangesAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception e)
+        {
+            // Residual D: propagate so a failed finalize does not advance the schedule on unpersisted state.
+            logger.LogCritical(e, "Unable to finalize recurring series for taskId {taskId}", taskId);
+            throw;
         }
     }
 

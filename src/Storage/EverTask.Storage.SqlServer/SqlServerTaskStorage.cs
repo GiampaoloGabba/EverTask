@@ -69,24 +69,19 @@ public class SqlServerTaskStorage : EfCoreTaskStorage
     /// RunsAudit insert (if required by AuditLevel) in a single atomic database roundtrip.
     /// </summary>
     /// <remarks>
-    /// <paramref name="runsToAdvance"/> (1 + occurrences skipped during a downtime) is passed straight
-    /// to the proc's <c>@RunsToAdvance</c> parameter so skipped occurrences count toward
-    /// CurrentRunCount/MaxRuns (F7/F8) without leaving the single-roundtrip path.
+    /// The proc advances <c>CurrentRunCount</c> by exactly one real execution: occurrences skipped to
+    /// realign the schedule after a downtime do NOT consume the MaxRuns budget (Option B accounting).
     /// </remarks>
     public override async Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
-                                                AuditLevel auditLevel, int runsToAdvance)
+                                                AuditLevel auditLevel)
     {
-        // Skipped occurrences must count toward the run counter; never advance by less than 1.
-        if (runsToAdvance < 1)
-            runsToAdvance = 1;
-
         _logger.LogInformation("Update the current run counter for Task {TaskId} using SQL Server stored procedure", taskId);
 
         await using var dbContext = await _contextFactory.CreateDbContextAsync();
 
         try
         {
-            var sql = $"EXEC [{_schema}].[usp_UpdateCurrentRun] @TaskId, @ExecutionTimeMs, @NextRunUtc, @AuditLevel, @RunsToAdvance";
+            var sql = $"EXEC [{_schema}].[usp_UpdateCurrentRun] @TaskId, @ExecutionTimeMs, @NextRunUtc, @AuditLevel";
 
             await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(
                 sql,
@@ -94,14 +89,16 @@ public class SqlServerTaskStorage : EfCoreTaskStorage
                     new SqlParameter("@TaskId", taskId),
                     new SqlParameter("@ExecutionTimeMs", executionTimeMs),
                     new SqlParameter("@NextRunUtc", (object?)nextRun ?? DBNull.Value),
-                    new SqlParameter("@AuditLevel", (int)auditLevel),
-                    new SqlParameter("@RunsToAdvance", runsToAdvance)
+                    new SqlParameter("@AuditLevel", (int)auditLevel)
                 ]
             ).ConfigureAwait(false);
         }
         catch (Exception e)
         {
+            // Residual D: propagate (do not swallow) so a failed counter persist does not advance the
+            // schedule on unpersisted state; the recoverable row is re-run instead.
             _logger.LogCritical(e, "Update the current run counter for Task for taskId {TaskId}", taskId);
+            throw;
         }
     }
 }

@@ -437,6 +437,65 @@ public class QueueResilienceIntegrationTests : IsolatedIntegrationTestBase
     }
 
     [Fact]
+    public async Task Should_finalize_exhausted_recurring_series_on_recovery_instead_of_throwing()
+    {
+        // Bug B: on recovery, when the next occurrence of a RunUntil-bounded series falls past RunUntil,
+        // CalculateNextValidRun returns null. The Dispatcher used to THROW ArgumentException for this
+        // (a legitimate end-of-series), turning a normal exhaustion into a recovery error — and, combined
+        // with bug A's stale NextRunUtc, a per-restart poison. It must finalize the row terminally
+        // (Completed, NextRunUtc cleared) and NOT re-dispatch it.
+        await CreateIsolatedHostWithBuilderAsync(b =>
+            {
+                b.AddMemoryStorage();
+                b.Services.AddSingleton(_state);
+            },
+            startHost: false);
+
+        var now       = DateTimeOffset.UtcNow;
+        var recurring = new RecurringTask
+        {
+            // grace window is one interval (120 s); the next occurrence (~now+60 s) exceeds RunUntil.
+            SecondInterval = new SecondInterval(120),
+            RunUntil       = now.AddSeconds(20)   // >= now (recoverable) but before the next occurrence
+        };
+
+        var seeded = new QueuedTask
+        {
+            Id              = Guid.NewGuid(),
+            Type            = typeof(ResilienceRecurringTask).AssemblyQualifiedName!,
+            Request         = JsonConvert.SerializeObject(new ResilienceRecurringTask()),
+            Handler         = "seeded-by-test",
+            Status          = QueuedTaskStatus.Completed,   // recurring task between runs
+            IsRecurring     = true,
+            RecurringTask   = JsonConvert.SerializeObject(recurring),
+            NextRunUtc      = now.AddMinutes(-5),            // well in the past (beyond the grace window)
+            RunUntil        = recurring.RunUntil,
+            CurrentRunCount = 1,
+            CreatedAtUtc    = now.AddMinutes(-10)
+        };
+        await Storage.Persist(seeded);
+
+        var dispatcherInternal = Host!.Services.GetRequiredService<ITaskDispatcherInternal>();
+
+        // The recovery re-dispatch must NOT throw (it used to throw ArgumentException at Dispatcher.cs:308).
+        var ex = await Record.ExceptionAsync(() => dispatcherInternal.ExecuteDispatch(
+            new ResilienceRecurringTask(),
+            seeded.NextRunUtc,            // executionTime = stored NextRunUtc (recovery semantics)
+            recurring,
+            seeded.CurrentRunCount,
+            CancellationToken.None,
+            seeded.Id,
+            isRecovery: true));
+
+        ex.ShouldBeNull("an exhausted RunUntil-bounded series must be finalized on recovery, not throw (bug B)");
+
+        var row = (await Storage.GetAll()).Single(t => t.Id == seeded.Id);
+        row.Status.ShouldBe(QueuedTaskStatus.Completed, "the exhausted series is finalized as Completed");
+        row.NextRunUtc.ShouldBeNull("the finalized series must clear NextRunUtc so recovery does not revive it");
+        row.IsRecoverable(DateTimeOffset.UtcNow).ShouldBeFalse("the finalized series must not be recoverable");
+    }
+
+    [Fact]
     public async Task Should_execute_pending_occurrence_in_recent_past_on_recovery()
     {
         // L16: a recurring occurrence whose scheduled time slipped just into the past (a short downtime

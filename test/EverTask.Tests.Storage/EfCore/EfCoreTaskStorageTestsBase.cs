@@ -380,35 +380,76 @@ public abstract class EfCoreTaskStorageTestsBase
     }
 
     [Fact]
-    public async Task UpdateCurrentRun_Should_advance_counter_by_runsToAdvance_with_audit()
+    public async Task UpdateCurrentRun_Should_advance_counter_by_one_per_real_execution()
     {
-        // F7/F8: occurrences skipped during downtime must count toward CurrentRunCount, so the
-        // overload advances the counter by 1 + skipped (here 5) in ONE write (tracked path, audited).
-        // On SQL Server this is the path the stored procedure delegates to the base implementation for.
+        // Option B accounting (f7-f8 tech-debt paydown): each call advances CurrentRunCount by exactly
+        // one real execution. Occurrences skipped to realign the schedule after a downtime never inflate
+        // the counter, so CurrentRunCount tracks real executions only. Audited tracked path here, fast
+        // ExecuteUpdate path below.
         var queued = QueuedTasks[0];
         await _storage.Persist(queued);
         var taskId  = queued.Id;
         var nextRun = DateTimeOffset.UtcNow.AddDays(1);
 
-        await _storage.UpdateCurrentRun(taskId, 100.0, nextRun, AuditLevel.Full, runsToAdvance: 5);
+        await _storage.UpdateCurrentRun(taskId, 100.0, nextRun, AuditLevel.Full);
+        await _storage.UpdateCurrentRun(taskId, 100.0, nextRun, AuditLevel.Full);
+        await _storage.UpdateCurrentRun(taskId, 100.0, nextRun, AuditLevel.Full);
 
         var task = await _storage.Get(x => x.Id == taskId);
-        task[0].CurrentRunCount.ShouldBe(5);
+        task[0].CurrentRunCount.ShouldBe(3);
         task[0].NextRunUtc.ShouldBe(nextRun);
     }
 
     [Fact]
-    public async Task UpdateCurrentRun_Should_advance_counter_by_runsToAdvance_without_audit()
+    public async Task UpdateCurrentRun_Should_advance_counter_by_one_on_none_fastpath()
     {
-        // Same accounting on the AuditLevel.None server-side fast path (ExecuteUpdate, no SELECT).
+        // Option B accounting on the AuditLevel.None server-side fast path (ExecuteUpdate, no SELECT):
+        // exactly +1 per call.
         var queued = QueuedTasks[0];
         await _storage.Persist(queued);
         var taskId = queued.Id;
 
-        await _storage.UpdateCurrentRun(taskId, 100.0, null, AuditLevel.None, runsToAdvance: 4);
+        await _storage.UpdateCurrentRun(taskId, 100.0, null, AuditLevel.None);
+        await _storage.UpdateCurrentRun(taskId, 100.0, null, AuditLevel.None);
 
         var task = await _storage.Get(x => x.Id == taskId);
-        task[0].CurrentRunCount.ShouldBe(4);
+        task[0].CurrentRunCount.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task SetRecurringSeriesCompleted_should_complete_and_clear_NextRunUtc_without_advancing_counter()
+    {
+        // Fix for bug A: a recurring series that ENDS on a skipped occurrence (next slot past RunUntil) must
+        // be finalized so recovery cannot resurrect it — Completed AND NextRunUtc cleared — WITHOUT counting
+        // the skip: no CurrentRunCount advance and no RunsAudit row (the occurrence never executed, Option B).
+        var now  = DateTimeOffset.UtcNow;
+        var task = new QueuedTask
+        {
+            Id              = GetGuidForProvider(),
+            CreatedAtUtc    = now,
+            Type            = "RecSkipEnd", Request = "{}", Handler = "H",
+            Status          = QueuedTaskStatus.Queued,
+            IsRecurring     = true,
+            NextRunUtc      = now.AddMinutes(5),
+            RunUntil        = now.AddMinutes(10),   // >= now: a Completed row with NextRunUtc would be recoverable
+            MaxRuns         = 10,
+            CurrentRunCount = 2
+        };
+        await _storage.Persist(task);
+
+        await _storage.SetRecurringSeriesCompleted(task.Id, 123.0, AuditLevel.Full);
+
+        var row = (await _storage.Get(x => x.Id == task.Id))[0];
+        row.Status.ShouldBe(QueuedTaskStatus.Completed, "the ended series is terminal");
+        row.NextRunUtc.ShouldBeNull("NextRunUtc must be cleared so recovery cannot resurrect the ended series");
+        row.CurrentRunCount.ShouldBe(2, "a skipped occurrence must NOT advance the run counter (Option B)");
+
+        _mockedDbContext.RunsAudit.Count(x => x.QueuedTaskId == task.Id)
+            .ShouldBe(0, "a skipped occurrence never executed: no runs-audit row is written");
+
+        // The finalized row must no longer be recoverable (NextRunUtc cleared).
+        (await _storage.TrySetQueuedIfRecoverable(task.Id, AuditLevel.Full))
+            .ShouldBeFalse("a finalized (NextRunUtc-cleared) series must not be revived by recovery");
     }
 
     [Fact]
@@ -440,13 +481,44 @@ public abstract class EfCoreTaskStorageTestsBase
         var taskId  = queued.Id;
         var nextRun = DateTimeOffset.UtcNow.AddMinutes(30);
 
-        await _storage.CompleteRecurringRun(taskId, 75.0, nextRun, runsToAdvance: 2, AuditLevel.Full);
+        await _storage.CompleteRecurringRun(taskId, 75.0, nextRun, AuditLevel.Full);
 
         var task = (await _storage.Get(x => x.Id == taskId))[0];
         task.Status.ShouldBe(QueuedTaskStatus.Completed);
-        task.CurrentRunCount.ShouldBe(2);
+        task.CurrentRunCount.ShouldBe(1); // one real execution (Option B)
         task.NextRunUtc.ShouldBe(nextRun);
         task.ExecutionTimeMs.ShouldBe(75.0);
+    }
+
+    [Fact]
+    public async Task CurrentRunCount_Should_equal_RunsAudit_rows_across_real_executions()
+    {
+        // Option B headline invariant (f7-f8 tech-debt paydown): CurrentRunCount tracks REAL executions
+        // only, so it always equals the number of RunsAudit rows — no skip-inflated divergence. Audited
+        // runs here (AuditLevel.Full writes one RunsAudit per advance).
+        var taskId = GetGuidForProvider();
+        await _storage.Persist(new QueuedTask
+        {
+            Id              = taskId,
+            Type            = "TestTask",
+            Request         = "{}",
+            Handler         = "TestHandler",
+            CreatedAtUtc    = DateTimeOffset.UtcNow,
+            Status          = QueuedTaskStatus.Completed,
+            IsRecurring     = true,
+            CurrentRunCount = 0
+        });
+
+        var nextRun = DateTimeOffset.UtcNow.AddHours(1);
+        for (var i = 0; i < 4; i++)
+            await _storage.UpdateCurrentRun(taskId, 100.0, nextRun, AuditLevel.Full);
+
+        var task      = (await _storage.Get(x => x.Id == taskId))[0];
+        var runsCount = _mockedDbContext.RunsAudit.Count(x => x.QueuedTaskId == taskId);
+
+        task.CurrentRunCount.ShouldBe(4);
+        runsCount.ShouldBe(4);
+        task.CurrentRunCount!.Value.ShouldBe(runsCount, "CurrentRunCount must equal the RunsAudit row count");
     }
 
     [Fact]

@@ -231,6 +231,13 @@ public class WorkerExecutor(
         // status AND the run-counter / next-run advance atomically (CU14/L29) instead of just advancing.
         var recurringRunCompleted = false;
 
+        // Set (to the limiter's next available slot) when a RECURRING occurrence was SKIPPED without
+        // executing (rate-limit horizon rejection): the finally then advances the schedule but does NOT
+        // count it toward MaxRuns — only real executions consume the budget (a failed run still counts; a
+        // skipped one does not). Presence of the slot IS the "was skipped" signal, and the skip-forward
+        // jumps to it instead of grinding occurrence by occurrence (skip-ahead).
+        DateTimeOffset? skippedOccurrenceSlot = null;
+
         try
         {
             serviceToken.ThrowIfCancellationRequested();
@@ -329,6 +336,9 @@ public class WorkerExecutor(
                     if (taskStorage != null)
                         await taskStorage.SetQueued(task.PersistenceId, task.AuditLevel, serviceToken).ConfigureAwait(false);
 
+                    // Skipped occurrence: the finally must advance the schedule WITHOUT consuming MaxRuns,
+                    // skipping ahead to the limiter's next available slot.
+                    skippedOccurrenceSlot = rejection.SlotUtc;
                     return;
                 }
 
@@ -418,7 +428,8 @@ public class WorkerExecutor(
             // A rate-limit deferral must NOT schedule the next recurring occurrence: the
             // CURRENT occurrence is still parked in the scheduler (run-count integrity)
             if (!rateLimitDeferred)
-                await QueueNextOccourrence(task, executionTime, taskStorage, markCompleted: recurringRunCompleted);
+                await QueueNextOccourrence(task, executionTime, taskStorage, markCompleted: recurringRunCompleted,
+                                           countsAsRun: skippedOccurrenceSlot == null, skipAheadTo: skippedOccurrenceSlot);
         }
     }
 
@@ -478,8 +489,9 @@ public class WorkerExecutor(
     /// only mandatory storage write of the design, otherwise the task would stay Queued and be
     /// re-rejected at every restart — with the typed <see cref="RateLimitRejectedException"/>
     /// delivered to the handler's OnError. Recurring tasks skip the occurrence through the
-    /// normal next-occurrence path (the skip counts toward MaxRuns, same semantics as
-    /// downtime); the series stays alive and no callback is invoked.
+    /// normal next-occurrence path WITHOUT consuming the MaxRuns budget: the occurrence did not
+    /// execute, so it only advances the schedule (like a downtime skip) — MaxRuns counts real
+    /// executions only. The series stays alive and no callback is invoked.
     /// </summary>
     private async ValueTask HandleRateLimitRejectionAsync(TaskHandlerExecutor task, RateLimitGateResult gateResult,
                                                           CancellationToken serviceToken)
@@ -495,7 +507,10 @@ public class WorkerExecutor(
                 "Rate limit skipped occurrence of recurring task {0} (key {1}): the series stays alive.",
                 task.PersistenceId, task.RateLimitKey!);
 
-            await QueueNextOccourrence(task, 0, taskStorage).ConfigureAwait(false);
+            // Skipped occurrence: advance the schedule without consuming the MaxRuns budget, skipping
+            // ahead to the limiter's next available slot instead of grinding occurrence by occurrence.
+            await QueueNextOccourrence(task, 0, taskStorage, countsAsRun: false, skipAheadTo: gateResult.SlotUtc)
+                .ConfigureAwait(false);
             return;
         }
 
@@ -907,7 +922,8 @@ public class WorkerExecutor(
             : ex;
 
     private async Task QueueNextOccourrence(TaskHandlerExecutor task, double executionTimeMs, ITaskStorage? taskStorage,
-                                            bool markCompleted = false)
+                                            bool markCompleted = false, bool countsAsRun = true,
+                                            DateTimeOffset? skipAheadTo = null)
     {
         if (task.RecurringTask == null) return;
 
@@ -924,9 +940,13 @@ public class WorkerExecutor(
             return;
         }
 
+        // N: a SINGLE storage read serves both the Cancelled-status guard and the run counter below —
+        // the durable row carries CurrentRunCount, so a separate GetCurrentRunCount round-trip (loading the
+        // same row a second time) is redundant.
+        QueuedTask? current = null;
         if (taskStorage != null)
         {
-            var current = (await taskStorage.Get(t => t.Id == task.PersistenceId).ConfigureAwait(false)).FirstOrDefault();
+            current = (await taskStorage.Get(t => t.Id == task.PersistenceId).ConfigureAwait(false)).FirstOrDefault();
             if (current?.Status == QueuedTaskStatus.Cancelled)
             {
                 logger.LogInformation(
@@ -936,10 +956,11 @@ public class WorkerExecutor(
             }
         }
 
-        // Run counter source: storage when present, otherwise an in-memory counter so the series keeps
-        // running and still honors MaxRuns/RunUntil without persistence (F18).
+        // Run counter source: the row already read from storage when present (no second round-trip),
+        // otherwise an in-memory counter so the series keeps running and still honors MaxRuns/RunUntil
+        // without persistence (F18).
         var currentRun = taskStorage != null
-            ? await taskStorage.GetCurrentRunCount(task.PersistenceId).ConfigureAwait(false)
+            ? current?.CurrentRunCount ?? 0
             : _inMemoryRunCounts.GetValueOrDefault(task.PersistenceId);
 
         // Fix for schedule drift: Use the scheduled execution time as base for next calculation,
@@ -953,8 +974,35 @@ public class WorkerExecutor(
         //   (set in WorkerService.cs when loading pending tasks)
         var scheduledTime = task.ExecutionTime ?? DateTimeOffset.UtcNow;
 
-        // Use extension method to calculate next valid run and get skip information
-        var result = task.RecurringTask.CalculateNextValidRun(scheduledTime, currentRun + 1);
+        // Compute the next occurrence. A real execution (countsAsRun) advances the run number to
+        // currentRun + 1 so the MaxRuns gate stops the series once MaxRuns real executions have happened.
+        // A SKIPPED occurrence (rate-limit horizon rejection — countsAsRun == false) did not execute, so
+        // it keeps the run number at currentRun: the MaxRuns gate counts only real executions, and the
+        // skip never shortens the series (even the would-be MaxRuns-th occurrence is rescheduled for a
+        // real run). isRecovery: true on the skip path only suppresses re-applying the first-run config
+        // (InitialDelay/RunNow) when currentRun == 0 — the occurrence's time was already decided.
+        //
+        // skipAheadTo (the rate limiter's next available slot, only set on a horizon rejection): the
+        // skip-forward jumps straight to the first occurrence at/after that slot — i.e. when the series
+        // can actually run again — instead of grinding occurrence-by-occurrence and re-rejecting each one.
+        // For a cadence far faster than the limiter's refill rate this collapses thousands of doomed
+        // re-evaluations into one, while a correctly-configured series (near slot) barely moves. Passed as
+        // the "now" reference of the skip-forward; null falls back to the actual now (next occurrence).
+        // A real execution advances the run number to currentRun + 1 (so the MaxRuns gate stops the
+        // series after MaxRuns real runs); a skip keeps it at currentRun and suppresses the first-run
+        // config (isRecovery) — the occurrence's time was already decided — while jumping the "now"
+        // reference to skipAheadTo.
+        // I: defend against a misbehaving custom IRateLimitGate that returns a default/past SlotUtc — never
+        // anchor the skip-ahead reference in the past (a MinValue/past `now` would make every occurrence look
+        // "in the future" and defeat the skip). Floor to the real now by dropping it (the built-in gate's
+        // PastSlotFloor already guarantees a future slot; this only hardens the public extension point).
+        if (skipAheadTo.HasValue && skipAheadTo.Value <= DateTimeOffset.UtcNow)
+            skipAheadTo = null;
+
+        var runNumber = countsAsRun ? currentRun + 1 : currentRun;
+        var result    = task.RecurringTask.CalculateNextValidRun(
+            scheduledTime, runNumber, referenceTime: countsAsRun ? null : skipAheadTo, isRecovery: !countsAsRun,
+            computeSkippedCount: countsAsRun);
 
         // Log skipped occurrences if any
         if (result.SkippedCount > 0)
@@ -964,28 +1012,33 @@ public class WorkerExecutor(
                 task.PersistenceId, result.SkippedCount);
         }
 
-        // Advance the run counter by THIS run plus every occurrence skipped during downtime: the
-        // recurring stop-check already accounts for skipped occurrences (currentRun + skippedCount
-        // >= MaxRuns), so the counter must stay consistent with it (F7/F8). Persistence is gated on
-        // storage; without storage only the in-memory counter advances.
-        var advance = 1 + result.SkippedCount;
-        if (taskStorage != null)
+        // Advance the run counter by exactly ONE real execution. Occurrences skipped during a downtime
+        // realign the schedule and are logged above, but they do NOT consume the MaxRuns budget: the
+        // counter tracks real executions only (CurrentRunCount == RunsAudit rows), so MaxRuns means
+        // "run this many times" (Option B accounting). Persistence is gated on storage; without storage
+        // only the in-memory counter advances.
+        //
+        // A rate-limit-rejected occurrence (countsAsRun == false) did NOT execute: it advances the
+        // schedule only and writes nothing to the run counter (mirroring the deferral's no-storage-write
+        // invariant — the status was already set Queued by the caller). A failed run still counts.
+        if (countsAsRun)
         {
-            // On a successful run the Completed status is written in the SAME atomic operation as the
-            // advance (CU14/L29); otherwise (failure/rejection) the status was already set and we only
-            // advance.
-            if (markCompleted)
-                await taskStorage.CompleteRecurringRun(task.PersistenceId, executionTimeMs, result.NextRun,
-                                                       advance, task.AuditLevel)
-                                 .ConfigureAwait(false);
+            if (taskStorage != null)
+            {
+                // On a successful run the Completed status is written in the SAME atomic operation as the
+                // advance (CU14/L29); otherwise (failure) the status was already set and we only advance.
+                if (markCompleted)
+                    await taskStorage.CompleteRecurringRun(task.PersistenceId, executionTimeMs, result.NextRun,
+                                                           task.AuditLevel)
+                                     .ConfigureAwait(false);
+                else
+                    await taskStorage.UpdateCurrentRun(task.PersistenceId, executionTimeMs, result.NextRun, task.AuditLevel)
+                                     .ConfigureAwait(false);
+            }
             else
-                await taskStorage.UpdateCurrentRun(task.PersistenceId, executionTimeMs, result.NextRun, task.AuditLevel,
-                                                   advance)
-                                 .ConfigureAwait(false);
-        }
-        else
-        {
-            _inMemoryRunCounts[task.PersistenceId] = currentRun + advance;
+            {
+                _inMemoryRunCounts[task.PersistenceId] = currentRun + 1;
+            }
         }
 
         if (result.NextRun.HasValue)
@@ -1003,6 +1056,18 @@ public class WorkerExecutor(
         {
             // Series ended (MaxRuns/RunUntil reached): drop the in-memory counter, if any.
             _inMemoryRunCounts.TryRemove(task.PersistenceId, out _);
+
+            // A series that ends on the SKIP path (its next limiter slot is past RunUntil) wrote nothing
+            // above, so without this it would linger in a non-terminal Queued status forever. Persist a
+            // terminal Completed AND clear NextRunUtc — mirroring how the counted paths end via
+            // CompleteRecurringRun/UpdateCurrentRun with a null next run. A plain SetCompleted would leave
+            // NextRunUtc populated, and a Completed recurring row with NextRunUtc != null is revived by
+            // QueuedTask.IsRecoverable while RunUntil >= now — recovery would resurrect the finished
+            // series. SetRecurringSeriesCompleted does both atomically WITHOUT counting the skip (Option B).
+            // Only the series-END writes here; a skip that continues still writes nothing (no-storage-write skip).
+            if (!countsAsRun && taskStorage != null)
+                await taskStorage.SetRecurringSeriesCompleted(task.PersistenceId, executionTimeMs, task.AuditLevel)
+                                 .ConfigureAwait(false);
         }
     }
 

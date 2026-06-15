@@ -224,18 +224,9 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         return Task.CompletedTask;
     }
 
-    public Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel) =>
-        UpdateCurrentRun(taskId, executionTimeMs, nextRun, auditLevel, 1);
-
-    public Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel,
-                                 int runsToAdvance)
+    public Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel)
     {
         logger.LogInformation("Update the current run counter for Task {taskId}", taskId);
-
-        // Skipped occurrences must count toward the run counter (F7/F8): advance by 1 + skipped,
-        // never below 1.
-        if (runsToAdvance < 1)
-            runsToAdvance = 1;
 
         lock (_pendingTasksLock)
         {
@@ -259,9 +250,9 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
 
                 task.ExecutionTimeMs = executionTimeMs;
                 task.NextRunUtc      = nextRun;
-                var currentRun       = task.CurrentRunCount ?? 0;
 
-                task.CurrentRunCount = currentRun + runsToAdvance;
+                // Advance by exactly one real execution (Option B): skipped occurrences never count.
+                task.CurrentRunCount = (task.CurrentRunCount ?? 0) + 1;
             }
         }
 
@@ -270,12 +261,9 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
 
     /// <inheritdoc />
     public Task CompleteRecurringRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
-                                     int runsToAdvance, AuditLevel auditLevel)
+                                     AuditLevel auditLevel)
     {
         logger.LogInformation("Complete recurring run for Task {taskId}", taskId);
-
-        if (runsToAdvance < 1)
-            runsToAdvance = 1;
 
         lock (_pendingTasksLock)
         {
@@ -316,7 +304,44 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
             task.LastExecutionUtc = now;
             task.ExecutionTimeMs  = executionTimeMs;
             task.NextRunUtc       = nextRun;
-            task.CurrentRunCount  = (task.CurrentRunCount ?? 0) + runsToAdvance;
+            task.CurrentRunCount  = (task.CurrentRunCount ?? 0) + 1; // one real execution (Option B)
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task SetRecurringSeriesCompleted(Guid taskId, double executionTimeMs, AuditLevel auditLevel)
+    {
+        logger.LogInformation("Finalize recurring series (terminal skip) for Task {taskId}", taskId);
+
+        lock (_pendingTasksLock)
+        {
+            var task = _pendingTasks.FirstOrDefault(x => x.Id == taskId);
+            if (task == null)
+                return Task.CompletedTask;
+
+            var now = DateTimeOffset.UtcNow;
+
+            // Status -> Completed (+ status audit) AND NextRunUtc cleared together under the store lock.
+            // NO run-counter advance and NO runs audit: the skipped occurrence never executed (Option B).
+            // Clearing NextRunUtc is what keeps the terminal row out of IsRecoverable (a Completed recurring
+            // row with NextRunUtc != null is resurrected by recovery).
+            if (AuditPolicy.ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Completed, null))
+            {
+                task.StatusAudits.Add(new StatusAudit
+                {
+                    QueuedTaskId = taskId,
+                    UpdatedAtUtc = now,
+                    NewStatus    = QueuedTaskStatus.Completed,
+                    Exception    = null
+                });
+            }
+
+            task.Status           = QueuedTaskStatus.Completed;
+            task.Exception        = null;
+            task.LastExecutionUtc = now;
+            task.ExecutionTimeMs  = executionTimeMs;
+            task.NextRunUtc       = null;
         }
 
         return Task.CompletedTask;

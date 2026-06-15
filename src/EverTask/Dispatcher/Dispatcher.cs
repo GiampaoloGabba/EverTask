@@ -306,7 +306,24 @@ public class Dispatcher(
                         isRecovery: isRecovery);
 
                     if (result.NextRun == null)
-                        throw new ArgumentException("Invalid scheduler recurring expression", nameof(recurring));
+                    {
+                        // A legitimately exhausted series: every remaining occurrence falls past RunUntil,
+                        // so there is nothing left to run. Finalize the recovered row terminally (Completed,
+                        // NextRunUtc cleared, no extra run counted) and do NOT re-dispatch. Throwing here
+                        // would turn a normal end-of-series into a recovery error — and, combined with a
+                        // stale NextRunUtc, a per-restart poison (the row keeps coming back recoverable).
+                        // Fail-fast on a genuinely malformed expression stays on the new-task path below.
+                        logger.LogInformation(
+                            "Recovery: recurring task {TaskId} has no occurrence left before RunUntil; finalizing the series as completed.",
+                            existingTaskId);
+
+                        if (taskStorage != null && existingTaskId.HasValue)
+                            await taskStorage.SetRecurringSeriesCompleted(
+                                existingTaskId.Value, 0, auditLevel ?? serviceConfiguration.DefaultAuditLevel)
+                                .ConfigureAwait(false);
+
+                        return existingTaskId ?? Guid.Empty;
+                    }
 
                     nextRun = result.NextRun;
                     executionTime = nextRun;

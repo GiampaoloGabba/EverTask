@@ -32,7 +32,7 @@ Core implementation: dispatcher, worker executor, scheduler, in-memory storage.
 Monitoring events (`TaskEventOccurredAsync`) published fire-and-forget to prevent monitoring failures from blocking execution.
 
 ### Recurring Auto-Rescheduling
-After recurring task completes, `WorkerExecutor` auto-calculates next run and updates storage. Stops when `MaxRuns` reached or `RunUntil` exceeded.
+After recurring task completes, `WorkerExecutor` auto-calculates next run and updates storage. Stops when `MaxRuns` reached or `RunUntil` exceeded. **`MaxRuns` counts real executions only**: occurrences skipped to realign after a downtime are logged but do not consume the budget, so `CurrentRunCount` == `RunsAudit` rows and the counter advances by exactly 1 per run (see `Scheduler/Recurring/CLAUDE.md`).
 
 ### Blacklist for Cancelled Tasks
 `ITaskDispatcher.Cancel(Guid)` adds to blacklist (TTL-swept: entries lapse after ~1h so cancelled parked tasks don't leak them). `WorkerExecutor` checks it in `DoWork` BEFORE the rate-limit gate (cancelled tasks must not burn tokens). `Cancel` also calls `IScheduler.TryUnschedule(id)`, bumps the gate invalidation epoch and releases the parking-lot entry.
