@@ -68,6 +68,32 @@ Provider consistency and audit:
 - **`AuditPolicy`** (public, in `EverTask.Storage`): the shared audit-decision helper (`IsRealError`, `ShouldCreateStatusAudit`, `ShouldCreateRunsAudit`) used by every storage provider. Custom providers can use it to keep their audit trail consistent with the built-in ones.
 - **`AuditRetentionPolicy.DeleteCompletedTasksAfterRetention`**, replacing the misnamed `DeleteCompletedTasksWithAudits` (kept as a deprecated alias that forwards to it).
 
+### Performance & stability hardening
+
+A second pass over the same dispatch → scheduler → worker → rate-limit path, this time for allocation, memory retention and two robustness gaps rather than correctness. The happy path is unchanged; two items change observable behavior under specific conditions, both noted below. A BenchmarkDotNet project (`benchmarks/EverTask.Benchmarks`, kept out of the CI test run) records the before/after numbers in `benchmarks/RESULTS.md`.
+
+#### Changed (behavior)
+
+- **A rate-limited task whose slot is near is re-parked instead of waited for inline** (L14): the gate used to `await` a near slot (up to `MaxInSlotWait`) on the consumer before admitting the task, which on a single-consumer queue head-of-line-blocked every following item — including tasks with no rate-limit policy. A near slot is now re-parked into the scheduler like a far one, so the consumer is free immediately; the task still fires at its reserved slot via redelivery. `RateLimitPolicy.MaxInSlotWait` is kept for binary compatibility but no longer drives an inline wait.
+- **A recovered task that keeps failing to re-dispatch is poisoned instead of retried forever** (L18): a persistent (non-transient) re-dispatch failure during startup recovery left the row untouched, so it was retried at every restart while the run logged "Completed processing N pending tasks" — a constant error masked as success. The failure count is now persisted; after `MaxRecoveryDispatchAttempts` (default 5) the task is marked `Failed`, and a successful re-dispatch clears the count. The recovery summary reports failures instead of unconditional success.
+
+#### Fixed
+
+- **The recurring-task `ToString` cache leaked** (F22): `ToQueuedTask` memoized `RecurringTask.ToString()` in a process-wide static dictionary keyed by reference identity, but every persisted dispatch builds a fresh `RecurringTask`, so it never hit and grew by one permanent entry per dispatch. It is computed inline now — no retention, and about half the per-dispatch allocation.
+- **Lifecycle callbacks were resolved by reflection on every execution** (F23): in lazy mode (the default for immediate tasks) `OnStarted`/`OnCompleted`/`OnError` were looked up with `GetMethod` per task, unlike `OnRetry`, which was already cached. They are now cached per handler type alongside the rest of the handler options.
+- **Event messages were formatted even when nobody consumed them** (L30): `RegisterEvent` ran `string.Format` and boxed the argument array before the log-level check and before the zero-subscriber short-circuit, so a filtered event with no monitoring subscribers still paid for the format. It is skipped when the level is disabled and there are no subscribers.
+- **Monitoring fan-out was unbounded** (F24): each event spawned one fire-and-forget `Task.Run` per subscriber with no cap, so a slow subscriber under load could flood the thread pool. Concurrent monitoring callbacks are now bounded by a semaphore — non-blocking for the worker, with over-cap events dropped (monitoring stays fire-and-forget).
+- **Latest-wins scheduling left orphan heap entries** (CU19): re-scheduling the same id updated the registration but left the previous node in the priority queue until its (possibly far-future) due time. The stale node is now evicted at replacement, so repeated re-registrations of one id keep a single entry instead of piling up.
+- **The tracked-keys cap was not atomic** (CU20): the rate limiter checked `Count` and then added a key in two steps, so concurrent acquisitions of distinct new keys could overshoot `MaxTrackedKeys`. The check-and-add is now serialized on the new-key path; existing keys keep the lock-free path.
+- **A reservation could lapse before its redelivery redeemed it** (L22): for a short-`Period` policy under congestion the reservation expiry margin did not cover the parking-lot pause, so the redelivery re-booked budget — double consumption / over-throttling. The owner's reservation is now honored before any purge, and the margin covers the consumer pause.
+- **Recovery of one saturated queue blocked recovery of the others** (L34): startup recovery used a single global-parallelism loop, so blocking enqueues toward a full queue occupied every slot and head-of-line-blocked the recovery of unrelated, idle queues. Recovery is now partitioned per target queue and each group recovers independently.
+
+#### Added
+
+- **`QueuedTask.RecoveryDispatchFailureCount`** (nullable), with SQL Server and SQLite migrations, tracking consecutive failed recovery re-dispatches for the poison logic above.
+- **`ITaskStorage.IncrementRecoveryFailure` / `ClearRecoveryFailure`**, default interface members (non-breaking): custom storages that do not override them keep the previous retry-forever behavior; the built-in providers persist the counter.
+- **`benchmarks/EverTask.Benchmarks`**: a BenchmarkDotNet project (Central Package Management, kept out of `EverTask.sln` and the CI test run); the A/B measurements live in `benchmarks/RESULTS.md`.
+
 ## [3.8.0] - 2026-06-13
 
 ### Recovery & double-delivery hardening
