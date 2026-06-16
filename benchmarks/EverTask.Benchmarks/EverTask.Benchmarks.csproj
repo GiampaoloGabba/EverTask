@@ -12,6 +12,8 @@
 
   <ItemGroup>
     <PackageReference Include="BenchmarkDotNet" />
+    <!-- For the payload serialization micro: EverTask's serializer is Newtonsoft (EverTaskJson, internal). -->
+    <PackageReference Include="Newtonsoft.Json" />
   </ItemGroup>
 
   <ItemGroup>

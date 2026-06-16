@@ -139,3 +139,82 @@ Robustness / correctness fixes — the deterministic gates own the proof, no hea
   recovery of idle queues. Pinned by `RecoveryParallelismIntegrationTests` (a wedged queue does not
   starve an idle queue's recovery). A wall-clock recovery-throughput micro would be flaky; the
   TaskCompletionSource-gated integration test is the deterministic proof.
+
+---
+
+## P-F — DbContext pooling on the EF Core storage path
+
+From the load-benchmark / storage-allocation work (`benchmarks/BENCHMARK_PLAN.md`,
+`benchmarks/EverTask.LoadHarness`), not the original hardening plan.
+
+**The bug:** every storage op opened a FRESH `DbContext` (`contextFactory.CreateDbContextAsync()`), even
+when the SQL is a stored proc (SqlServer) / writable CTE (Postgres) / `ExecuteUpdate` (base). A task's
+lifecycle does ~4 such ops → ~4 contexts/task. The three providers registered `AddDbContextFactory`
+(**not pooled**) while the code comments + `CHANGELOG` claimed "built-in pooling" — false; only
+`AddPooledDbContextFactory` pools. Pooling was blocked by the context's 2nd ctor param
+(`IOptions<ITaskStoreOptions>` for the schema, which EF pooling forbids); the fix routes the schema via a
+custom `IDbContextOptionsExtension` (`UseEverTaskSchema`) so the ctor takes a single `DbContextOptions`,
+then switches the three registrations to `AddPooledDbContextFactory`.
+
+### Micro (`DbContextPoolingBenchmark`, BenchmarkDotNet DefaultJob, N=15, same machine as P-A)
+
+| Method | Mean | Allocated | Alloc ratio |
+|--------|-----:|----------:|------------:|
+| Create context — non-pooled (pre-fix) | 3,816 ns | 6,608 B | 1.00 |
+| Create context — **production, pooled** (post-fix) | **71.6 ns** | **104 B** | **0.02** |
+| Create + 1 write — non-pooled | 51,419 ns | 55,155 B | 8.35 |
+| Create + 1 write — pooled | 11,053 ns | 6,408 B | 0.97 |
+
+The production `SqliteTaskStoreContext` (`Create_Real_Pooled`) matches the pool-compatible proxy
+(104 B, ~71 ns) — the win landed in production: **6,616 B → 104 B (-98%), 53× faster** per context. With a
+real write the cold non-pooled context pays ~48 KB of one-time pipeline init it then throws away on
+dispose; the pooled context reuses it (**55 KB → 6.4 KB per write**).
+
+### End-to-end (`EverTask.LoadHarness` L8, audit none, parallelism 16, count 5k — smoke-level, directional)
+
+| Storage | Throughput | Allocated/task | p999 latency |
+|---------|-----------:|---------------:|-------------:|
+| Postgres (pre-fix) | 2,127/s | ~250 KB | 9.2 ms |
+| **Postgres (post-fix)** | **2,543/s (+20%)** | **~73 KB (-71%)** | **4.1 ms (-55%)** |
+| SqlServer (pre-fix) | 729/s | ~362 KB | 21.7 ms |
+| **SqlServer (post-fix)** | **745/s (~flat)** | **~68 KB (-81%)** | ~flat |
+
+Pooling cuts per-task allocation **-71% (Postgres) / -81% (SqlServer)**. Throughput rises **+20% on
+Postgres** (GC-pressure-sensitive) and is **flat on SqlServer** (write/round-trip-bound) — pooling saves
+allocations and GC pauses, not the DB round-trip. The **p999 tail halves on Postgres** (9.2 → 4.1 ms),
+the GC-pause reduction showing up where it matters.
+
+The residual ~70 KB/task is **not** DbContext anymore: it's the Newtonsoft payload serialization at
+`Persist`, the `SqlParameter[]` arrays, and the engine's ~4.5 KB/task. The Newtonsoft → System.Text.Json
+switch is the next allocation frontier (see P-G).
+
+---
+
+## P-G — Task payload serialization (Newtonsoft baseline)
+
+`PayloadSerializationBenchmark` — the **BEFORE** baseline for the Newtonsoft → System.Text.Json switch.
+Replicates EverTask's serializer settings exactly (`EverTaskJson` is internal: `TypeNameHandling.None` —
+the concrete type is stored in `QueuedTask.Type` and deserialized to it, no `$type` markers). `Serialize`
+is what `ToQueuedTask()` pays at dispatch; `Deserialize` is what recovery / monitoring pay.
+
+ShortRun (3 warmup + 3 iterations), same machine as P-A. **Allocations are reliable** (deterministic);
+**times are directional** (high CV at ShortRun). After the STJ switch, re-run `--filter
+*PayloadSerialization*` for the per-payload after.
+
+| Payload | Serialize alloc | Deserialize alloc | Serialize (≈) | Deserialize (≈) |
+|---------|----------------:|------------------:|--------------:|----------------:|
+| tiny (primitives) | 1.65 KB | 3.11 KB | 0.31 µs | 0.61 µs |
+| blob 1K (string) | 7.38 KB | 8.98 KB | 0.98 µs | 1.44 µs |
+| nested (50-item graph) | 31.91 KB | 35.22 KB | 17.0 µs | 27.9 µs |
+| blob 64K (string) | 272.92 KB | 639.18 KB | 66.2 µs | 156.7 µs |
+
+Reads:
+- **Even a trivial task pays ~1.65 KB to serialize** — part of the ~70 KB/task residual from P-F (Persist
+  serializes once per dispatch).
+- **Allocation explodes super-linearly with size**: blob 64K serializes in **272 KB** (~4× the payload)
+  and deserializes in **639 KB** (~10×), all of it on the **LOH/Gen2** (Gen0=Gen1=Gen2 for blob64k) —
+  expensive Gen2 pauses under load. The nested graph pays ~8× its on-wire size.
+- **Deserialize costs more than Serialize** (~1.5–2.4× allocation) — the path recovery and monitoring pay.
+
+This is where System.Text.Json (pooled UTF-8 buffers, direct byte writing) is expected to win most: the
+large/nested payloads and the LOH pressure. `tiny` should drop toward ~0.3–0.5 KB with source-gen.
