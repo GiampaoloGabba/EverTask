@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### SQLite statistics fix + dead-code cleanup
+
+#### Fixed
+
+- **`CountByStatusAsync` / `CountByQueueAndStatusAsync` threw on SQLite when given a `createdAtOrAfterUtc` filter.** The filter compares `CreatedAtUtc` (`DateTimeOffset`) server-side, which the EF Core SQLite provider can't translate — the same limit behind the `RetrievePending` and retention-cleanup overrides — so a date-filtered statistics query (for example from the monitoring API) blew up on SQLite. `SqliteTaskStorage` now overrides both methods and applies the date filter client-side; with no filter it still runs the server-side `GROUP BY`, and SQL Server is untouched. The new tests below are what caught it.
+
+#### Removed
+
+- **`ServiceScopeDbContextFactory`** (EF Core storage). Dead code: this `IServiceScopeFactory`-based `ITaskStoreDbContextFactory` was never registered or used anywhere. Both providers (SQL Server, SQLite) ship their own `IDbContextFactory`-backed adapter, and the custom-storage guide implements the interface directly. Breaking only if you referenced this unused public type — custom EF Core providers still implement `ITaskStoreDbContextFactory` as before.
+
+#### Tests
+
+- **Cross-provider coverage for `GetByTaskKey`, `UpdateTask`, `Remove`, `CountByStatusAsync`, `CountByQueueAndStatusAsync`** in `EfCoreTaskStorageTestsBase`, so they run on SQLite and SQL Server (any EF Core provider added later inherits them too). None of these had storage-layer coverage before, and the tests are what turned up the SQLite bug above.
+- **Parity tests for the in-memory provider** (`MemoryTaskStorageTests`). `MemoryTaskStorage` has its own implementation of those five methods and doesn't inherit `EfCoreTaskStorage`, so the EF Core suite never reached it; these cover it directly.
+- **Registration test for `AddAuditCleanup`** (`AuditCleanupRegistrationTests`): checks the DI wiring — `AuditCleanupHostedService` registered as an `IHostedService`, and `AuditCleanupOptions` carrying the policy and interval passed in (24 h by default).
+
 ### SQL Server recurring-completion performance
 
 #### Added

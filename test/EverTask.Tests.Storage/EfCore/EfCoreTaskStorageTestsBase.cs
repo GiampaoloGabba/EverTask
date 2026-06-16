@@ -2622,5 +2622,164 @@ public abstract class EfCoreTaskStorageTestsBase
 
     #endregion
 
+    #region TaskKey / UpdateTask / Remove
+
+    [Fact]
+    public async Task Should_GetByTaskKey_return_matching_task_and_null_when_absent()
+    {
+        var taskKey = $"key-{Guid.NewGuid():N}";
+        var task = NewTask(QueuedTaskStatus.Queued, DateTimeOffset.UtcNow, taskKey: taskKey);
+        await _storage.Persist(task);
+
+        var found = await _storage.GetByTaskKey(taskKey);
+        found.ShouldNotBeNull();
+        found!.Id.ShouldBe(task.Id);
+        found.TaskKey.ShouldBe(taskKey);
+
+        (await _storage.GetByTaskKey($"missing-{Guid.NewGuid():N}")).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Should_UpdateTask_persist_mutable_fields()
+    {
+        var task = NewTask(QueuedTaskStatus.Queued, DateTimeOffset.UtcNow);
+        await _storage.Persist(task);
+
+        var newSchedule = DateTimeOffset.UtcNow.AddDays(2);
+        var newRunUntil = DateTimeOffset.UtcNow.AddDays(10);
+        var newNextRun  = DateTimeOffset.UtcNow.AddHours(3);
+
+        var updated = new QueuedTask
+        {
+            Id                    = task.Id,
+            Type                  = "UpdatedType",
+            Request               = "{\"x\":1}",
+            Handler               = "UpdatedHandler",
+            ScheduledExecutionUtc = newSchedule,
+            IsRecurring           = true,
+            RecurringTask         = "recurring-task",
+            RecurringInfo         = "recurring-info",
+            MaxRuns               = 5,
+            RunUntil              = newRunUntil,
+            NextRunUtc            = newNextRun,
+            QueueName             = "queue-1",
+            TaskKey               = "task-key-1"
+        };
+
+        await _storage.UpdateTask(updated);
+
+        var result = await _storage.Get(x => x.Id == task.Id);
+        result.Length.ShouldBe(1);
+        var r = result[0];
+        r.Type.ShouldBe("UpdatedType");
+        r.Request.ShouldBe("{\"x\":1}");
+        r.Handler.ShouldBe("UpdatedHandler");
+        r.IsRecurring.ShouldBeTrue();
+        r.RecurringTask.ShouldBe("recurring-task");
+        r.RecurringInfo.ShouldBe("recurring-info");
+        r.MaxRuns.ShouldBe(5);
+        r.QueueName.ShouldBe("queue-1");
+        r.TaskKey.ShouldBe("task-key-1");
+        // DateTimeOffset round-trips with provider-specific precision (SQLite stores ISO-8601 text) -> tolerance.
+        r.ScheduledExecutionUtc!.Value.ShouldBe(newSchedule, TimeSpan.FromSeconds(1));
+        r.RunUntil!.Value.ShouldBe(newRunUntil, TimeSpan.FromSeconds(1));
+        r.NextRunUtc!.Value.ShouldBe(newNextRun, TimeSpan.FromSeconds(1));
+    }
+
+    [Fact]
+    public async Task Should_UpdateTask_be_noop_when_task_absent()
+    {
+        var ghost = NewTask(QueuedTaskStatus.Queued, DateTimeOffset.UtcNow);
+        // never persisted: the bulk UPDATE matches no row and must not throw
+        await Should.NotThrowAsync(async () => await _storage.UpdateTask(ghost));
+        (await _storage.Get(x => x.Id == ghost.Id)).Length.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task Should_Remove_delete_task()
+    {
+        var task = NewTask(QueuedTaskStatus.Completed, DateTimeOffset.UtcNow);
+        await _storage.Persist(task);
+        (await _storage.Get(x => x.Id == task.Id)).Length.ShouldBe(1);
+
+        await _storage.Remove(task.Id);
+        (await _storage.Get(x => x.Id == task.Id)).Length.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task Should_Remove_be_noop_when_task_absent()
+    {
+        await Should.NotThrowAsync(async () => await _storage.Remove(GetGuidForProvider()));
+    }
+
+    #endregion
+
+    #region Statistics (CountByStatus / CountByQueueAndStatus)
+
+    [Fact]
+    public async Task Should_CountByStatusAsync_group_counts_by_status()
+    {
+        // Delta against the pre-existing counts: robust to any rows other tests may have left behind.
+        var before = await ((ITaskStorageStatistics)_storage).CountByStatusAsync();
+
+        var now = DateTimeOffset.UtcNow;
+        await _storage.Persist(NewTask(QueuedTaskStatus.Pending, now));
+        await _storage.Persist(NewTask(QueuedTaskStatus.Pending, now));
+        await _storage.Persist(NewTask(QueuedTaskStatus.Failed, now));
+
+        var after = await ((ITaskStorageStatistics)_storage).CountByStatusAsync();
+        (after.GetValueOrDefault(QueuedTaskStatus.Pending) - before.GetValueOrDefault(QueuedTaskStatus.Pending))
+            .ShouldBe(2);
+        (after.GetValueOrDefault(QueuedTaskStatus.Failed) - before.GetValueOrDefault(QueuedTaskStatus.Failed))
+            .ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Should_CountByStatusAsync_apply_createdAt_filter()
+    {
+        // Anchor far in the future so ONLY these rows satisfy the filter, regardless of leftovers.
+        var future = DateTimeOffset.UtcNow.AddYears(50);
+        await _storage.Persist(NewTask(QueuedTaskStatus.Queued, future));
+        await _storage.Persist(NewTask(QueuedTaskStatus.Queued, future.AddMinutes(1)));
+
+        var counts = await ((ITaskStorageStatistics)_storage).CountByStatusAsync(future);
+        counts.Values.Sum().ShouldBe(2);
+        counts.GetValueOrDefault(QueuedTaskStatus.Queued).ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task Should_CountByQueueAndStatusAsync_group_counts_by_queue_and_status()
+    {
+        var future = DateTimeOffset.UtcNow.AddYears(50);
+        var queueA = $"queue-a-{Guid.NewGuid():N}";
+        var queueB = $"queue-b-{Guid.NewGuid():N}";
+
+        await _storage.Persist(NewTask(QueuedTaskStatus.Queued, future, queueA));
+        await _storage.Persist(NewTask(QueuedTaskStatus.Queued, future, queueA));
+        await _storage.Persist(NewTask(QueuedTaskStatus.InProgress, future, queueB));
+        await _storage.Persist(NewTask(QueuedTaskStatus.Queued, future, queueName: null)); // null queue -> ""
+
+        var result = await ((ITaskStorageStatistics)_storage).CountByQueueAndStatusAsync(future);
+
+        result[queueA][QueuedTaskStatus.Queued].ShouldBe(2);
+        result[queueB][QueuedTaskStatus.InProgress].ShouldBe(1);
+        result[""][QueuedTaskStatus.Queued].ShouldBe(1);
+    }
+
+    #endregion
+
+    private QueuedTask NewTask(QueuedTaskStatus status, DateTimeOffset createdAt,
+                               string? queueName = null, string? taskKey = null) => new()
+    {
+        Id           = GetGuidForProvider(),
+        CreatedAtUtc = createdAt,
+        Type         = "StatType",
+        Request      = "{}",
+        Handler      = "StatHandler",
+        Status       = status,
+        QueueName    = queueName,
+        TaskKey      = taskKey
+    };
+
     protected abstract Task CleanUpDatabase();
 }

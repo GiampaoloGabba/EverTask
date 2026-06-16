@@ -2,9 +2,9 @@
 
 ## Purpose
 
-Integration tests for all EverTask storage implementations (InMemory, Sqlite, SqlServer). Verifies `ITaskStorage` contract for task persistence, status transitions, scheduling, audit trails.
+Integration tests for EverTask's EF Core storage providers (SQLite, SQL Server). Verifies the `ITaskStorage` contract for task persistence, status transitions, scheduling, audit trails. (The in-memory `MemoryTaskStorage` lives in the core library and is covered separately in `EverTask.Tests`.)
 
-**End-to-end recovery against real SQL Server**: `SqlServerRecoveryIntegrationTests.cs` (Docker, `DatabaseTests` collection) exercises the **concurrent recovery flow** (WorkerService + consumers + dispatcher + scheduler) against real storage — backlog > capacity without deadlock/loss, `WaitingQueue` recovery across restart, recurring revival preserving `NextRunUtc`. This is the real-DB counterpart of the memory-backed `QueueResilienceIntegrationTests` in `EverTask.Tests`. The `RetrievePending` recoverable-status filter is covered for all three providers by the recovery-filter section in `EfCoreTaskStorageTestsBase.cs`.
+**End-to-end recovery against real SQL Server**: `SqlServerRecoveryIntegrationTests.cs` (Docker, `DatabaseTests` collection) exercises the **concurrent recovery flow** (WorkerService + consumers + dispatcher + scheduler) against real storage — backlog > capacity without deadlock/loss, `WaitingQueue` recovery across restart, recurring revival preserving `NextRunUtc`. This is the real-DB counterpart of the memory-backed `QueueResilienceIntegrationTests` in `EverTask.Tests`. The `RetrievePending` recoverable-status filter is covered for both EF Core providers by the recovery-filter section in `EfCoreTaskStorageTestsBase.cs`.
 
 ## Test Architecture
 
@@ -14,7 +14,6 @@ Integration tests for all EverTask storage implementations (InMemory, Sqlite, Sq
 
 | Class | Provider | Prerequisites | Cleanup Strategy |
 |-------|----------|---------------|------------------|
-| `InMemoryEfCoreTaskStorageTests` | EF Core InMemory | None (fastest) | New DB per test class |
 | `SqliteEfCoreTaskStorageTests` | SQLite file | None | Manual `RemoveRange()` |
 | `SqlServerEfCoreTaskStorageTests` | SQL Server Testcontainers | Docker | Respawn library |
 
@@ -50,9 +49,6 @@ dotnet test test/EverTask.Tests.Storage/EverTask.Tests.Storage.csproj
 
 **Specific provider**:
 ```bash
-# InMemory (fastest, no dependencies)
-dotnet test test/EverTask.Tests.Storage/ --filter "FullyQualifiedName~InMemoryEfCoreTaskStorageTests"
-
 # SQLite (file-based, minimal setup)
 dotnet test test/EverTask.Tests.Storage/ --filter "FullyQualifiedName~SqliteEfCoreTaskStorageTests"
 
@@ -115,7 +111,6 @@ public async Task Should_get_pending_tasks()
 |----------|------------|------------|
 | **SQLite** | DateTimeOffset ordering issues in some queries | Use `.ToList().OrderBy()` instead of `.OrderBy()` in LINQ |
 | **SQLite** | Concurrent write tests may fail under heavy load | Expected behavior (single writer limitation) |
-| **InMemory** | No schema support | Tests using schema-specific features skip InMemory |
 
 ## Test Data
 

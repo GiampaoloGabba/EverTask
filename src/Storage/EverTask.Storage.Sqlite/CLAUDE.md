@@ -73,7 +73,7 @@ SQLite storage implementation. File-based or in-memory persistence for single-se
 **DateTimeOffset Precision**: SQLite stores as text, may have ordering issues in some queries (see test notes).
 
 ### 4. Client-side overrides for DateTimeOffset queries
-SQLite cannot translate `DateTimeOffset` ordering comparisons (`<`/`>`/`OrderBy`). The optimized server-side query always lives in the `EfCoreTaskStorage` base; `SqliteTaskStorage` overrides only the methods that hit this limit and evaluates them client-side (resolve ids, then delete/update by key). Current overrides: `RetrievePending`, `TrySetQueuedIfRecoverable`, and the retention cleanup (`CleanupStatusAudits`, `CleanupRunsAudits`, `CleanupExecutionLogsByAge`, `CleanupExecutionLogsByCount`, `CleanupCompletedTasks`). Never push a SQLite workaround down into the base — add a new override here instead.
+SQLite cannot translate `DateTimeOffset` ordering comparisons (`<`/`>`/`OrderBy`). The optimized server-side query always lives in the `EfCoreTaskStorage` base; `SqliteTaskStorage` overrides only the methods that hit this limit and evaluates them client-side (resolve ids, then delete/update by key). Current overrides: `RetrievePending`, `TrySetQueuedIfRecoverable`, the retention cleanup (`CleanupStatusAudits`, `CleanupRunsAudits`, `CleanupExecutionLogsByAge`, `CleanupExecutionLogsByCount`, `CleanupCompletedTasks`), and the date-filtered statistics (`CountByStatusAsync`, `CountByQueueAndStatusAsync` — only when a `createdAtOrAfterUtc` filter is supplied; the unfiltered path reuses the base server-side `GROUP BY`). Never push a SQLite workaround down into the base — add a new override here instead.
 
 ## Migrations
 

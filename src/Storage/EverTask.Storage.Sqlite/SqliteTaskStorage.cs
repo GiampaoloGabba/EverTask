@@ -192,4 +192,53 @@ public class SqliteTaskStorage : EfCoreTaskStorage
         return await DeleteByIdsAsync(dbContext.QueuedTasks, ids,
             (set, batch) => set.Where(qt => batch.Contains(qt.Id)), ct).ConfigureAwait(false);
     }
+
+    // ---- Statistics (SQLite overrides) ------------------------------------------------------------
+    // The createdAt filter compares CreatedAtUtc (DateTimeOffset), which SQLite cannot translate (the
+    // same limitation behind the RetrievePending override). With no filter the base server-side GROUP BY
+    // translates fine and is reused; with a filter, project the rows and group/filter client-side.
+
+    /// <inheritdoc />
+    public override async Task<IReadOnlyDictionary<QueuedTaskStatus, int>> CountByStatusAsync(
+        DateTimeOffset? createdAtOrAfterUtc = null, CancellationToken ct = default)
+    {
+        if (createdAtOrAfterUtc == null)
+            return await base.CountByStatusAsync(null, ct).ConfigureAwait(false);
+
+        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct);
+
+        var rows = await dbContext.QueuedTasks
+            .AsNoTracking()
+            .Select(t => new { t.CreatedAtUtc, t.Status })
+            .ToListAsync(ct).ConfigureAwait(false);
+
+        return rows
+            .Where(r => r.CreatedAtUtc >= createdAtOrAfterUtc.Value)
+            .GroupBy(r => r.Status)
+            .ToDictionary(g => g.Key, g => g.Count());
+    }
+
+    /// <inheritdoc />
+    public override async Task<IReadOnlyDictionary<string, IReadOnlyDictionary<QueuedTaskStatus, int>>>
+        CountByQueueAndStatusAsync(DateTimeOffset? createdAtOrAfterUtc = null, CancellationToken ct = default)
+    {
+        if (createdAtOrAfterUtc == null)
+            return await base.CountByQueueAndStatusAsync(null, ct).ConfigureAwait(false);
+
+        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct);
+
+        var rows = await dbContext.QueuedTasks
+            .AsNoTracking()
+            .Select(t => new { t.CreatedAtUtc, t.QueueName, t.Status })
+            .ToListAsync(ct).ConfigureAwait(false);
+
+        return rows
+            .Where(r => r.CreatedAtUtc >= createdAtOrAfterUtc.Value)
+            .GroupBy(r => r.QueueName ?? string.Empty)
+            .ToDictionary(
+                g => g.Key,
+                g => (IReadOnlyDictionary<QueuedTaskStatus, int>)g
+                    .GroupBy(r => r.Status)
+                    .ToDictionary(s => s.Key, s => s.Count()));
+    }
 }

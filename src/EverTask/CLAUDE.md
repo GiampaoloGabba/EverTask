@@ -77,4 +77,4 @@ Code follows [David Fowl's AsyncGuidance.md](https://github.com/davidfowl/AspNet
 **When modifying queue/recovery/scheduler resilience** (no-loss/no-deadlock invariants):
 - `test/EverTask.Tests/IntegrationTests/QueueResilienceIntegrationTests.cs` (deadlock, WaitingQueue recovery, HOL, cancellation, recurring revival, RunUntil, exactly-once)
 - `test/EverTask.Tests/SchedulerResilienceTests.cs`, `WorkerQueueResilienceTests.cs`, `MemoryStorageRecoveryFilterTests.cs`
-- Real-DB recovery: `test/EverTask.Tests.Storage/SqlServerRecoveryIntegrationTests.cs` (Docker) + recovery-filter section in `EfCoreTaskStorageTestsBase.cs` (all 3 providers)
+- Real-DB recovery: `test/EverTask.Tests.Storage/SqlServerRecoveryIntegrationTests.cs` (Docker) + recovery-filter section in `EfCoreTaskStorageTestsBase.cs` (both EF Core providers: SQLite, SQL Server)

@@ -65,13 +65,12 @@ When creating a new provider (e.g., PostgreSQL, MySQL):
 **When modifying EfCoreTaskStorage**:
 - **MUST run ALL provider tests** (verify no regressions):
   ```bash
-  dotnet test test/EverTask.Tests.Storage/ --filter "FullyQualifiedName~InMemoryEfCoreTaskStorageTests"
   dotnet test test/EverTask.Tests.Storage/ --filter "FullyQualifiedName~SqliteEfCoreTaskStorageTests"
   dotnet test test/EverTask.Tests.Storage/ --filter "FullyQualifiedName~SqlServerEfCoreTaskStorageTests"
   ```
 
 **When adding new ITaskStorage method**:
 - Update: `test/EverTask.Tests.Storage/EfCore/EfCoreTaskStorageTestsBase.cs`
-- Test automatically runs for all providers (InMemory, Sqlite, SqlServer)
+- Test automatically runs for all EF Core providers (SQLite, SQL Server)
 
 **Location**: `test/EverTask.Tests.Storage/`
