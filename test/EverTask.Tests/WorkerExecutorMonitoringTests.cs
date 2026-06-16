@@ -131,9 +131,10 @@ public class WorkerExecutorMonitoringTests
         const int events = 50;
         var delivered = 0;
         // Event-driven completion: the TCS fires the instant the last event is delivered, so the test waits on
-        // the actual signal instead of polling on a fixed cadence. The timeout is only a safety net, and far
-        // more generous on CI, where async delivery can be starved under load (this is the flaky guard).
+        // the actual signal instead of polling on a fixed cadence. The timeout is only a safety net.
         var allDelivered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // Fast subscriber: completes synchronously, so every admitted callback frees its permit right away.
         executor.TaskEventOccurredAsync += _ =>
         {
             if (Interlocked.Increment(ref delivered) == events)
@@ -141,9 +142,19 @@ public class WorkerExecutorMonitoringTests
             return Task.CompletedTask;
         };
 
-        // Fast subscriber: permits free up immediately, so under moderate load nothing is dropped.
+        // "Moderate load" must mean the in-flight count never reaches the fan-out cap — otherwise the
+        // non-blocking Wait(0) admission drops over-cap events BY DESIGN (that is the F24 contract).
+        // A fixed-rate loop fires far faster than the Task.Run callbacks drain on a 2-core CI box
+        // (cap == 4 there), so it dropped events and never reached `events` → the old flake.
+        // We are the sole producer and callbacks only ever RELEASE permits, so once we observe headroom
+        // our next fire is guaranteed a permit and cannot be dropped — deterministic, no timing assumptions.
+        var cap = WorkerExecutor.MonitoringMaxConcurrency;
         for (var i = 0; i < events; i++)
+        {
+            while (executor.MonitoringInFlightCount >= cap)
+                await Task.Delay(1);
             executor.RegisterInfo(SampleExecutor(), "evt {0}", i);
+        }
 
         await allDelivered.Task.WaitAsync(TimeSpan.FromMilliseconds(TestEnvironment.GetTimeout(5000, 30000)));
 
