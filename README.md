@@ -13,46 +13,44 @@
 
 ## Overview
 
-**EverTask** is a high-performance .NET library for background task execution. It handles everything from simple fire-and-forget operations to complex recurring schedules, with persistence that survives application restarts.
+**EverTask** runs background work in your .NET app: fire-and-forget jobs, delayed and scheduled tasks, and recurring schedules. Everything is persisted, so tasks survive a restart.
 
-Supports **CPU-intensive, I/O-bound, long-running and short-running tasks**. No external schedulers or Windows Services required — everything runs in-process with your application.
+It runs in-process — no external scheduler, no Windows Service, no separate worker host — and it doesn't poll the database in a loop. An in-memory scheduler drives execution through channels, and persistence happens where it matters: on enqueue, on status changes, and for recovery after a restart.
 
-EverTask doesn't continuously poll the database: it uses a lightweight and optimized in-memory scheduler, coupled with channels and strategic persistence.
+If you've used MediatR, the request/handler pattern will feel familiar. The difference is that tasks are persisted, can be isolated across queues, and hold up under load.
 
-If you've used MediatR, you'll feel right at home with the request/handler pattern — but with built-in persistence, multi-queue isolation, and the ability to scale to high load.
-
-Works great with ASP.NET Core, Windows Services, or any .NET project that needs reliable background processing.
+Tasks can be CPU-bound or I/O-bound, long- or short-running. Works with ASP.NET Core, Windows Services, or any .NET host.
 
 ## Key Features
 
-### Core Execution
-- **Background Execution** — Fire-and-forget, scheduled, and recurring tasks with elegant API
-- **Zero Database Polling** — Smart scheduler with in-memory channels and persistence, no continuous database polling
-- **Smart Persistence** — Tasks resume after application restarts (SQL Server, PostgreSQL, SQLite, In-Memory)
-- **Fluent Scheduling API** — Intuitive recurring task configuration (every minute, hour, day, week, month, cron)
-- **Idempotent Task Registration** — Prevent duplicate recurring tasks with unique keys
+### Core execution
+- **Background execution** — fire-and-forget, scheduled, and recurring tasks
+- **No database polling** — the scheduler lives in memory and runs through channels; the database is written, not polled in a loop
+- **Persistence** — tasks resume after a restart (SQL Server, PostgreSQL, SQLite, In-Memory)
+- **Fluent scheduling** — recurring tasks by minute, hour, day, week, month, or cron
+- **Idempotent registration** — a task key keeps duplicate recurring registrations out
 
-### Performance & Scalability
-- **Multi-Queue Support** — Isolate workloads by priority, resource type, or business domain
-- **Keyed Rate Limiting** — Throttle tasks per tenant/account/resource against external API limits, without blocking workers or other keys
-- **High-Performance Scheduler** — Minimal lock contention and zero CPU when idle
-- **High Load Support** — Optional sharded scheduler for high-loading scheduling scenarios
-- **Optimized Performance** — Reflection caching, lazy serialization, optimized database operations
+### Performance & scalability
+- **Multi-queue** — isolate workloads by priority, resource type, or business domain
+- **Keyed rate limiting** — throttle per tenant/account/resource against external API limits, without blocking workers or other keys
+- **Light scheduler** — minimal lock contention, zero CPU when idle
+- **Sharded scheduler** — optional, for high scheduling load
+- **Lower overhead** — reflection caching and lazy serialization
 
-### Monitoring & Observability
-- **Web Dashboard + REST API** — Embedded React UI for monitoring, analytics, and observability
-- **Real-Time Updates** — SignalR live monitoring with event-driven cache invalidation
-- **Task Execution Log Capture** — Proxy logger with optional database persistence and configurable retention for audit trails
-- **Configurable Audit Levels** — Control database bloat with granular audit trail settings
+### Monitoring
+- **Dashboard + REST API** — an embedded React UI for monitoring and analytics
+- **Real-time updates** — SignalR push with event-driven cache invalidation
+- **Execution log capture** — a proxy logger with optional database persistence and configurable retention
+- **Audit levels** — tune how much audit history you keep, to control table growth
 
-### Resilience & Error Handling
-- **Powerful Retry Policies** — Built-in linear retry, custom policies, Polly integration, exception filtering
-- **Timeout Management** — Global and per-task timeout configuration
+### Resilience
+- **Retry policies** — built-in linear retry, custom policies, Polly integration, exception filtering
+- **Timeouts** — global and per-task
 
-### Developer Experience
-- **Extensible Architecture** — Custom storage, retry policies, and schedulers
-- **Serilog Integration** — Detailed structured logging
-- **Async All The Way** — Fully asynchronous for maximum scalability
+### Developer experience
+- **Extensible** — custom storage, retry policies, and schedulers
+- **Serilog integration** — structured logging
+- **Async throughout**
 
 
 <img src="assets/screenshots/4.png" style="width:100%;max-width:900px;display: block; margin:20px auto;" alt="Task Details" />
@@ -134,11 +132,11 @@ await _dispatcher.Dispatch(new SendWelcomeEmailTask(dto.Email, dto.Name));
 - **[Configuration](https://GiampaoloGabba.github.io/EverTask/configuration.html)** - Configure EverTask (Reference + Cheatsheet)
 - **[Architecture & Internals](https://GiampaoloGabba.github.io/EverTask/architecture.html)** - How EverTask works under the hood
 
-## Showcase: Powerful Features
+## A closer look
 
 ### Fluent Recurring Scheduler
 
-Schedule recurring tasks with an intuitive, type-safe API:
+Schedule recurring tasks with a type-safe API:
 
 ```csharp
 // Run every day at 3 AM
@@ -165,7 +163,7 @@ Keep critical tasks separate from heavy background work:
     .SetDefaultTimeout(TimeSpan.FromMinutes(2)))
 ```
 
-### Smart Retry Policies with Exception Filtering
+### Retry policies with exception filtering
 
 Control which exceptions trigger retries to fail-fast on permanent errors:
 
@@ -221,7 +219,7 @@ Use unique keys to safely register recurring tasks at startup without creating d
 
 ### Monitoring Dashboard
 
-Monitor your tasks with a feature-complete web dashboard providing real-time insights, comprehensive analytics, and detailed observability:
+Monitor tasks from a built-in web dashboard — live status, task history, execution logs, and analytics:
 
 **Dashboard Preview:**
 
@@ -291,7 +289,7 @@ Capture all logs written during task execution and persist them to the database 
 
 ## Roadmap
 
-We have some exciting features in the pipeline:
+On the roadmap:
 
 - **Task Management API**: REST endpoints for stopping, restarting, and canceling tasks via the dashboard
 - **Distributed Clustering**: Multi-server task distribution with leader election and automatic failover
