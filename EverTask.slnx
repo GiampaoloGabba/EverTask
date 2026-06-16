@@ -33,6 +33,7 @@
     <Project Path="src/Storage/EverTask.Storage.EfCore/EverTask.Storage.EfCore.csproj" />
     <Project Path="src/Storage/EverTask.Storage.Sqlite/EverTask.Storage.Sqlite.csproj" />
     <Project Path="src/Storage/EverTask.Storage.SqlServer/EverTask.Storage.SqlServer.csproj" />
+    <Project Path="src/Storage/EverTask.Storage.Postgres/EverTask.Storage.Postgres.csproj" />
   </Folder>
   <Folder Name="/test/">
     <Project Path="test/EverTask.Tests.Logging/EverTask.Tests.Logging.csproj" />

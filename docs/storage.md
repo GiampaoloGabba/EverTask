@@ -27,11 +27,14 @@ Fast, zero-setup storage perfect for development and testing. Tasks are lost on 
 ### [SQL Server Storage](storage/sql-server-storage.md)
 Enterprise-grade storage for production environments with DbContext pooling, stored procedures, and schema management.
 
+### [PostgreSQL Storage](storage/postgres-storage.md)
+Relational, open-source storage for production with DbContext pooling, schema-aware migrations, and writable-CTE optimizations, comparable to the SQL Server provider.
+
 ### [SQLite Storage](storage/sqlite-storage.md)
 Lightweight, file-based storage ideal for small-scale production and single-server deployments.
 
 ### [Custom Storage](storage/custom-storage.md)
-Learn how to implement custom storage providers for Redis, MongoDB, PostgreSQL, or any other database.
+Learn how to implement custom storage providers for Redis, MongoDB, or any other database.
 
 ### [Serialization](storage/serialization.md)
 Best practices for designing serializable tasks and handling serialization with Newtonsoft.Json.
@@ -72,6 +75,15 @@ builder.Services.AddEverTask(opt =>
     opt.RegisterTasksFromAssembly(typeof(Program).Assembly);
 })
 .AddSqliteStorage("Data Source=evertask.db");
+```
+
+### Production Setup (PostgreSQL)
+```csharp
+builder.Services.AddEverTask(opt =>
+{
+    opt.RegisterTasksFromAssembly(typeof(Program).Assembly);
+})
+.AddPostgresStorage("Host=localhost;Database=evertask;Username=evertask;Password=***");
 ```
 
 ## Next Steps

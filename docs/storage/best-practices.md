@@ -2,7 +2,7 @@
 layout: default
 title: Best Practices
 parent: Storage
-nav_order: 8
+nav_order: 9
 ---
 
 # Storage Best Practices

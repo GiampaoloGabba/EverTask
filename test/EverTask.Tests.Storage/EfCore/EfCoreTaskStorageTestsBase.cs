@@ -81,6 +81,16 @@ public abstract class EfCoreTaskStorageTestsBase
     /// </summary>
     protected virtual Guid GetGuidForProvider() => TestGuidGenerator.New();
 
+    /// <summary>
+    /// Floors a DateTimeOffset to whole microseconds (R13). The exact <c>NextRunUtc.ShouldBe(nextRun)</c>
+    /// assertions compare at .NET tick precision (100 ns), but Postgres <c>timestamptz</c> stores microseconds
+    /// (1 µs = 10 ticks). Flooring the INPUT before persisting keeps the round-trip exact on EVERY provider
+    /// (SQL Server / SQLite round-trip ticks unchanged, so this neither weakens nor changes their behavior),
+    /// without loosening the equality assertions.
+    /// </summary>
+    protected static DateTimeOffset FloorToMicroseconds(DateTimeOffset value) =>
+        new(value.Ticks - value.Ticks % 10, value.Offset);
+
     [Fact]
     public async Task Get_ReturnsExpectedTasks()
     {
@@ -370,7 +380,7 @@ public abstract class EfCoreTaskStorageTestsBase
         var queued = QueuedTasks[0];
         await _storage.Persist(queued);
         var taskId  = queued.Id;
-        var nextRun = DateTimeOffset.UtcNow.AddDays(1);
+        var nextRun = FloorToMicroseconds(DateTimeOffset.UtcNow.AddDays(1)); // R13: µs floor for exact round-trip
 
         await _storage.UpdateCurrentRun(taskId, 100.0, nextRun, AuditLevel.Full);
 
@@ -389,7 +399,7 @@ public abstract class EfCoreTaskStorageTestsBase
         var queued = QueuedTasks[0];
         await _storage.Persist(queued);
         var taskId  = queued.Id;
-        var nextRun = DateTimeOffset.UtcNow.AddDays(1);
+        var nextRun = FloorToMicroseconds(DateTimeOffset.UtcNow.AddDays(1)); // R13: µs floor for exact round-trip
 
         await _storage.UpdateCurrentRun(taskId, 100.0, nextRun, AuditLevel.Full);
         await _storage.UpdateCurrentRun(taskId, 100.0, nextRun, AuditLevel.Full);
@@ -479,7 +489,7 @@ public abstract class EfCoreTaskStorageTestsBase
         var queued = QueuedTasks[0];
         await _storage.Persist(queued);
         var taskId  = queued.Id;
-        var nextRun = DateTimeOffset.UtcNow.AddMinutes(30);
+        var nextRun = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(30)); // R13: µs floor for exact round-trip
 
         await _storage.CompleteRecurringRun(taskId, 75.0, nextRun, AuditLevel.Full);
 
@@ -1018,6 +1028,62 @@ public abstract class EfCoreTaskStorageTestsBase
         }
     }
 
+    /// <summary>
+    /// R1: keyset tie-break on IDENTICAL CreatedAtUtc. Every existing keyset test uses UNIQUE timestamps, so
+    /// none exercises the secondary <c>t.Id.CompareTo(lastGuid) &gt; 0</c> tie-break. When many rows share the
+    /// same CreatedAtUtc the pagination must still walk them by Id without skipping or duplicating a single row.
+    /// This stresses the server-side translation of the Guid keyset on Npgsql (uuid byte-wise ordering, which
+    /// for the provider-optimized v7 GUIDs matches .NET Guid.CompareTo). Paginated with take = 1 to force the
+    /// tie-break on every step.
+    /// </summary>
+    [Fact]
+    public async Task RetrievePending_Keyset_Should_Not_Skip_Or_Duplicate_On_Identical_CreatedAtUtc()
+    {
+        // Arrange - all rows share ONE CreatedAtUtc; only the Id distinguishes them in the keyset.
+        var sharedCreatedAt = FloorToMicroseconds(DateTimeOffset.UtcNow);
+        var createdIds      = new List<Guid>();
+        const int total     = 12;
+
+        for (var i = 0; i < total; i++)
+        {
+            var taskId = GetGuidForProvider();
+            createdIds.Add(taskId);
+            await _storage.Persist(new QueuedTask
+            {
+                Id           = taskId,
+                Type         = $"TieBreak{i}",
+                Request      = "{}",
+                Handler      = "Handler",
+                CreatedAtUtc = sharedCreatedAt, // identical on purpose -> Id is the only tie-break
+                Status       = QueuedTaskStatus.Pending
+            });
+        }
+
+        // Act - walk one row at a time so the (CreatedAtUtc, Id) tie-break fires on every page.
+        var             retrieved     = new List<Guid>();
+        DateTimeOffset? lastCreatedAt = null;
+        Guid?           lastId        = null;
+
+        while (true)
+        {
+            var page = await _storage.RetrievePending(lastCreatedAt, lastId, 1);
+            if (page.Length == 0)
+                break;
+
+            // Restrict to OUR ids: the shared-collection DB may hold leftovers from other tests.
+            foreach (var t in page.Where(t => createdIds.Contains(t.Id)))
+                retrieved.Add(t.Id);
+
+            lastCreatedAt = page[^1].CreatedAtUtc;
+            lastId        = page[^1].Id;
+        }
+
+        // Assert - no skips, no duplicates: exactly our 12 ids, each once.
+        retrieved.Count.ShouldBe(total, "every same-timestamp row must be paged exactly once (no skip)");
+        retrieved.ToHashSet().Count.ShouldBe(total, "no row may be returned twice across pages (no duplicate)");
+        createdIds.Except(retrieved).ShouldBeEmpty("no same-timestamp row may be skipped by the keyset tie-break");
+    }
+
     #region AuditLevel Tests
 
     /// <summary>
@@ -1498,7 +1564,7 @@ public abstract class EfCoreTaskStorageTestsBase
         });
 
         var startingRunsCount = _mockedDbContext.RunsAudit.Count(x => x.QueuedTaskId == taskId);
-        var nextRun           = DateTimeOffset.UtcNow.AddHours(1);
+        var nextRun           = FloorToMicroseconds(DateTimeOffset.UtcNow.AddHours(1)); // R13: µs floor for exact round-trip
 
         // Act
         await _storage.UpdateCurrentRun(taskId, 100.0, nextRun, AuditLevel.Full);
@@ -2745,6 +2811,27 @@ public abstract class EfCoreTaskStorageTestsBase
         var counts = await ((ITaskStorageStatistics)_storage).CountByStatusAsync(future);
         counts.Values.Sum().ShouldBe(2);
         counts.GetValueOrDefault(QueuedTaskStatus.Queued).ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task Should_CountByStatusAsync_accept_non_utc_offset_filter()
+    {
+        // R4: the public statistics take a caller-supplied DateTimeOffset. Npgsql requires offset 0 for
+        // timestamptz, so a +02:00 value (e.g. DateTimeOffset.Now) would throw at the DB boundary unless the
+        // base normalizes it with .ToUniversalTime(). This must NOT throw and must count correctly on every
+        // provider (no-op for SQL Server / SQLite which tolerate the offset).
+        var futureUtc      = DateTimeOffset.UtcNow.AddYears(60);
+        var futureWithOffset = futureUtc.ToOffset(TimeSpan.FromHours(2)); // same instant, offset +02:00
+
+        await _storage.Persist(NewTask(QueuedTaskStatus.Queued, futureUtc.AddMinutes(1)));
+        await _storage.Persist(NewTask(QueuedTaskStatus.Queued, futureUtc.AddMinutes(2)));
+
+        IReadOnlyDictionary<QueuedTaskStatus, int> counts = null!;
+        await Should.NotThrowAsync(async () =>
+            counts = await ((ITaskStorageStatistics)_storage).CountByStatusAsync(futureWithOffset));
+
+        counts.GetValueOrDefault(QueuedTaskStatus.Queued).ShouldBe(2,
+            "a non-UTC offset filter must be normalized and count the same rows as its UTC equivalent");
     }
 
     [Fact]

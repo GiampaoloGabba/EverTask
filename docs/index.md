@@ -53,7 +53,7 @@ await _dispatcher.Dispatch(new SendEmailTask("user@example.com", "Hello!"));
   - [Task Dispatching](task-dispatching.md) - Execute tasks immediately or on a schedule
 
 ### Core Concepts
-- [Storage](storage.md) - Choose your persistence layer (SQL Server, SQLite, or in-memory)
+- [Storage](storage.md) - Choose your persistence layer (SQL Server, PostgreSQL, SQLite, or in-memory)
 - **[Configuration](configuration.md)** - Configure EverTask
   - [Configuration Reference](configuration-reference.md) - Complete configuration options
   - [Configuration Cheatsheet](configuration-cheatsheet.md) - Quick reference guide

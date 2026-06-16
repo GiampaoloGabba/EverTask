@@ -748,6 +748,38 @@ AddSqlServerStorage(string connectionString, Action<SqlServerTaskStoreOptions>? 
 - `SchemaName` (string?): Database schema name (default: "EverTask", null = main schema)
 - `AutoApplyMigrations` (bool): Auto-apply EF Core migrations (default: true)
 
+### AddPostgresStorage
+
+Uses PostgreSQL (via Npgsql) for persistent storage.
+
+**Signature:**
+```csharp
+AddPostgresStorage(string connectionString, Action<PostgresTaskStoreOptions>? configure = null)
+```
+
+**Parameters:**
+- `connectionString` (string): Npgsql connection string (e.g. `Host=localhost;Database=evertask;Username=...;Password=...`)
+- `configure` (Action, optional): Storage configuration options
+
+**Examples:**
+```csharp
+// Basic
+.AddPostgresStorage("Host=localhost;Database=evertask;Username=evertask;Password=***")
+
+// With options
+.AddPostgresStorage(
+    connectionString,
+    opt =>
+    {
+        opt.SchemaName = "evertask";
+        opt.AutoApplyMigrations = true;
+    })
+```
+
+**PostgresTaskStoreOptions Properties:**
+- `SchemaName` (string?): Database schema name (default: "evertask", **must be lowercase**; null = `public` schema)
+- `AutoApplyMigrations` (bool): Auto-apply EF Core migrations (default: true)
+
 ### AddSqliteStorage
 
 Uses SQLite for persistent storage.

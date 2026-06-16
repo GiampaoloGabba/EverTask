@@ -94,11 +94,12 @@ Defaults differ between the auto-created `default`/`recurring` queues (inherit t
 |--------|---------|-------|
 | `AddMemoryStorage()` | core | Dev/test only: tasks lost on restart |
 | `AddSqlServerStorage(cs, opt?)` | `EverTask.Storage.SqlServer` | Options: `SqlServerTaskStoreOptions`; DbContext pooling + stored procedures |
+| `AddPostgresStorage(cs, opt?)` | `EverTask.Storage.Postgres` | Options: `PostgresTaskStoreOptions`; DbContext pooling + writable-CTE optimizations |
 | `AddSqliteStorage(cs?, opt?)` | `EverTask.Storage.Sqlite` | Options: `SqliteTaskStoreOptions`; `cs` defaults to `"Data Source=EverTask.db"` |
 
 | Option (both store option types) | Default | Notes |
 |----------------------------------|---------|-------|
-| `SchemaName` | SQL Server: `"EverTask"`; SQLite: `""` | SQL Server: `null` = dbo; SQLite: must stay `""` (no schema concept) |
+| `SchemaName` | SQL Server: `"EverTask"`; PostgreSQL: `"evertask"`; SQLite: `""` | PostgreSQL: lowercase only (`null` = `public`); SQL Server: `null` = dbo; SQLite: must stay `""` (no schema concept) |
 | `AutoApplyMigrations` | `true` | Disable for manual migrations in production |
 
 ## Logging

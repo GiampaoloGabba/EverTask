@@ -27,6 +27,9 @@ public static class TestGuidGenerator
     private static readonly IGuidGenerator _sqliteGenerator =
         new DefaultGuidGenerator(Database.SQLite);
 
+    private static readonly IGuidGenerator _postgresGenerator =
+        new DefaultGuidGenerator(Database.PostgreSql);
+
     /// <summary>
     /// Generates GUID v7 optimized for generic databases.
     /// Use in unit tests and memory storage tests.
@@ -44,4 +47,10 @@ public static class TestGuidGenerator
     /// Use in SQLite storage tests.
     /// </summary>
     public static Guid NewForSqlite() => _sqliteGenerator.NewDatabaseFriendly();
+
+    /// <summary>
+    /// Generates GUID v7 optimized for PostgreSQL uuid byte-wise sorting (same v7 family as SQLite, NOT v8).
+    /// Use in PostgreSQL storage tests.
+    /// </summary>
+    public static Guid NewForPostgres() => _postgresGenerator.NewDatabaseFriendly();
 }

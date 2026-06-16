@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### PostgreSQL storage provider (`EverTask.Storage.Postgres`)
+
+#### Added
+
+- **New PostgreSQL storage provider** built on Npgsql (`AddPostgresStorage(connectionString, …)`), multi-targeting net8.0/net9.0/net10.0. As a fully relational provider it **inherits the optimized `EfCoreTaskStorage` base with no client-side overrides** (unlike SQLite): Npgsql maps `DateTimeOffset` → `timestamptz` and translates every ordering/keyset/cleanup comparison server-side. Verified end-to-end — the full `EfCoreTaskStorageTestsBase` suite runs green on a real `postgres:16-alpine` Testcontainer, and the captured SQL confirms the `Guid.CompareTo` keyset (`uuid >`) and the `Take().ExecuteDelete` cleanup (`LIMIT`) translate server-side.
+- **Schema-aware migrations (full parity with SQL Server)**: a configurable, runtime-honored schema (default `"evertask"`, lowercase to avoid Postgres case-folding traps) via `DbSchemaAwareMigrationAssembly`. Includes a partial+covering recovery index `IX_QueuedTasks_Recovery` (static predicate, no `now()`).
+- **Phase-2 writable-CTE optimizations**: `SetStatus`, `UpdateCurrentRun` and `CompleteRecurringRun` override the base with single-statement data-modifying CTEs (atomic by construction; the run-counter writes propagate on failure, `SetStatus` swallows — same contracts as the base and the SQL Server stored procedures). The `ErrorsOnly` RunsAudit gate is decided server-side from the row's `Status`/`Exception`; audit decisions match `AuditPolicy` exactly. The `integer` run-counter raises SQLSTATE 22003 at `int.MaxValue` and the statement rolls back atomically.
+- **GUID generator** uses `UUIDNext.Database.PostgreSql` (v7; Postgres sorts `uuid` byte-wise so the sequential order is preserved — never the SQL Server v8 layout).
+
+#### Fixed
+
+- **`CountByStatusAsync` / `CountByQueueAndStatusAsync` now normalize the `createdAtOrAfterUtc` filter to UTC** (`?.ToUniversalTime()`) in the EF Core base. Npgsql requires `DateTimeOffset.Offset == 0` for `timestamptz`, so a non-UTC filter (e.g. `DateTimeOffset.Now`) would have thrown on Postgres; a no-op for SQL Server/SQLite.
+
+#### Tests
+
+- **`PostgresEfCoreTaskStorageTests`** (Testcontainers `postgres:16-alpine`, Respawn `DbAdapter.Postgres` with `SchemasToInclude=["public","evertask"]`) inherits the full shared suite plus provider-specific tests (schema, recovery index existence, `TaskKey` multi-null uniqueness, Respawn reset) and Phase-2 tests asserting the CTE audit gates per `AuditLevel`, overflow propagation (SQLSTATE 22003) and atomic rollback.
+- **New cross-provider tests** in `EfCoreTaskStorageTestsBase` (run on SQLite, SQL Server and PostgreSQL): keyset tie-break on identical `CreatedAtUtc`, and a non-UTC offset statistics filter. Exact `NextRunUtc` assertions floor their inputs to whole microseconds (Postgres `timestamptz` precision) without weakening the equality.
+
 ### Build: solution moved to `.slnx`
 
 - **The solution is now `EverTask.slnx`** (the new XML solution format); the old `EverTask.sln` is removed. CI (`build.yml`, `release.yml`) and the documented build/test commands point at `.slnx`. Building or opening it needs the .NET SDK 9.0.200+ (VS 17.13+ or a recent Rider for the IDE) — `global.json` already rolls forward to a compatible SDK. The ReSharper/dotCover settings moved alongside it to `EverTask.slnx.DotSettings`, so the coverage filters keep applying.

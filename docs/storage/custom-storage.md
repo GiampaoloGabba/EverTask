@@ -2,12 +2,12 @@
 layout: default
 title: Custom Storage
 parent: Storage
-nav_order: 6
+nav_order: 7
 ---
 
 # Custom Storage
 
-You can implement custom storage providers for Redis, MongoDB, PostgreSQL, or any other database by implementing the `ITaskStorage` interface.
+You can implement custom storage providers for Redis, MongoDB, or any other database by implementing the `ITaskStorage` interface.
 
 ## Implementing ITaskStorage
 
@@ -252,7 +252,7 @@ public class CustomStorageTests
 
 ### PostgreSQL
 
-Implement using Npgsql and EF Core with PostgreSQL provider. Follow the same pattern as SQL Server storage.
+PostgreSQL is now a **built-in** provider — use [`EverTask.Storage.Postgres`](postgres-storage.md) (`AddPostgresStorage(...)`) instead of writing your own. The scenarios below remain useful for stores EverTask does not ship.
 
 ### MongoDB
 

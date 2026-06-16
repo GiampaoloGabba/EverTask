@@ -15,6 +15,7 @@ Storage providers persist tasks and their state. With persistent storage, tasks 
 |----------|----------|------|------|
 | **In-Memory** | Development, Testing | Fast, no setup | Data lost on restart |
 | **SQL Server** | Production, Enterprise | Robust, scalable, stored procedures | Requires SQL Server |
+| **PostgreSQL** | Production, Open-source | Relational, scalable, server-side queries, writable-CTE optimizations | Requires PostgreSQL |
 | **SQLite** | Small-scale production, Single-server | Simple, file-based, no server | Limited concurrent writes |
 
 ## Storage Provider Details
@@ -45,6 +46,20 @@ Enterprise-grade storage for production environments.
 
 **Learn more:** [SQL Server Storage](sql-server-storage.md)
 
+### PostgreSQL Storage
+
+Relational, open-source storage for production, comparable to the SQL Server provider.
+
+- Production-ready
+- Open-source (no licensing cost)
+- Highly scalable, multi-server
+- ACID transactions
+- Server-side querying for all recovery and cleanup operations
+- Writable-CTE optimizations for hot writes (single-statement, atomic)
+- Requires a PostgreSQL instance
+
+**Learn more:** [PostgreSQL Storage](postgres-storage.md)
+
 ### SQLite Storage
 
 Lightweight, file-based storage that works well for single-server deployments.
@@ -62,7 +77,7 @@ Lightweight, file-based storage that works well for single-server deployments.
 
 ### Custom Storage
 
-Implement custom storage providers for Redis, MongoDB, PostgreSQL, or any other database.
+Implement custom storage providers for Redis, MongoDB, or any other database.
 
 **Learn more:** [Custom Storage](custom-storage.md)
 
@@ -83,6 +98,13 @@ Implement custom storage providers for Redis, MongoDB, PostgreSQL, or any other 
 - Have existing SQL Server infrastructure
 - Need enterprise-grade reliability
 
+**Use PostgreSQL when:**
+- Running in production at scale
+- Need high availability with an open-source database
+- Require robust, server-side querying
+- Have existing PostgreSQL infrastructure
+- Want no database licensing cost
+
 **Use SQLite when:**
 - Running a small application
 - Single-server deployment
@@ -101,6 +123,7 @@ Implement custom storage providers for Redis, MongoDB, PostgreSQL, or any other 
 - **[Audit Configuration](audit-configuration.md)** - Control database bloat with audit levels
 - **[In-Memory Storage](in-memory-storage.md)** - Development and testing setup
 - **[SQL Server Storage](sql-server-storage.md)** - Production SQL Server configuration
+- **[PostgreSQL Storage](postgres-storage.md)** - Production open-source configuration
 - **[SQLite Storage](sqlite-storage.md)** - Lightweight production setup
 - **[Custom Storage](custom-storage.md)** - Implement your own storage provider
 - **[Best Practices](best-practices.md)** - Storage selection and optimization

@@ -897,6 +897,11 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     public virtual async Task<IReadOnlyDictionary<QueuedTaskStatus, int>> CountByStatusAsync(
         DateTimeOffset? createdAtOrAfterUtc = null, CancellationToken ct = default)
     {
+        // Normalize the filter to UTC (offset 0): Npgsql maps DateTimeOffset to timestamptz and REQUIRES
+        // Offset==0, so a caller passing e.g. DateTimeOffset.Now (+02:00) would throw on Postgres. This is a
+        // no-op for SQL Server/SQLite and for already-UTC inputs (DateTimeOffset comparison is instant-based).
+        createdAtOrAfterUtc = createdAtOrAfterUtc?.ToUniversalTime();
+
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
 
         // Set-based GROUP BY: never materializes the backlog. The filter is applied
@@ -918,6 +923,10 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     public virtual async Task<IReadOnlyDictionary<string, IReadOnlyDictionary<QueuedTaskStatus, int>>>
         CountByQueueAndStatusAsync(DateTimeOffset? createdAtOrAfterUtc = null, CancellationToken ct = default)
     {
+        // Normalize the filter to UTC (offset 0) — see CountByStatusAsync: required by Npgsql/timestamptz,
+        // no-op for the other providers.
+        createdAtOrAfterUtc = createdAtOrAfterUtc?.ToUniversalTime();
+
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
 
         IQueryable<QueuedTask> query = dbContext.QueuedTasks.AsNoTracking();

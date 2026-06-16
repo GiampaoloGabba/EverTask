@@ -5,6 +5,7 @@
 [![NuGet](https://img.shields.io/nuget/vpre/EverTask.Abstractions.svg?label=EverTask.Abstractions)](https://www.nuget.org/packages/EverTask.Abstractions)
 [![NuGet](https://img.shields.io/nuget/vpre/EverTask.Storage.SqlServer.svg?label=EverTask.Storage.SqlServer)](https://www.nuget.org/packages/EverTask.Storage.SqlServer)
 [![NuGet](https://img.shields.io/nuget/vpre/EverTask.Storage.Sqlite.svg?label=EverTask.Storage.Sqlite)](https://www.nuget.org/packages/EverTask.Storage.Sqlite)
+[![NuGet](https://img.shields.io/nuget/vpre/EverTask.Storage.Postgres.svg?label=EverTask.Storage.Postgres)](https://www.nuget.org/packages/EverTask.Storage.Postgres)
 [![NuGet](https://img.shields.io/nuget/vpre/EverTask.Storage.EfCore.svg?label=EverTask.Storage.EfCore)](https://www.nuget.org/packages/EverTask.Storage.EfCore)
 [![NuGet](https://img.shields.io/nuget/vpre/EverTask.Logging.Serilog.svg?label=EverTask.Logging.Serilog)](https://www.nuget.org/packages/EverTask.Logging.Serilog)
 [![NuGet](https://img.shields.io/nuget/vpre/EverTask.Monitor.AspnetCore.SignalR.svg?label=EverTask.Monitor.AspnetCore.SignalR)](https://www.nuget.org/packages/EverTask.Monitor.AspnetCore.SignalR)
@@ -27,7 +28,7 @@ Works great with ASP.NET Core, Windows Services, or any .NET project that needs 
 ### Core Execution
 - **Background Execution** — Fire-and-forget, scheduled, and recurring tasks with elegant API
 - **Zero Database Polling** — Smart scheduler with in-memory channels and persistence, no continuous database polling
-- **Smart Persistence** — Tasks resume after application restarts (SQL Server, SQLite, In-Memory)
+- **Smart Persistence** — Tasks resume after application restarts (SQL Server, PostgreSQL, SQLite, In-Memory)
 - **Fluent Scheduling API** — Intuitive recurring task configuration (every minute, hour, day, week, month, cron)
 - **Idempotent Task Registration** — Prevent duplicate recurring tasks with unique keys
 
@@ -62,7 +63,7 @@ Works great with ASP.NET Core, Windows Services, or any .NET project that needs 
 
 ```bash
 dotnet add package EverTask
-dotnet add package EverTask.Storage.SqlServer  # Or EverTask.Storage.Sqlite
+dotnet add package EverTask.Storage.SqlServer  # Or EverTask.Storage.Postgres / EverTask.Storage.Sqlite
 ```
 
 ### Configuration
@@ -129,7 +130,7 @@ await _dispatcher.Dispatch(new SendWelcomeEmailTask(dto.Email, dto.Name));
 - **[Monitoring](https://GiampaoloGabba.github.io/EverTask/monitoring.html)** - Complete monitoring guide (Dashboard, Events, and Logs)
 - **[Scalability](https://GiampaoloGabba.github.io/EverTask/scalability.html)** - Multi-queue support, keyed rate limiting, and sharded scheduler for high-load scenarios
 - **[Task Orchestration](https://GiampaoloGabba.github.io/EverTask/advanced-features.html)** - Chain tasks, build workflows, and coordinate complex processes
-- **[Storage Configuration](https://GiampaoloGabba.github.io/EverTask/storage.html)** - SQL Server, SQLite, In-Memory, custom implementations
+- **[Storage Configuration](https://GiampaoloGabba.github.io/EverTask/storage.html)** - SQL Server, PostgreSQL, SQLite, In-Memory, custom implementations
 - **[Configuration](https://GiampaoloGabba.github.io/EverTask/configuration.html)** - Configure EverTask (Reference + Cheatsheet)
 - **[Architecture & Internals](https://GiampaoloGabba.github.io/EverTask/architecture.html)** - How EverTask works under the hood
 
@@ -276,6 +277,7 @@ Capture all logs written during task execution and persist them to the database 
   - [EverTask.Abstractions](https://www.nuget.org/packages/EverTask.Abstractions) - Lightweight interfaces package
   - [EverTask.Storage.SqlServer](https://www.nuget.org/packages/EverTask.Storage.SqlServer) - SQL Server storage
   - [EverTask.Storage.Sqlite](https://www.nuget.org/packages/EverTask.Storage.Sqlite) - SQLite storage
+  - [EverTask.Storage.Postgres](https://www.nuget.org/packages/EverTask.Storage.Postgres) - PostgreSQL storage
   - [EverTask.Storage.EfCore](https://www.nuget.org/packages/EverTask.Storage.EfCore) - EF Core base storage
   - [EverTask.Logging.Serilog](https://www.nuget.org/packages/EverTask.Logging.Serilog) - Serilog integration
   - [EverTask.Monitor.AspnetCore.SignalR](https://www.nuget.org/packages/EverTask.Monitor.AspnetCore.SignalR) - Real-time monitoring
@@ -297,7 +299,7 @@ We have some exciting features in the pipeline:
 - **Adaptive Throttling**: Dynamic throttling based on system resources
 - **Workflow Orchestration**: Complex workflow and saga orchestration with fluent API
 - **Additional Monitoring**: Sentry Crons, Application Insights, OpenTelemetry support
-- **More Storage Options**: PostgreSQL, MySQL, Redis, Cosmos DB
+- **More Storage Options**: MySQL, Redis, Cosmos DB (PostgreSQL shipped)
 
 ## Contributing
 

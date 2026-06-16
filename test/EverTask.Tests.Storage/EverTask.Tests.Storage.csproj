@@ -12,8 +12,9 @@
     <PackageReference Include="Microsoft.Extensions.Logging" />
     
     <PackageReference Include="Moq" />
-    <PackageReference Include="Respawn" />    
+    <PackageReference Include="Respawn" />
     <PackageReference Include="Testcontainers.MsSql" />
+    <PackageReference Include="Testcontainers.PostgreSql" />
     <PackageReference Include="xunit" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="Shouldly" />
@@ -27,6 +28,7 @@
     <ProjectReference Include="..\..\src\Storage\EverTask.Storage.EfCore\EverTask.Storage.EfCore.csproj" />
     <ProjectReference Include="..\..\src\Storage\EverTask.Storage.Sqlite\EverTask.Storage.Sqlite.csproj" />
     <ProjectReference Include="..\..\src\Storage\EverTask.Storage.SqlServer\EverTask.Storage.SqlServer.csproj" />
+    <ProjectReference Include="..\..\src\Storage\EverTask.Storage.Postgres\EverTask.Storage.Postgres.csproj" />
     <ProjectReference Include="..\EverTask.Tests\EverTask.Tests.csproj" />
   </ItemGroup>
 
