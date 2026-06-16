@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### SQL Server recurring-completion performance
+
+#### Added
+
+- **`usp_CompleteRecurringRun` stored procedure (SQL Server).** Completing a recurring occurrence on success — marking it `Completed` and advancing its run counter / next run — now runs as a single database roundtrip on SQL Server, the same optimization already applied to `usp_SetTaskStatus` and `usp_UpdateCurrentRun`. (The terminal-skip finalization `SetRecurringSeriesCompleted` stays on the EF path.) It is a new `SqlServerTaskStorage.CompleteRecurringRun` override backed by a schema-aware migration; SQLite and the in-memory provider keep the EF Core path. The atomicity that protects against a crash splitting "completed" from "advanced" (CU14) is preserved identically — the proc does the update and the audit insert in one transaction — and a failed `EXEC` propagates (it does not silently swallow), so the scheduler never advances on unpersisted state. `NextRunUtc` is written unconditionally, so a terminal series (`null` next run) stays out of recovery. Accounting is unchanged: `CurrentRunCount` still counts real executions only (`== RunsAudit` rows), and the audit thresholds for the `(Completed, no-exception)` transition match the EF baseline exactly (StatusAudit at `Full`; RunsAudit at `Full` and `Minimal`).
+
 ### Execution log retention
 
 Captured execution logs (`TaskExecutionLog`, written when persistent logging is enabled) now have a retention of their own, so a long-running service (recurring tasks especially) no longer accumulates logs without bound.

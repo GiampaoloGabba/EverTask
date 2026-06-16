@@ -6,8 +6,9 @@ using Microsoft.Extensions.Logging;
 namespace EverTask.Storage.SqlServer;
 
 /// <summary>
-/// SQL Server-specific task storage implementation.
-/// Overrides SetStatus() to use stored procedure for optimal performance (single roundtrip).
+/// SQL Server-specific task storage implementation. Overrides the hot-path writes — <c>SetStatus</c>,
+/// <c>UpdateCurrentRun</c> and <c>CompleteRecurringRun</c> — to use stored procedures for optimal
+/// performance (a single atomic roundtrip each). Everything else is inherited from the EF Core base.
 /// </summary>
 public class SqlServerTaskStorage : EfCoreTaskStorage
 {
@@ -98,6 +99,47 @@ public class SqlServerTaskStorage : EfCoreTaskStorage
             // Residual D: propagate (do not swallow) so a failed counter persist does not advance the
             // schedule on unpersisted state; the recoverable row is re-run instead.
             _logger.LogCritical(e, "Update the current run counter for Task for taskId {TaskId}", taskId);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Completes a recurring occurrence using the optimized stored procedure: marks the task Completed and
+    /// advances the run counter / next run in a single atomic database roundtrip (one transaction), so a
+    /// crash can never split the status transition from the counter advance and resurrect the finished
+    /// occurrence at recovery (CU14/L29).
+    /// </summary>
+    /// <remarks>
+    /// The proc advances <c>CurrentRunCount</c> by exactly one real execution (Option B accounting) and
+    /// assigns <c>NextRunUtc</c> unconditionally: a null clears it, making a terminal series unrecoverable.
+    /// </remarks>
+    public override async Task CompleteRecurringRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
+                                                    AuditLevel auditLevel)
+    {
+        _logger.LogInformation("Complete recurring run for Task {TaskId} using SQL Server stored procedure", taskId);
+
+        await using var dbContext = await _contextFactory.CreateDbContextAsync();
+
+        try
+        {
+            var sql = $"EXEC [{_schema}].[usp_CompleteRecurringRun] @TaskId, @ExecutionTimeMs, @NextRunUtc, @AuditLevel";
+
+            await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(
+                sql,
+                [
+                    new SqlParameter("@TaskId", taskId),
+                    new SqlParameter("@ExecutionTimeMs", executionTimeMs),
+                    new SqlParameter("@NextRunUtc", (object?)nextRun ?? DBNull.Value),
+                    new SqlParameter("@AuditLevel", (int)auditLevel)
+                ]
+            ).ConfigureAwait(false);
+        }
+        catch (Exception e)
+        {
+            // Residual D: propagate (do not swallow) — a failed completion must NOT advance the schedule on
+            // unpersisted state; the recoverable row is re-run instead. Same contract as UpdateCurrentRun,
+            // deliberately NOT the swallow pattern of SetStatus.
+            _logger.LogCritical(e, "Unable to complete recurring run for taskId {TaskId}", taskId);
             throw;
         }
     }

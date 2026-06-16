@@ -521,6 +521,76 @@ public abstract class EfCoreTaskStorageTestsBase
         task.CurrentRunCount!.Value.ShouldBe(runsCount, "CurrentRunCount must equal the RunsAudit row count");
     }
 
+    [Theory]
+    [InlineData(AuditLevel.Full,       1, 1)] // StatusAudit only at Full; RunsAudit at Full
+    [InlineData(AuditLevel.Minimal,    0, 1)] // Minimal: no StatusAudit, but RunsAudit tracks the run
+    [InlineData(AuditLevel.ErrorsOnly, 0, 0)] // a successful (Completed, no-exception) run is never an error
+    [InlineData(AuditLevel.None,       0, 0)]
+    public async Task CompleteRecurringRun_creates_correct_audit_rows_per_level(
+        AuditLevel level, int expectedStatusAudits, int expectedRunsAudits)
+    {
+        // The (Completed, null-exception) transition has DIFFERENT audit thresholds per table:
+        // StatusAudit only at Full, RunsAudit at Full+Minimal (AuditPolicy). A single combined audit flag
+        // in the SQL Server proc would write a spurious StatusAudit at Minimal -> the Minimal row bites it.
+        // The run counter ALWAYS advances +1, regardless of the audit level (Option B).
+        var taskId = GetGuidForProvider();
+        await _storage.Persist(new QueuedTask
+        {
+            Id              = taskId,
+            Type            = "T",
+            Request         = "{}",
+            Handler         = "H",
+            CreatedAtUtc    = DateTimeOffset.UtcNow,
+            Status          = QueuedTaskStatus.Completed,
+            IsRecurring     = true,
+            CurrentRunCount = 0
+        });
+
+        var startStatus = _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == taskId);
+        var startRuns   = _mockedDbContext.RunsAudit.Count(x => x.QueuedTaskId == taskId);
+
+        await _storage.CompleteRecurringRun(taskId, 50.0, DateTimeOffset.UtcNow.AddHours(1), level);
+
+        var task = (await _storage.Get(x => x.Id == taskId))[0];
+        task.CurrentRunCount.ShouldBe(1, "the counter always advances +1, never gated on the audit level");
+        task.Status.ShouldBe(QueuedTaskStatus.Completed);
+        (_mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == taskId) - startStatus)
+            .ShouldBe(expectedStatusAudits, "StatusAudit threshold (Full only) must match the EF baseline");
+        (_mockedDbContext.RunsAudit.Count(x => x.QueuedTaskId == taskId) - startRuns)
+            .ShouldBe(expectedRunsAudits, "RunsAudit threshold (Full+Minimal) must match the EF baseline");
+    }
+
+    [Fact]
+    public async Task CompleteRecurringRun_with_null_nextRun_makes_row_terminal_and_unrecoverable()
+    {
+        // P0: the last successful occurrence of a bounded series passes nextRun = null. The proc must assign
+        // NextRunUtc UNCONDITIONALLY (never COALESCE), otherwise a future stale value survives and recovery
+        // resurrects a finished series -> double execution. RunUntil is future on purpose so that, WITH a
+        // COALESCE trap, the row would stay recoverable and RetrievePending would (wrongly) include it.
+        var taskId = GetGuidForProvider();
+        await _storage.Persist(new QueuedTask
+        {
+            Id              = taskId,
+            Type            = "T",
+            Request         = "{}",
+            Handler         = "H",
+            CreatedAtUtc    = DateTimeOffset.UtcNow,
+            Status          = QueuedTaskStatus.InProgress,
+            IsRecurring     = true,
+            CurrentRunCount = 0,
+            NextRunUtc      = DateTimeOffset.UtcNow.AddMinutes(5),  // stale value that must NOT be preserved
+            RunUntil        = DateTimeOffset.UtcNow.AddMinutes(30)  // future: with COALESCE the row stays recoverable
+        });
+
+        await _storage.CompleteRecurringRun(taskId, 10.0, nextRun: null, AuditLevel.Full);
+
+        var row = (await _storage.Get(x => x.Id == taskId))[0];
+        row.NextRunUtc.ShouldBeNull("NextRunUtc must be cleared, never preserved with COALESCE");
+
+        var pending = await _storage.RetrievePending(null, null, 100);
+        pending.ShouldNotContain(t => t.Id == taskId, "a terminated series must never be revived by recovery");
+    }
+
     [Fact]
     public async Task SaveExecutionLogsAsync_Should_PersistLogs()
     {

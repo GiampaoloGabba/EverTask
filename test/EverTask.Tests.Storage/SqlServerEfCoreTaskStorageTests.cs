@@ -1,4 +1,6 @@
-﻿using EverTask.Storage;
+﻿using System.Data.Common;
+using EverTask.Abstractions;
+using EverTask.Storage;
 using EverTask.Storage.EfCore;
 using EverTask.Storage.SqlServer;
 using EverTask.Tests.Storage.EfCore;
@@ -105,12 +107,66 @@ public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsyn
             SELECT COUNT(*) FROM sys.objects
             WHERE type = 'P'
               AND SCHEMA_NAME(schema_id) = 'EverTask'
-              AND name IN ('usp_SetTaskStatus', 'usp_UpdateCurrentRun')
+              AND name IN ('usp_SetTaskStatus', 'usp_UpdateCurrentRun', 'usp_CompleteRecurringRun')
             """,
             connection);
 
         var count = (int)(await command.ExecuteScalarAsync())!;
-        count.ShouldBe(2, "both usp_SetTaskStatus and usp_UpdateCurrentRun should exist");
+        count.ShouldBe(3, "usp_SetTaskStatus, usp_UpdateCurrentRun and usp_CompleteRecurringRun should exist");
+    }
+
+    [Fact]
+    public async Task Should_have_complete_recurring_run_stored_procedure()
+    {
+        // Single-roundtrip counterpart of EfCoreTaskStorage.CompleteRecurringRun on SQL Server:
+        // the override execs this proc, so it MUST exist after migrations are applied.
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = new SqlCommand(
+            """
+            SELECT COUNT(*) FROM sys.objects
+            WHERE type = 'P'
+              AND SCHEMA_NAME(schema_id) = 'EverTask'
+              AND name = 'usp_CompleteRecurringRun'
+            """,
+            connection);
+
+        var count = (int)(await command.ExecuteScalarAsync())!;
+        count.ShouldBe(1, "usp_CompleteRecurringRun should exist");
+    }
+
+    [Fact]
+    public async Task CompleteRecurringRun_override_propagates_sql_failure_instead_of_swallowing()
+    {
+        // Residual D: the SQL Server override must PROPAGATE a failed EXEC (like UpdateCurrentRun), NOT
+        // swallow it (like SetStatus) — a failed completion must not let the scheduler advance on
+        // unpersisted state. Deterministic, self-contained failure injection: CurrentRunCount = int.MaxValue
+        // makes the proc's `ISNULL(CurrentRunCount,0) + 1` overflow inside the EXEC (no schema mutation, so
+        // subsequent tests in the collection still see the proc).
+        var id = GetGuidForProvider();
+        await _taskStorage.Persist(new QueuedTask
+        {
+            Id              = id,
+            Type            = "T",
+            Request         = "{}",
+            Handler         = "H",
+            CreatedAtUtc    = DateTimeOffset.UtcNow,
+            Status          = QueuedTaskStatus.InProgress,
+            IsRecurring     = true,
+            CurrentRunCount = int.MaxValue
+        });
+
+        // Assert a DbException specifically: this proves the failure propagated from the DB layer (the EXEC),
+        // not from some unrelated pre-EXEC C# fault, so the test genuinely exercises the propagate-on-persist-
+        // failure contract.
+        await Should.ThrowAsync<DbException>(
+            () => _taskStorage.CompleteRecurringRun(id, 10.0, DateTimeOffset.UtcNow.AddMinutes(1), AuditLevel.Full));
+
+        // The failed completion rolled back: the row stays recoverable (not advanced to Completed).
+        var row = (await _taskStorage.Get(x => x.Id == id))[0];
+        row.Status.ShouldBe(QueuedTaskStatus.InProgress, "a rolled-back completion must not advance the status");
+        row.CurrentRunCount.ShouldBe(int.MaxValue, "the counter must not advance on a failed persist");
     }
 
     protected override async Task CleanUpDatabase()

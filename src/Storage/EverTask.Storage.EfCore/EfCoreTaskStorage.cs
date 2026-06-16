@@ -456,9 +456,10 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     /// <summary>
     /// Atomically marks a recurring occurrence Completed AND advances the run counter / next run in a
     /// SINGLE tracked SaveChanges (= one transaction), so a crash can never split the two and resurrect
-    /// the finished occurrence at recovery (CU14/L29). Inherited unchanged by Sqlite and SQL Server:
-    /// this combined operation has no single-roundtrip stored-procedure equivalent, and atomicity — not
-    /// a saved roundtrip — is the priority here.
+    /// the finished occurrence at recovery (CU14/L29). Inherited unchanged by Sqlite and the in-memory
+    /// provider. SQL Server overrides it with the <c>usp_CompleteRecurringRun</c> stored procedure, which
+    /// preserves the exact same atomicity (one transaction) while collapsing it into a single roundtrip on
+    /// the recurring success path.
     /// </summary>
     public virtual async Task CompleteRecurringRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
                                                    AuditLevel auditLevel)
