@@ -196,4 +196,63 @@ public class WorkerServiceRecoveryPoisonTests
             e => e.Level == LogLevel.Error && e.Message.Contains("corrupt recurring metadata"),
             "the recovery log must surface the corrupt recurring metadata poison");
     }
+
+    /// <summary>
+    /// Recovery must re-dispatch a recovered task with its PERSISTED per-task audit level, not the
+    /// global default. The re-dispatch used to omit the auditLevel argument, so ExecuteDispatch fell
+    /// back to EverTaskServiceConfiguration.DefaultAuditLevel — a recovered task silently reverted to
+    /// the global default after a restart (e.g. a per-dispatch Minimal task became Full-audited). The
+    /// same loss surfaced as a flaky integration test whenever a coarse-clock cutoff tie let recovery
+    /// win the delivery race against the live dispatch.
+    /// [UNIT-necessario: drives ProcessPendingAsync directly and captures the audit level handed to ExecuteDispatch.]
+    /// </summary>
+    [Fact]
+    public async Task Should_carry_persisted_audit_level_into_recovery_redispatch()
+    {
+        var row = new QueuedTask
+        {
+            Id           = Guid.NewGuid(),
+            Type         = typeof(RecoveryFailProbeTask).AssemblyQualifiedName!,
+            Request      = JsonConvert.SerializeObject(new RecoveryFailProbeTask()),
+            Handler      = "seeded-by-test",
+            Status       = QueuedTaskStatus.Queued,
+            AuditLevel   = (int)AuditLevel.Minimal,                 // per-dispatch override on the persisted row
+            CreatedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-5)     // well before the dynamic recovery cutoff
+        };
+
+        var storage = new Mock<ITaskStorage>();
+        storage.Setup(s => s.RetrievePending(It.IsAny<DateTimeOffset?>(), It.IsAny<Guid?>(), It.IsAny<int>(),
+                   It.IsAny<CancellationToken>()))
+               .ReturnsAsync((DateTimeOffset? last, Guid? id, int take, CancellationToken ct) =>
+                   last == null ? new[] { row } : Array.Empty<QueuedTask>());
+
+        var provider = new Mock<IServiceProvider>();
+        provider.Setup(p => p.GetService(typeof(ITaskStorage))).Returns(storage.Object);
+        var scope = new Mock<IServiceScope>();
+        scope.Setup(s => s.ServiceProvider).Returns(provider.Object);
+        var scopeFactory = new Mock<IServiceScopeFactory>();
+        scopeFactory.Setup(f => f.CreateScope()).Returns(scope.Object);
+
+        AuditLevel? capturedAuditLevel = null;
+        var dispatcher = new Mock<ITaskDispatcherInternal>();
+        dispatcher.Setup(d => d.ExecuteDispatch(It.IsAny<IEverTask>(), It.IsAny<DateTimeOffset?>(),
+                      It.IsAny<RecurringTask?>(), It.IsAny<int?>(), It.IsAny<CancellationToken>(),
+                      It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<AuditLevel?>(), It.IsAny<bool>()))
+                  .Callback((IEverTask _, DateTimeOffset? _, RecurringTask? _, int? _, CancellationToken _,
+                             Guid? _, string? _, AuditLevel? auditLevel, bool _) => capturedAuditLevel = auditLevel)
+                  .ReturnsAsync(Guid.NewGuid());
+
+        var service = new WorkerService(
+            new Mock<IWorkerQueueManager>().Object,
+            scopeFactory.Object,
+            dispatcher.Object,
+            new EverTaskServiceConfiguration(),   // global default is Full — the override must win
+            new Mock<IEverTaskWorkerExecutor>().Object,
+            new RecordingLogger<WorkerService>());
+
+        await service.ProcessPendingAsync();
+
+        capturedAuditLevel.ShouldBe(AuditLevel.Minimal,
+            "recovery must re-dispatch with the persisted per-task audit level, not the global default");
+    }
 }

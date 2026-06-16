@@ -223,11 +223,16 @@ public class WorkerService(
             if (page.Length == 0)
                 break;
 
-            // The cutoff is a cheap first pass, not the correctness defense: a re-delivery that
-            // slips past it (same-instant tie, stale page) is rejected deterministically at the
-            // channel write by the TaskDeliveryRegistry, and a row that terminally finished
-            // since the page read is refused by the conditional SetQueued (QueueForRecovery).
-            var pendingTasks = page.Where(t => t.CreatedAtUtc <= recoveryCutoff).ToArray();
+            // STRICT cutoff (<, not <=): live dispatches happen after this host captured the cutoff,
+            // but the wall clock is coarse (DateTimeOffset.UtcNow resolves to ~15 ms on Windows), so a
+            // live dispatch can land in the SAME tick as the cutoff. A <= filter then grabs that live
+            // row and re-dispatches it via ExecuteDispatch(isRecovery:true), racing the live delivery —
+            // wasted re-park churn for rate-limited tasks and, worse, the re-dispatch used to drop the
+            // per-dispatch audit level (see the auditLevel propagation below). < excludes the same-tick
+            // tie up front; the cutoff stays a best-effort first pass — the channel-write
+            // TaskDeliveryRegistry is still the correctness defense for any residual race (stale page),
+            // and the conditional SetQueued refuses a row that terminally finished since the page read.
+            var pendingTasks = page.Where(t => t.CreatedAtUtc < recoveryCutoff).ToArray();
 
             logger.LogInformation("Processing batch with {Count} pending tasks (lastCreatedAt={LastCreatedAt}, lastId={LastId})",
                 pendingTasks.Length, lastCreatedAt, lastId);
@@ -256,12 +261,13 @@ public class WorkerService(
             totalProcessed += pendingTasks.Length;
 
             // Advance the keyset cursor using the RAW page (not the filtered one) so pagination
-            // always makes progress; stop once the page goes past the recovery cutoff.
+            // always makes progress; stop once the page reaches the recovery cutoff (>=, matching the
+            // strict < filter above: every row from the cutoff tick onward is excluded anyway).
             var lastTask = page[^1];
             lastCreatedAt = lastTask.CreatedAtUtc;
             lastId = lastTask.Id;
 
-            if (lastTask.CreatedAtUtc > recoveryCutoff)
+            if (lastTask.CreatedAtUtc >= recoveryCutoff)
                 break;
         }
 
@@ -341,9 +347,14 @@ public class WorkerService(
                     // isRecovery: recovery must never drop tasks, so full queues exert
                     // backpressure here (consumers are draining concurrently), the stored
                     // NextRunUtc is preserved for recurring tasks and the task definition
-                    // is not rewritten in storage
+                    // is not rewritten in storage.
+                    // auditLevel: carry the PERSISTED per-task audit level through the re-dispatch.
+                    // Omitting it let ExecuteDispatch fall back to the global DefaultAuditLevel, so a
+                    // recovered task silently reverted to the global default (e.g. a Minimal task got
+                    // Full-audited after a restart, or vice versa) — and the same loss surfaced as a
+                    // flaky test whenever a same-tick cutoff tie made recovery win the delivery race.
                     await taskDispatcher.ExecuteDispatch(task, executionTime, scheduledTask,
-                        taskInfo.CurrentRunCount, token, taskInfo.Id, isRecovery: true)
+                        taskInfo.CurrentRunCount, token, taskInfo.Id, auditLevel: auditLevel, isRecovery: true)
                         .ConfigureAwait(false);
 
                     // L18: a task that previously failed re-dispatch but now succeeded clears its failure
