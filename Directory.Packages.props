@@ -99,6 +99,8 @@
   <ItemGroup>
     <!-- Benchmarks only (benchmarks/EverTask.Benchmarks) — not referenced by any shipped/test project -->
     <PackageVersion Include="BenchmarkDotNet" Version="0.14.0" />
+    <!-- Load harness only (benchmarks/EverTask.LoadHarness) — fixed-memory concurrent latency percentiles -->
+    <PackageVersion Include="HdrHistogram" Version="2.5.0" />
     <PackageVersion Include="Cronos" Version="0.13.0" />
     <PackageVersion Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageVersion Include="Respawn" Version="7.0.0" />

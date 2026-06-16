@@ -16,6 +16,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\EverTask\EverTask.csproj" />
+    <!-- For the DbContext pooling micro-benchmark: real SqliteTaskStoreContext + UseSqlite. -->
+    <ProjectReference Include="..\..\src\Storage\EverTask.Storage.Sqlite\EverTask.Storage.Sqlite.csproj" />
   </ItemGroup>
 
 </Project>

@@ -4,6 +4,10 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/EverTask.Benchmarks/EverTask.Benchmarks.csproj" />
+    <Project Path="benchmarks/EverTask.LoadHarness/EverTask.LoadHarness.csproj" />
+  </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/EverTask.Example.AspnetCore/EverTask.Example.AspnetCore.csproj" />
     <Project Path="samples/EverTask.Example.Console/EverTask.Example.Console.csproj" />

@@ -552,3 +552,6 @@ fabric.properties
 # Custom
 /firebase.json
 .claude/
+
+# EverTask load harness generated reports
+benchmarks/results/
