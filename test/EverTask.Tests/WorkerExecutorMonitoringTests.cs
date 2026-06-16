@@ -128,19 +128,24 @@ public class WorkerExecutorMonitoringTests
         logger.Setup(l => l.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
         var executor = CreateExecutor(logger.Object);
 
+        const int events = 50;
         var delivered = 0;
+        // Event-driven completion: the TCS fires the instant the last event is delivered, so the test waits on
+        // the actual signal instead of polling on a fixed cadence. The timeout is only a safety net, and far
+        // more generous on CI, where async delivery can be starved under load (this is the flaky guard).
+        var allDelivered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         executor.TaskEventOccurredAsync += _ =>
         {
-            Interlocked.Increment(ref delivered);
+            if (Interlocked.Increment(ref delivered) == events)
+                allDelivered.TrySetResult();
             return Task.CompletedTask;
         };
 
         // Fast subscriber: permits free up immediately, so under moderate load nothing is dropped.
-        const int events = 50;
         for (var i = 0; i < events; i++)
             executor.RegisterInfo(SampleExecutor(), "evt {0}", i);
 
-        await TaskWaitHelper.WaitForConditionAsync(() => Volatile.Read(ref delivered) == events, timeoutMs: 5000);
+        await allDelivered.Task.WaitAsync(TimeSpan.FromMilliseconds(TestEnvironment.GetTimeout(5000, 30000)));
 
         Volatile.Read(ref delivered).ShouldBe(events,
             "non-regression: under moderate load every event reaches the subscriber (no silent loss)");
