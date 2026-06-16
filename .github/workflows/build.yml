@@ -51,10 +51,10 @@ jobs:
           dotnet-version: '10.0.x'
 
       - name: Restore dependencies
-        run: dotnet restore EverTask.sln
+        run: dotnet restore EverTask.slnx
 
       - name: Build
-        run: dotnet build EverTask.sln --no-restore
+        run: dotnet build EverTask.slnx --no-restore
 
       # Tests run only on .NET 9 - multi-target testing disabled (flaky on GitHub Actions)
       # To run on all frameworks, remove --framework net9.0

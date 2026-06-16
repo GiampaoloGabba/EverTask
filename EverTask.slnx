@@ -1,0 +1,43 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Folder Name="/samples/">
+    <Project Path="samples/EverTask.Example.AspnetCore/EverTask.Example.AspnetCore.csproj" />
+    <Project Path="samples/EverTask.Example.Console/EverTask.Example.Console.csproj" />
+  </Folder>
+  <Folder Name="/Solution Items/">
+    <File Path=".editorconfig" />
+    <File Path=".github/workflows/build.yml" />
+    <File Path=".github/workflows/release.yml" />
+    <File Path=".gitignore" />
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Packages.props" />
+    <File Path="global.json" />
+    <File Path="README.md" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/EverTask.Abstractions/EverTask.Abstractions.csproj" />
+    <Project Path="src/EverTask/EverTask.csproj" />
+  </Folder>
+  <Folder Name="/src/Logging/">
+    <Project Path="src/Logging/EverTask.Logging.Serilog/EverTask.Logging.Serilog.csproj" />
+  </Folder>
+  <Folder Name="/src/Monitoring/">
+    <Project Path="src/Monitoring/EverTask.Monitor.Api/EverTask.Monitor.Api.csproj" />
+    <Project Path="src/Monitoring/EverTask.Monitor.AspnetCore.SignalR/EverTask.Monitor.AspnetCore.SignalR.csproj" />
+  </Folder>
+  <Folder Name="/src/Storage/">
+    <Project Path="src/Storage/EverTask.Storage.EfCore/EverTask.Storage.EfCore.csproj" />
+    <Project Path="src/Storage/EverTask.Storage.Sqlite/EverTask.Storage.Sqlite.csproj" />
+    <Project Path="src/Storage/EverTask.Storage.SqlServer/EverTask.Storage.SqlServer.csproj" />
+  </Folder>
+  <Folder Name="/test/">
+    <Project Path="test/EverTask.Tests.Logging/EverTask.Tests.Logging.csproj" />
+    <Project Path="test/EverTask.Tests.Monitoring/EverTask.Tests.Monitoring.csproj" />
+    <Project Path="test/EverTask.Tests.Storage/EverTask.Tests.Storage.csproj" />
+    <Project Path="test/EverTask.Tests/EverTask.Tests.csproj" />
+  </Folder>
+</Solution>

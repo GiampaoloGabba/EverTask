@@ -46,10 +46,10 @@ jobs:
           pnpm run build
 
       - name: Restore dependencies
-        run: dotnet restore EverTask.sln
+        run: dotnet restore EverTask.slnx
 
       - name: Build
-        run: dotnet build EverTask.sln --no-restore --configuration Release
+        run: dotnet build EverTask.slnx --no-restore --configuration Release
 
       - name: NuGet Push
         run: |

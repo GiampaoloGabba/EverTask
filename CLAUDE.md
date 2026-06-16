@@ -28,8 +28,8 @@ EverTask is a .NET background task execution library inspired by MediatR. It pro
 
 | Task | Command | Notes |
 |------|---------|-------|
-| **Build** | `dotnet build EverTask.sln -c Release` | Warnings as errors |
-| **Test All** | `dotnet test EverTask.sln -c Release` | Exclude SQL Server: add `--filter "FullyQualifiedName!~SqlServerEfCoreTaskStorageTests"` |
+| **Build** | `dotnet build EverTask.slnx -c Release` | Warnings as errors; solution is `.slnx` (XML format, needs SDK 9.0.200+) |
+| **Test All** | `dotnet test EverTask.slnx -c Release` | Exclude SQL Server: add `--filter "FullyQualifiedName!~SqlServerEfCoreTaskStorageTests"` |
 | **Pack** | `dotnet pack <project.csproj> -c Release -o nupkg` | For all projects in src/ |
 | **Run Sample** | `dotnet run --project samples/<project>/<project>.csproj` | AspnetCore or Console |
 

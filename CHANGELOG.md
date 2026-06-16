@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Build: solution moved to `.slnx`
+
+- **The solution is now `EverTask.slnx`** (the new XML solution format); the old `EverTask.sln` is removed. CI (`build.yml`, `release.yml`) and the documented build/test commands point at `.slnx`. Building or opening it needs the .NET SDK 9.0.200+ (VS 17.13+ or a recent Rider for the IDE) — `global.json` already rolls forward to a compatible SDK. The ReSharper/dotCover settings moved alongside it to `EverTask.slnx.DotSettings`, so the coverage filters keep applying.
+
 ### SQLite statistics fix + dead-code cleanup
 
 #### Fixed
