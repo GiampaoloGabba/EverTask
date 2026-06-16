@@ -144,4 +144,42 @@ public class MemoryTaskStorageTests
         result["queue-b"][QueuedTaskStatus.InProgress].ShouldBe(1);
         result[""][QueuedTaskStatus.Queued].ShouldBe(1);
     }
+
+    // CurrentRunCount saturates at int.MaxValue instead of overflowing (parity with the EF Core providers).
+    [Theory]
+    [InlineData(AuditLevel.None)]
+    [InlineData(AuditLevel.Full)]
+    public async Task UpdateCurrentRun_saturates_run_counter_at_int_max(AuditLevel auditLevel)
+    {
+        var id = TestGuidGenerator.New();
+        await _storage.Persist(new QueuedTask
+        {
+            Id = id, Type = "T", Request = "{}", Handler = "H",
+            CreatedAtUtc = DateTimeOffset.UtcNow, Status = QueuedTaskStatus.InProgress,
+            IsRecurring = true, MaxRuns = null, CurrentRunCount = int.MaxValue
+        });
+
+        await Should.NotThrowAsync(() => _storage.UpdateCurrentRun(id, 10.0, DateTimeOffset.UtcNow.AddMinutes(1), auditLevel));
+
+        var row = (await _storage.Get(x => x.Id == id))[0];
+        row.CurrentRunCount.ShouldBe(int.MaxValue, "the run counter must saturate at int.MaxValue, never wrap");
+    }
+
+    [Fact]
+    public async Task CompleteRecurringRun_saturates_run_counter_at_int_max()
+    {
+        var id = TestGuidGenerator.New();
+        await _storage.Persist(new QueuedTask
+        {
+            Id = id, Type = "T", Request = "{}", Handler = "H",
+            CreatedAtUtc = DateTimeOffset.UtcNow, Status = QueuedTaskStatus.InProgress,
+            IsRecurring = true, MaxRuns = null, CurrentRunCount = int.MaxValue
+        });
+
+        await Should.NotThrowAsync(() => _storage.CompleteRecurringRun(id, 10.0, DateTimeOffset.UtcNow.AddMinutes(1), AuditLevel.Full));
+
+        var row = (await _storage.Get(x => x.Id == id))[0];
+        row.Status.ShouldBe(QueuedTaskStatus.Completed);
+        row.CurrentRunCount.ShouldBe(int.MaxValue, "the run counter must saturate at int.MaxValue, never wrap");
+    }
 }

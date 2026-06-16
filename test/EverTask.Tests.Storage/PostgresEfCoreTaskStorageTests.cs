@@ -1,4 +1,3 @@
-using System.Data.Common;
 using EverTask.Abstractions;
 using EverTask.Storage;
 using EverTask.Storage.EfCore;
@@ -321,53 +320,6 @@ public class PostgresEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsync
 
         var pending = await _taskStorage.RetrievePending(null, null, 100);
         pending.ShouldNotContain(t => t.Id == taskId, "a terminated series must never be revived by recovery");
-    }
-
-    [Fact]
-    public async Task UpdateCurrentRun_CTE_propagates_overflow_and_does_not_advance_row()
-    {
-        // Server-side overflow: COALESCE("CurrentRunCount",0)+1 on an integer column at int.MaxValue raises
-        // SQLSTATE 22003 INSIDE the CTE -> DbException propagated (Residual D: the scheduler must not advance
-        // on unpersisted state). The whole statement is atomic, so the row must NOT have moved.
-        var id = GetGuidForProvider();
-        await _taskStorage.Persist(new QueuedTask
-        {
-            Id = id, Type = "T", Request = "{}", Handler = "H",
-            CreatedAtUtc = DateTimeOffset.UtcNow, Status = QueuedTaskStatus.InProgress,
-            IsRecurring = true, CurrentRunCount = int.MaxValue
-        });
-
-        await Should.ThrowAsync<DbException>(
-            () => _taskStorage.UpdateCurrentRun(id, 10.0, DateTimeOffset.UtcNow.AddMinutes(1), AuditLevel.Full));
-
-        var row = (await _taskStorage.Get(x => x.Id == id))[0];
-        row.CurrentRunCount.ShouldBe(int.MaxValue, "an overflowed (rolled-back) update must not advance the counter");
-        row.NextRunUtc.ShouldBeNull("the rolled-back CTE must not have set NextRunUtc");
-        _dbContext.RunsAudit.Count(x => x.QueuedTaskId == id)
-            .ShouldBe(0, "a rolled-back statement must persist no audit row (atomicity)");
-    }
-
-    [Fact]
-    public async Task CompleteRecurringRun_CTE_propagates_overflow_and_does_not_advance_row()
-    {
-        // Mirror of the SQL Server CompleteRecurringRun_override_propagates_sql_failure test, now server-side:
-        // the +1 on int.MaxValue overflows inside the writable CTE -> DbException, atomic rollback.
-        var id = GetGuidForProvider();
-        await _taskStorage.Persist(new QueuedTask
-        {
-            Id = id, Type = "T", Request = "{}", Handler = "H",
-            CreatedAtUtc = DateTimeOffset.UtcNow, Status = QueuedTaskStatus.InProgress,
-            IsRecurring = true, CurrentRunCount = int.MaxValue
-        });
-
-        await Should.ThrowAsync<DbException>(
-            () => _taskStorage.CompleteRecurringRun(id, 10.0, DateTimeOffset.UtcNow.AddMinutes(1), AuditLevel.Full));
-
-        var row = (await _taskStorage.Get(x => x.Id == id))[0];
-        row.Status.ShouldBe(QueuedTaskStatus.InProgress, "a rolled-back completion must not advance the status");
-        row.CurrentRunCount.ShouldBe(int.MaxValue, "the counter must not advance on a failed persist");
-        _dbContext.StatusAudit.Count(x => x.QueuedTaskId == id)
-            .ShouldBe(0, "a rolled-back statement must persist no audit row (atomicity)");
     }
 
     protected override async Task CleanUpDatabase()

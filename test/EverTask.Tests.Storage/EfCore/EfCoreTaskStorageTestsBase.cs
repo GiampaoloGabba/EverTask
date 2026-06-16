@@ -1084,6 +1084,56 @@ public abstract class EfCoreTaskStorageTestsBase
         createdIds.Except(retrieved).ShouldBeEmpty("no same-timestamp row may be skipped by the keyset tie-break");
     }
 
+    /// <summary>
+    /// CurrentRunCount saturates at int.MaxValue instead of overflowing. An unbounded recurring series
+    /// (MaxRuns == null) that reaches int.MaxValue real executions keeps running with the counter frozen at
+    /// its max: it must NOT wrap to int.MinValue (the C# unchecked paths) NOR raise an out-of-range error
+    /// (the server-side procs/CTEs). Covers both base C# paths (the AuditLevel.None fast-path and the audited
+    /// path) on SQLite, and the stored-proc / writable-CTE overrides on SQL Server / PostgreSQL.
+    /// </summary>
+    [Theory]
+    [InlineData(AuditLevel.None)]
+    [InlineData(AuditLevel.Full)]
+    public async Task UpdateCurrentRun_saturates_run_counter_at_int_max(AuditLevel auditLevel)
+    {
+        var id = GetGuidForProvider();
+        await _storage.Persist(new QueuedTask
+        {
+            Id = id, Type = "T", Request = "{}", Handler = "H",
+            CreatedAtUtc = DateTimeOffset.UtcNow, Status = QueuedTaskStatus.InProgress,
+            IsRecurring = true, MaxRuns = null, CurrentRunCount = int.MaxValue
+        });
+
+        await Should.NotThrowAsync(() =>
+            _storage.UpdateCurrentRun(id, 10.0, DateTimeOffset.UtcNow.AddMinutes(1), auditLevel));
+
+        var row = (await _storage.Get(x => x.Id == id))[0];
+        row.CurrentRunCount.ShouldBe(int.MaxValue, "the run counter must saturate at int.MaxValue, never wrap to int.MinValue or throw");
+        row.ExecutionTimeMs.ShouldBe(10.0, "the rest of the update still applies (saturation is not a no-op)");
+    }
+
+    /// <summary>
+    /// The recurring-completion counter saturates at int.MaxValue too, and the occurrence still completes.
+    /// </summary>
+    [Fact]
+    public async Task CompleteRecurringRun_saturates_run_counter_at_int_max()
+    {
+        var id = GetGuidForProvider();
+        await _storage.Persist(new QueuedTask
+        {
+            Id = id, Type = "T", Request = "{}", Handler = "H",
+            CreatedAtUtc = DateTimeOffset.UtcNow, Status = QueuedTaskStatus.InProgress,
+            IsRecurring = true, MaxRuns = null, CurrentRunCount = int.MaxValue
+        });
+
+        await Should.NotThrowAsync(() =>
+            _storage.CompleteRecurringRun(id, 10.0, DateTimeOffset.UtcNow.AddMinutes(1), AuditLevel.Full));
+
+        var row = (await _storage.Get(x => x.Id == id))[0];
+        row.Status.ShouldBe(QueuedTaskStatus.Completed, "the occurrence still completes");
+        row.CurrentRunCount.ShouldBe(int.MaxValue, "the run counter must saturate at int.MaxValue, never wrap or throw");
+    }
+
     #region AuditLevel Tests
 
     /// <summary>

@@ -403,7 +403,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                                                   .ExecuteUpdateAsync(setters => setters
                                                                                  .SetProperty(t => t.ExecutionTimeMs, executionTimeMs)
                                                                                  .SetProperty(t => t.NextRunUtc, nextRun)
-                                                                                 .SetProperty(t => t.CurrentRunCount, t => (t.CurrentRunCount ?? 0) + 1))
+                                                                                 .SetProperty(t => t.CurrentRunCount, t => t.CurrentRunCount >= int.MaxValue ? int.MaxValue : (t.CurrentRunCount ?? 0) + 1))
                                                   .ConfigureAwait(false);
 
                 if (rowsAffected == 0)
@@ -439,7 +439,13 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
             task.ExecutionTimeMs = executionTimeMs;
             task.NextRunUtc      = nextRun;
-            task.CurrentRunCount = (task.CurrentRunCount ?? 0) + 1; // one real execution (Option B)
+            // Saturating increment (Option B): at int.MaxValue the counter FREEZES instead of overflowing.
+            // An unbounded recurring series (MaxRuns == null) that reaches int.MaxValue real executions keeps
+            // running with the counter pinned at its max, rather than wrapping to int.MinValue and corrupting
+            // the run accounting. Bounded series end at MaxRuns (<= int.MaxValue) long before this. Every path
+            // (here, the AuditLevel.None fast-path above, CompleteRecurringRun, the server-side procs/CTEs and
+            // MemoryTaskStorage) applies the same cap. Tradeoff documented in docs/recurring-tasks.
+            task.CurrentRunCount = task.CurrentRunCount >= int.MaxValue ? int.MaxValue : (task.CurrentRunCount ?? 0) + 1;
 
             await dbContext.SaveChangesAsync(CancellationToken.None).ConfigureAwait(false);
         }
@@ -513,7 +519,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             task.LastExecutionUtc = now;
             task.ExecutionTimeMs  = executionTimeMs;
             task.NextRunUtc       = nextRun;
-            task.CurrentRunCount  = (task.CurrentRunCount ?? 0) + 1; // one real execution (Option B)
+            task.CurrentRunCount  = task.CurrentRunCount >= int.MaxValue ? int.MaxValue : (task.CurrentRunCount ?? 0) + 1; // one real execution (Option B); saturating, see UpdateCurrentRun
 
             await dbContext.SaveChangesAsync(CancellationToken.None).ConfigureAwait(false);
         }

@@ -102,9 +102,9 @@ SELECT @taskId, now(), @status, @exception FROM updated WHERE @createAudit;";
     /// Advances the run counter via a single data-modifying CTE. The RunsAudit decision for ErrorsOnly
     /// depends on the ROW's Status/Exception (NOT a constant), so it is evaluated SERVER-SIDE in the CTE —
     /// it cannot be a single C# boolean. The UPDATE never mutates Status/Exception, so its <c>RETURNING</c>
-    /// yields the pre-update values the audit must record (faithful to usp_UpdateCurrentRun). The
-    /// <c>COALESCE(CurrentRunCount,0)+1</c> on an <c>integer</c> column raises SQLSTATE 22003 at int.MaxValue,
-    /// aborting the statement — propagated (Residual D) so the scheduler never advances on unpersisted state.
+    /// yields the pre-update values the audit must record (faithful to usp_UpdateCurrentRun). The run counter
+    /// SATURATES at int.MaxValue (a CASE guard) instead of overflowing, matching the base and the other
+    /// providers; failures still propagate (Residual D) so the scheduler never advances on unpersisted state.
     /// </summary>
     public override async Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
                                                 AuditLevel auditLevel)
@@ -118,7 +118,7 @@ WITH updated AS (
     UPDATE ""{_schema}"".""QueuedTasks""
     SET ""ExecutionTimeMs"" = @execTime,
         ""NextRunUtc""      = @nextRun,
-        ""CurrentRunCount"" = COALESCE(""CurrentRunCount"", 0) + 1
+        ""CurrentRunCount"" = CASE WHEN COALESCE(""CurrentRunCount"", 0) >= 2147483647 THEN 2147483647 ELSE COALESCE(""CurrentRunCount"", 0) + 1 END
     WHERE ""Id"" = @taskId
     RETURNING ""Status"", ""Exception""
 )
@@ -176,7 +176,7 @@ WITH updated AS (
         ""LastExecutionUtc"" = now(),
         ""ExecutionTimeMs""  = @execTime,
         ""NextRunUtc""       = @nextRun,
-        ""CurrentRunCount""  = COALESCE(""CurrentRunCount"", 0) + 1
+        ""CurrentRunCount""  = CASE WHEN COALESCE(""CurrentRunCount"", 0) >= 2147483647 THEN 2147483647 ELSE COALESCE(""CurrentRunCount"", 0) + 1 END
     WHERE ""Id"" = @taskId
     RETURNING ""Id""
 ),

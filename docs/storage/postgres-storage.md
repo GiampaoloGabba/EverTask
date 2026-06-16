@@ -115,7 +115,7 @@ A dedicated partial covering index (`IX_QueuedTasks_Recovery`) supports recovery
 
 The hot writes (`SetStatus`, `UpdateCurrentRun`, `CompleteRecurringRun`) override the base with single-statement, data-modifying CTEs — PostgreSQL's analog of the SQL Server stored procedures. Because each is a single statement, the audit insert and the row update commit together atomically. The audit decisions match the configured `AuditPolicy`. There is no stored database object and no extra migration: the SQL lives in versioned C#.
 
-The run counter is an `integer`; an increment past `int.MaxValue` raises SQLSTATE `22003` (numeric value out of range) and aborts the statement.
+The run counter is an `integer` and **saturates at `int.MaxValue`** (a `CASE` guard) instead of overflowing: an unbounded recurring series that reaches that many runs keeps going with the counter frozen at its max. See [Recurring Tasks](../recurring-tasks.md) for the tradeoff.
 
 ### GUID Generation
 

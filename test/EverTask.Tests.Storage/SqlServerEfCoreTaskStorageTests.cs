@@ -1,5 +1,4 @@
-﻿using System.Data.Common;
-using EverTask.Abstractions;
+﻿using EverTask.Abstractions;
 using EverTask.Storage;
 using EverTask.Storage.EfCore;
 using EverTask.Storage.SqlServer;
@@ -134,39 +133,6 @@ public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsyn
 
         var count = (int)(await command.ExecuteScalarAsync())!;
         count.ShouldBe(1, "usp_CompleteRecurringRun should exist");
-    }
-
-    [Fact]
-    public async Task CompleteRecurringRun_override_propagates_sql_failure_instead_of_swallowing()
-    {
-        // Residual D: the SQL Server override must PROPAGATE a failed EXEC (like UpdateCurrentRun), NOT
-        // swallow it (like SetStatus) — a failed completion must not let the scheduler advance on
-        // unpersisted state. Deterministic, self-contained failure injection: CurrentRunCount = int.MaxValue
-        // makes the proc's `ISNULL(CurrentRunCount,0) + 1` overflow inside the EXEC (no schema mutation, so
-        // subsequent tests in the collection still see the proc).
-        var id = GetGuidForProvider();
-        await _taskStorage.Persist(new QueuedTask
-        {
-            Id              = id,
-            Type            = "T",
-            Request         = "{}",
-            Handler         = "H",
-            CreatedAtUtc    = DateTimeOffset.UtcNow,
-            Status          = QueuedTaskStatus.InProgress,
-            IsRecurring     = true,
-            CurrentRunCount = int.MaxValue
-        });
-
-        // Assert a DbException specifically: this proves the failure propagated from the DB layer (the EXEC),
-        // not from some unrelated pre-EXEC C# fault, so the test genuinely exercises the propagate-on-persist-
-        // failure contract.
-        await Should.ThrowAsync<DbException>(
-            () => _taskStorage.CompleteRecurringRun(id, 10.0, DateTimeOffset.UtcNow.AddMinutes(1), AuditLevel.Full));
-
-        // The failed completion rolled back: the row stays recoverable (not advanced to Completed).
-        var row = (await _taskStorage.Get(x => x.Id == id))[0];
-        row.Status.ShouldBe(QueuedTaskStatus.InProgress, "a rolled-back completion must not advance the status");
-        row.CurrentRunCount.ShouldBe(int.MaxValue, "the counter must not advance on a failed persist");
     }
 
     protected override async Task CleanUpDatabase()

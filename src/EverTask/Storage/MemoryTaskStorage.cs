@@ -252,7 +252,8 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
                 task.NextRunUtc      = nextRun;
 
                 // Advance by exactly one real execution (Option B): skipped occurrences never count.
-                task.CurrentRunCount = (task.CurrentRunCount ?? 0) + 1;
+                // Saturating at int.MaxValue (see EfCoreTaskStorage.UpdateCurrentRun for the rationale).
+                task.CurrentRunCount = task.CurrentRunCount >= int.MaxValue ? int.MaxValue : (task.CurrentRunCount ?? 0) + 1;
             }
         }
 
@@ -304,7 +305,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
             task.LastExecutionUtc = now;
             task.ExecutionTimeMs  = executionTimeMs;
             task.NextRunUtc       = nextRun;
-            task.CurrentRunCount  = (task.CurrentRunCount ?? 0) + 1; // one real execution (Option B)
+            task.CurrentRunCount  = task.CurrentRunCount >= int.MaxValue ? int.MaxValue : (task.CurrentRunCount ?? 0) + 1; // one real execution (Option B); saturating
         }
 
         return Task.CompletedTask;

@@ -66,7 +66,8 @@ commit together. No stored object, no migration (SQL lives in versioned C#).
   `Status`/`Exception`, read via `RETURNING` — faithful because the UPDATE never mutates them). `CompleteRecurringRun`
   audits CONSTANTS (`Completed`/null) so the gate is C#-computed from the level.
 - **Propagation**: `SetStatus` swallows; `UpdateCurrentRun`/`CompleteRecurringRun` rethrow (Residual D). The
-  `COALESCE(CurrentRunCount,0)+1` on `integer` raises SQLSTATE 22003 at `int.MaxValue` and aborts the statement.
+  run counter SATURATES at `int.MaxValue` (a `CASE` guard) instead of overflowing — uniform with the base and
+  the other providers (see the run-count saturation note in `docs/recurring-tasks`).
 
 ## 🔗 Test Coverage
 `test/EverTask.Tests.Storage/PostgresEfCoreTaskStorageTests.cs` (Testcontainers `postgres:16-alpine`, Respawn with
