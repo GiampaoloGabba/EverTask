@@ -15,7 +15,7 @@
 
 **EverTask** runs background work in your .NET app: fire-and-forget jobs, delayed and scheduled tasks, and recurring schedules. Everything is persisted, so tasks survive a restart.
 
-It runs in-process — no external scheduler, no Windows Service, no separate worker host — and it doesn't poll the database in a loop. An in-memory scheduler drives execution through channels, and persistence happens where it matters: on enqueue, on status changes, and for recovery after a restart.
+It runs in-process (no external scheduler, no Windows Service, no separate worker host), and it doesn't poll the database in a loop. An in-memory scheduler drives execution through channels, and persistence happens where it matters: on enqueue, on status changes, and for recovery after a restart.
 
 If you've used MediatR, the request/handler pattern will feel familiar. The difference is that tasks are persisted, can be isolated across queues, and hold up under load.
 
@@ -180,7 +180,7 @@ RetryPolicy = new LinearRetryPolicy(3, TimeSpan.FromSeconds(1)).HandleWhen(ex =>
 
 ### Keyed Rate Limiting
 
-Throttle tasks against external API limits — per tenant, per account, per resource — without slowing anyone else down:
+Throttle tasks against external API limits (per tenant, per account, per resource) without slowing anyone else down:
 
 ```csharp
 public record SyncTenantData(Guid TenantId) : IEverTask, IRateLimitedTask
@@ -198,7 +198,7 @@ public class SyncTenantDataHandler : EverTaskHandler<SyncTenantData>
 }
 ```
 
-When a task exceeds its key's budget, EverTask reserves the next available slot and re-schedules it automatically — no worker is blocked, no task is dropped, and tasks for other keys keep flowing. Rate limiting is in-memory and per-instance (a pluggable seam for distributed limiters is on the [roadmap](#roadmap)).
+When a task exceeds its key's budget, EverTask reserves the next available slot and re-schedules it automatically: no worker is blocked, no task is dropped, and tasks for other keys keep flowing. Rate limiting is in-memory and per-instance (a pluggable seam for distributed limiters is on the [roadmap](#roadmap)).
 
 ### Idempotent Task Registration
 
@@ -215,11 +215,11 @@ Use unique keys to safely register recurring tasks at startup without creating d
 > ⚠️ **Self-redispatch gotcha**: while a handler is executing, its task is `InProgress`. A dispatch with the
 > same key as an `InProgress` task is a no-op that returns the existing ID without scheduling anything (a
 > warning is logged). If a handler re-dispatches itself (e.g. polling chains), use a null or per-attempt key
-> like `"my-task-{id}-{attempt}"` — reserve stable keys for dispatches originating outside the handler.
+> like `"my-task-{id}-{attempt}"`; reserve stable keys for dispatches originating outside the handler.
 
 ### Monitoring Dashboard
 
-Monitor tasks from a built-in web dashboard — live status, task history, execution logs, and analytics:
+Monitor tasks from a built-in web dashboard with live status, task history, execution logs, and analytics:
 
 **Dashboard Preview:**
 
