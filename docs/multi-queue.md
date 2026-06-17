@@ -81,13 +81,13 @@ Sets the maximum number of tasks that can wait in the queue:
 Determines what happens when the queue is full:
 
 ```csharp
-// Wait: Block until space is available (default)
-.AddQueue("important", q => q
-    .SetFullBehavior(QueueFullBehavior.Wait))
-
-// FallbackToDefault: Try the default queue if this queue is full
+// FallbackToDefault: Try the default queue if this queue is full (default for AddQueue)
 .AddQueue("optional", q => q
     .SetFullBehavior(QueueFullBehavior.FallbackToDefault))
+
+// Wait: Block until space is available
+.AddQueue("important", q => q
+    .SetFullBehavior(QueueFullBehavior.Wait))
 
 // ThrowException: Throw immediately if full
 .AddQueue("strict", q => q
@@ -154,6 +154,7 @@ public class EmailHandler : EverTaskHandler<SendEmailTask>
 - **Default Queue**: Tasks without a specified `QueueName` go to the "default" queue
 - **Recurring Queue**: Recurring tasks go to the "recurring" queue unless explicitly overridden
 - **Fallback Behavior**: When a queue is full with `FallbackToDefault`, tasks fall back to the "default" queue
+- **Unknown Queue Name**: A `QueueName` that does not match any registered queue routes to the "default" queue, and the task runs under the default queue's configuration (its retry policy and timeout), not the missing queue's. A warning is logged when this happens.
 
 ## Real-World Example
 

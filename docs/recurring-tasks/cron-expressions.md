@@ -11,6 +11,8 @@ For complex scheduling patterns, cron expressions give you maximum flexibility.
 
 ## Cron Syntax
 
+EverTask uses [Cronos](https://github.com/HangfireIO/Cronos) and accepts both the standard 5-field form and a 6-field form with a leading seconds field. The field count is detected from the expression.
+
 ```
 * * * * *
 │ │ │ │ │
@@ -19,6 +21,26 @@ For complex scheduling patterns, cron expressions give you maximum flexibility.
 │ │ └─────── Day of month (1-31)
 │ └───────── Hour (0-23)
 └─────────── Minute (0-59)
+```
+
+Add a sixth field at the front to schedule with second-level precision:
+
+```
+* * * * * *
+│ │ │ │ │ │
+│ │ │ │ │ └─── Day of week (0-6, Sunday = 0)
+│ │ │ │ └───── Month (1-12)
+│ │ │ └─────── Day of month (1-31)
+│ │ └───────── Hour (0-23)
+│ └─────────── Minute (0-59)
+└───────────── Second (0-59)
+```
+
+```csharp
+// Every 30 seconds
+await dispatcher.Dispatch(
+    new Task(),
+    builder => builder.Schedule().UseCron("*/30 * * * * *"));
 ```
 
 ## Common Cron Patterns

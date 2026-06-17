@@ -14,30 +14,45 @@ You can implement custom storage providers for Redis, MongoDB, or any other data
 ```csharp
 public interface ITaskStorage
 {
-    // Basic CRUD
-    Task<Guid> AddAsync(QueuedTask task, CancellationToken cancellationToken = default);
-    Task<QueuedTask?> GetAsync(Guid id, CancellationToken cancellationToken = default);
-    Task UpdateAsync(QueuedTask task, CancellationToken cancellationToken = default);
-    Task RemoveAsync(Guid id, CancellationToken cancellationToken = default);
-
-    // Status management
-    Task SetStatus(Guid id, TaskStatus status, CancellationToken cancellationToken = default);
-
     // Querying
-    Task<List<QueuedTask>> GetPendingTasksAsync(CancellationToken cancellationToken = default);
-    Task<List<QueuedTask>> GetScheduledTasksAsync(CancellationToken cancellationToken = default);
+    Task<QueuedTask[]> Get(Expression<Func<QueuedTask, bool>> where, CancellationToken ct = default);
+    Task<QueuedTask[]> GetAll(CancellationToken ct = default);
+    Task<QueuedTask?> GetByTaskKey(string taskKey, CancellationToken ct = default);
 
-    // Task keys (for idempotent registration)
-    Task<QueuedTask?> GetByTaskKey(string taskKey, CancellationToken cancellationToken = default);
+    // Persistence
+    Task Persist(QueuedTask executor, CancellationToken ct = default);
+    Task UpdateTask(QueuedTask task, CancellationToken ct = default);
+    Task Remove(Guid taskId, CancellationToken ct = default);
 
-    // Audit
-    Task AddAuditAsync(TaskAudit audit, CancellationToken cancellationToken = default);
+    // Recovery: keyset-paginated page of pending tasks ordered by creation timestamp
+    Task<QueuedTask[]> RetrievePending(DateTimeOffset? lastCreatedAt, Guid? lastId, int take, CancellationToken ct = default);
+
+    // Status transitions (each carries the AuditLevel so the audit row is written without a SELECT)
+    Task SetQueued(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default);
+    Task SetInProgress(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default);
+    Task SetCompleted(Guid taskId, double executionTimeMs, AuditLevel auditLevel);
+    Task SetCancelledByUser(Guid taskId, AuditLevel auditLevel);
+    Task SetCancelledByService(Guid taskId, Exception exception, AuditLevel auditLevel);
+    Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception, AuditLevel auditLevel,
+                   double? executionTimeMs = null, CancellationToken ct = default);
+
+    // Recurring run accounting
+    Task<int> GetCurrentRunCount(Guid taskId);
+    Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel);
 
     // Task execution log persistence (v3.0+)
-    Task SaveExecutionLogsAsync(Guid taskId, IReadOnlyList<TaskExecutionLog> logs, CancellationToken cancellationToken = default);
-    Task<IReadOnlyList<TaskExecutionLog>> GetExecutionLogsAsync(Guid taskId, int skip = 0, int take = 1000, CancellationToken cancellationToken = default);
+    Task SaveExecutionLogsAsync(Guid taskId, IReadOnlyList<TaskExecutionLog> logs, CancellationToken cancellationToken);
+    Task<IReadOnlyList<TaskExecutionLog>> GetExecutionLogsAsync(Guid taskId, CancellationToken cancellationToken);
+    Task<IReadOnlyList<TaskExecutionLog>> GetExecutionLogsAsync(Guid taskId, int skip, int take, CancellationToken cancellationToken);
 }
 ```
+
+The interface also exposes default-implemented members that built-in providers override with atomic
+writes — `TrySetQueuedIfRecoverable`, `CompleteRecurringRun`, `SetRecurringSeriesCompleted`,
+`SetRecurringTaskPoisoned`, and the recovery-failure counter (`IncrementRecoveryFailure` /
+`ClearRecoveryFailure`). A custom store inherits the non-atomic fallbacks; override them only
+if your backend can make the check-and-set atomic. See `src/EverTask/Storage/ITaskStorage.cs` for the
+full contract and the per-member rationale.
 
 ## Example: Redis Storage
 
@@ -53,70 +68,57 @@ public class RedisTaskStorage : ITaskStorage
         _db = redis.GetDatabase();
     }
 
-    public async Task<Guid> AddAsync(QueuedTask task, CancellationToken cancellationToken = default)
+    public async Task Persist(QueuedTask executor, CancellationToken ct = default)
     {
-        var id = task.PersistenceId;
-        var json = JsonSerializer.Serialize(task);
+        var id = executor.Id;
+        var json = JsonSerializer.Serialize(executor);
 
         await _db.StringSetAsync($"task:{id}", json);
 
-        // Add to pending set
-        if (task.Status == TaskStatus.Pending)
-        {
-            await _db.SetAddAsync("tasks:pending", id.ToString());
-        }
-
-        return id;
+        // Index by status so SetStatus and recovery can find the row
+        await _db.SetAddAsync($"tasks:{executor.Status}", id.ToString());
     }
 
-    public async Task<QueuedTask?> GetAsync(Guid id, CancellationToken cancellationToken = default)
+    private async Task<QueuedTask?> Read(Guid id)
     {
         var json = await _db.StringGetAsync($"task:{id}");
-
-        if (json.IsNullOrEmpty)
-            return null;
-
-        return JsonSerializer.Deserialize<QueuedTask>(json!);
+        return json.IsNullOrEmpty ? null : JsonSerializer.Deserialize<QueuedTask>(json!);
     }
 
-    public async Task UpdateAsync(QueuedTask task, CancellationToken cancellationToken = default)
+    public async Task UpdateTask(QueuedTask task, CancellationToken ct = default)
     {
         var json = JsonSerializer.Serialize(task);
-        await _db.StringSetAsync($"task:{task.PersistenceId}", json);
+        await _db.StringSetAsync($"task:{task.Id}", json);
     }
 
-    public async Task SetStatus(Guid id, TaskStatus status, CancellationToken cancellationToken = default)
+    public async Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception,
+                                AuditLevel auditLevel, double? executionTimeMs = null,
+                                CancellationToken ct = default)
     {
-        var task = await GetAsync(id, cancellationToken);
-        if (task != null)
-        {
-            task.Status = status;
-            await UpdateAsync(task, cancellationToken);
+        var task = await Read(taskId);
+        if (task is null)
+            return;
 
-            // Update indexes
-            await _db.SetRemoveAsync($"tasks:{task.Status}", id.ToString());
-            await _db.SetAddAsync($"tasks:{status}", id.ToString());
+        await _db.SetRemoveAsync($"tasks:{task.Status}", taskId.ToString());
+
+        task.Status = status;
+        task.Exception = exception?.ToString();
+        await UpdateTask(task, ct);
+
+        await _db.SetAddAsync($"tasks:{status}", taskId.ToString());
+
+        // Write a StatusAudit row when the audit level requires it (mirror AuditPolicy)
+        if (AuditPolicy.ShouldCreateStatusAudit(auditLevel, status, exception))
+        {
+            // persist a StatusAudit record keyed by QueuedTaskId = taskId
         }
     }
 
-    public async Task<List<QueuedTask>> GetPendingTasksAsync(CancellationToken cancellationToken = default)
-    {
-        var ids = await _db.SetMembersAsync("tasks:pending");
-        var tasks = new List<QueuedTask>();
+    // RetrievePending: return a keyset-paginated page of recoverable tasks
+    // ordered by CreatedAtUtc (then Id), starting after (lastCreatedAt, lastId).
 
-        foreach (var id in ids)
-        {
-            var task = await GetAsync(Guid.Parse(id!), cancellationToken);
-            if (task != null)
-            {
-                tasks.Add(task);
-            }
-        }
-
-        return tasks;
-    }
-
-    // Implement other methods...
+    // Implement the remaining members (Get, GetAll, the other status setters,
+    // UpdateCurrentRun, execution-log persistence, ...).
 }
 
 // Registration
@@ -152,8 +154,9 @@ public class MyCustomDbContextFactory : ITaskStoreDbContextFactory
 }
 
 // Registration
-builder.Services.AddDbContextFactory<MyCustomDbContext>(options =>
-    options.UseYourDatabase(connectionString));
+builder.Services.AddPooledDbContextFactory<MyCustomDbContext>(options =>
+    options.UseYourDatabase(connectionString)
+           .UseEverTaskSchema(schemaName));
 
 builder.Services.AddSingleton<ITaskStoreDbContextFactory, MyCustomDbContextFactory>();
 ```
@@ -173,8 +176,8 @@ Your custom storage implementation must:
 
 ### Performance Considerations
 
-1. **Index Key Fields**: Ensure `Status`, `ScheduledTime`, and `TaskKey` are indexed for fast queries
-2. **Optimize Pending Tasks Query**: `GetPendingTasksAsync()` is called frequently - make it fast
+1. **Index Key Fields**: Ensure `Status`, `CreatedAtUtc`, and `TaskKey` are indexed for fast queries
+2. **Optimize the Recovery Query**: `RetrievePending()` runs on every startup - keyset pagination on `(CreatedAtUtc, Id)` keeps it fast
 3. **Use Transactions**: Ensure atomic updates where necessary (status changes + audit records)
 4. **Connection Pooling**: Reuse database connections efficiently
 5. **Batch Operations**: Consider batch operations for audit records if your storage supports it
@@ -201,21 +204,21 @@ public class CustomStorageTests
     }
 
     [Fact]
-    public async Task Should_Add_And_Retrieve_Task()
+    public async Task Should_Persist_And_Retrieve_Task()
     {
         var task = new QueuedTask
         {
-            PersistenceId = Guid.NewGuid(),
-            TaskType = "TestTask",
-            Status = TaskStatus.Pending,
+            Id = Guid.NewGuid(),
+            Type = "TestTask",
+            Status = QueuedTaskStatus.Queued,
             CreatedAtUtc = DateTimeOffset.UtcNow
         };
 
-        await _storage.AddAsync(task);
-        var retrieved = await _storage.GetAsync(task.PersistenceId);
+        await _storage.Persist(task);
+        var retrieved = (await _storage.Get(t => t.Id == task.Id)).FirstOrDefault();
 
         retrieved.ShouldNotBeNull();
-        retrieved.TaskType.ShouldBe("TestTask");
+        retrieved.Type.ShouldBe("TestTask");
     }
 
     [Fact]
@@ -223,30 +226,30 @@ public class CustomStorageTests
     {
         var task = new QueuedTask
         {
-            PersistenceId = Guid.NewGuid(),
-            Status = TaskStatus.Pending
+            Id = Guid.NewGuid(),
+            Status = QueuedTaskStatus.Queued
         };
 
-        await _storage.AddAsync(task);
-        await _storage.SetStatus(task.PersistenceId, TaskStatus.Completed);
+        await _storage.Persist(task);
+        await _storage.SetStatus(task.Id, QueuedTaskStatus.Completed, null, AuditLevel.Full);
 
-        var retrieved = await _storage.GetAsync(task.PersistenceId);
-        retrieved!.Status.ShouldBe(TaskStatus.Completed);
+        var retrieved = (await _storage.Get(t => t.Id == task.Id)).First();
+        retrieved.Status.ShouldBe(QueuedTaskStatus.Completed);
     }
 
     [Fact]
     public async Task Should_Retrieve_Pending_Tasks()
     {
-        var task1 = new QueuedTask { PersistenceId = Guid.NewGuid(), Status = TaskStatus.Pending };
-        var task2 = new QueuedTask { PersistenceId = Guid.NewGuid(), Status = TaskStatus.Completed };
+        var task1 = new QueuedTask { Id = Guid.NewGuid(), Status = QueuedTaskStatus.Queued };
+        var task2 = new QueuedTask { Id = Guid.NewGuid(), Status = QueuedTaskStatus.Completed };
 
-        await _storage.AddAsync(task1);
-        await _storage.AddAsync(task2);
+        await _storage.Persist(task1);
+        await _storage.Persist(task2);
 
-        var pending = await _storage.GetPendingTasksAsync();
+        var pending = await _storage.Get(t => t.Status == QueuedTaskStatus.Queued);
 
-        pending.Count.ShouldBe(1);
-        pending[0].PersistenceId.ShouldBe(task1.PersistenceId);
+        pending.Length.ShouldBe(1);
+        pending[0].Id.ShouldBe(task1.Id);
     }
 }
 ```
@@ -270,10 +273,9 @@ public class MongoDbTaskStorage : ITaskStorage
         _tasks = database.GetCollection<QueuedTask>("Tasks");
     }
 
-    public async Task<Guid> AddAsync(QueuedTask task, CancellationToken cancellationToken = default)
+    public async Task Persist(QueuedTask executor, CancellationToken ct = default)
     {
-        await _tasks.InsertOneAsync(task, cancellationToken: cancellationToken);
-        return task.PersistenceId;
+        await _tasks.InsertOneAsync(executor, cancellationToken: ct);
     }
 
     // Implement other methods...

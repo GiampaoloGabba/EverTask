@@ -132,11 +132,11 @@ public class MonitorRecurringTasksHandler : EverTaskHandler<MonitorRecurringTask
 
     public override async Task Handle(MonitorRecurringTasksTask task, CancellationToken cancellationToken)
     {
-        var recurringTasks = await _storage.GetAllRecurringTasksAsync(cancellationToken);
+        var recurringTasks = await _storage.Get(t => t.IsRecurring, cancellationToken);
 
         foreach (var t in recurringTasks)
         {
-            if (t.Status == TaskStatus.Failed && t.CurrentRunCount > 0)
+            if (t.Status == QueuedTaskStatus.Failed && t.CurrentRunCount > 0)
             {
                 await _alertService.SendAlertAsync(
                     $"Recurring task '{t.TaskKey}' is failing",

@@ -50,7 +50,7 @@ public class LongRunningTaskHandler : EverTaskHandler<LongRunningTask>
 
 ## Per-Queue Timeout
 
-You can also set default timeouts at the queue level, which is useful when you organize tasks by execution characteristics:
+You can also set default timeouts at the queue level, which is useful when you organize tasks by execution characteristics. The effective timeout is resolved through a chain: the handler override takes precedence, then the declared queue's default, then the global default (v3.7+).
 
 ```csharp
 builder.Services.AddEverTask(opt =>

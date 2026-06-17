@@ -11,38 +11,45 @@ Combine continuations, rescheduling, and conditional logic to build sophisticate
 
 ## Workflow Orchestrator Pattern
 
+The lifecycle callbacks receive only the task ID, so the orchestrator captures the request into private fields during `Handle` and reads them back in `OnCompleted` and `OnError`:
+
 ```csharp
 public class WorkflowOrchestrator : EverTaskHandler<WorkflowTask>
 {
     private readonly ITaskDispatcher _dispatcher;
+    private Guid _workflowId;
+    private WorkflowStage _stage;
 
     public override async Task Handle(WorkflowTask task, CancellationToken cancellationToken)
     {
+        _workflowId = task.WorkflowId;
+        _stage = task.Stage;
+
         // Execute current stage
         await ExecuteStageAsync(task.Stage, cancellationToken);
     }
 
     public override async ValueTask OnCompleted(Guid taskId)
     {
-        switch (_task.Stage)
+        switch (_stage)
         {
             case WorkflowStage.Validation:
                 // Move to payment stage
                 await _dispatcher.Dispatch(new WorkflowTask(
-                    _task.WorkflowId,
+                    _workflowId,
                     WorkflowStage.Payment));
                 break;
 
             case WorkflowStage.Payment:
                 // Wait 1 hour before fulfillment
                 await _dispatcher.Dispatch(
-                    new WorkflowTask(_task.WorkflowId, WorkflowStage.Fulfillment),
+                    new WorkflowTask(_workflowId, WorkflowStage.Fulfillment),
                     TimeSpan.FromHours(1));
                 break;
 
             case WorkflowStage.Fulfillment:
                 // Final stage - send confirmation
-                await _dispatcher.Dispatch(new SendConfirmationTask(_task.WorkflowId));
+                await _dispatcher.Dispatch(new SendConfirmationTask(_workflowId));
                 break;
         }
     }
@@ -50,7 +57,7 @@ public class WorkflowOrchestrator : EverTaskHandler<WorkflowTask>
     public override async ValueTask OnError(Guid taskId, Exception? exception, string? message)
     {
         // Rollback workflow on any stage failure
-        await _dispatcher.Dispatch(new RollbackWorkflowTask(_task.WorkflowId, _task.Stage));
+        await _dispatcher.Dispatch(new RollbackWorkflowTask(_workflowId, _stage));
     }
 }
 ```
@@ -72,8 +79,14 @@ public enum WorkflowStage
 // Stage implementations
 public class ValidationStageHandler : EverTaskHandler<ValidationStageTask>
 {
+    private Guid _orderId;
+    private Guid _workflowId;
+
     public override async Task Handle(ValidationStageTask task, CancellationToken ct)
     {
+        _orderId = task.OrderId;
+        _workflowId = task.WorkflowId;
+
         // Validate order details
         await ValidateOrderAsync(task.OrderId, ct);
     }
@@ -82,21 +95,27 @@ public class ValidationStageHandler : EverTaskHandler<ValidationStageTask>
     {
         // Progress to payment
         await _dispatcher.Dispatch(new WorkflowTask(
-            _task.WorkflowId,
+            _workflowId,
             WorkflowStage.Payment));
     }
 
     public override async ValueTask OnError(Guid taskId, Exception? ex, string? msg)
     {
         // Notify customer of validation failure
-        await _dispatcher.Dispatch(new SendValidationErrorEmailTask(_task.OrderId));
+        await _dispatcher.Dispatch(new SendValidationErrorEmailTask(_orderId));
     }
 }
 
 public class PaymentStageHandler : EverTaskHandler<PaymentStageTask>
 {
+    private Guid _orderId;
+    private Guid _workflowId;
+
     public override async Task Handle(PaymentStageTask task, CancellationToken ct)
     {
+        _orderId = task.OrderId;
+        _workflowId = task.WorkflowId;
+
         // Process payment
         await ChargePaymentMethodAsync(task.OrderId, ct);
     }
@@ -105,15 +124,15 @@ public class PaymentStageHandler : EverTaskHandler<PaymentStageTask>
     {
         // Progress to inventory
         await _dispatcher.Dispatch(new WorkflowTask(
-            _task.WorkflowId,
+            _workflowId,
             WorkflowStage.Inventory));
     }
 
     public override async ValueTask OnError(Guid taskId, Exception? ex, string? msg)
     {
         // Notify customer and cancel order
-        await _dispatcher.Dispatch(new SendPaymentFailedEmailTask(_task.OrderId));
-        await _dispatcher.Dispatch(new CancelOrderTask(_task.OrderId));
+        await _dispatcher.Dispatch(new SendPaymentFailedEmailTask(_orderId));
+        await _dispatcher.Dispatch(new CancelOrderTask(_orderId));
     }
 }
 ```
@@ -125,9 +144,14 @@ public class OrderSagaOrchestrator : EverTaskHandler<OrderSagaTask>
 {
     private readonly ITaskDispatcher _dispatcher;
     private readonly List<Guid> _completedSteps = new();
+    private Guid _orderId;
+    private SagaStep _step;
 
     public override async Task Handle(OrderSagaTask task, CancellationToken ct)
     {
+        _orderId = task.OrderId;
+        _step = task.Step;
+
         switch (task.Step)
         {
             case SagaStep.ReserveInventory:
@@ -148,11 +172,11 @@ public class OrderSagaOrchestrator : EverTaskHandler<OrderSagaTask>
 
     public override async ValueTask OnCompleted(Guid taskId)
     {
-        var nextStep = GetNextStep(_task.Step);
+        var nextStep = GetNextStep(_step);
         if (nextStep.HasValue)
         {
             await _dispatcher.Dispatch(new OrderSagaTask(
-                _task.OrderId,
+                _orderId,
                 nextStep.Value,
                 _completedSteps));
         }
@@ -163,11 +187,11 @@ public class OrderSagaOrchestrator : EverTaskHandler<OrderSagaTask>
         // Compensate all completed steps in reverse order
         foreach (var step in _completedSteps.Reverse())
         {
-            await CompensateStep(step, _task.OrderId);
+            await CompensateStep(step, _orderId);
         }
 
         // Notify failure
-        await _dispatcher.Dispatch(new OrderFailedTask(_task.OrderId));
+        await _dispatcher.Dispatch(new OrderFailedTask(_orderId));
     }
 
     private async Task CompensateStep(SagaStep step, Guid orderId)
@@ -196,27 +220,34 @@ public class OrderSagaOrchestrator : EverTaskHandler<OrderSagaTask>
 public class OrderStateMachine : EverTaskHandler<OrderStateTask>
 {
     private readonly ITaskDispatcher _dispatcher;
+    private Guid _orderId;
+    private OrderState _currentState;
+    private OrderEvent? _event;
 
     public override async Task Handle(OrderStateTask task, CancellationToken ct)
     {
+        _orderId = task.OrderId;
+        _currentState = task.CurrentState;
+        _event = task.Event;
+
         // Execute action for current state
         await ExecuteStateAction(task.CurrentState, task.OrderId, ct);
     }
 
     public override async ValueTask OnCompleted(Guid taskId)
     {
-        var nextState = GetNextState(_task.CurrentState, _task.Event);
+        var nextState = GetNextState(_currentState, _event);
 
         if (nextState == OrderState.Completed)
         {
             // Workflow complete
-            await _dispatcher.Dispatch(new OrderCompletedTask(_task.OrderId));
+            await _dispatcher.Dispatch(new OrderCompletedTask(_orderId));
         }
         else if (nextState != null)
         {
             // Transition to next state
             await _dispatcher.Dispatch(new OrderStateTask(
-                _task.OrderId,
+                _orderId,
                 nextState.Value,
                 null));
         }
@@ -258,14 +289,22 @@ public class ParallelWorkflowHandler : EverTaskHandler<ParallelWorkflowTask>
 // Coordination handler checks if all parallel tasks complete
 public class ParallelCoordinator : EverTaskHandler<ProcessDataATask>
 {
+    private Guid _workflowId;
+
+    public override async Task Handle(ProcessDataATask task, CancellationToken ct)
+    {
+        _workflowId = task.WorkflowId;
+        await ProcessAsync(task, ct);
+    }
+
     public override async ValueTask OnCompleted(Guid taskId)
     {
-        var allComplete = await CheckAllParallelTasksCompleteAsync(_task.WorkflowId);
+        var allComplete = await CheckAllParallelTasksCompleteAsync(_workflowId);
 
         if (allComplete)
         {
             // All parallel tasks done - move to next stage
-            await _dispatcher.Dispatch(new AggregateResultsTask(_task.WorkflowId));
+            await _dispatcher.Dispatch(new AggregateResultsTask(_workflowId));
         }
     }
 }
@@ -276,19 +315,25 @@ public class ParallelCoordinator : EverTaskHandler<ProcessDataATask>
 ```csharp
 public class DelayedWorkflowHandler : EverTaskHandler<DelayedWorkflowTask>
 {
+    private Guid _workflowId;
+    private int _step;
+
     public override async Task Handle(DelayedWorkflowTask task, CancellationToken ct)
     {
+        _workflowId = task.WorkflowId;
+        _step = task.Step;
+
         await ProcessStepAsync(task.Step, ct);
     }
 
     public override async ValueTask OnCompleted(Guid taskId)
     {
-        var nextStep = _task.Step + 1;
-        var delay = CalculateDelay(_task.Step);
+        var nextStep = _step + 1;
+        var delay = CalculateDelay(_step);
 
         // Schedule next step with delay
         await _dispatcher.Dispatch(
-            new DelayedWorkflowTask(_task.WorkflowId, nextStep),
+            new DelayedWorkflowTask(_workflowId, nextStep),
             delay);
     }
 

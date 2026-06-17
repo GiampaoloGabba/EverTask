@@ -63,7 +63,9 @@ By default, EverTask creates a dedicated schema to keep task tables separate fro
 
 The schema contains:
 - **QueuedTasks**: Main task table
-- **TaskAudit**: Task execution history
+- **StatusAudit**: Status-transition history (one row per audited transition)
+- **RunsAudit**: Per-run history for recurring tasks (timestamp, duration, result)
+- **TaskExecutionLog**: Captured log lines per execution (when the persistent logger is enabled)
 - **__EFMigrationsHistory**: EF Core migrations table (also in custom schema)
 
 ## Migration Management

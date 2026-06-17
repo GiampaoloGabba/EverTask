@@ -17,7 +17,7 @@ nav_order: 1
 
 ---
 
-EverTask is a .NET background task execution library built for **persistence** and **resilience**. If you need to process work in the background, handle scheduled jobs, or build fault-tolerant task pipelines, you're in the right place.
+EverTask is a .NET background task execution library focused on persistence and resilience. Use it to process work in the background, run scheduled jobs, and build task pipelines that survive failures and restarts.
 
 ## Quick Example
 
@@ -43,7 +43,7 @@ public class SendEmailHandler : EverTaskHandler<SendEmailTask>
 await _dispatcher.Dispatch(new SendEmailTask("user@example.com", "Hello!"));
 ```
 
-**That's it!** EverTask persists the task, handles retries on failure, and executes it in the background. Learn more in [Getting Started](getting-started.md).
+With those four steps in place, EverTask persists the task, executes it in the background, and retries it if the handler throws. See [Getting Started](getting-started.md) for the details.
 
 ## Table of Contents
 
@@ -53,14 +53,38 @@ await _dispatcher.Dispatch(new SendEmailTask("user@example.com", "Hello!"));
   - [Task Dispatching](task-dispatching.md) - Execute tasks immediately or on a schedule
 
 ### Core Concepts
-- [Storage](storage.md) - Choose your persistence layer (SQL Server, PostgreSQL, SQLite, or in-memory)
+- **[Storage](storage.md)** - Choose your persistence layer (SQL Server, PostgreSQL, SQLite, or in-memory)
+  - [Overview](storage/overview.md) - Picking a provider
+  - [Audit Configuration](storage/audit-configuration.md) - Audit levels and retention
+  - [In-Memory Storage](storage/in-memory-storage.md) - Zero-infra storage for dev and tests
+  - [SQL Server Storage](storage/sql-server-storage.md) - Setup and schema
+  - [PostgreSQL Storage](storage/postgres-storage.md) - Setup and schema
+  - [SQLite Storage](storage/sqlite-storage.md) - Setup and connection strings
+  - [Custom Storage](storage/custom-storage.md) - Implement ITaskStorage
+  - [Serialization](storage/serialization.md) - System.Text.Json payload contract
+  - [Best Practices](storage/best-practices.md) - Patterns and pitfalls
 - **[Configuration](configuration.md)** - Configure EverTask
   - [Configuration Reference](configuration-reference.md) - Complete configuration options
   - [Configuration Cheatsheet](configuration-cheatsheet.md) - Quick reference guide
 
 ### Advanced Topics
-- [Recurring Tasks](recurring-tasks.md) - Schedule jobs with the fluent API or cron expressions
-- [Resilience](resilience.md) - Handle failures with retry policies and timeouts
+- **[Recurring Tasks](recurring-tasks.md)** - Schedule jobs with the fluent API or cron expressions
+  - [Overview](recurring-tasks/overview.md) - Concepts and when to use recurring tasks
+  - [Fluent Scheduling API](recurring-tasks/fluent-api.md) - Build schedules by minute, hour, day, week, or month
+  - [Cron Expressions](recurring-tasks/cron-expressions.md) - 5- and 6-field cron schedules
+  - [Idempotent Registration](recurring-tasks/idempotent-registration.md) - Register recurring tasks safely on every startup
+  - [Managing Tasks](recurring-tasks/managing-tasks.md) - Inspect, cancel, and reschedule recurring tasks
+  - [Best Practices](recurring-tasks/best-practices.md) - Patterns and pitfalls
+- **[Resilience](resilience.md)** - Handle failures with retry policies and timeouts
+  - [Overview](resilience/overview.md) - Failure handling at a glance
+  - [Retry Policies](resilience/retry-policies.md) - Linear retry, custom policies, Polly
+  - [Exception Filtering](resilience/exception-filtering.md) - Whitelist, blacklist, and predicate filtering
+  - [Retry Callbacks](resilience/retry-callbacks.md) - React to each retry attempt
+  - [Timeout Management](resilience/timeout-management.md) - Per-handler, per-queue, and global timeouts
+  - [Cancellation Tokens](resilience/cancellation-tokens.md) - Cooperative cancellation in handlers
+  - [Graceful Shutdown](resilience/graceful-shutdown.md) - What happens to running tasks on stop
+  - [Error Observation](resilience/error-observation.md) - Observe and record failures
+  - [Best Practices](resilience/best-practices.md) - Patterns and pitfalls
 - **[Scalability](scalability.md)** - Performance and scalability features
   - [Multi-Queue Support](multi-queue.md) - Workload isolation by priority or domain
   - [Sharded Scheduler](sharded-scheduler.md) - Lower scheduler lock contention under high Schedule() call rates
@@ -76,6 +100,9 @@ await _dispatcher.Dispatch(new SendEmailTask("user@example.com", "Hello!"));
   - [Custom Workflows](custom-workflows.md) - Build complex task pipelines
 - [Architecture](architecture.md) - How EverTask works under the hood
 
+### Tooling
+- [Agent Skill](agent-skill.md) - AI-assisted integration: install the skill and let an agent wire up EverTask (one-step on Claude Code)
+
 ## Quick Links
 
 - [GitHub Repository](https://github.com/GiampaoloGabba/EverTask)
@@ -84,4 +111,4 @@ await _dispatcher.Dispatch(new SendEmailTask("user@example.com", "Hello!"));
 
 ## Support
 
-Questions? Found a bug? Want to contribute? Head over to our [GitHub Issues](https://github.com/GiampaoloGabba/EverTask/issues) page.
+For questions, bug reports, or contributions, use the [GitHub Issues](https://github.com/GiampaoloGabba/EverTask/issues) page.

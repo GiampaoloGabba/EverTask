@@ -11,7 +11,7 @@ EverTask provides extensive configuration options to control task execution, que
 
 ## Quick Access
 
-### 📖 [Configuration Reference](configuration-reference.md)
+### [Configuration Reference](configuration-reference.md)
 Complete reference documentation for all EverTask configuration options with detailed explanations, examples, and best practices.
 
 **Use this when:**
@@ -20,7 +20,7 @@ Complete reference documentation for all EverTask configuration options with det
 - Learning about advanced configuration scenarios
 - Troubleshooting configuration issues
 
-### ⚡ [Configuration Cheatsheet](configuration-cheatsheet.md)
+### [Configuration Cheatsheet](configuration-cheatsheet.md)
 Quick reference guide with all configuration options in a concise, scannable format.
 
 **Use this when:**

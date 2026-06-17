@@ -18,7 +18,7 @@ By default, tasks use `LinearRetryPolicy`, which you can configure globally:
 ```csharp
 builder.Services.AddEverTask(opt =>
 {
-    // Default: 3 attempts with 500ms delay between retries
+    // Default: 3 retries (up to 4 executions) with 500ms delay between attempts
     opt.SetDefaultRetryPolicy(new LinearRetryPolicy(3, TimeSpan.FromMilliseconds(500)));
 });
 ```
@@ -28,7 +28,7 @@ builder.Services.AddEverTask(opt =>
 ### Fixed Retry Count and Delay
 
 ```csharp
-// 5 attempts with 1 second between retries
+// 5 retries (up to 6 executions) with 1 second between attempts
 builder.Services.AddEverTask(opt =>
 {
     opt.SetDefaultRetryPolicy(new LinearRetryPolicy(5, TimeSpan.FromSeconds(1)));
@@ -55,7 +55,7 @@ builder.Services.AddEverTask(opt =>
 
 ## Per-Handler Retry Policy
 
-You can override the global policy on a per-handler basis when you need different retry behavior for specific task types:
+A handler's retry policy is resolved through a chain: the handler override takes precedence, then the declared queue's default, then the global default (v3.7+). Override the policy on a handler when you need different retry behavior for specific task types:
 
 ```csharp
 public class CriticalTaskHandler : EverTaskHandler<CriticalTask>
@@ -97,33 +97,46 @@ public class CustomRetryHandler : EverTaskHandler<CustomRetryTask>
 Need full control over retry behavior? Implement `IRetryPolicy` yourself:
 
 ```csharp
+using Microsoft.Extensions.Logging;
+
 public class ExponentialBackoffPolicy : IRetryPolicy
 {
-    private readonly int _maxAttempts;
+    private readonly int _maxRetries;
     private readonly TimeSpan _baseDelay;
 
-    public ExponentialBackoffPolicy(int maxAttempts = 5, TimeSpan? baseDelay = null)
+    public ExponentialBackoffPolicy(int maxRetries = 5, TimeSpan? baseDelay = null)
     {
-        _maxAttempts = maxAttempts;
+        _maxRetries = maxRetries;
         _baseDelay = baseDelay ?? TimeSpan.FromSeconds(1);
     }
 
-    public async Task Execute(Func<CancellationToken, Task> action, CancellationToken token = default)
+    public async Task Execute(
+        Func<CancellationToken, Task> action,
+        ILogger attemptLogger,
+        CancellationToken token = default,
+        Func<int, Exception, TimeSpan, ValueTask>? onRetryCallback = null)
     {
-        for (int attempt = 0; attempt < _maxAttempts; attempt++)
+        // maxRetries retries means up to maxRetries + 1 total executions
+        for (int attempt = 0; attempt <= _maxRetries; attempt++)
         {
+            token.ThrowIfCancellationRequested();
+
             try
             {
                 await action(token);
                 return; // Success
             }
-            catch (Exception) when (attempt < _maxAttempts - 1)
+            catch (Exception ex) when (attempt < _maxRetries)
             {
                 // Calculate exponential delay: base * 2^attempt
                 var delay = TimeSpan.FromMilliseconds(
                     _baseDelay.TotalMilliseconds * Math.Pow(2, attempt));
 
                 await Task.Delay(delay, token);
+
+                // Notify the worker so OnRetry callbacks fire (attempt is 1-based)
+                if (onRetryCallback != null)
+                    await onRetryCallback(attempt + 1, ex, delay);
                 // Loop continues to retry
             }
         }
@@ -133,7 +146,7 @@ public class ExponentialBackoffPolicy : IRetryPolicy
 // Use in handler
 public class MyHandler : EverTaskHandler<MyTask>
 {
-    public override IRetryPolicy? RetryPolicy => new ExponentialBackoffPolicy(maxAttempts: 5);
+    public override IRetryPolicy? RetryPolicy => new ExponentialBackoffPolicy(maxRetries: 5);
 }
 ```
 
@@ -142,34 +155,38 @@ public class MyHandler : EverTaskHandler<MyTask>
 If you're already using [Polly](https://github.com/App-vNext/Polly) in your project, you can wrap it in an `IRetryPolicy` implementation:
 
 ```csharp
+using Microsoft.Extensions.Logging;
 using Polly;
+using Polly.Retry;
 
 public class PollyRetryPolicy : IRetryPolicy
 {
     private readonly AsyncRetryPolicy _pollyPolicy;
+    private Func<int, Exception, TimeSpan, ValueTask>? _onRetryCallback;
 
     public PollyRetryPolicy()
     {
         _pollyPolicy = Policy
             .Handle<HttpRequestException>() // Only retry on HTTP errors
-            .Or<TimeoutException>()
             .WaitAndRetryAsync(
                 retryCount: 3,
                 sleepDurationProvider: retryAttempt =>
                     TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)),
                 onRetry: (exception, timeSpan, retryCount, context) =>
                 {
-                    // Log retry attempt
-                    Console.WriteLine($"Retry {retryCount} after {timeSpan.TotalSeconds}s due to {exception.GetType().Name}");
+                    // Surface the retry to EverTask's OnRetry callback (attempt is 1-based)
+                    _onRetryCallback?.Invoke(retryCount, exception, timeSpan);
                 });
     }
 
-    public async Task Execute(Func<CancellationToken, Task> action, CancellationToken token = default)
+    public async Task Execute(
+        Func<CancellationToken, Task> action,
+        ILogger attemptLogger,
+        CancellationToken token = default,
+        Func<int, Exception, TimeSpan, ValueTask>? onRetryCallback = null)
     {
-        await _pollyPolicy.ExecuteAsync(async (ct) =>
-        {
-            await action(ct);
-        }, token);
+        _onRetryCallback = onRetryCallback;
+        await _pollyPolicy.ExecuteAsync(async (ct) => await action(ct), token);
     }
 }
 
@@ -189,6 +206,9 @@ builder.Services.AddEverTask(opt =>
 ## Circuit Breaker with Polly
 
 ```csharp
+using Microsoft.Extensions.Logging;
+using Polly;
+
 public class CircuitBreakerRetryPolicy : IRetryPolicy
 {
     private readonly AsyncPolicy _policy;
@@ -209,7 +229,11 @@ public class CircuitBreakerRetryPolicy : IRetryPolicy
         _policy = Policy.WrapAsync(retryPolicy, circuitBreakerPolicy);
     }
 
-    public async Task Execute(Func<CancellationToken, Task> action, CancellationToken token = default)
+    public async Task Execute(
+        Func<CancellationToken, Task> action,
+        ILogger attemptLogger,
+        CancellationToken token = default,
+        Func<int, Exception, TimeSpan, ValueTask>? onRetryCallback = null)
     {
         await _policy.ExecuteAsync(async (ct) => await action(ct), token);
     }

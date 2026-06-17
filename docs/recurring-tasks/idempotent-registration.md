@@ -27,13 +27,24 @@ await dispatcher.Dispatch(
 
 ## Update Behavior
 
-What happens when you dispatch with an existing key depends on the current task status:
+What happens when you dispatch with an existing key depends on whether the task is recurring and on its current status.
+
+For a **recurring** task, the existing row is reused so its schedule and run history survive a redispatch:
+
+| Existing Task Status | Behavior |
+|---------------------|----------|
+| **InProgress** | Returns existing task ID without making changes |
+| **Any other status** (Pending/Queued/WaitingQueue/Completed/Failed/Cancelled) | Updates the task in place, preserving the stored `NextRunUtc` and `CurrentRunCount` |
+
+A recurring task is never removed and recreated by a redispatch, and a recurring row cannot be converted to a one-shot through its task key.
+
+For a **one-shot** task:
 
 | Existing Task Status | Behavior |
 |---------------------|----------|
 | **InProgress** | Returns existing task ID without making changes |
 | **Pending/Queued/WaitingQueue** | Updates the task configuration |
-| **Completed/Failed/Cancelled** | Removes the old task and creates a new one |
+| **Completed/Failed/Cancelled/ServiceStopped** | Removes the old task and creates a new one |
 
 ## Updating Schedules
 

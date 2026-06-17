@@ -17,7 +17,7 @@
 
 It runs in-process (no external scheduler, no Windows Service, no separate worker host), and it doesn't poll the database in a loop. An in-memory scheduler drives execution through channels, and persistence happens where it matters: on enqueue, on status changes, and for recovery after a restart.
 
-If you've used MediatR, the request/handler pattern will feel familiar. The difference is that tasks are persisted, can be isolated across queues, and hold up under load.
+If you've used MediatR, the request/handler pattern will feel familiar. The difference is that here tasks are persisted, can be isolated across queues, and keep working under load.
 
 Tasks can be CPU-bound or I/O-bound, long- or short-running. Works with ASP.NET Core, Windows Services, or any .NET host.
 
@@ -116,6 +116,27 @@ Dispatch the task:
 await _dispatcher.Dispatch(new SendWelcomeEmailTask(dto.Email, dto.Name));
 ```
 
+## AI-assisted setup (agent skill)
+
+EverTask ships an **agent skill** that integrates the library for you: it picks the packages, wires
+`AddEverTask(...)` to your needs, and scaffolds tasks/handlers that already satisfy the payload
+analyzers. The skill is plain `SKILL.md` markdown, so it works with any AI coding agent that
+supports the Agent Skills convention, or that you can point at a folder of instructions.
+
+On [Claude Code](https://claude.com/claude-code) it installs in one step from the marketplace in
+this repo:
+
+```text
+/plugin marketplace add GiampaoloGabba/EverTask
+/plugin install evertask@evertask
+```
+
+Then `/reload-plugins` and either describe what you want ("add EverTask with PostgreSQL and a
+nightly cleanup job") or invoke `/evertask:integrate-evertask`. For other agents, copy
+`plugins/evertask/skills/integrate-evertask/` into your agent's skills/instructions directory. See
+the [agent skill guide](https://GiampaoloGabba.github.io/EverTask/agent-skill.html) for
+details, alternatives, and how to try it without installing.
+
 ## Documentation
 
 📚 **[Full Documentation](https://GiampaoloGabba.github.io/EverTask)** - Complete guides, tutorials, and API reference
@@ -132,6 +153,7 @@ await _dispatcher.Dispatch(new SendWelcomeEmailTask(dto.Email, dto.Name));
 - **[Task Orchestration](https://GiampaoloGabba.github.io/EverTask/advanced-features.html)** - Chain tasks, build workflows, and coordinate complex processes
 - **[Storage Configuration](https://GiampaoloGabba.github.io/EverTask/storage.html)** - SQL Server, PostgreSQL, SQLite, In-Memory, custom implementations
 - **[Configuration](https://GiampaoloGabba.github.io/EverTask/configuration.html)** - Configure EverTask (Reference + Cheatsheet)
+- **[Agent Skill](https://GiampaoloGabba.github.io/EverTask/agent-skill.html)** - AI-assisted integration: install the skill and let an agent wire up EverTask (one-step on Claude Code)
 - **[Architecture & Internals](https://GiampaoloGabba.github.io/EverTask/architecture.html)** - How EverTask works under the hood
 
 ## A closer look
@@ -174,10 +196,10 @@ Control which exceptions trigger retries to fail-fast on permanent errors:
 RetryPolicy => new LinearRetryPolicy(5, TimeSpan.FromSeconds(2)).HandleTransientDatabaseErrors();
 
 // Whitelist: Only retry specific exceptions (you can also use DoNotHandle for blacklist)
-RetryPolicy = new LinearRetryPolicy(3, TimeSpan.FromSeconds(1)).Handle<DbException>().Handle<HttpRequestException>();
+RetryPolicy => new LinearRetryPolicy(3, TimeSpan.FromSeconds(1)).Handle<DbException>().Handle<HttpRequestException>();
 
 // Predicate: Custom logic (e.g., HTTP 5xx only)
-RetryPolicy = new LinearRetryPolicy(3, TimeSpan.FromSeconds(1)).HandleWhen(ex => ex is HttpRequestException httpEx && httpEx.StatusCode >= 500);
+RetryPolicy => new LinearRetryPolicy(3, TimeSpan.FromSeconds(1)).HandleWhen(ex => ex is HttpRequestException httpEx && httpEx.StatusCode >= 500);
 ```
 
 ### Keyed Rate Limiting
@@ -325,7 +347,7 @@ On the roadmap:
 
 ## Contributing
 
-Contributions are welcome! Bug reports, feature requests, and pull requests all help make EverTask better.
+Contributions are welcome. Bug reports, feature requests, and pull requests all help.
 
 - Report issues: https://github.com/GiampaoloGabba/EverTask/issues
 - Contribute code: https://github.com/GiampaoloGabba/EverTask/pulls

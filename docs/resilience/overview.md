@@ -52,7 +52,7 @@ React to errors using lifecycle hooks for alerting, telemetry, and compensation 
 ```csharp
 builder.Services.AddEverTask(opt =>
 {
-    // 3 attempts with 500ms delay between retries
+    // 3 retries (up to 4 executions) with 500ms delay between attempts
     opt.SetDefaultRetryPolicy(new LinearRetryPolicy(3, TimeSpan.FromMilliseconds(500)));
 });
 ```

@@ -245,7 +245,7 @@ Two more caches sit on the execution side. Monitoring events carry the task's JS
 
 ### Pooled DbContext + provider-specific hot writes
 
-Every storage provider registers `AddPooledDbContextFactory`, not a per-operation context, so each write leases a reset, reused `DbContext`. That cuts per-operation allocation sharply (~-88% per write, ~-71% per task end to end) and the GC pressure with it. On a real database the round-trip dominates wall-clock, so this is an allocation win, not a throughput one. Plain `AddDbContextFactory` does *not* pool.
+The EF Core providers (SQL Server, PostgreSQL, SQLite) register `AddPooledDbContextFactory`, not a per-operation context, so each write leases a reset, reused `DbContext`. (The in-memory store keeps its state in process and uses no `DbContext`.) That cuts per-operation allocation sharply (~-88% per write, ~-71% per task end to end) and the GC pressure with it. On a real database the round-trip dominates wall-clock, so this is an allocation win, not a throughput one. Plain `AddDbContextFactory` does *not* pool.
 
 The status write itself is the hot one: it runs on every state change and adds an audit row. Each provider keeps it to as few round-trips as possible and commits the row update and the audit row together, but the mechanism differs:
 
@@ -297,7 +297,7 @@ Asynchronous APIs from top to bottom maximize scalability for I/O-bound workload
 // No polling loops like this:
 while (true)
 {
-    var tasks = await storage.GetPendingTasksAsync();
+    var tasks = await database.QueryPendingTasks(); // hypothetical naive poller, not EverTask
     if (tasks.Any())
     {
         // Process

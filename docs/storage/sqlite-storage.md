@@ -32,7 +32,7 @@ builder.Services.AddEverTask(opt =>
     "Data Source=evertask.db;Cache=Shared;",
     opt =>
     {
-        opt.SchemaName = null;               // SQLite doesn't support schemas
+        opt.SchemaName = "";                 // SQLite doesn't support schemas; keep it empty (the default)
         opt.AutoApplyMigrations = true;
     });
 ```

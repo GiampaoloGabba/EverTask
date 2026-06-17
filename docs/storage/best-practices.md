@@ -159,13 +159,13 @@ public class StorageMonitor
 
     public async Task<StorageMetrics> GetMetrics()
     {
-        var pending = await _storage.GetPendingTasksAsync();
-        var scheduled = await _storage.GetScheduledTasksAsync();
+        var queued = await _storage.Get(t => t.Status == QueuedTaskStatus.Queued);
+        var scheduled = await _storage.Get(t => t.NextRunUtc != null);
 
         return new StorageMetrics
         {
-            PendingTasksCount = pending.Count,
-            ScheduledTasksCount = scheduled.Count
+            QueuedTasksCount = queued.Length,
+            ScheduledTasksCount = scheduled.Length
         };
     }
 }
@@ -220,17 +220,17 @@ await dispatcher.Dispatch(
 ### SQL Server Cleanup
 
 ```sql
--- Delete completed tasks older than 30 days
+-- Delete completed tasks older than 30 days (Status is stored by name)
 DELETE FROM [EverTask].[QueuedTasks]
-WHERE Status = 2 -- Completed
-  AND CompletedAtUtc < DATEADD(DAY, -30, GETUTCDATE());
+WHERE Status = 'Completed'
+  AND LastExecutionUtc < DATEADD(DAY, -30, GETUTCDATE());
 
--- Clean up orphaned audit records
+-- Clean up orphaned audit records (audit rows reference the task via QueuedTaskId)
 DELETE FROM [EverTask].[StatusAudit]
-WHERE TaskId NOT IN (SELECT Id FROM [EverTask].[QueuedTasks]);
+WHERE QueuedTaskId NOT IN (SELECT Id FROM [EverTask].[QueuedTasks]);
 
 DELETE FROM [EverTask].[RunsAudit]
-WHERE TaskId NOT IN (SELECT Id FROM [EverTask].[QueuedTasks]);
+WHERE QueuedTaskId NOT IN (SELECT Id FROM [EverTask].[QueuedTasks]);
 ```
 
 ### Cleanup Strategy
@@ -252,13 +252,13 @@ CREATE TABLE [EverTask].[QueuedTasks_Archive] (
 -- Archive old tasks
 INSERT INTO [EverTask].[QueuedTasks_Archive]
 SELECT * FROM [EverTask].[QueuedTasks]
-WHERE Status = 2 -- Completed
-  AND CompletedAtUtc < DATEADD(DAY, -90, GETUTCDATE());
+WHERE Status = 'Completed'
+  AND LastExecutionUtc < DATEADD(DAY, -90, GETUTCDATE());
 
 -- Delete archived tasks
 DELETE FROM [EverTask].[QueuedTasks]
-WHERE Status = 2
-  AND CompletedAtUtc < DATEADD(DAY, -90, GETUTCDATE());
+WHERE Status = 'Completed'
+  AND LastExecutionUtc < DATEADD(DAY, -90, GETUTCDATE());
 ```
 
 ## Audit Configuration

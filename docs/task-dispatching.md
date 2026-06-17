@@ -180,7 +180,7 @@ await _database.SaveTaskIdAsync(orderId, taskId);
 
 #### Cancellation
 
-You can cancel a task before it starts executing:
+You can cancel a task whether it is still pending or already running:
 
 ```csharp
 // Dispatch task
@@ -192,7 +192,7 @@ Guid taskId = await _dispatcher.Dispatch(
 await _dispatcher.Cancel(taskId);
 ```
 
-> **Note:** Cancellation only works for tasks that haven't started executing yet. For running tasks, the `CancellationToken` in the handler will be triggered.
+> **Note:** A task that hasn't started yet is removed from the queue before it runs. For a task that is already executing, `Cancel` signals the `CancellationToken` passed to the handler, so the handler must observe that token (for example with `ThrowIfCancellationRequested`) for cancellation to take effect.
 
 #### Tracking
 
@@ -216,24 +216,28 @@ await _database.SaveAsync(notification);
 #### Querying Task Status
 
 ```csharp
-// Later, check task status from storage
-var task = await _taskStorage.GetAsync(taskId);
+// Later, check task status from storage.
+// ITaskStorage.Get takes a predicate and returns matching rows.
+var task = (await _taskStorage.Get(t => t.Id == taskId)).FirstOrDefault();
+
+if (task == null)
+    return; // No row for this ID
 
 switch (task.Status)
 {
-    case TaskStatus.Pending:
-        // Not started yet
+    case QueuedTaskStatus.Queued:
+        // Accepted into the queue, not started yet
         break;
-    case TaskStatus.InProgress:
+    case QueuedTaskStatus.InProgress:
         // Currently executing
         break;
-    case TaskStatus.Completed:
+    case QueuedTaskStatus.Completed:
         // Finished successfully
         break;
-    case TaskStatus.Failed:
+    case QueuedTaskStatus.Failed:
         // Failed after all retries
         break;
-    case TaskStatus.Cancelled:
+    case QueuedTaskStatus.Cancelled:
         // Was cancelled
         break;
 }
@@ -282,11 +286,20 @@ else
 You can build sequential workflows by dispatching the next task when the previous one completes:
 
 ```csharp
-// In a handler's OnCompleted method
+// In a handler. OnCompleted receives only the task ID, so capture any
+// payload value you need in Handle and read it back here.
+private Guid _correlationId;
+
+public override async Task Handle(FirstStepTask task, CancellationToken ct)
+{
+    _correlationId = task.CorrelationId;
+    // ... first step logic
+}
+
 public override async ValueTask OnCompleted(Guid taskId)
 {
     // First task completed, dispatch next step
-    await _dispatcher.Dispatch(new SecondStepTask(_task.CorrelationId));
+    await _dispatcher.Dispatch(new SecondStepTask(_correlationId));
 }
 ```
 
@@ -297,13 +310,14 @@ See [Task Continuations](task-orchestration.md) for more details.
 When things go wrong, you can dispatch compensating tasks to roll back or clean up:
 
 ```csharp
-// In a handler's OnError method
+// In a handler. As with OnCompleted, capture the value in Handle (_operationId)
+// since OnError only receives the task ID.
 public override async ValueTask OnError(Guid taskId, Exception? exception, string? message)
 {
     _logger.LogError(exception, "Task {TaskId} failed, dispatching rollback", taskId);
 
     // Dispatch compensating task
-    await _dispatcher.Dispatch(new RollbackOperationTask(_task.OperationId));
+    await _dispatcher.Dispatch(new RollbackOperationTask(_operationId));
 }
 ```
 
@@ -377,7 +391,18 @@ await _dispatcher.Dispatch(
     taskKey: "daily-report"); // Prevents duplicate registration
 ```
 
-See [Idempotent Task Registration](recurring-tasks/idempotent-registration.md) for more details.
+Every `Dispatch` overload accepts the same three optional parameters after the scheduling argument: `auditLevel` (per-dispatch override of how much audit trail to persist), `taskKey` (the idempotency key shown above), and `cancellationToken` (cancels the dispatch operation itself, such as a blocking enqueue on a full queue — not the task's execution). Each is optional and can be passed by name:
+
+```csharp
+await _dispatcher.Dispatch(
+    new DailyReportTask(),
+    recurring => recurring.Schedule().EveryDay(),
+    auditLevel: AuditLevel.Minimal,
+    taskKey: "daily-report",
+    cancellationToken: ct);
+```
+
+See [Idempotent Task Registration](recurring-tasks/idempotent-registration.md) for more details, and [Dispatch Parameters](configuration-reference.md#dispatch-parameters) for the full reference.
 
 ## Performance Considerations
 

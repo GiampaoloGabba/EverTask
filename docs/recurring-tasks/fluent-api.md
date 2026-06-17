@@ -117,10 +117,11 @@ await dispatcher.Dispatch(
     new FirstMondayTask(),
     builder => builder.Schedule().EveryMonth().OnFirst(DayOfWeek.Monday));
 
-// Last Friday of every month
+// The fluent API only exposes OnFirst for nth-weekday-of-month patterns.
+// For "last Friday of every month", use cron instead:
 await dispatcher.Dispatch(
     new LastFridayTask(),
-    builder => builder.Schedule().EveryMonth().OnLast(DayOfWeek.Friday));
+    builder => builder.Schedule().UseCron("0 0 * * 5L")); // 5L = last Friday
 
 // Every N months
 await dispatcher.Dispatch(
@@ -184,7 +185,7 @@ await dispatcher.Dispatch(
     new LimitedTask(),
     builder => builder.Schedule().EveryHour().MaxRuns(10));
 
-// Run now, then 5 more times
+// Run a total of 5 times (the immediate run counts toward the limit)
 await dispatcher.Dispatch(
     new OnboardingTask(),
     builder => builder.RunNow().Then().EveryDay().MaxRuns(5));
@@ -217,14 +218,16 @@ await dispatcher.Dispatch(
 
 ### Combining Limits
 
+`MaxRuns(int)` returns `void`, so it must come last in the chain. Call `RunUntil` first when you combine both limits:
+
 ```csharp
 // Run daily, max 30 times OR until end date (whichever comes first)
 await dispatcher.Dispatch(
     new CampaignTask(),
     builder => builder.Schedule()
         .EveryDay()
-        .MaxRuns(30)
-        .RunUntil(DateTimeOffset.UtcNow.AddMonths(1)));
+        .RunUntil(DateTimeOffset.UtcNow.AddMonths(1))
+        .MaxRuns(30));
 ```
 
 ## Complex Schedules

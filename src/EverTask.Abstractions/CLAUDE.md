@@ -137,7 +137,7 @@ from the pluggable serializer on the backlog (`review/todo/b6-ievertaskserialize
 | Every 5 minutes | `r => r.Schedule().Every(5).Minutes()` |
 | Cron expression | `r => r.Schedule().UseCron("0 0 * * *")` |
 | Run now + hourly | `r => r.RunNow().Then().EveryHour()` |
-| Max runs + end date | `r => r.Schedule().Every(30).Minutes().MaxRuns(10).RunUntil(endDate)` |
+| Max runs + end date | `r => r.Schedule().Every(30).Minutes().RunUntil(endDate).MaxRuns(10)` (`MaxRuns` returns void — call it last) |
 
 For interval gotchas, see `src/EverTask/Scheduler/Recurring/CLAUDE.md`.
 

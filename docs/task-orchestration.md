@@ -136,35 +136,63 @@ public class OrderProcessingHandler : EverTaskHandler<ProcessOrderTask>
 
 Build multi-stage workflows by chaining continuations:
 
+The callbacks only receive the task ID, not the original request, so capture any payload value you need during `Handle` and read it back in `OnCompleted`:
+
 ```csharp
 // Stage 1: Validate order
 public class ValidateOrderHandler : EverTaskHandler<ValidateOrderTask>
 {
+    private Guid _orderId;
+
+    public override async Task Handle(ValidateOrderTask task, CancellationToken ct)
+    {
+        _orderId = task.OrderId;
+        await ValidateOrderAsync(task.OrderId, ct);
+    }
+
     public override async ValueTask OnCompleted(Guid taskId)
     {
-        await _dispatcher.Dispatch(new ProcessPaymentTask(_task.OrderId));
+        await _dispatcher.Dispatch(new ProcessPaymentTask(_orderId));
     }
 }
 
 // Stage 2: Process payment
 public class ProcessPaymentHandler : EverTaskHandler<ProcessPaymentTask>
 {
+    private Guid _orderId;
+
+    public override async Task Handle(ProcessPaymentTask task, CancellationToken ct)
+    {
+        _orderId = task.OrderId;
+        await ChargePaymentAsync(task.OrderId, ct);
+    }
+
     public override async ValueTask OnCompleted(Guid taskId)
     {
-        await _dispatcher.Dispatch(new ReserveInventoryTask(_task.OrderId));
+        await _dispatcher.Dispatch(new ReserveInventoryTask(_orderId));
     }
 }
 
 // Stage 3: Reserve inventory
 public class ReserveInventoryHandler : EverTaskHandler<ReserveInventoryTask>
 {
+    private Guid _orderId;
+
+    public override async Task Handle(ReserveInventoryTask task, CancellationToken ct)
+    {
+        _orderId = task.OrderId;
+        await ReserveInventoryAsync(task.OrderId, ct);
+    }
+
     public override async ValueTask OnCompleted(Guid taskId)
     {
-        await _dispatcher.Dispatch(new ShipOrderTask(_task.OrderId));
-        await _dispatcher.Dispatch(new SendConfirmationEmailTask(_task.OrderId));
+        await _dispatcher.Dispatch(new ShipOrderTask(_orderId));
+        await _dispatcher.Dispatch(new SendConfirmationEmailTask(_orderId));
     }
 }
 ```
+
+Because `Handle` runs before `OnCompleted` within the same execution and assigns the field each time, a private field is safe to carry payload state into the callback. Alternatively, load the row from `ITaskStorage` by `taskId` inside the callback.
 
 ## Task Cancellation
 

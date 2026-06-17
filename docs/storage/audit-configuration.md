@@ -211,23 +211,27 @@ EverTask eliminates unnecessary database queries by passing `AuditLevel` through
 ```sql
 CREATE PROCEDURE [EverTask].[usp_SetTaskStatus]
     @TaskId uniqueidentifier,
-    @Status int,
+    @Status nvarchar(15),                  -- status stored by name, e.g. 'Completed', 'Failed'
     @Exception nvarchar(max) = NULL,
-    @AuditLevel int = 0  -- Default: Full
+    @AuditLevel int = 0                     -- 0 Full, 1 Minimal, 2 ErrorsOnly, 3 None
 AS
 BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @Now datetimeoffset = SYSDATETIMEOFFSET();
+
     -- Update task status
     UPDATE [EverTask].[QueuedTasks]
     SET Status = @Status, Exception = @Exception
     WHERE Id = @TaskId;
 
-    -- Conditionally insert audit record based on AuditLevel
+    -- Conditionally insert an audit record based on AuditLevel.
+    -- Minimal and ErrorsOnly only audit real errors: a Failed/ServiceStopped status or any exception.
     IF (@AuditLevel = 0  -- Full
-        OR (@AuditLevel = 1 AND (@Status = 3 OR @Status = 4 OR @Exception IS NOT NULL))  -- Minimal (errors)
-        OR (@AuditLevel = 2 AND (@Status = 3 OR @Status = 4 OR @Exception IS NOT NULL))) -- ErrorsOnly
+        OR (@AuditLevel IN (1, 2) AND (@Status IN ('Failed', 'ServiceStopped') OR @Exception IS NOT NULL)))
     BEGIN
-        INSERT INTO [EverTask].[StatusAudit] (TaskId, Status, Exception, CreatedAtUtc)
-        VALUES (@TaskId, @Status, @Exception, GETUTCDATE());
+        INSERT INTO [EverTask].[StatusAudit] (QueuedTaskId, UpdatedAtUtc, NewStatus, Exception)
+        VALUES (@TaskId, @Now, @Status, @Exception);
     END
 END
 ```
@@ -262,13 +266,13 @@ Query audit table sizes to determine if audit levels need adjustment:
 SELECT
     'StatusAudit' AS TableName,
     COUNT(*) AS TotalRows,
-    COUNT(*) / NULLIF(DATEDIFF(DAY, MIN(CreatedAtUtc), MAX(CreatedAtUtc)), 0) AS AvgRowsPerDay
+    COUNT(*) / NULLIF(DATEDIFF(DAY, MIN(UpdatedAtUtc), MAX(UpdatedAtUtc)), 0) AS AvgRowsPerDay
 FROM [EverTask].[StatusAudit]
 UNION ALL
 SELECT
     'RunsAudit' AS TableName,
     COUNT(*) AS TotalRows,
-    COUNT(*) / NULLIF(DATEDIFF(DAY, MIN(ExecutedAtUtc), MAX(ExecutedAtUtc)), 0) AS AvgRowsPerDay
+    COUNT(*) / NULLIF(DATEDIFF(DAY, MIN(ExecutedAt), MAX(ExecutedAt)), 0) AS AvgRowsPerDay
 FROM [EverTask].[RunsAudit];
 ```
 

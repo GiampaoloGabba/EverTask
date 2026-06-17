@@ -7,7 +7,7 @@ nav_order: 3
 
 # Keyed Rate Limiting
 
-Throttle task execution per logical key (tenant, account, external resource): each key respects its own budget while every other key keeps flowing at full speed.
+Throttle task execution per logical key (tenant, account, external resource): each key respects its own budget while every other key keeps flowing unthrottled.
 
 ## Why
 
@@ -18,7 +18,7 @@ The driving scenario: your tasks call an external API limited to ~15 requests pe
 - **no busy workers**: a worker slot is never held while waiting for budget;
 - **no lost tasks**: an over-budget task is re-scheduled, not dropped (unless you opt into `Discard`).
 
-EverTask implements this with a consumer-side gate backed by a [GCRA](https://en.wikipedia.org/wiki/Generic_cell_rate_algorithm) limiter (sliding window with burst tolerance). When a task has no budget, the gate reserves the next available slot for it and re-parks it into the in-memory scheduler. Nothing is written to storage for a deferral: the task simply stays in its recoverable `Queued` status until its slot fires.
+EverTask implements this with a consumer-side gate backed by a [GCRA](https://en.wikipedia.org/wiki/Generic_cell_rate_algorithm) limiter (sliding window with burst tolerance). When a task has no budget, the gate reserves the next available slot for it and re-parks it into the in-memory scheduler. Nothing is written to storage for a deferral: the task stays in its recoverable `Queued` status until its slot fires.
 
 ## Quick Start
 
@@ -90,7 +90,7 @@ StartEmpty = true:
 
 In detail:
 
-- **`Burst`** is the cap on how much budget a key can save up while it sits idle, which makes it the number of tasks that may execute immediately, back-to-back, when work arrives after a quiet stretch. The default is the same value as `Permits` (here 15): a tenant that has been quiet for a minute or more can fire all 15 calls at once, and only then is paced down to one every 4 seconds. `Burst = 1` is the opposite extreme: no budget ever accumulates, so executions are strictly spaced 4 seconds apart no matter how long the key was idle. Values in between trade burstiness for smoothness (`Burst = 5`: at most 5 back-to-back, then steady pacing).
+- **`Burst`** is the cap on how much budget a key can save up while it sits idle, which is also the number of tasks that may execute immediately, back-to-back, when work arrives after a quiet stretch. The default is the same value as `Permits` (here 15): a tenant that has been quiet for a minute or more can fire all 15 calls at once, and only then is paced down to one every 4 seconds. `Burst = 1` is the opposite extreme: no budget ever accumulates, so executions are strictly spaced 4 seconds apart no matter how long the key was idle. Values in between cap the back-to-back run at that number (`Burst = 5`: at most 5 back-to-back, then steady pacing).
 
 - **`ThrottleRetries`** decides whether retry attempts also consume budget. Default `true`: if the task failed while calling the rate-limited API, its retries hit the same API, so they must respect the same limit. Set it to `false` only when retries don't touch the limited resource (e.g. retrying a cheap local failure).
 
@@ -133,9 +133,9 @@ Rules and behavior:
 ```
 dispatch → queue → consumer dequeues → rate-limit gate:
   ├─ budget available  → execute now
-  ├─ slot ≤ MaxInSlotWait away → wait inline, then execute (saves a scheduler round-trip)
   └─ otherwise → reserve the slot, re-park into the in-memory scheduler
-                 (lazy, no handler instance pinned; storage untouched, status stays Queued)
+                 (near or far slot alike — the consumer never waits inline, so it stays
+                  free for the next item; lazy, no handler pinned; storage untouched, status stays Queued)
 slot fires → task re-enters the queue (the usual SetQueued write) → gate redeems the
              reservation → executes
 ```
@@ -151,18 +151,17 @@ Key properties:
 
 By default (`ThrottleRetries = true`) every retry attempt re-acquires budget before running: if the task calls a rate-limited API, its retries should respect the same limit. The budget wait happens *before* the per-attempt `Timeout` starts, so waiting never erodes it.
 
-- A retry whose slot is at most `MaxInSlotWait` away waits inline between attempts.
-- A retry whose slot is farther away re-parks the task at the reserved slot instead of failing it. The attempt counter restarts on redelivery; combined with a low `MaxDegreeOfParallelism`, this trades some throughput for retry fidelity.
+- A retry that is out of budget re-parks the task at the reserved slot instead of failing it (the consumer never waits inline, near or far slot). The attempt counter restarts on redelivery; combined with a low `MaxDegreeOfParallelism`, this trades some throughput for retry fidelity.
 - Set `ThrottleRetries = false` to let retries bypass the limiter (e.g. when retrying cheap local failures).
 
-The `OnRetry` callback still fires as usual; throttled waits are visible through its delay parameter.
+The `OnRetry` callback still fires as usual. Its delay parameter reports the retry policy's own backoff, not the rate-limit wait: a throttled attempt re-parks in the scheduler rather than delaying inline, so the wait surfaces through the deferral events, logs, and dashboard described under [Observability](#observability), not through `OnRetry`.
 
 ## Recurring Tasks
 
 Recurring tasks are throttled per occurrence, and the series rhythm is preserved: a deferred occurrence executes late, but the *next* occurrence is still computed from the original schedule (the re-park never touches the occurrence's scheduled time).
 
 - An occurrence whose reserved slot would fall past `RunUntil` is skipped, never fired late.
-- An occurrence rejected by the reservation horizon (see below) is skipped through the normal next-occurrence path: it only advances the schedule and does not consume the `MaxRuns` budget, the same as a downtime skip (`MaxRuns` counts real executions). The series stays alive and still runs its full `MaxRuns` of real executions, so a rate-limited series is never cut short of its run budget by occurrences it could not fit within the horizon. The next occurrence skips ahead to the limiter's next available slot rather than re-checking every occurrence at the cadence, so a recurrence configured far faster than the policy's refill rate re-checks about once per refill interval instead of once per occurrence.
+- An occurrence rejected by the reservation horizon (see below) is skipped through the normal next-occurrence path: it only advances the schedule and does not consume the `MaxRuns` budget, the same as a downtime skip (`MaxRuns` counts real executions). The series stays alive and still runs its full `MaxRuns` of real executions, so a rate-limited series is never cut short of its run budget by occurrences it could not fit within the horizon. The next occurrence skips ahead to the limiter's next available slot rather than re-checking every occurrence at the cadence, so a recurrence configured far faster than the policy's refill rate re-checks about once per refill interval rather than once per occurrence.
 - A recurrence faster than the policy refill rate logs a warning at first dispatch (occurrences would pile up behind the limiter).
 
 ## Observability
@@ -171,7 +170,7 @@ Deferrals are infrastructure routing: no handler callback fires for them (like t
 
 - **Monitoring events** (`TaskEventOccurredAsync` / SignalR): deferral events with a machine-parseable message (`Rate limit deferred task {id}: key={key} slotUtc={slot:O} policy={taskType} deferredCount={n}`), aggregated at the source: first deferral per key per window, then one summary per window, so sustained throttling never becomes an event storm. Disable via `EmitDeferralEvents = false`.
 - **Logs**: per-deferral details at `Debug` level.
-- **Monitor.Api / Dashboard**: a dedicated **Rate Limits** page (backed by `GET /api/rate-limits`) lists each key's parked count and next slot, plus tracked keys, fail-open count, and parking-lot usage. The overview shows a `ThrottledTasks` counter and the queue cards a per-queue `throttledCount`, both only while something is actually throttled. Open a parked task and you'll see when it unparks: a *Throttled* badge in the list, a *Throttled Until* field in the detail. The whole view is in-memory and **single-node**.
+- **Monitor.Api / Dashboard**: a dedicated **Rate Limits** page (backed by `GET /api/rate-limits`) lists each key's parked count and next slot, plus tracked keys, the tracked-key-cap fail-open count, and parking-lot usage. (The fail-open count covers only the in-memory limiter's `MaxTrackedKeys` overflow, where new keys execute untracked. A custom `IKeyedRateLimiter` that throws also fails open, but that path is a logged warning and is not added to this counter.) The overview shows a `ThrottledTasks` counter and the queue cards a per-queue `throttledCount`, both only while something is actually throttled. Open a parked task and you'll see when it unparks: a *Throttled* badge in the list, a *Throttled Until* field in the detail. The whole view is in-memory and **single-node**.
 - **Terminal outcomes DO invoke `OnError`** with a typed `RateLimitRejectedException` (carrying key, computed slot and policy): horizon rejections and `Discard` drops.
 
 ## Restart Semantics
@@ -220,7 +219,7 @@ public override RateLimitPolicy? RateLimitPolicy =>
         ThrottleRetries       = true,                     // retry attempts consume budget too (default)
         StartEmpty            = false,                    // new keys start with the full Burst saved up (default)
         MaxReservationHorizon = TimeSpan.FromHours(1),    // farther slots → terminal rejection
-        MaxInSlotWait         = TimeSpan.FromSeconds(1),  // nearer slots → inline wait
+        MaxInSlotWait         = TimeSpan.FromSeconds(1),  // no-op: retained for binary compat (gate never waits inline; over-budget tasks always re-park)
         OverflowBehavior      = RateLimitOverflowBehavior.WaitForCapacity // or Discard
     };
 ```
@@ -232,8 +231,8 @@ public override RateLimitPolicy? RateLimitPolicy =>
 | `ThrottleRetries` | `true` | Retry attempts re-acquire budget before running, so retries of a rate-limited API call respect the same limit. `false`: retries bypass the limiter. |
 | `StartEmpty` | `false` | Budget of a brand-new bucket (first time a key is seen, or any key after a restart, since the limiter is in-memory). `false`: starts with the full `Burst` saved up, so the first `Burst` tasks run immediately. `true`: starts with nothing saved, so after the first task the steady pacing applies right away; this caps the post-restart spike. |
 | `MaxReservationHorizon` | 1 hour | If the next available slot for a key is farther away than this, the task is rejected instead of parked: one-shot tasks fail with `RateLimitRejectedException` (delivered to `OnError`), recurring occurrences are skipped. |
-| `MaxInSlotWait` | 1 second | If the reserved slot is at most this close, the consumer waits inline instead of re-parking through the scheduler. |
-| `OverflowBehavior` | `WaitForCapacity` | What happens when a key has no budget: `WaitForCapacity` reserves a slot and defers; `Discard` fails the task immediately (terminal `Failed`, typed exception to `OnError`). |
+| `MaxInSlotWait` | 1 second | **No-op — retained for binary compatibility only.** The gate never waits inline on the consumer; every over-budget task (near or far slot) is re-parked to the scheduler and fires at its reserved slot via redelivery. |
+| `OverflowBehavior` | `WaitForCapacity` | What happens when a key has no budget: `WaitForCapacity` reserves a slot and defers; `Discard` rejects immediately — one-shot tasks fail (terminal `Failed`, typed exception to `OnError`), recurring occurrences are skipped (series continues, no callback). |
 
 Global infrastructure knobs:
 

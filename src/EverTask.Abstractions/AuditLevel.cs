@@ -16,10 +16,12 @@ public enum AuditLevel
 
     /// <summary>
     /// Minimal audit trail - optimized for high-frequency recurring tasks.
-    /// Only records errors and updates last execution timestamp in QueuedTask.
-    /// Success executions: No StatusAudit/RunsAudit records, only QueuedTask.LastExecutionUtc updated.
-    /// Failed executions: Full audit trail with exception details.
-    /// Use for recurring tasks where only error visibility and last run tracking is needed.
+    /// Success executions: No StatusAudit row; a RunsAudit row IS still written for every recurring
+    /// run (preserving run-frequency history), and QueuedTask.LastExecutionUtc is updated.
+    /// Failed executions: Full audit trail with exception details (StatusAudit + RunsAudit).
+    /// Differs from ErrorsOnly only in RunsAudit (Minimal: every run; ErrorsOnly: failures only).
+    /// Authoritative rules live in AuditPolicy.ShouldCreateStatusAudit / ShouldCreateRunsAudit.
+    /// Use for recurring tasks where you want run tracking but not full status history.
     /// </summary>
     Minimal = 1,
 

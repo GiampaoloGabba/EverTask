@@ -82,7 +82,7 @@ Task C (ID: ghi789) → Shard 7
 **Pros:**
 - ✅ Lower lock contention on `Schedule()` (the single priority-queue lock is split across shards)
 - ✅ Better burst handling (independent shard processing)
-- ✅ Complete failure isolation (issues in one shard don't affect others)
+- ✅ Per-shard loop isolation: each shard runs its own timer, lock, and priority queue, so an error in one shard's processing loop is caught and logged without stalling the others. This isolates the scheduling loops only; the shards still share the same process, worker queues, and storage, so it is not process- or dependency-level isolation.
 - ✅ Higher sustainable `Schedule()`-call rate and scheduled-task count (scheduling axis only)
 
 **Cons:**

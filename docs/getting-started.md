@@ -20,6 +20,7 @@ dotnet add package EverTask.Abstractions
 
 # Storage providers
 dotnet add package EverTask.Storage.SqlServer
+dotnet add package EverTask.Storage.Postgres
 dotnet add package EverTask.Storage.Sqlite
 
 # Optional packages

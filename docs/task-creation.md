@@ -189,6 +189,28 @@ public override ValueTask OnError(Guid taskId, Exception? exception, string? mes
 }
 ```
 
+### OnRetry
+
+Called before each retry attempt, after the retry delay has elapsed and immediately before `Handle` runs again. It is not called for the initial attempt, only for retries:
+
+```csharp
+public override ValueTask OnRetry(Guid taskId, int attemptNumber, Exception exception, TimeSpan delay)
+{
+    _logger.LogWarning(
+        exception,
+        "Task {TaskId} retry {Attempt} after {DelayMs}ms",
+        taskId,
+        attemptNumber,
+        delay.TotalMilliseconds);
+
+    // Useful for retry metrics, alerting on excessive retries, etc.
+
+    return ValueTask.CompletedTask;
+}
+```
+
+The `attemptNumber` is 1-based, so the first retry is attempt 1. See [Resilience & Error Handling](resilience.md) for how retries are configured.
+
 ### DisposeAsyncCore
 
 Called during handler disposal for any cleanup you need:
@@ -242,6 +264,12 @@ public class CompleteLifecycleHandler : EverTaskHandler<CompleteLifecycleTask>
 
         // Chain to next task
         await _dispatcher.Dispatch(new FollowUpTask());
+    }
+
+    public override ValueTask OnRetry(Guid taskId, int attemptNumber, Exception exception, TimeSpan delay)
+    {
+        _logger.LogWarning(exception, "Task {TaskId} retry {Attempt} after {Delay}", taskId, attemptNumber, delay);
+        return ValueTask.CompletedTask;
     }
 
     public override ValueTask OnError(Guid taskId, Exception? exception, string? message)

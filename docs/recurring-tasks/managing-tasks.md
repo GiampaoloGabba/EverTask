@@ -30,10 +30,10 @@ var task = await _taskStorage.GetByTaskKey("daily-report");
 
 if (task != null)
 {
-    Console.WriteLine($"Task ID: {task.PersistenceId}");
+    Console.WriteLine($"Task ID: {task.Id}");
     Console.WriteLine($"Status: {task.Status}");
     Console.WriteLine($"Current Run Count: {task.CurrentRunCount}");
-    Console.WriteLine($"Next Run: {task.ExecutionTime}");
+    Console.WriteLine($"Next Run: {task.NextRunUtc}");
 }
 ```
 
@@ -45,15 +45,20 @@ Lifecycle hooks let you track execution patterns and catch issues:
 public class MonitoredRecurringHandler : EverTaskHandler<MonitoredRecurringTask>
 {
     private readonly ILogger<MonitoredRecurringHandler> _logger;
+    private readonly ITaskStorage _storage;
 
-    public MonitoredRecurringHandler(ILogger<MonitoredRecurringHandler> logger)
+    public MonitoredRecurringHandler(ILogger<MonitoredRecurringHandler> logger, ITaskStorage storage)
     {
         _logger = logger;
+        _storage = storage;
     }
 
     public override async Task Handle(MonitoredRecurringTask task, CancellationToken cancellationToken)
     {
-        _logger.LogInformation("Recurring task execution #{Count}", task.CurrentExecutionCount);
+        // The run count lives on the persisted row, not on the request payload.
+        // Read it from storage by task key when you need it inside the handler.
+        var persisted = await _storage.GetByTaskKey("monitored-recurring");
+        _logger.LogInformation("Recurring task execution #{Count}", persisted?.CurrentRunCount);
 
         // Task logic here
     }

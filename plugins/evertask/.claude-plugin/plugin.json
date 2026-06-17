@@ -1,0 +1,19 @@
+{
+  "name": "evertask",
+  "description": "Integrate the EverTask .NET background-task library into a project (storage, scheduling, resilience, rate limiting, monitoring) with an interactive, analyzer-aware skill.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Giampaolo Gabba",
+    "url": "https://github.com/GiampaoloGabba"
+  },
+  "homepage": "https://github.com/GiampaoloGabba/EverTask",
+  "repository": "https://github.com/GiampaoloGabba/EverTask",
+  "license": "Apache-2.0",
+  "keywords": [
+    "evertask",
+    "background-tasks",
+    "dotnet",
+    "scheduling",
+    "integration"
+  ]
+}

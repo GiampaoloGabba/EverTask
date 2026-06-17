@@ -162,7 +162,7 @@ All configuration is done through the `EverTaskApiOptions` class passed to `AddM
 | `JwtAudience` | string | `"EverTask.Monitor.Api"` | JWT token audience |
 | `JwtExpirationHours` | int | `8` | JWT token expiration time in hours |
 | `EnableAuthentication` | bool | `true` | Enable JWT authentication |
-| `EnableCors` | bool | `true` | Enable CORS |
+| `EnableCors` | bool | `true` | Register the `EverTaskMonitoringApi` CORS policy. The policy is registered but not applied by the integration; call `app.UseCors("EverTaskMonitoringApi")` in your pipeline to activate it |
 | `CorsAllowedOrigins` | string[] | `[]` | CORS allowed origins (empty = allow all) |
 | `AllowedIpAddresses` | string[] | `[]` | IP whitelist (empty = allow all IPs). Supports IPv4/IPv6 and CIDR notation |
 | `MagicLinkToken` | string? | `null` | Static token for magic link access. If set, enables `/api/auth/magic` endpoint for instant authentication |
@@ -404,6 +404,8 @@ builder.Services.AddEverTaskMonitoringApiStandalone(options =>
 // Note: You must register ITaskStorage manually
 builder.Services.AddSingleton<ITaskStorage, MyCustomStorage>();
 ```
+
+The standalone registration does not configure SignalR monitoring. `AddSignalRMonitoring` is only available on `EverTaskServiceBuilder` (the chain returned by `AddEverTask`), so a standalone API has no live event feed: dashboard data refreshes on poll rather than on push. To get live updates, register the API through `AddEverTask(...).AddMonitoringApi(...)`, which wires up the SignalR monitor for you.
 
 ## Swagger Integration
 

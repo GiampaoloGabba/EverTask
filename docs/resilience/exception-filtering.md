@@ -21,14 +21,13 @@ public override async Task Handle(MyTask task, CancellationToken ct)
 }
 ```
 
-With default retry policy:
+With the default retry policy (3 retries, so up to 4 executions):
 - Attempt 1: `NullReferenceException` → Retry (wasteful)
 - Attempt 2: `NullReferenceException` → Retry (wasteful)
 - Attempt 3: `NullReferenceException` → Retry (wasteful)
-- Attempt 4: `NullReferenceException` → Retry (wasteful)
-- Attempt 5: `NullReferenceException` → Final failure
+- Attempt 4: `NullReferenceException` → Final failure
 
-**Total wasted time**: 5 attempts × retry delay
+**Total wasted time**: 4 executions × retry delay
 
 With exception filtering, you can fail immediately on permanent errors like `NullReferenceException`, `ArgumentException`, or validation failures.
 
@@ -41,8 +40,7 @@ public class DatabaseTaskHandler : EverTaskHandler<DatabaseTask>
 {
     public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(5, TimeSpan.FromSeconds(2))
         .Handle<DbException>()
-        .Handle<SqlException>()
-        .Handle<TimeoutException>();
+        .Handle<SqlException>();
 
     public override async Task Handle(DatabaseTask task, CancellationToken ct)
     {
@@ -51,7 +49,7 @@ public class DatabaseTaskHandler : EverTaskHandler<DatabaseTask>
 }
 ```
 
-**Result**: Only database-related exceptions trigger retries. Application logic errors (ArgumentException, NullReferenceException) fail immediately.
+**Result**: Only database-related exceptions trigger retries. Application logic errors (ArgumentException, NullReferenceException) fail immediately. Note that `TimeoutException` is never retried even when whitelisted: the fail-fast guard blocks it before the whitelist is consulted.
 
 ## Blacklist Approach (DoNotHandle)
 
@@ -72,7 +70,7 @@ public class ApiTaskHandler : EverTaskHandler<ApiTask>
 }
 ```
 
-**Result**: Permanent errors (argument validation, logic errors) fail immediately. Network errors, timeouts, and other transient issues trigger retries.
+**Result**: Permanent errors (argument validation, logic errors) fail immediately. Network errors and other transient issues trigger retries. `TimeoutException` and `OperationCanceledException` are still fail-fast regardless of the blacklist.
 
 ## Multiple Exception Types (Params Overload)
 
@@ -85,8 +83,7 @@ public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(5, TimeSpan.F
         typeof(SqlException),
         typeof(HttpRequestException),
         typeof(IOException),
-        typeof(SocketException),
-        typeof(TimeoutException)
+        typeof(SocketException)
     );
 ```
 
@@ -109,8 +106,8 @@ public class HttpApiHandler : EverTaskHandler<HttpApiTask>
                 return statusCode >= 500 && statusCode < 600;
             }
 
-            // Retry timeout and network errors
-            return ex is TimeoutException or SocketException;
+            // Retry network errors (TimeoutException is fail-fast and ignored here)
+            return ex is SocketException;
         });
 
     public override async Task Handle(HttpApiTask task, CancellationToken ct)
@@ -149,16 +146,18 @@ public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(5, TimeSpan.F
 
 `HandleTransientDatabaseErrors()`:
 - `DbException`
-- `TimeoutException` (database-related)
+- `TimeoutException` (never retried — see note below)
 
 `HandleTransientNetworkErrors()`:
 - `HttpRequestException`
 - `SocketException`
 - `WebException`
-- `TaskCanceledException`
+- `TaskCanceledException` (never retried — see note below)
 
 `HandleAllTransientErrors()`:
 - All of the above combined
+
+> **Note**: These presets include `TimeoutException` and `TaskCanceledException` in their whitelists, but the fail-fast guard blocks both before the whitelist is consulted. `TimeoutException` never retries, and `TaskCanceledException` derives from `OperationCanceledException`, so it never retries either. The presets retry only the remaining types.
 
 You can combine predefined sets with custom exceptions:
 
@@ -172,10 +171,11 @@ public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(5, TimeSpan.F
 
 When multiple filtering strategies are configured, they're evaluated in this order:
 
-1. **Predicate** (`HandleWhen`): Takes precedence over all other filters
-2. **Whitelist** (`Handle<T>`): Only retry whitelisted exceptions
-3. **Blacklist** (`DoNotHandle<T>`): Retry all except blacklisted exceptions
-4. **Default**: Retry all exceptions except `OperationCanceledException` and `TimeoutException`
+1. **Fail-fast guard**: `OperationCanceledException` and `TimeoutException` never retry. This guard runs first and cannot be overridden by any filter below, so a whitelist, blacklist, or predicate that names these types has no effect on them.
+2. **Predicate** (`HandleWhen`): Takes precedence over the whitelist and blacklist
+3. **Whitelist** (`Handle<T>`): Only retry whitelisted exceptions
+4. **Blacklist** (`DoNotHandle<T>`): Retry all except blacklisted exceptions
+5. **Default**: Retry every remaining exception
 
 **Important**: You cannot mix `Handle<T>()` and `DoNotHandle<T>()` - choose either whitelist or blacklist approach, not both.
 
@@ -217,7 +217,7 @@ You don't need to explicitly whitelist every derived type.
 public class DatabaseTaskHandler : EverTaskHandler<DatabaseTask>
 {
     public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(5, TimeSpan.FromSeconds(2))
-        .HandleTransientDatabaseErrors(); // Retry DB timeouts, deadlocks, etc.
+        .HandleTransientDatabaseErrors(); // Retry transient DB errors (deadlocks, etc.); TimeoutException stays fail-fast
 }
 ```
 

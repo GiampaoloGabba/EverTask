@@ -212,9 +212,10 @@ builder.Services.AddEverTask(opt =>
 
 var app = builder.Build();
 
-// Hub is automatically mapped when you call MapEverTaskApi()
-// No need to map it separately
+// Map the hub so the monitor subscribes to task events.
+// Without this call the SignalR monitor is registered but never receives events.
 // Default hub path: /evertask-monitoring/hub
+app.MapEverTaskMonitorHub();
 
 app.Run();
 ```
