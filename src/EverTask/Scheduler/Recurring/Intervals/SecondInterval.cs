@@ -3,7 +3,7 @@
 public class SecondInterval : IInterval
 {
     //used for serialization/deserialization
-    [JsonConstructor]
+    [System.Text.Json.Serialization.JsonConstructor]
     public SecondInterval() { }
 
     public SecondInterval(int interval)

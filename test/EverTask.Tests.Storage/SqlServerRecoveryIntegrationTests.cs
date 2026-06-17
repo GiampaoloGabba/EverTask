@@ -91,6 +91,36 @@ public class SqlServerRecoveryIntegrationTests : IsolatedIntegrationTestBase, IA
         };
 
     [Fact]
+    public async Task Should_recover_legacy_Newtonsoft_row_with_4byte_emoji_payload_against_real_db()
+    {
+        // B4 headline: a row written by the LEGACY producer (Newtonsoft 13.x) carrying non-ASCII + 4-byte
+        // UTF-8 emoji is persisted into the REAL SQL Server NVARCHAR column, then recovered by the actual
+        // startup flow against the STJ EverTaskJson — proving no data loss / no encoding corruption on an
+        // upgraded database. This is the only test that exercises the real DB round-trip end-to-end.
+        const string emojiPayload = "Caffè è perché 日本語のテスト 🚀🔥✅";
+
+        await CreateSqlServerHostAsync(startHost: false);
+
+        var legacyTask = new LegacyPayloadProbeTask(emojiPayload);
+        await Storage.Persist(new QueuedTask
+        {
+            Id           = Guid.NewGuid(),
+            Type         = legacyTask.GetType().AssemblyQualifiedName!,
+            Request      = JsonConvert.SerializeObject(legacyTask), // legacy Newtonsoft format on disk
+            Handler      = "seeded-by-test",
+            Status       = QueuedTaskStatus.Queued,
+            CreatedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-5)
+        });
+
+        await Host!.StartAsync();
+
+        await TaskWaitHelper.WaitForConditionAsync(() => _state.CapturedPayloads.Count >= 1, timeoutMs: 30000);
+
+        _state.CapturedPayloads.ShouldContain(emojiPayload,
+            "the 4-byte emoji payload must survive the real-DB legacy→STJ recovery byte-for-byte");
+    }
+
+    [Fact]
     public async Task Should_recover_backlog_exceeding_capacity_without_deadlock_or_loss()
     {
         const int backlog = 60;

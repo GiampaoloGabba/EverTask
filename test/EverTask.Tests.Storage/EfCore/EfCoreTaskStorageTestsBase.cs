@@ -2,8 +2,11 @@
 using Xunit;
 using EverTask.Storage.EfCore;
 using EverTask.Storage;
+using EverTask.Scheduler.Recurring;
+using EverTask.Scheduler.Recurring.Intervals;
 using Shouldly;
 using EverTask.Tests.TestHelpers;
+using Newtonsoft.Json;
 
 namespace EverTask.Tests.Storage.EfCore;
 
@@ -1943,6 +1946,69 @@ public abstract class EfCoreTaskStorageTestsBase
 
         pending.ShouldNotContain(t => t.Id == exhausted.Id);
         pending.ShouldNotContain(t => t.Id == cancelled.Id);
+    }
+
+    #endregion
+
+    #region Legacy serialization round-trip (B4 — Newtonsoft -> STJ, no data loss / no encoding corruption)
+
+    private static readonly JsonSerializerSettings LegacyJsonSettings = new() { TypeNameHandling = TypeNameHandling.None };
+
+    [Fact]
+    public async Task Legacy_emoji_payload_survives_db_round_trip_byte_for_byte()
+    {
+        // The DB column must preserve a legacy Newtonsoft payload carrying non-ASCII + 4-byte UTF-8 emoji
+        // exactly (collation/encoding fidelity). STJ's ability to READ that exact JSON is pinned by the unit
+        // parity tests; here we prove the relational provider does not mangle the stored bytes.
+        const string emojiPayload = "Caffè è perché 日本語のテスト 🚀🔥✅";
+        var legacyRequest = JsonConvert.SerializeObject(new { Text = emojiPayload }, LegacyJsonSettings);
+
+        var id = GetGuidForProvider();
+        await _storage.Persist(new QueuedTask
+        {
+            Id           = id,
+            Type         = "LegacyEmojiTask",
+            Request      = legacyRequest,
+            Handler      = "H",
+            Status       = QueuedTaskStatus.Queued,
+            CreatedAtUtc = DateTimeOffset.UtcNow
+        });
+
+        var row = (await _storage.Get(x => x.Id == id))[0];
+        row.Request.ShouldBe(legacyRequest, "the legacy emoji payload must round-trip through the DB unchanged");
+        row.Request.ShouldContain("🚀", Case.Sensitive);
+    }
+
+    [Fact]
+    public async Task Legacy_recurring_DayInterval_OnDays_metadata_survives_db_round_trip()
+    {
+        // A recurring row's RecurringTask metadata (legacy Newtonsoft) carrying a DayInterval.OnDays schedule
+        // must be persisted and read back unchanged on every relational provider, so recovery can re-read the
+        // schedule under STJ (OnDays preservation itself is pinned by the unit interval-parity tests).
+        var recurring = new RecurringTask
+        {
+            DayInterval = new DayInterval(0, new[] { DayOfWeek.Monday, DayOfWeek.Friday })
+        };
+        var legacyRecurring = JsonConvert.SerializeObject(recurring, LegacyJsonSettings);
+        legacyRecurring.ShouldContain("OnDays");
+
+        var id = GetGuidForProvider();
+        await _storage.Persist(new QueuedTask
+        {
+            Id            = id,
+            Type          = "LegacyRecurringTask",
+            Request       = "{}",
+            Handler       = "H",
+            Status        = QueuedTaskStatus.Completed,
+            IsRecurring   = true,
+            RecurringTask = legacyRecurring,
+            NextRunUtc    = DateTimeOffset.UtcNow.AddMinutes(30),
+            CreatedAtUtc  = DateTimeOffset.UtcNow
+        });
+
+        var row = (await _storage.Get(x => x.Id == id))[0];
+        row.RecurringTask.ShouldBe(legacyRecurring,
+            "the legacy recurring schedule metadata must round-trip through the DB unchanged");
     }
 
     #endregion

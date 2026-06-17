@@ -5,263 +5,127 @@ parent: Storage
 nav_order: 8
 ---
 
-# Serialization
+# JSON serialization
 
-EverTask uses **Newtonsoft.Json** for task serialization because it handles polymorphism and inheritance well.
+EverTask turns every task into JSON before it touches storage, and back into an object when it runs it again. Since v3.9 that job is done by **System.Text.Json** (it used Newtonsoft.Json before). You almost never call the serializer yourself, but the shape of your task decides whether it survives a restart, so it pays to know the rules.
 
-## Serialization Best Practices
+## When (de)serialization actually happens
 
-### Good Task Designs
+Three moments, all internal:
 
-```csharp
-// Simple primitives
-public record GoodTask1(int Id, string Name, DateTime Date) : IEverTask;
+1. **Dispatch.** The task is serialized and the JSON is written to the `Request` column. Recurring schedules are serialized too, into `RecurringTask`.
+2. **Recovery.** On startup EverTask reads back the pending rows and deserializes them to re-run the work. This is the only path that turns stored JSON back into your task, so it's where a bad payload bites.
+3. **Monitoring.** The same JSON is sent to the SignalR monitoring sink as `TaskParameters`.
 
-// Simple collections
-public record GoodTask2(List<int> Ids, Dictionary<string, string> Metadata) : IEverTask;
+A normal immediate dispatch hands the in-memory object straight to the handler, so it never round-trips. Recovery does. That asymmetry is why a payload bug can pass every local run and only show up after a restart.
 
-// Simple nested objects
-public record Address(string Street, string City);
-public record GoodTask3(string Name, Address Address) : IEverTask;
-```
+## The rules that matter
 
-### Problematic Task Designs
+EverTask uses one private, isolated serializer configuration. It does not read your app's global JSON settings, and it never writes a `$type` type marker, so a hostile global config can't weaponize recovery. What it does care about:
 
-```csharp
-// Circular references
-public class BadTask1 : IEverTask
-{
-    public BadTask1? Parent { get; set; }
-    public List<BadTask1> Children { get; set; }
-}
+- **Public properties only.** Public *fields* are not serialized. This is the one that catches people most often.
+- **A setter it can reach.** A property with only a private/internal setter and no matching constructor parameter is dropped on read. Give it a public setter, or accept it through the constructor (records do this for free).
+- **Enums are written as numbers.** `Priority.High` becomes `2`, not `"High"`. Reads are lenient: a legacy row with `"High"` still parses.
+- **Newtonsoft attributes are ignored.** `[JsonProperty]`, `[JsonIgnore]`, and Newtonsoft's `[JsonConstructor]` do nothing here. Don't rely on them to rename, hide, or pick a constructor.
+- **`object` and `Dictionary<string, object>` come back as `JsonElement`.** You get the raw JSON node, not a boxed `int` or `string`. Read it explicitly in the handler.
 
-// Non-serializable types
-public record BadTask2(DbContext Context, ILogger Logger) : IEverTask;
+## Designing a payload that survives
 
-// Streams or delegates
-public record BadTask3(Stream Data, Func<int> Callback) : IEverTask;
-
-// Deep object graphs
-public record BadTask4(ComplexObject WithManyNestedLevels) : IEverTask;
-```
-
-## Design Guidelines
-
-### Use Primitives and Simple Types
-
-**Good:**
-```csharp
-public record ProcessOrderTask(
-    int OrderId,
-    string CustomerEmail,
-    List<int> ItemIds) : IEverTask;
-```
-
-**Bad:**
-```csharp
-public record ProcessOrderTask(
-    Order Order, // DbContext-tracked entity
-    IOrderService OrderService, // Service dependency
-    Func<bool> ValidationCallback) : IEverTask; // Delegate
-```
-
-### Use IDs Instead of Entities
-
-**Good:**
-```csharp
-public record SendEmailTask(
-    Guid UserId,
-    string EmailTemplate) : IEverTask;
-
-public class SendEmailHandler : EverTaskHandler<SendEmailTask>
-{
-    private readonly UserRepository _userRepository;
-
-    public override async Task Handle(SendEmailTask task, CancellationToken ct)
-    {
-        // Load entity from database inside handler
-        var user = await _userRepository.GetByIdAsync(task.UserId, ct);
-        await SendEmail(user.Email, task.EmailTemplate);
-    }
-}
-```
-
-**Bad:**
-```csharp
-public record SendEmailTask(
-    User User, // Don't pass entities
-    string EmailTemplate) : IEverTask;
-```
-
-### Avoid Service Dependencies in Tasks
-
-**Good:**
-```csharp
-public record SendEmailTask(string ToEmail, string Subject) : IEverTask;
-
-public class SendEmailHandler : EverTaskHandler<SendEmailTask>
-{
-    private readonly IEmailService _emailService; // Inject in handler
-
-    public override async Task Handle(SendEmailTask task, CancellationToken ct)
-    {
-        await _emailService.SendAsync(task.ToEmail, task.Subject, ct);
-    }
-}
-```
-
-**Bad:**
-```csharp
-public record SendEmailTask(
-    string ToEmail,
-    IEmailService EmailService) : IEverTask; // Don't pass services
-```
-
-### Keep Tasks Simple
-
-Tasks should be simple data containers. Complex logic belongs in handlers, not tasks.
-
-**Good:**
-```csharp
-// Simple data container
-public record ProcessPaymentTask(
-    Guid OrderId,
-    decimal Amount,
-    string Currency) : IEverTask;
-```
-
-**Bad:**
-```csharp
-// Complex behavior in task
-public record ProcessPaymentTask(
-    Guid OrderId,
-    decimal Amount,
-    string Currency) : IEverTask
-{
-    public decimal CalculateTax() => Amount * 0.1m; // Don't add logic to tasks
-    public bool IsValid() => Amount > 0; // Don't add logic to tasks
-}
-```
-
-## Handling Serialization Failures
+Keep tasks as plain data. Primitives, `Guid`, `DateTimeOffset`, strings, simple collections, and nested records all round-trip cleanly.
 
 ```csharp
-try
-{
-    await dispatcher.Dispatch(new MyTask(data));
-}
-catch (JsonSerializationException ex)
-{
-    _logger.LogError(ex, "Failed to serialize task. Ensure task contains only serializable types.");
-    // Handle error - simplify task data or use different approach
-}
+// Good: flat, all public properties, no behavior.
+public record ProcessOrderTask(Guid OrderId, decimal Amount, string Currency) : IEverTask;
 ```
 
-## Custom Serialization Settings
+Pass identifiers, not entities. An EF entity drags navigation properties, change-tracking state, and circular references into the JSON; load it fresh inside the handler instead.
 
-EverTask handles serialization internally. We don't recommend customizing this unless you have a specific need and understand the implications.
-
-## Common Serialization Issues
-
-### Issue: Circular References
-
-**Problem:**
 ```csharp
-public class BadTask : IEverTask
-{
-    public BadTask? Parent { get; set; }
-    public List<BadTask> Children { get; set; }
-}
+// Don't serialize the entity.
+public record SendEmailTask(User User) : IEverTask;            // no
+
+// Serialize the id, load in the handler.
+public record SendEmailTask(Guid UserId) : IEverTask;          // yes
 ```
 
-**Solution:**
-Use IDs to represent relationships:
+Skip services, `DbContext`, streams, and delegates. None of them round-trip. Inject what you need into the handler through DI.
+
+For the full design checklist see [Storage best practices](best-practices.md).
+
+## Polymorphic payloads
+
+By default a property typed as an abstract base or interface does **not** work: the derived members are dropped on write, and recovery throws because the serializer can't build an abstract type. This is deliberate (no arbitrary type loading means no deserialization gadget).
+
+If you genuinely need a polymorphic property, declare the allowed subtypes on the base type with System.Text.Json's own attributes:
+
 ```csharp
-public record GoodTask(
-    Guid? ParentId,
-    List<Guid> ChildIds) : IEverTask;
+[JsonPolymorphic(TypeDiscriminatorPropertyName = "$kind")]
+[JsonDerivedType(typeof(EmailChannel), "email")]
+[JsonDerivedType(typeof(SmsChannel),   "sms")]
+public abstract class NotifyChannel { }
+
+public sealed class EmailChannel : NotifyChannel { public string Address { get; set; } = ""; }
+public sealed class SmsChannel   : NotifyChannel { public string Number  { get; set; } = ""; }
+
+public record NotifyTask(NotifyChannel Channel) : IEverTask;
 ```
 
-### Issue: Non-Serializable Types
+Now `Channel` round-trips with its concrete type intact. The stored JSON carries a short discriminator (`"$kind":"email"`), not a CLR type name, so the closed set of types you declared is the only thing recovery can ever build. A row with an unknown discriminator is rejected, not loaded.
 
-**Problem:**
-```csharp
-public record BadTask(
-    DbContext Context,
-    ILogger Logger,
-    Stream Data) : IEverTask;
-```
+Use the System.Text.Json attributes (`[JsonPolymorphic]`, `[JsonDerivedType]`), not the Newtonsoft ones. And pick a discriminator name like `$kind` rather than the default `$type`, to keep it visually distinct from the old Newtonsoft type marker.
 
-**Solution:**
-Pass only serializable data:
-```csharp
-public record GoodTask(
-    byte[] Data,
-    string FileName) : IEverTask;
+If you can avoid polymorphism, do. A flat payload with an enum discriminator and a few nullable fields is simpler to reason about and impossible to get wrong.
 
-public class GoodTaskHandler : EverTaskHandler<GoodTask>
-{
-    private readonly IDbContextFactory<MyDbContext> _contextFactory;
-    private readonly ILogger<GoodTaskHandler> _logger;
+## Coming from Newtonsoft (upgrade notes)
 
-    // Inject dependencies in handler, not task
-    public override async Task Handle(GoodTask task, CancellationToken ct)
-    {
-        using var context = await _contextFactory.CreateDbContextAsync(ct);
-        _logger.LogInformation("Processing {FileName}", task.FileName);
-        // Process task.Data
-    }
-}
-```
+If you already have rows on disk written by an older EverTask, you don't need to migrate them. The reader is intentionally lenient about the shapes Newtonsoft used to produce:
 
-### Issue: Entity Framework Entities
+- Quoted numbers (`"Count": "42"`) parse fine.
+- String-named enums (`"Priority": "High"`), including `DayOfWeek` arrays on recurring schedules, parse fine.
+- `TimeSpan`, `DateTimeOffset`, `TimeOnly`, and the recurring interval types all read back unchanged.
 
-**Problem:**
-```csharp
-public record BadTask(Order Order) : IEverTask; // EF entity with navigation properties
-```
+New writes use the numeric enum form, so a row written by the new version stays readable by an un-upgraded peer during a rolling deployment.
 
-**Solution:**
-Pass entity ID and load in handler:
-```csharp
-public record GoodTask(int OrderId) : IEverTask;
+Two behavior changes to know about:
 
-public class GoodTaskHandler : EverTaskHandler<GoodTask>
-{
-    private readonly MyDbContext _dbContext;
+- A 4-byte emoji is written as an escaped `🚀` surrogate pair instead of raw bytes. It still round-trips to the same string; only the on-disk representation differs.
+- `IPAddress` and a handful of other types that Newtonsoft rejected at dispatch now behave differently under System.Text.Json. Keep payloads to the simple types above and it's a non-issue.
 
-    public override async Task Handle(GoodTask task, CancellationToken ct)
-    {
-        var order = await _dbContext.Orders
-            .Include(o => o.Items)
-            .FirstAsync(o => o.Id == task.OrderId, ct);
+## Customizing the serializer
 
-        // Process order
-    }
-}
-```
+You can't, yet. The serializer is internal and isolated on purpose. That isolation is a feature: your app's global JSON configuration can't reach in and change how tasks are stored, which keeps recovery predictable and closes a gadget-deserialization hole.
 
-## Testing Serialization
+A pluggable `IEverTaskSerializer` is planned as a separate, additive change. Until then, the lever you have is the payload shape, not the serializer settings.
 
-Test that your tasks serialize correctly:
+## When something goes missing
+
+A few symptoms and what they usually mean:
+
+- **A value is empty after a restart but fine before.** It was a public field, or a property with no reachable setter. Make it a public property with a public setter (or a record parameter).
+- **Recovery throws for one task type.** Often a polymorphic property without `[JsonDerivedType]`, or a type that can't be deserialized at all (a service, a stream). The row stays recoverable for a few attempts, then gets marked `Failed` rather than retried forever.
+- **A dictionary value isn't the type you expected.** `Dictionary<string, object>` hands you `JsonElement`. Call `.GetInt32()`, `.GetString()`, and so on.
+
+## Testing your tasks
+
+The cheapest insurance is a round-trip test. If a task can't survive serialize-then-deserialize in a unit test, it won't survive a restart either.
 
 ```csharp
 [Fact]
-public void Task_Should_Serialize_And_Deserialize()
+public void Order_task_round_trips()
 {
-    var originalTask = new MyTask(123, "test", DateTime.UtcNow);
+    var original = new ProcessOrderTask(Guid.NewGuid(), 99.90m, "EUR");
 
-    var json = JsonConvert.SerializeObject(originalTask);
-    var deserializedTask = JsonConvert.DeserializeObject<MyTask>(json);
+    var json     = System.Text.Json.JsonSerializer.Serialize(original);
+    var restored = System.Text.Json.JsonSerializer.Deserialize<ProcessOrderTask>(json);
 
-    deserializedTask.ShouldNotBeNull();
-    deserializedTask.Id.ShouldBe(originalTask.Id);
-    deserializedTask.Name.ShouldBe(originalTask.Name);
+    restored.ShouldNotBeNull();
+    restored!.OrderId.ShouldBe(original.OrderId);
+    restored.Amount.ShouldBe(original.Amount);
 }
 ```
 
-## Next Steps
+## Next steps
 
-- **[Best Practices](best-practices.md)** - Overall storage best practices
-- **[Custom Storage](custom-storage.md)** - Implement custom serialization logic
-- **[Task Creation](../task-creation.md)** - Learn about task design patterns
+- [Storage best practices](best-practices.md) — the full task-design checklist
+- [Task creation](../task-creation.md) — patterns for modeling work as tasks
+- [Custom storage](custom-storage.md) — plug in your own persistence layer

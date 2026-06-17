@@ -14,11 +14,11 @@ public record SampleIsolationTask(int Value) : IEverTask;
 public class GlobalJsonSettingsCollection { }
 
 /// <summary>
-/// L33: EverTask used parameterless JsonConvert to (de)serialize task payloads and recurring metadata,
-/// honoring the process-global JsonConvert.DefaultSettings. A host that sets them (e.g. opening
-/// TypeNameHandling globally) could corrupt the recovery round-trip or open a gadget-deserialization
-/// surface on recovery. The fix routes all task (de)serialization through explicit, isolated settings
-/// (TypeNameHandling.None), so the global no longer affects EverTask.
+/// L33: EverTask (de)serializes task payloads and recurring metadata through its own private, isolated
+/// System.Text.Json options. A host that opens a hostile global Newtonsoft <c>JsonConvert.DefaultSettings</c>
+/// (e.g. <c>TypeNameHandling.All</c>, a gadget-deserialization surface) must NOT be able to influence
+/// EverTask's persisted task round-trip. STJ never consults the Newtonsoft global and never emits a
+/// <c>$type</c> marker, so the migration preserves and strengthens the isolation guarantee.
 /// </summary>
 [Collection("GlobalJsonSettings")]
 public class TaskSerializationIsolationTests
@@ -43,8 +43,8 @@ public class TaskSerializationIsolationTests
 
             var queued = executor.ToQueuedTask();
 
-            // The hostile global would inject a "$type" gadget marker into every serialized object;
-            // EverTask must not honor it for the persisted task payload (L33).
+            // The hostile global would inject a "$type" gadget marker into every Newtonsoft-serialized
+            // object; EverTask's STJ serializer never honors it for the persisted task payload (L33).
             queued.Request.ShouldNotContain("$type");
         }
         finally
@@ -56,8 +56,6 @@ public class TaskSerializationIsolationTests
     [Fact]
     public void EverTaskJson_ignores_global_settings_and_round_trips()
     {
-        EverTaskJson.Settings.TypeNameHandling.ShouldBe(TypeNameHandling.None);
-
         var previous = JsonConvert.DefaultSettings;
         try
         {
@@ -66,7 +64,7 @@ public class TaskSerializationIsolationTests
 
             var task = new SampleIsolationTask(7);
 
-            // Raw JsonConvert honors the hostile global; EverTaskJson is isolated from it.
+            // Raw JsonConvert honors the hostile global; EverTaskJson (STJ) is isolated from it.
             JsonConvert.SerializeObject(task).ShouldContain("$type");
             var json = EverTaskJson.Serialize(task);
             json.ShouldNotContain("$type");

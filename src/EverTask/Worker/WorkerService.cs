@@ -287,16 +287,24 @@ public class WorkerService(
             IEverTask?     task          = null;
             RecurringTask? scheduledTask = null;
 
+            // Distinguish "the type itself cannot be loaded" (assembly/type gone, genuine corruption — can
+            // never run, poison justified) from "the type is loadable but its persisted payload could not be
+            // deserialized in this build" (an unrecognized format that may heal — must NOT be terminalized).
+            var        typeWasLoadable = false;
+            Exception? payloadError    = null;
+
             try
             {
                 var type = Type.GetType(taskInfo.Type);
                 if (type != null && typeof(IEverTask).IsAssignableFrom(type))
                 {
-                    task = (IEverTask?)EverTaskJson.Deserialize(taskInfo.Request, type);
+                    typeWasLoadable = true;
+                    task            = (IEverTask?)EverTaskJson.Deserialize(taskInfo.Request, type);
                 }
             }
             catch (Exception e)
             {
+                payloadError = e;
                 logger.LogError(e, "Unable to deserialize task with id {TaskId}", taskInfo.Id);
             }
 
@@ -397,8 +405,36 @@ public class WorkerService(
                     }
                 }
             }
+            else if (typeWasLoadable && payloadError != null)
+            {
+                // B3/F7: the task TYPE is loadable but its persisted payload could not be deserialized in
+                // this build (an unrecognized legacy/serializer format). Unlike an unloadable type, this can
+                // heal (a serializer fix, a code change), so do NOT terminalize on the first restart. Count
+                // it durably with the SAME bounded mechanism as a transient re-dispatch failure: the row
+                // stays recoverable until the attempt limit, then is poisoned so it does not retry forever.
+                var attempts = await taskStorage.IncrementRecoveryFailure(taskInfo.Id, token).ConfigureAwait(false);
+
+                if (attempts >= MaxRecoveryDispatchAttempts)
+                {
+                    await taskStorage.SetStatus(taskInfo.Id, QueuedTaskStatus.Failed, payloadError, auditLevel, null, token)
+                                     .ConfigureAwait(false);
+                    Interlocked.Increment(ref permanentFailures);
+                    logger.LogError(payloadError,
+                        "Pending task {TaskId} has a loadable type but an unreadable payload after {Attempts} attempt(s) " +
+                        "and is poisoned (marked Failed); it will no longer be retried", taskInfo.Id, attempts);
+                }
+                else
+                {
+                    Interlocked.Increment(ref transientFailures);
+                    logger.LogWarning(payloadError,
+                        "Pending task {TaskId} has a loadable type but its payload could not be deserialized " +
+                        "(attempt {Attempts}/{Max}); the task stays recoverable and will be retried at the next startup",
+                        taskInfo.Id, attempts, MaxRecoveryDispatchAttempts);
+                }
+            }
             else
             {
+                // The type itself is not loadable (assembly/type gone) — it can never run, so poison it.
                 // Create scope per iteration for thread safety (required for DbContext-based storage)
                 using var itemScope = serviceScopeFactory.CreateScope();
                 var itemStorage = itemScope.ServiceProvider.GetService<ITaskStorage>();

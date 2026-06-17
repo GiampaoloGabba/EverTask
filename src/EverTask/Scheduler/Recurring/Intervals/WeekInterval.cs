@@ -3,7 +3,7 @@ namespace EverTask.Scheduler.Recurring.Intervals;
 public class WeekInterval : IInterval
 {
     //used for serialization/deserialization
-    [JsonConstructor]
+    [System.Text.Json.Serialization.JsonConstructor]
     public WeekInterval() { }
 
     public WeekInterval(int interval)
@@ -25,7 +25,9 @@ public class WeekInterval : IInterval
         get => _onTimes;
         set => _onTimes = value.OrderBy(t => t).ToArray(); // Always keep sorted
     }
-    public DayOfWeek[] OnDays   { get; internal set; } = [];
+    // public set (coherent with MonthInterval): an internal setter is silently dropped by STJ on read,
+    // losing the OnDays schedule constraint on recovery (F1/B2).
+    public DayOfWeek[] OnDays   { get; set; } = [];
 
     public void Validate()
     {

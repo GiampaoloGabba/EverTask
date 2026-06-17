@@ -3,7 +3,7 @@
 public class MonthInterval : IInterval
 {
     //used for serialization/deserialization
-    [JsonConstructor]
+    [System.Text.Json.Serialization.JsonConstructor]
     public MonthInterval() { }
 
     public MonthInterval(int interval)
@@ -28,7 +28,7 @@ public class MonthInterval : IInterval
         get => _onTimes;
         set => _onTimes = value.OrderBy(t => t).ToArray(); // Always keep sorted
     }
-    // Settable (like OnDays) so Newtonsoft repopulates it on deserialization — a get-only property is
+    // Settable (like OnDays) so System.Text.Json repopulates it on deserialization — a get-only property is
     // silently dropped on round-trip, losing the month constraint (F11).
     public int[]      OnMonths { get; set; } = [];
 

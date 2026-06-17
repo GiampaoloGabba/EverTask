@@ -33,10 +33,18 @@ Multiple intervals refine each other: Month → Day → Hour → Minute → Seco
 
 **Example**: `.Every(5).Minutes().AtSecond(30)` = Every 5 minutes at :30 seconds mark.
 
-### 4. Serialization Requirement
-**ALL interval classes MUST have parameterless constructor** for Newtonsoft.Json (RecurringTask is persisted to DB).
+### 4. Serialization Requirement (System.Text.Json since v3.9)
+**ALL interval classes MUST keep a public parameterless constructor annotated with the STJ
+`[System.Text.Json.Serialization.JsonConstructor]`** (RecurringTask is persisted to DB). STJ then builds the
+instance via the no-arg ctor and sets properties via their setters. Removing the parameterless ctor makes STJ
+fall back to a parameterized ctor, which flips `Interval` to a different default and stops binding
+`OnDays`/`OnTimes` — a SILENT schedule corruption.
 
-**Check**: Verify `public XInterval() { }` in all interval classes.
+**`OnDays` must have a PUBLIC setter** on `DayInterval`/`WeekInterval` (like `MonthInterval`): STJ silently
+drops a non-public setter on read, losing the OnDays schedule on recovery.
+
+**Check / guard**: `public XInterval() { }` with the STJ `[JsonConstructor]` in every interval class — pinned
+by the build-time guard `IntervalSerializationParityTests.Every_interval_keeps_a_public_parameterless_json_constructor`.
 
 ### 5. Stop Conditions
 Tasks auto-stop when:

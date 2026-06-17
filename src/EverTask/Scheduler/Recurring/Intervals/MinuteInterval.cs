@@ -3,7 +3,7 @@
 public class MinuteInterval : IInterval
 {
     //used for serialization/deserialization
-    [JsonConstructor]
+    [System.Text.Json.Serialization.JsonConstructor]
     public MinuteInterval() { }
 
     public MinuteInterval(int interval)

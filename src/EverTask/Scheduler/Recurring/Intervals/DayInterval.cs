@@ -3,7 +3,7 @@
 public class DayInterval : IInterval
 {
     //used for serialization/deserialization
-    [JsonConstructor]
+    [System.Text.Json.Serialization.JsonConstructor]
     public DayInterval() { }
 
     public DayInterval(int interval)
@@ -25,7 +25,9 @@ public class DayInterval : IInterval
         get => _onTimes;
         set => _onTimes = value.OrderBy(t => t).ToArray(); // Always keep sorted
     }
-    public DayOfWeek[] OnDays   { get; internal set; } = Array.Empty<DayOfWeek>();
+    // public set (coherent with MonthInterval.OnDays/OnMonths): an internal setter is silently dropped by
+    // STJ on read, losing the OnDays schedule constraint on recovery (F1/B2).
+    public DayOfWeek[] OnDays   { get; set; } = Array.Empty<DayOfWeek>();
 
     public void Validate()
     {

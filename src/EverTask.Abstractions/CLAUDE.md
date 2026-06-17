@@ -18,10 +18,37 @@ Lightweight contracts package for EverTask. Application code references this wit
 
 ## Serialization Guidelines
 
-**CRITICAL**: Tasks are persisted using Newtonsoft.Json.
+**CRITICAL**: Tasks are persisted using **System.Text.Json** (migrated from Newtonsoft.Json in v3.9). The
+serializer is the internal, isolated `EverTaskJson` (private static `JsonSerializerOptions`, L33). It READS
+leniently for backward-compat with legacy Newtonsoft rows (quoted numbers, string-named enums via a tolerant
+converter) but WRITES the historical numeric form (enums as numbers) for byte-parity.
 
-✅ **Use**: Primitives, `string`, `Guid`, `DateTimeOffset`
-❌ **Avoid**: Complex graphs, circular refs, entities, services, DbContexts
+✅ **Use**: Primitives, `string`, `Guid`, `DateTimeOffset`, public **properties** with public setters (or a
+matching ctor parameter), enums, collections, nested records.
+❌ **Avoid**: Complex graphs, circular refs, entities, services, DbContexts.
+
+**Payload contract (STJ specifics — differ from Newtonsoft):**
+- **Public PROPERTIES only.** Public *fields* are NOT serialized (`IncludeFields` is deliberately off).
+- **Newtonsoft attributes are NOT honored** — `[JsonProperty]` / `[JsonIgnore]` / `[Newtonsoft.Json.JsonConstructor]`
+  are ignored by STJ. Use PascalCase property names; do not rely on Newtonsoft rename/ignore/ctor-select.
+- A property with only a **non-public setter and no matching ctor parameter** is dropped on read.
+- `object` / `Dictionary<string, object>` values come back as `JsonElement` (not boxed primitives / `JObject`).
+- A nested property typed as an **abstract base / interface** is not round-tripped BY DEFAULT (the derived
+  members are dropped on write and read throws). **Supported escape hatch:** declare STJ polymorphism on the
+  base type with `[JsonPolymorphic]` + `[JsonDerivedType(typeof(Sub), "alias")]`. The discriminator is a
+  CLOSED, declared set of aliases (NOT arbitrary type loading), so the concrete subtype round-trips while the
+  L33 gadget-deserialization isolation holds. Pick a discriminator name (e.g. `$kind`) and NEVER rely on the
+  old Newtonsoft `TypeNameHandling`. Pinned by `test/EverTask.Tests/Serialization/PolymorphicPayloadTests.cs`
+  + `IntegrationTests/PolymorphicPayloadRecoveryIntegrationTests.cs`.
+
+  ```csharp
+  [JsonPolymorphic(TypeDiscriminatorPropertyName = "$kind")]
+  [JsonDerivedType(typeof(EmailChannel), "email")]
+  [JsonDerivedType(typeof(SmsChannel),   "sms")]
+  public abstract class NotifyChannel { }
+  public sealed class EmailChannel : NotifyChannel { public string Address { get; set; } = ""; }
+  public record NotifyTask(NotifyChannel Channel) : IEverTask;   // round-trips concrete subtype + members
+  ```
 
 **Pattern**: Store IDs, not entities (`Guid OrderId` ✅, `Order Order` ❌)
 

@@ -102,6 +102,9 @@
     <!-- Load harness only (benchmarks/EverTask.LoadHarness) — fixed-memory concurrent latency percentiles -->
     <PackageVersion Include="HdrHistogram" Version="2.5.0" />
     <PackageVersion Include="Cronos" Version="0.13.0" />
+    <!-- Option 2 (feasibility §4): pin System.Text.Json across all TFMs so the core uses a single, known STJ
+         version instead of each runtime's in-box build. 10.0.x is the highest, so no NU1605 downgrade. -->
+    <PackageVersion Include="System.Text.Json" Version="10.0.9" />
     <PackageVersion Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageVersion Include="Respawn" Version="7.0.0" />
     <PackageVersion Include="Serilog.Sinks.Console" Version="6.1.1" />

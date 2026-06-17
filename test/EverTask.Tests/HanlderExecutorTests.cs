@@ -2,8 +2,8 @@ using EverTask.Tests.TestHelpers;
 ﻿using EverTask.Handler;
 using EverTask.Monitoring;
 using EverTask.Scheduler.Recurring;
+using EverTask.Serialization;
 using EverTask.Storage;
-using Newtonsoft.Json;
 
 namespace EverTask.Tests;
 
@@ -67,7 +67,11 @@ public class HanlderExecutorTests
         var executor =
             await taskHandlerWrapper.Handle(new TestTaskRequestNoSerializable(IPAddress.None), null, null, _provider, AuditLevel.Full);
 
-        Should.Throw<JsonSerializationException>(() => executor.ToQueuedTask());
+        // IPAddress is not a valid task payload: System.Text.Json throws while serializing it (it reflects
+        // over IPAddress and IPAddress.None.ScopeId throws). The exception type is serializer-specific
+        // (no longer Newtonsoft's JsonSerializationException), so assert the serializer-agnostic contract:
+        // an un-serializable payload makes ToQueuedTask throw.
+        Should.Throw<Exception>(() => executor.ToQueuedTask());
     }
 
     [Fact]
@@ -80,7 +84,9 @@ public class HanlderExecutorTests
 
         queuedTask.Id.ShouldBeOfType<Guid>();
         queuedTask.Type.ShouldBe(executor.Task.GetType().AssemblyQualifiedName);
-        queuedTask.Request.ShouldBe(JsonConvert.SerializeObject(executor.Task));
+        // Semantic assertion: the persisted Request is exactly what EverTaskJson (the real serializer)
+        // produces — decoupled from the legacy Newtonsoft byte format (B5.2).
+        queuedTask.Request.ShouldBe(EverTaskJson.Serialize(executor.Task));
         queuedTask.Handler.ShouldBe(executor.Handler!.GetType().AssemblyQualifiedName);  // Handler is guaranteed to be present from TaskHandlerWrapper
         queuedTask.Status.ShouldBe(QueuedTaskStatus.WaitingQueue);
     }
@@ -188,13 +194,13 @@ public class HanlderExecutorTests
         var queuedTask = executor.ToQueuedTask();
 
         queuedTask.Id.ShouldBe(persistenceId);
-        queuedTask.Request.ShouldBe(JsonConvert.SerializeObject(task));
+        queuedTask.Request.ShouldBe(EverTaskJson.Serialize(task));
         queuedTask.Type.ShouldBe(task.GetType().AssemblyQualifiedName);
         queuedTask.Handler.ShouldBe(handler.GetType().AssemblyQualifiedName);
         queuedTask.Status.ShouldBe(QueuedTaskStatus.WaitingQueue);
         queuedTask.ScheduledExecutionUtc.ShouldBe(executionTime);
         queuedTask.CreatedAtUtc.ShouldBe(DateTimeOffset.UtcNow, TimeSpan.FromSeconds(1));
-        queuedTask.RecurringTask.ShouldBeEquivalentTo(JsonConvert.SerializeObject(recurringTask));
+        queuedTask.RecurringTask.ShouldBeEquivalentTo(EverTaskJson.Serialize(recurringTask));
         queuedTask.IsRecurring.ShouldBe(true);
         queuedTask.RecurringInfo.ShouldBe(recurringTask.ToString());
         queuedTask.RunUntil.ShouldBe(runUntil);
@@ -269,7 +275,7 @@ public class HanlderExecutorTests
         var eventData = EverTaskEventData.FromExecutor(executor, SeverityLevel.Information, "test", null);
 
         eventData.TaskId.ShouldBe(persistenceId);
-        eventData.TaskParameters.ShouldBe(JsonConvert.SerializeObject(task));
+        eventData.TaskParameters.ShouldBe(EverTaskJson.Serialize(task));
         eventData.TaskType.ShouldBe(task.GetType().ToString());
         eventData.TaskHandlerType.ShouldBe(handler.GetType().ToString());
         eventData.Severity.ShouldBe(SeverityLevel.Information.ToString());

@@ -73,8 +73,13 @@ See local CLAUDE.md files for implementation details.
 ### Critical Design Decisions
 - **MediatR Inspiration**: `IEverTask` ≈ `INotification`, `IEverTaskHandler<T>` ≈ `INotificationHandler<T>`, `ITaskDispatcher` ≈ `IMediator`
   - **Key Differences**: Persistent (survives restarts), scheduling/recurring, retry policies, timeouts, monitoring
-- **Serialization**: Uses **Newtonsoft.Json** (NOT System.Text.Json) for polymorphism support
-  - **Best Practice**: Keep tasks simple (primitives, Guid, DateTimeOffset), use IDs not entities (e.g., `Guid OrderId` not `Order Order`)
+- **Serialization**: Uses **System.Text.Json** (migrated from Newtonsoft.Json in v3.9) via the internal,
+  isolated `EverTaskJson` (private static `JsonSerializerOptions`, L33). Reads legacy Newtonsoft rows
+  leniently (quoted numbers, string-named enums via a tolerant converter) but writes the historical numeric
+  form (byte-parity). STJ pinned (Option 2, `System.Text.Json` 10.0.x in `Directory.Packages.props`) across
+  net8/9/10. Newtonsoft remains ONLY in the test projects as the "legacy producer".
+  - **Best Practice**: Keep tasks simple (primitives, Guid, DateTimeOffset, public **properties**), use IDs not entities (e.g., `Guid OrderId` not `Order Order`)
+  - **STJ contract** (differs from Newtonsoft — public properties only, fields dropped, Newtonsoft attributes NOT honored): see `src/EverTask.Abstractions/CLAUDE.md`
 - **DI Scoping**: WorkerExecutor creates **scoped service scope per task** (safe DbContext usage, no shared state)
 - **Retry Policies (v1.6.0+)**: Exception filtering (whitelist/blacklist), predicate filtering, OnRetry callback
   - **Default**: Retry all except `OperationCanceledException` and `TimeoutException`

@@ -1201,8 +1201,9 @@ public class WorkerExecutor(
     private EverTaskEventData CreateEventDataCached(TaskHandlerExecutor executor, SeverityLevel severity,
                                                      string message, Exception? exception, IReadOnlyList<TaskExecutionLog>? executionLogs = null)
     {
-        // Cache task JSON (weak reference - GC'd when task is collected). Isolated settings (L33) so a
-        // hostile global JsonConvert.DefaultSettings cannot alter the monitoring payload either.
+        // Cache task JSON (weak reference - GC'd when task is collected). EverTaskJson uses private, isolated
+        // System.Text.Json options (L33) so a hostile global JSON configuration cannot alter the monitoring
+        // payload either.
         var taskJson = TaskJsonCache.GetValue(executor.Task, EverTaskJson.Serialize);
 
         // Cache type strings (permanent cache - types never unload)

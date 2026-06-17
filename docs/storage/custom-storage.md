@@ -56,7 +56,7 @@ public class RedisTaskStorage : ITaskStorage
     public async Task<Guid> AddAsync(QueuedTask task, CancellationToken cancellationToken = default)
     {
         var id = task.PersistenceId;
-        var json = JsonConvert.SerializeObject(task);
+        var json = JsonSerializer.Serialize(task);
 
         await _db.StringSetAsync($"task:{id}", json);
 
@@ -76,12 +76,12 @@ public class RedisTaskStorage : ITaskStorage
         if (json.IsNullOrEmpty)
             return null;
 
-        return JsonConvert.DeserializeObject<QueuedTask>(json!);
+        return JsonSerializer.Deserialize<QueuedTask>(json!);
     }
 
     public async Task UpdateAsync(QueuedTask task, CancellationToken cancellationToken = default)
     {
-        var json = JsonConvert.SerializeObject(task);
+        var json = JsonSerializer.Serialize(task);
         await _db.StringSetAsync($"task:{task.PersistenceId}", json);
     }
 

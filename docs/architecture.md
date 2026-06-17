@@ -396,7 +396,7 @@ var eventData = new EverTaskEventData(
     severity,
     task.GetType().AssemblyQualifiedName,
     handler.GetType().AssemblyQualifiedName,
-    JsonConvert.SerializeObject(task), // Every time!
+    EverTaskJson.Serialize(task), // Every time!
     message,
     exception);
 
@@ -404,7 +404,7 @@ var eventData = new EverTaskEventData(
 private static readonly ConditionalWeakTable<IEverTask, string> _taskJsonCache = new();
 private static readonly ConcurrentDictionary<Type, string> _typeNameCache = new();
 
-var taskJson = _taskJsonCache.GetValue(task, t => JsonConvert.SerializeObject(t));
+var taskJson = _taskJsonCache.GetValue(task, t => EverTaskJson.Serialize(t));
 var typeName = _typeNameCache.GetOrAdd(task.GetType(), t => t.AssemblyQualifiedName);
 ```
 

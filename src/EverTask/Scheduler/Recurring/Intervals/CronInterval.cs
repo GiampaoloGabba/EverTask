@@ -8,6 +8,7 @@ public class CronInterval : IInterval
     private string _cronExpression = "";
 
     //used for serialization/deserialization
+    [System.Text.Json.Serialization.JsonConstructor]
     public CronInterval() { }
 
     public CronInterval(string cronExpression)

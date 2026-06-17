@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (breaking — task payload serialization moved to System.Text.Json)
+
+- **Tasks and recurring metadata are now (de)serialized with System.Text.Json instead of Newtonsoft.Json**
+  (`src/EverTask/Serialization/EverTaskJson.cs`). The serializer still uses its own private options (L33) and
+  still never writes a `$type` marker. `System.Text.Json` is pinned to 10.0.x on net8.0/9.0/10.0
+  (`Directory.Packages.props`), and the core no longer references `Newtonsoft.Json`
+  (`src/EverTask/EverTask.csproj`). Newtonsoft stays in the test projects only, as the legacy producer.
+- **The payload contract changed to match System.Text.Json.** Public fields are no longer serialized, only
+  properties. A property with just a non-public setter and no matching constructor parameter is dropped on read.
+  Newtonsoft attributes (`[JsonProperty]`, `[JsonIgnore]`, `[JsonConstructor]`) are ignored. `object` and
+  `Dictionary<string,object>` come back as `JsonElement`. Details in `src/EverTask.Abstractions/CLAUDE.md`.
+- **`IPAddress`, and a few other types Newtonsoft rejected at dispatch, behave differently now.** STJ no longer
+  throws a `JsonSerializationException` for them. Keep payloads to simple types and ids.
+
+### Added
+
+- **Old Newtonsoft rows still read, with no migration step.** Quoted numbers like `"42"` parse via
+  `JsonNumberHandling.AllowReadingFromString`, and string-named enums (including `DayOfWeek` arrays on recurring
+  schedules) parse via a `TolerantEnumConverter`. New writes keep the numeric enum form, so a row written by the
+  new version stays readable by an un-upgraded peer during a rolling deployment.
+- **Declarative polymorphism for nested payload properties** through System.Text.Json's `[JsonPolymorphic]` and
+  `[JsonDerivedType]`. The discriminator is a closed, declared set of types, not arbitrary type loading, so the
+  L33 isolation still holds. A test persists then recovers such a task to prove the concrete subtype survives.
+- **Recovery now tells an unloadable type apart from an unreadable payload**
+  (`WorkerService.ProcessRecoveredTaskAsync`). A loadable type whose payload fails to deserialize stays
+  recoverable for a few attempts before it is poisoned, instead of being marked `Failed` on the first restart.
+  Such a row is no longer lost.
+- **`DayInterval.OnDays` and `WeekInterval.OnDays` now have public setters** (like `MonthInterval`), and every
+  interval keeps a public parameterless constructor marked with the STJ `[JsonConstructor]`, checked by a
+  build-time test. STJ drops a non-public setter, which would have quietly lost the OnDays schedule on recovery.
+
+### Removed
+
+- **`Newtonsoft.Json` is gone from the EverTask core** (it stays in the test projects). The old
+  `EverTask.Tests.SerializationPoc` project was folded into `EverTask.Tests` and deleted.
+
+### Documentation
+
+- **New System.Text.Json serialization guide** (`docs/storage/serialization.md`) covering the payload contract,
+  polymorphic payloads, upgrade notes, and troubleshooting. `docs/architecture.md`, `docs/storage.md`, and
+  `docs/storage/custom-storage.md` were updated to System.Text.Json.
+
 ### Performance
 
 - **EF Core DbContext pooling actually enabled** (SQLite, SQL Server, PostgreSQL). The providers previously

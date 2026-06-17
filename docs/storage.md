@@ -37,7 +37,7 @@ Lightweight, file-based storage ideal for small-scale production and single-serv
 Learn how to implement custom storage providers for Redis, MongoDB, or any other database.
 
 ### [Serialization](storage/serialization.md)
-Best practices for designing serializable tasks and handling serialization with Newtonsoft.Json.
+How tasks are serialized with System.Text.Json, the payload contract, polymorphic payloads, and upgrade notes.
 
 ### [Best Practices](storage/best-practices.md)
 Storage selection guidelines, connection string management, migration strategies, and cleanup tasks.
