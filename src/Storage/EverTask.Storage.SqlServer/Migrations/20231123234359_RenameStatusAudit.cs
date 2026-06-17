@@ -33,7 +33,7 @@ namespace EverTask.Storage.SqlServer.Migrations
                 name: "QueuedTaskStatusAudit",
                 schema: _dbContext.Schema,
                 newName: "StatusAudit",
-                newSchema: "EverTask");
+                newSchema: _dbContext.Schema);
 
             migrationBuilder.RenameIndex(
                 name: "IX_QueuedTaskStatusAudit_QueuedTaskId",
@@ -52,7 +52,7 @@ namespace EverTask.Storage.SqlServer.Migrations
                 schema: _dbContext.Schema,
                 table: "StatusAudit",
                 column: "QueuedTaskId",
-                principalSchema: "EverTask",
+                principalSchema: _dbContext.Schema,
                 principalTable: "QueuedTasks",
                 principalColumn: "Id",
                 onDelete: ReferentialAction.Cascade);
@@ -75,7 +75,7 @@ namespace EverTask.Storage.SqlServer.Migrations
                 name: "StatusAudit",
                 schema: _dbContext.Schema,
                 newName: "QueuedTaskStatusAudit",
-                newSchema: "EverTask");
+                newSchema: _dbContext.Schema);
 
             migrationBuilder.RenameIndex(
                 name: "IX_StatusAudit_QueuedTaskId",
@@ -94,7 +94,7 @@ namespace EverTask.Storage.SqlServer.Migrations
                 schema: _dbContext.Schema,
                 table: "QueuedTaskStatusAudit",
                 column: "QueuedTaskId",
-                principalSchema: "EverTask",
+                principalSchema: _dbContext.Schema,
                 principalTable: "QueuedTasks",
                 principalColumn: "Id",
                 onDelete: ReferentialAction.Cascade);

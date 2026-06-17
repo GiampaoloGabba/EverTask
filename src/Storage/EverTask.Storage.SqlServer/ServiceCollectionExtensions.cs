@@ -48,7 +48,8 @@ public static class ServiceCollectionExtensions
 
         if (storeOptions.AutoApplyMigrations)
         {
-            using var scope     = builder.Services.BuildServiceProvider().CreateScope();
+            using var provider  = builder.Services.BuildServiceProvider();
+            using var scope     = provider.CreateScope();
             var       dbContext = scope.ServiceProvider.GetRequiredService<ITaskStoreDbContext>();
             ((DbContext)dbContext).Database.Migrate();
         }

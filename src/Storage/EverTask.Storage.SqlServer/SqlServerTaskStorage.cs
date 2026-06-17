@@ -24,7 +24,11 @@ public class SqlServerTaskStorage : EfCoreTaskStorage
     {
         _contextFactory = contextFactory;
         _logger = logger;
-        _schema = storeOptions.Value.SchemaName ?? "EverTask";
+        // Must match the migrations' schema fallback (dbo) so the hot-path procs resolve to where they were
+        // created. A null/empty SchemaName lands the procs in dbo; the old `?? "EverTask"` made runtime EXEC
+        // a different schema than the procs lived in -> proc-not-found, swallowed in SetStatus, recoverable
+        // row -> re-dispatch -> double execution. Mirrors PostgresTaskStorage's `?? "public"`.
+        _schema = string.IsNullOrEmpty(storeOptions.Value.SchemaName) ? "dbo" : storeOptions.Value.SchemaName!;
     }
 
     /// <summary>
