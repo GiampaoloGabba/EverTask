@@ -14,7 +14,7 @@ import { TaskStatusBadge } from '@/components/common/TaskStatusBadge';
 import { EmptyState } from '@/components/common/EmptyState';
 import { TaskListDto } from '@/types/task.types';
 import { format } from 'date-fns';
-import { ChevronLeft, ChevronRight, ListX, Clock } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ListX, Clock, Hourglass } from 'lucide-react';
 
 interface TasksTableProps {
   tasks: TaskListDto[];
@@ -150,6 +150,16 @@ export function TasksTable({
                     {task.maxRuns && task.currentRunCount !== null && (
                       <Badge variant="outline" className="text-xs">
                         {task.currentRunCount} / {task.maxRuns}
+                      </Badge>
+                    )}
+                    {task.throttledUntil && (
+                      <Badge
+                        variant="outline"
+                        className="text-xs bg-amber-50 text-amber-700 border-amber-200"
+                        title={`Rate-limited: reserved slot ${formatDate(task.throttledUntil)}`}
+                      >
+                        <Hourglass className="h-3 w-3 mr-1" />
+                        Throttled
                       </Badge>
                     )}
                   </div>

@@ -8,7 +8,7 @@ import { ExceptionViewer } from '@/components/common/ExceptionViewer';
 import { ExecutionLogsTab } from '@/components/tasks/ExecutionLogsTab';
 import { TaskDetailDto, AuditLevel } from '@/types/task.types';
 import { format } from 'date-fns';
-import { Copy, RefreshCw, Calendar, Clock, Timer, CalendarClock } from 'lucide-react';
+import { Copy, RefreshCw, Calendar, Clock, Timer, CalendarClock, Hourglass } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Breadcrumb } from '@/components/common/Breadcrumb';
 import { useState } from 'react';
@@ -137,6 +137,12 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
               <Badge variant="outline" className="bg-gray-50 text-gray-700 border-gray-300">
                 Queue: {task.queueName || 'Default'}
               </Badge>
+              {task.throttledUntil && (
+                <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200">
+                  <Hourglass className="h-3 w-3 mr-1" />
+                  Throttled
+                </Badge>
+              )}
               <TaskStatusBadge status={task.status} />
             </div>
           </div>
@@ -250,6 +256,19 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
                     <CalendarClock className="h-3 w-3" />
                     {formatDate(task.scheduledExecutionUtc)}
                   </div>
+                </div>
+              )}
+
+              {task.throttledUntil && (
+                <div>
+                  <span className="text-xs uppercase tracking-wide text-gray-600 font-medium">Throttled Until</span>
+                  <div className="flex items-center gap-1 text-sm font-medium text-amber-700 mt-1">
+                    <Hourglass className="h-3 w-3" />
+                    {formatDate(task.throttledUntil)}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Reserved rate-limit slot (in-memory, single-node view)
+                  </p>
                 </div>
               )}
 

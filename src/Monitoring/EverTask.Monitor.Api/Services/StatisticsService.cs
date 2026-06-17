@@ -2,6 +2,7 @@ using EverTask.Configuration;
 using EverTask.Monitor.Api.DTOs.Dashboard;
 using EverTask.Monitor.Api.DTOs.Queues;
 using EverTask.Monitor.Api.DTOs.Statistics;
+using EverTask.RateLimiting;
 using EverTask.Storage;
 using EverTask.Worker;
 
@@ -14,15 +15,35 @@ public class StatisticsService : IStatisticsService
 {
     private readonly ITaskStorage _storage;
     private readonly IWorkerQueueManager? _queueManager;
+    private readonly IRateLimiterIntrospection? _rateLimiter;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="StatisticsService"/> class.
     /// </summary>
-    public StatisticsService(ITaskStorage storage, IWorkerQueueManager? queueManager = null)
+    /// <param name="storage">The task storage.</param>
+    /// <param name="queueManager">Optional worker queue manager (absent in standalone API mode).</param>
+    /// <param name="rateLimiter">
+    /// Optional rate-limiter introspection (absent when EverTask runs without rate limiting or in
+    /// standalone API mode): sources the per-queue ThrottledCount.
+    /// </param>
+    public StatisticsService(
+        ITaskStorage storage,
+        IWorkerQueueManager? queueManager = null,
+        IRateLimiterIntrospection? rateLimiter = null)
     {
         _storage = storage;
         _queueManager = queueManager;
+        _rateLimiter = rateLimiter;
     }
+
+    /// <summary>
+    /// Parked (throttled) task counts per queue from the limiter snapshot. Storage cannot
+    /// distinguish a parked task from a queued one (single-node, in-memory view).
+    /// </summary>
+    private Dictionary<string, int> GetThrottledByQueue() =>
+        (_rateLimiter?.GetParkedSnapshot() ?? [])
+        .GroupBy(s => s.QueueName)
+        .ToDictionary(g => g.Key, g => g.Sum(s => s.ParkedCount));
 
     /// <inheritdoc />
     public async Task<SuccessRateTrendDto> GetSuccessRateTrendAsync(TimePeriod period, CancellationToken ct = default)
@@ -177,24 +198,31 @@ public class StatisticsService : IStatisticsService
     /// <inheritdoc />
     public async Task<List<QueueConfigurationDto>> GetQueueConfigurationsAsync(CancellationToken ct = default)
     {
+        var throttledByQueue = GetThrottledByQueue();
+
         if (_queueManager == null)
         {
             // Fallback to old behavior if queue manager not available
             var metrics = await GetQueueMetricsAsync(ct);
-            return metrics.Select(m => new QueueConfigurationDto(
-                m.QueueName ?? "default",
-                MaxDegreeOfParallelism: 1,
-                ChannelCapacity: 2000,
-                QueueFullBehavior: "Wait",
-                DefaultTimeout: null,
-                m.TotalTasks,
-                m.PendingTasks,
-                m.InProgressTasks,
-                m.CompletedTasks,
-                m.FailedTasks,
-                m.AvgExecutionTimeMs,
-                m.SuccessRate
-            )).ToList();
+            return metrics.Select(m =>
+            {
+                var queueName = m.QueueName ?? "default";
+                return new QueueConfigurationDto(
+                    queueName,
+                    MaxDegreeOfParallelism: 1,
+                    ChannelCapacity: 2000,
+                    QueueFullBehavior: "Wait",
+                    DefaultTimeout: null,
+                    m.TotalTasks,
+                    m.PendingTasks,
+                    m.InProgressTasks,
+                    m.CompletedTasks,
+                    m.FailedTasks,
+                    m.AvgExecutionTimeMs,
+                    m.SuccessRate,
+                    throttledByQueue.GetValueOrDefault(queueName)
+                );
+            }).ToList();
         }
 
         // Get all configured queues from queue manager
@@ -247,7 +275,8 @@ public class StatisticsService : IStatisticsService
                 CompletedTasks: completedTasks,
                 FailedTasks: failedTasks,
                 AvgExecutionTimeMs: Math.Round(avgExecutionTimeMs, 2),
-                SuccessRate: Math.Round(successRate, 2)
+                SuccessRate: Math.Round(successRate, 2),
+                ThrottledCount: throttledByQueue.GetValueOrDefault(queueName)
             ));
         }
 

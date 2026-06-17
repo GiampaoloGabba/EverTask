@@ -9,6 +9,7 @@ import { TaskDetailPage } from '@/pages/TaskDetailPage';
 import { QueuesPage } from '@/pages/QueuesPage';
 import { LiveMonitoringPage } from '@/pages/LiveMonitoringPage';
 import { StatisticsPage } from '@/pages/StatisticsPage';
+import { RateLimitsPage } from '@/pages/RateLimitsPage';
 
 // Protected route wrapper
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -42,6 +43,7 @@ const router = createBrowserRouter([
       { path: 'tasks', element: <TasksPage /> },
       { path: 'tasks/:id', element: <TaskDetailPage /> },
       { path: 'queues', element: <QueuesPage /> },
+      { path: 'rate-limits', element: <RateLimitsPage /> },
       { path: 'live', element: <LiveMonitoringPage /> },
       { path: 'statistics', element: <StatisticsPage /> },
     ],

@@ -171,7 +171,7 @@ Deferrals are infrastructure routing: no handler callback fires for them (like t
 
 - **Monitoring events** (`TaskEventOccurredAsync` / SignalR): deferral events with a machine-parseable message (`Rate limit deferred task {id}: key={key} slotUtc={slot:O} policy={taskType} deferredCount={n}`), aggregated at the source: first deferral per key per window, then one summary per window, so sustained throttling never becomes an event storm. Disable via `EmitDeferralEvents = false`.
 - **Logs**: per-deferral details at `Debug` level.
-- **Monitor.Api / Dashboard**: `ThrottledTasks` counters in the overview, `GET /api/rate-limits` (per-key parked counts and next slots), and a per-task `throttledUntil` overlay. This view is in-memory and **single-node**.
+- **Monitor.Api / Dashboard**: a dedicated **Rate Limits** page (backed by `GET /api/rate-limits`) lists each key's parked count and next slot, plus tracked keys, fail-open count, and parking-lot usage. The overview shows a `ThrottledTasks` counter and the queue cards a per-queue `throttledCount`, both only while something is actually throttled. Open a parked task and you'll see when it unparks: a *Throttled* badge in the list, a *Throttled Until* field in the detail. The whole view is in-memory and **single-node**.
 - **Terminal outcomes DO invoke `OnError`** with a typed `RateLimitRejectedException` (carrying key, computed slot and policy): horizon rejections and `Discard` drops.
 
 ## Restart Semantics

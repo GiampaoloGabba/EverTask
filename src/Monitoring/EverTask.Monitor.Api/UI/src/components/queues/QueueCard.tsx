@@ -3,7 +3,7 @@ import { Badge } from '@/components/ui/badge';
 import { QueueConfigurationDto } from '@/types/queue.types';
 import { formatNumber, formatPercentage, formatTime } from '@/utils/formatters';
 import { useNavigate } from 'react-router-dom';
-import { Layers, TrendingUp, Clock, Settings, Users, Database } from 'lucide-react';
+import { Layers, TrendingUp, Clock, Settings, Users, Database, Hourglass } from 'lucide-react';
 
 interface QueueCardProps {
   queue: QueueConfigurationDto;
@@ -105,6 +105,19 @@ export function QueueCard({ queue }: QueueCardProps) {
             </div>
           </div>
         </div>
+
+        {/* Throttled (rate-limited, parked) — only when in use */}
+        {queue.throttledCount > 0 && (
+          <div className="flex items-center justify-between">
+            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+              <Hourglass className="h-3 w-3 text-amber-600" />
+              Throttled
+            </span>
+            <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200">
+              {formatNumber(queue.throttledCount)}
+            </Badge>
+          </div>
+        )}
 
         {/* Metrics */}
         <div className="pt-3 border-t space-y-2">

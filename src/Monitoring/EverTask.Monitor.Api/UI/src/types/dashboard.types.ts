@@ -16,6 +16,8 @@ export interface OverviewDto {
   statusDistribution: Record<QueuedTaskStatus, number>;
   tasksOverTime: TasksOverTimeDto[];
   queueSummaries: QueueSummaryDto[];
+  // Rate-limited tasks currently parked waiting for budget (in-memory, single-node view).
+  throttledTasks: number;
 }
 
 export interface TasksOverTimeDto {
@@ -31,6 +33,8 @@ export interface QueueSummaryDto {
   inProgressCount: number;
   completedCount: number;
   failedCount: number;
+  // Rate-limited tasks parked for this queue (in-memory, single-node view).
+  throttledCount: number;
 }
 
 export interface RecentActivityDto {

@@ -22,4 +22,6 @@ export interface QueueConfigurationDto {
   failedTasks: number;
   avgExecutionTimeMs: number;
   successRate: number;
+  // Rate-limited tasks parked for this queue (in-memory, single-node view). 0 when unused.
+  throttledCount: number;
 }

@@ -1,4 +1,4 @@
-import { Home, List, Layers, Activity, BarChart3, Menu, X } from 'lucide-react';
+import { Home, List, Layers, Activity, BarChart3, Gauge, Menu, X } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -8,6 +8,7 @@ const navigation = [
   { name: 'Overview', href: '/', icon: Home },
   { name: 'Tasks', href: '/tasks', icon: List },
   { name: 'Queues', href: '/queues', icon: Layers },
+  { name: 'Rate Limits', href: '/rate-limits', icon: Gauge },
   { name: 'Live Monitoring', href: '/live', icon: Activity },
   { name: 'Statistics', href: '/statistics', icon: BarChart3 },
 ];

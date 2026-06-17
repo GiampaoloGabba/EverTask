@@ -45,6 +45,9 @@ export interface TaskListDto {
   currentRunCount: number | null;
   maxRuns: number | null;
   executionTimeMs: number; // Last execution time in milliseconds
+  // Reserved rate-limit slot (UTC) when the task is currently parked by the limiter, null otherwise.
+  // In-memory single-node overlay: only this process' parked tasks are visible.
+  throttledUntil: string | null;
 }
 
 export interface TaskDetailDto extends TaskListDto {

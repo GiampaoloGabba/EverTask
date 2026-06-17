@@ -100,6 +100,48 @@ public class RateLimitMonitoringTests
         overview.QueueSummaries.Single().ThrottledCount.ShouldBe(0);
     }
 
+    // ---------------------------------------------------------------- StatisticsService per-queue
+
+    [Fact]
+    public async Task Should_source_throttled_count_per_queue_in_configurations()
+    {
+        var storage = new Mock<ITaskStorage>();
+        storage.Setup(s => s.GetAll(It.IsAny<CancellationToken>()))
+               .ReturnsAsync(new[]
+               {
+                   CreateTask(QueuedTaskStatus.Queued, "default"),
+                   CreateTask(QueuedTaskStatus.Queued, "exports")
+               });
+
+        var introspection = new FakeRateLimiterIntrospection
+        {
+            Snapshot =
+            [
+                new RateLimitKeySnapshot("default", "tenant-A", 2, DateTimeOffset.UtcNow.AddSeconds(5)),
+                new RateLimitKeySnapshot("exports", "tenant-B", 1, DateTimeOffset.UtcNow.AddSeconds(9))
+            ]
+        };
+
+        // No queue manager → fallback path; rate-limiter introspection sources ThrottledCount
+        var configs = await new StatisticsService(storage.Object, queueManager: null, introspection)
+                           .GetQueueConfigurationsAsync();
+
+        configs.Single(c => c.QueueName == "default").ThrottledCount.ShouldBe(2);
+        configs.Single(c => c.QueueName == "exports").ThrottledCount.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Should_report_zero_throttled_count_per_queue_without_introspection()
+    {
+        var storage = new Mock<ITaskStorage>();
+        storage.Setup(s => s.GetAll(It.IsAny<CancellationToken>()))
+               .ReturnsAsync(new[] { CreateTask(QueuedTaskStatus.Queued, "default") });
+
+        var configs = await new StatisticsService(storage.Object).GetQueueConfigurationsAsync();
+
+        configs.Single().ThrottledCount.ShouldBe(0);
+    }
+
     // ---------------------------------------------------------------- TaskQueryService overlay
 
     [Fact]

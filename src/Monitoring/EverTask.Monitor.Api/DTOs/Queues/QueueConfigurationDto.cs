@@ -15,6 +15,10 @@ namespace EverTask.Monitor.Api.DTOs.Queues;
 /// <param name="FailedTasks">Number of failed tasks.</param>
 /// <param name="AvgExecutionTimeMs">Average execution time in milliseconds.</param>
 /// <param name="SuccessRate">Success rate as a percentage (0-100).</param>
+/// <param name="ThrottledCount">
+/// Number of rate-limited tasks parked for this queue (in-memory, single-node view; these tasks
+/// also count as pending in storage). Zero when rate limiting is not in use.
+/// </param>
 public record QueueConfigurationDto(
     string QueueName,
     int MaxDegreeOfParallelism,
@@ -27,5 +31,6 @@ public record QueueConfigurationDto(
     int CompletedTasks,
     int FailedTasks,
     double AvgExecutionTimeMs,
-    decimal SuccessRate
+    decimal SuccessRate,
+    int ThrottledCount = 0
 );

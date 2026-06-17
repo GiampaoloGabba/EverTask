@@ -6,7 +6,7 @@ import { ActivityFeed } from '@/components/dashboard/ActivityFeed';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { DateRange } from '@/types/dashboard.types';
-import { CheckCircle2, XCircle, TrendingUp, Clock, AlertCircle } from 'lucide-react';
+import { CheckCircle2, XCircle, TrendingUp, Clock, AlertCircle, Gauge } from 'lucide-react';
 import { formatNumber, formatPercentage, formatTime } from '@/utils/formatters';
 
 export function OverviewPage() {
@@ -62,6 +62,14 @@ export function OverviewPage() {
           value={formatTime(overview.avgExecutionTimeMs)}
           subtitle="Actual task execution duration"
         />
+        {overview.throttledTasks > 0 && (
+          <KPICard
+            icon={Gauge}
+            title="Throttled Tasks"
+            value={formatNumber(overview.throttledTasks)}
+            subtitle="Parked waiting for rate-limit budget"
+          />
+        )}
       </div>
 
       {/* Charts */}

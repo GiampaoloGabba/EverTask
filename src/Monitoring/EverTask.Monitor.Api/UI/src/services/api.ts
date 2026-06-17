@@ -18,6 +18,7 @@ import {
   type RecentActivityDto
 } from '@/types/dashboard.types';
 import type { QueueConfigurationDto } from '@/types/queue.types';
+import type { RateLimitsDto } from '@/types/rateLimit.types';
 import {
   TimePeriod,
   type SuccessRateTrendDto,
@@ -224,6 +225,12 @@ class ApiService {
     return this.client.get<ExecutionTimeDto[]>('/statistics/execution-times', {
       params: { range }
     });
+  }
+
+  // Rate Limits API
+  async getRateLimits() {
+    await this.initialize();
+    return this.client.get<RateLimitsDto>('/rate-limits');
   }
 }
 
