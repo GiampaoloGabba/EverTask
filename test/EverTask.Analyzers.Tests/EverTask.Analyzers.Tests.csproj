@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Single-target: the analyzer is TFM-agnostic and CI runs tests on net9.0. -->
+    <TargetFrameworks></TargetFrameworks>
+    <TargetFramework>net9.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <!-- Analyzer-test sources are string literals; relax nullable/CS warnings-as-errors noise. -->
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Analyzer.Testing" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.CodeFix.Testing" />
+    <!-- Pin CodeAnalysis: the *.Testing packages float their dependency to an ancient .NETFramework floor
+         (1.0.1 -> NU1701). Direct references unify everything on the modern build. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Referenced as libraries (NOT as analyzers) so tests can instantiate the analyzer / code-fix types. -->
+    <ProjectReference Include="..\..\analyzers\EverTask.Analyzers\EverTask.Analyzers.csproj" />
+    <ProjectReference Include="..\..\analyzers\EverTask.Analyzers.CodeFixes\EverTask.Analyzers.CodeFixes.csproj" />
+  </ItemGroup>
+
+</Project>

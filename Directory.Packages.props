@@ -89,6 +89,18 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Roslyn analyzer (analyzers/EverTask.Analyzers[.CodeFixes]). Pinned to 4.8.0: an analyzer compiled
+         against an older Roslyn API loads on every newer compiler/IDE host, maximizing VS/SDK reach for
+         consumers. PrivateAssets="all" on the references keeps CodeAnalysis out of the shipped nupkg deps. -->
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="4.8.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="4.8.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="3.11.0" />
+    <!-- Analyzer/code-fix unit testing (test/EverTask.Analyzers.Tests). -->
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Analyzer.Testing" Version="1.1.2" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.CodeFix.Testing" Version="1.1.2" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.6.0" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5">
       <PrivateAssets>all</PrivateAssets>

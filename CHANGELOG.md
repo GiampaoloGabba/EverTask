@@ -23,6 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Roslyn analyzer bundled in the `EverTask.Abstractions` package** (`analyzers/dotnet/cs`, no runtime
+  dependency) that checks the System.Text.Json payload contract at compile time, so violations that used to
+  surface only on recovery now show up in the IDE and the build (#14). The rules: public field not serialized
+  (ET0001), property with no reachable setter and no matching ctor parameter (ET0002), ignored Newtonsoft
+  attribute (ET0003), undeclared polymorphism on an abstract/interface property (ET0004), `object` and
+  `Dictionary<string,object>` read back as `JsonElement` (ET0005, info), unsupported types like delegates,
+  `Stream`, `IntPtr`, `DbContext` or `ValueTuple` (ET0006, opt-in), and multiple public constructors STJ can't
+  choose between (ET0007). ET0001–ET0004 ship with code fixes. The serializer stays reflection-based and
+  isolated, so a consumer's own STJ source generators don't affect it and Native AOT isn't supported
+  (documented, not analyzed).
 - **Old Newtonsoft rows still read, with no migration step.** Quoted numbers like `"42"` parse via
   `JsonNumberHandling.AllowReadingFromString`, and string-named enums (including `DayOfWeek` arrays on recurring
   schedules) parse via a `TolerantEnumConverter`. New writes keep the numeric enum form, so a row written by the

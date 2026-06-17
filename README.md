@@ -51,6 +51,8 @@ Tasks can be CPU-bound or I/O-bound, long- or short-running. Works with ASP.NET 
 - **Extensible** — custom storage, retry policies, and schedulers
 - **Serilog integration** — structured logging
 - **Async throughout**
+- **Compile-time payload analyzer** — a Roslyn analyzer (ET0001–ET0007) bundled in `EverTask.Abstractions`
+  catches System.Text.Json contract violations in the IDE/build, with code fixes (see below)
 
 
 <img src="assets/screenshots/4.png" style="width:100%;max-width:900px;display: block; margin:20px auto;" alt="Task Details" />
@@ -265,6 +267,28 @@ Capture all logs written during task execution and persist them to the database 
 <img src="assets/screenshots/5.png" style="width:100%;max-width:900px;display: block; margin:20px auto;" alt="Task Details" />
 <br />
 <em>View logs in dashboard or retrieve via storage</em>
+
+### Compile-time payload contract analyzer
+
+Tasks are persisted with System.Text.Json, and its contract is stricter than Newtonsoft's. A violation used to
+surface only at runtime, on recovery: a silently dropped member, or a deserialization throw. The Roslyn analyzer
+bundled in `EverTask.Abstractions` (no extra package, no runtime dependency) catches it the moment you reference
+`IEverTask`, in the IDE and in the build:
+
+| Rule | Default | What it catches |
+|------|---------|-----------------|
+| **ET0001** | Warning | Public field on a payload (STJ serializes properties only) — *code fix: convert to property* |
+| **ET0002** | Warning | Property with a non-public setter and no matching constructor parameter (dropped on read) — *code fix* |
+| **ET0003** | Warning | Newtonsoft.Json attribute (ignored by STJ) — *code fix: remove / map to the STJ equivalent* |
+| **ET0004** | Warning | Abstract/interface property without `[JsonPolymorphic]`+`[JsonDerivedType]` (throws on recovery) — *code fix: scaffold* |
+| **ET0005** | Info | `object` / `Dictionary<string,object>` (comes back as `JsonElement`) |
+| **ET0006** | Off (opt-in) | Types unlikely to round-trip (delegate, `Stream`, `Type`, `IntPtr`, `DbContext`, `ValueTuple`, …) |
+| **ET0007** | Warning | Multiple public constructors, none parameterless or `[JsonConstructor]` (STJ throws on recovery) |
+
+Every rule is configurable via `.editorconfig` (e.g. `dotnet_diagnostic.ET0001.severity = error`).
+
+> Note: the payload serializer is reflection-based and isolated — a consumer's own STJ source generators don't
+> affect it, and Native AOT / reflection-disabled builds are unsupported (see `EverTask.Abstractions` docs).
 
 [View Complete Changelog](CHANGELOG.md)
 

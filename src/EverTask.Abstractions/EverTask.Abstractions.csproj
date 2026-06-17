@@ -8,4 +8,21 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="UUIDNext" />
   </ItemGroup>
+
+  <!-- Payload-contract analyzer (issue #14): bundled so it lights up wherever IEverTask is referenced.
+       ReferenceOutputAssembly=false + PrivateAssets=all keep Microsoft.CodeAnalysis.* out of this package's
+       runtime/transitive dependencies; only the analyzer DLLs are packed under analyzers/dotnet/cs. -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\analyzers\EverTask.Analyzers\EverTask.Analyzers.csproj"
+                      ReferenceOutputAssembly="false" OutputItemType="Analyzer" PrivateAssets="all" />
+    <ProjectReference Include="..\..\analyzers\EverTask.Analyzers.CodeFixes\EverTask.Analyzers.CodeFixes.csproj"
+                      ReferenceOutputAssembly="false" OutputItemType="Analyzer" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\analyzers\EverTask.Analyzers\bin\$(Configuration)\netstandard2.0\EverTask.Analyzers.dll"
+          Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+    <None Include="..\..\analyzers\EverTask.Analyzers.CodeFixes\bin\$(Configuration)\netstandard2.0\EverTask.Analyzers.CodeFixes.dll"
+          Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+  </ItemGroup>
 </Project>

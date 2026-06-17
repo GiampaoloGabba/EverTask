@@ -52,6 +52,46 @@ matching ctor parameter), enums, collections, nested records.
 
 **Pattern**: Store IDs, not entities (`Guid OrderId` ✅, `Order Order` ❌)
 
+## Payload Contract Analyzer (issue #14)
+
+A Roslyn analyzer (`analyzers/EverTask.Analyzers`) is **bundled into this package** (`analyzers/dotnet/cs`), so
+it lights up automatically wherever `IEverTask` is referenced — no opt-in, no runtime dependency. It validates
+the contract above at **compile time** for every `IEverTask` type and the in-source types reachable through
+their serialized members (closure walk, visited-set + depth bound). Mirrors `EverTaskJson.Options` exactly.
+
+| ID | Default | Trigger | Code fix |
+|----|---------|---------|----------|
+| ET0001 | Warning | Public instance field on a payload (not `[JsonInclude]`) | field → auto-property |
+| ET0002 | Warning | Property with non-public/absent setter **and** no matching ctor parameter (init & record positional are OK) | add public setter |
+| ET0003 | Warning | `Newtonsoft.Json` attribute on type/member/ctor | remove, or map `[JsonProperty]`→`[JsonPropertyName]` / Newtonsoft `[JsonIgnore]`→STJ `[JsonIgnore]` |
+| ET0004 | Warning | Abstract/interface property without `[JsonPolymorphic]`+`[JsonDerivedType]` (unwraps `Nullable`/collections) | scaffold the attributes on the base |
+| ET0005 | Info | `object` / `dynamic` / `Dictionary<string,object>` property | — |
+| ET0006 | **Disabled** | Non-round-trippable type (delegate, `Stream`, `Type`, `IntPtr`, `CancellationToken`, `DbContext`, `ValueTuple`) — heuristic | — |
+| ET0007 | Warning | ≥2 public constructors, none parameterless or `[JsonConstructor]` → STJ throws on recovery (records & single-ctor are OK) | — |
+
+**Implementation notes (for maintainers)**: diagnostics are reported from a per-symbol action (local, so the
+code fixes apply); the closure is precomputed once in `CompilationStartAction`. The two analyzer DLLs target
+`netstandard2.0` and reference `Microsoft.CodeAnalysis.*` with `PrivateAssets="all"` (kept out of the package's
+dependency closure). Behavior is pinned by `test/EverTask.Analyzers.Tests` (one file per rule, positive +
+negative cases + code-fix verifiers).
+
+**Tuning** (`.editorconfig`): each rule is configurable / suppressible per-member.
+
+```ini
+[*.cs]
+dotnet_diagnostic.ET0001.severity = error    # promote to build break
+dotnet_diagnostic.ET0006.severity = warning  # opt into the heuristic rule
+```
+
+### Native AOT / trimming (not an analyzer rule)
+
+`EverTaskJson` is **reflection-based** (its private options set no `TypeInfoResolver`), so it is **not**
+compatible with Native AOT or `JsonSerializerIsReflectionEnabledByDefault=false` — `(de)serialization throws at
+runtime` there, regardless of payload shape. This is a publish/runtime configuration (not a compile-time symbol),
+so it is documented rather than analyzed. A consumer's own STJ **source generators / `JsonSerializerContext`
+have no effect** on EverTask: the isolated options instance (L33) never consults them. AOT support would come
+from the pluggable serializer on the backlog (`review/todo/b6-ievertaskserializer-pluggable.md`), not from a rule.
+
 ## Base Classes
 
 ### EverTaskHandler<TTask>

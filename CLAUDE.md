@@ -21,6 +21,7 @@ EverTask is a .NET background task execution library inspired by MediatR. It pro
 - **src/Storage/**: Persistence providers (EfCore, SqlServer, Postgres, Sqlite)
 - **src/Logging/**: Logging integrations (Serilog)
 - **src/Monitoring/**: Monitoring integrations (SignalR)
+- **analyzers/**: Roslyn payload-contract analyzer (`EverTask.Analyzers` + `.CodeFixes`, netstandard2.0), bundled into the `EverTask.Abstractions` package
 - **samples/**: Example implementations
 - **test/**: Test projects mirroring src/
 
@@ -110,7 +111,7 @@ See local CLAUDE.md files for implementation details.
 | Module | Local CLAUDE.md | Focus |
 |--------|-----------------|-------|
 | **Core** | `src/EverTask/CLAUDE.md` | Dispatcher/worker implementation, MediatR attribution, async guidance |
-| **Abstractions** | `src/EverTask.Abstractions/CLAUDE.md` | Interfaces, retry policy details, serialization gotchas |
+| **Abstractions** | `src/EverTask.Abstractions/CLAUDE.md` | Interfaces, retry policy details, serialization gotchas, payload-contract analyzer (ET0001–ET0006) |
 | **Rate Limiting** | `src/EverTask/RateLimiting/CLAUDE.md` | Keyed rate limiting invariants (no-storage-write deferrals, re-park rules, retry/restart semantics) |
 | **Recurring** | `src/EverTask/Scheduler/Recurring/CLAUDE.md` | Cron scheduling, builder flow, calculation gotchas |
 | **SQL Server** | `src/Storage/EverTask.Storage.SqlServer/CLAUDE.md` | Setup, schema-aware migrations, Docker testing |

@@ -193,10 +193,10 @@ var channel = Channel.CreateBounded<TaskHandlerExecutor>(new BoundedChannelOptio
 // Writer (Dispatcher)
 await channel.Writer.WriteAsync(taskExecutor);
 
-// Reader (WorkerService)
+// Reader: each of the N consumers awaits the same channel and runs its item inline
 await foreach (var task in channel.Reader.ReadAllAsync(cancellationToken))
 {
-    _ = ExecuteTaskAsync(task); // Fire-and-forget execution
+    await ExecuteTaskAsync(task); // one consumer takes the item, runs it, then reads the next
 }
 ```
 
@@ -204,90 +204,17 @@ Why channels? They give us zero polling overhead through OS-level signaling, bui
 
 ### ConcurrentPriorityQueue
 
-For scheduled tasks, we use a custom priority queue:
+Scheduled and recurring tasks wait in a custom `ConcurrentPriorityQueue<TElement, TPriority>` (`src/EverTask/Scheduler/ConcurrentPriorityQueue.cs`). It wraps the BCL `PriorityQueue<TElement, TPriority>` (a binary heap) behind a single `lock`, and keys each task by its execution time, so the head is always the next one due.
 
-```csharp
-// Tasks ordered by execution time
-public class ConcurrentPriorityQueue<T>
-{
-    private readonly SortedSet<(DateTimeOffset ExecutionTime, T Item)> _queue;
-    private readonly SemaphoreSlim _semaphore;
-
-    public void Enqueue(T item, DateTimeOffset executionTime)
-    {
-        lock (_lock)
-        {
-            _queue.Add((executionTime, item));
-        }
-        _semaphore.Release(); // Wake up scheduler
-    }
-
-    public bool TryPeek(out T item, out DateTimeOffset executionTime)
-    {
-        lock (_lock)
-        {
-            if (_queue.Count > 0)
-            {
-                var first = _queue.First();
-                item = first.Item;
-                executionTime = first.ExecutionTime;
-                return true;
-            }
-        }
-        item = default;
-        executionTime = default;
-        return false;
-    }
-}
-```
-
-The priority queue gives us O(log n) insert and remove operations, and we always know exactly when the next task needs to run. Locks are fine here since the scheduler isn't on the hot path.
+Enqueue and dequeue are O(log n). Removing an arbitrary task (a cancellation, say) is O(n): the heap has no indexed delete, so the queue is rebuilt without that entry. That's fine in practice: the scheduler isn't on the task-execution hot path, and the lock is uncontended at the rates we see. Moving to an indexed heap is tracked as a future optimization but hasn't been applied.
 
 ## Scheduler Architecture
 
-### PeriodicTimerScheduler (v2.0+, Default)
+### PeriodicTimerScheduler (default)
 
-The default high-performance scheduler:
+The default scheduler runs a single background loop (`ProcessScheduledTasksAsync` in `src/EverTask/Scheduler/PeriodicTimerScheduler.cs`). It peeks the head of the priority queue, works out the delay until that task is due, and waits on a `SemaphoreSlim` (`_wakeUpSignal`) for exactly that long. With an empty queue it waits with no timeout, so an idle scheduler burns zero CPU. Scheduling a new task calls `Release()` on the signal: the loop wakes immediately and recomputes the delay instead of oversleeping a task that should run sooner.
 
-```csharp
-public class PeriodicTimerScheduler : IScheduler
-{
-    private readonly ConcurrentPriorityQueue<QueuedTask> _queue;
-    private readonly SemaphoreSlim _wakeSignal;
-    private readonly CancellationTokenSource _cts;
-
-    private async Task RunAsync()
-    {
-        while (!_cts.Token.IsCancellationRequested)
-        {
-            // Calculate delay to next task
-            var delay = CalculateNextDelay();
-
-            if (delay == Timeout.InfiniteTimeSpan)
-            {
-                // No tasks - wait for signal
-                await _wakeSignal.WaitAsync(_cts.Token);
-            }
-            else
-            {
-                // Wait until next task OR new task scheduled
-                await _wakeSignal.WaitAsync(delay, _cts.Token);
-            }
-
-            // Dequeue and dispatch ready tasks
-            await DequeueReadyTasksAsync();
-        }
-    }
-
-    public void Schedule(QueuedTask task, DateTimeOffset executionTime)
-    {
-        _queue.Enqueue(task, executionTime);
-        _wakeSignal.Release(); // Wake up immediately
-    }
-}
-```
-
-The scheduler uses dynamic delays, sleeping only until the next task is due. When idle, it uses zero CPU. New tasks signal immediately for wake-up, resulting in minimal lock contention compared to the old timer-based approach.
+Despite the name, there's no `System.Threading.PeriodicTimer` involved; the "period" is the dynamic, signal-driven delay just described.
 
 **Scheduler comparison** (qualitative; we haven't benchmarked the `Schedule()`-rate axis yet):
 
@@ -300,243 +227,56 @@ The scheduler uses dynamic delays, sleeping only until the next task is due. Whe
 > These rows describe the **scheduling** side (how `Schedule()` calls contend on the priority-queue lock),
 > not task-execution throughput, which is storage-bound and the same for all three.
 
-### ShardedScheduler (Opt-in)
+### ShardedScheduler (opt-in)
 
-For a high rate of `Schedule()` calls (the scheduling axis, not a task-execution speedup):
+For a high rate of `Schedule()` calls (the scheduling axis, not a task-execution speedup), the sharded scheduler runs N independent shards, each with its own priority queue, wake signal, and loop, effectively N `PeriodicTimerScheduler`s side by side. A task is routed to a shard by its persistence id: `(uint)persistenceId.GetHashCode() % shardCount`, with the unsigned cast there to dodge the `Math.Abs(int.MinValue)` overflow. Lock contention on the queue is split across the shards, and a stall in one shard doesn't touch the others. This raises the `Schedule()` rate the scheduler can sustain; it does **not** change task-execution throughput, which is storage-bound.
 
-```csharp
-public class ShardedScheduler : IScheduler
-{
-    private readonly PeriodicTimerScheduler[] _shards;
-    private readonly int _shardCount;
-
-    public ShardedScheduler(int shardCount, ...)
-    {
-        _shardCount = shardCount;
-        _shards = new PeriodicTimerScheduler[shardCount];
-
-        for (int i = 0; i < shardCount; i++)
-        {
-            _shards[i] = new PeriodicTimerScheduler(...);
-        }
-    }
-
-    public void Schedule(QueuedTask task, DateTimeOffset executionTime)
-    {
-        // Hash-based distribution
-        var shard = GetShard(task.PersistenceId);
-        _shards[shard].Schedule(task, executionTime);
-    }
-
-    private int GetShard(Guid taskId)
-    {
-        return Math.Abs(taskId.GetHashCode()) % _shardCount;
-    }
-}
-```
-
-Sharding distributes the work across multiple independent schedulers, each operating in parallel. Lock contention on the priority queue gets divided across the shards, and issues in one shard won't affect others. This raises the rate of `Schedule()` calls the scheduler can sustain; it does **not** change task-execution throughput (storage-bound).
-
-The trade-off? You'll use additional memory (around 300 bytes per shard) and additional threads (one per shard), plus debugging becomes slightly more complex.
+The trade-off is a little more memory (around 300 bytes per shard) and one thread per shard, plus a bit more to keep in your head when debugging.
 
 ## Performance Optimizations
 
-EverTask v2.0 includes several major performance improvements:
+The hot paths lean on a few caches, and storage leans on pooled database contexts. The theme is the same throughout: do the reflection, serialization, and option-reading once, then reuse it.
 
-### Reflection Caching (Dispatcher)
+### Caches on the dispatch and execution paths
 
-```csharp
-// v1.x: Reflection on every dispatch
-var wrapperType = typeof(TaskHandlerWrapper<>).MakeGenericType(task.GetType());
-var wrapper = (TaskHandlerWrapper)Activator.CreateInstance(wrapperType, task);
+Resolving a handler used to mean `MakeGenericType` + `Activator.CreateInstance` on every dispatch. The dispatcher now caches a compiled factory per task type in `WrapperFactoryCache` (a `ConcurrentDictionary<Type, Func<TaskHandlerWrapper>>`, `src/EverTask/Dispatcher/Dispatcher.cs`), so repeat dispatches of the same type skip the reflection. Serialization is lazy in the same spirit: with no storage configured there's nothing to persist, so the dispatcher never builds the `QueuedTask` or serializes the payload, and in-memory-only setups pay nothing for it.
 
-// v2.0: Compiled expression cache
-private static readonly ConcurrentDictionary<Type, Func<IEverTask, TaskHandlerWrapper>> _wrapperCache = new();
+Two more caches sit on the execution side. Monitoring events carry the task's JSON, so rather than re-serialize it per event the executor serializes once into a `ConditionalWeakTable<IEverTask, string>` (`TaskJsonCache`, collected with the task) and keeps type-name strings in `TypeStringCache`; a burst of events for one task never re-serializes the same payload. And a handler's timeout, retry policy, and lifecycle hooks are read once per handler type into `HandlerOptionsInternalCache` (which also holds the `OnStarted`/`OnCompleted`/`OnError`/`OnRetry` `MethodInfo`s), instead of being reflected on every run.
 
-var factory = _wrapperCache.GetOrAdd(task.GetType(), type =>
-{
-    var wrapperType = typeof(TaskHandlerWrapper<>).MakeGenericType(type);
-    var ctor = wrapperType.GetConstructor(new[] { type });
-    var param = Expression.Parameter(typeof(IEverTask));
-    var newExpr = Expression.New(ctor, Expression.Convert(param, type));
-    return Expression.Lambda<Func<IEverTask, TaskHandlerWrapper>>(newExpr, param).Compile();
-});
+### Pooled DbContext + provider-specific hot writes
 
-var wrapper = factory(task);
-```
+Every storage provider registers `AddPooledDbContextFactory`, not a per-operation context, so each write leases a reset, reused `DbContext`. That cuts per-operation allocation sharply (~-88% per write, ~-71% per task end to end) and the GC pressure with it. On a real database the round-trip dominates wall-clock, so this is an allocation win, not a throughput one. Plain `AddDbContextFactory` does *not* pool.
 
-We compile the reflection once into an expression factory and cache it per task type, so repeated dispatches of the same type skip the `MakeGenericType` + `Activator.CreateInstance` cost on the hot path.
+The status write itself is the hot one: it runs on every state change and adds an audit row. Each provider keeps it to as few round-trips as possible and commits the row update and the audit row together, but the mechanism differs:
 
-### Lazy Serialization (Dispatcher)
-
-```csharp
-// v1.x: Always serialize
-var queuedTask = executor.ToQueuedTask();
-if (storage != null)
-{
-    await storage.AddAsync(queuedTask);
-}
-
-// v2.0: Serialize only when needed
-QueuedTask? queuedTask = null;
-
-if (storage != null)
-{
-    queuedTask = executor.ToQueuedTask(); // Only when storage configured
-    await storage.AddAsync(queuedTask);
-}
-```
-
-If you're running in-memory only, why serialize? Now we skip it entirely when storage isn't configured.
-
-### Event Data Caching (Worker Executor)
-
-```csharp
-// v1.x: Serialize on every event
-var eventData = new EverTaskEventData(
-    taskId,
-    DateTimeOffset.UtcNow,
-    severity,
-    task.GetType().AssemblyQualifiedName,
-    handler.GetType().AssemblyQualifiedName,
-    EverTaskJson.Serialize(task), // Every time!
-    message,
-    exception);
-
-// v2.0: Cache serialized data
-private static readonly ConditionalWeakTable<IEverTask, string> _taskJsonCache = new();
-private static readonly ConcurrentDictionary<Type, string> _typeNameCache = new();
-
-var taskJson = _taskJsonCache.GetValue(task, t => EverTaskJson.Serialize(t));
-var typeName = _typeNameCache.GetOrAdd(task.GetType(), t => t.AssemblyQualifiedName);
-```
-
-Monitoring previously re-serialized the task JSON on every event. Now it serializes once per task (cached in a weak table, collected with the task) and reuses it across that task's events, so a burst of events no longer re-serializes the same payload.
-
-### Handler Options Caching (Worker Executor)
-
-```csharp
-// v1.x: Cast and read on every execution
-var timeout = (handler as EverTaskHandler<T>)?.Timeout;
-var retryPolicy = (handler as EverTaskHandler<T>)?.RetryPolicy;
-
-// v2.0: Cache per handler type
-private static readonly ConcurrentDictionary<Type, HandlerOptionsCache> _optionsCache = new();
-
-var options = _optionsCache.GetOrAdd(handler.GetType(), _ => new HandlerOptionsCache
-{
-    Timeout = (handler as dynamic)?.Timeout,
-    RetryPolicy = (handler as dynamic)?.RetryPolicy
-});
-```
-
-We were reading the timeout/retry options via a runtime cast on every execution. Now they're resolved once per handler type and cached, so each execution reads them from the cache instead of re-casting.
-
-### DbContext Pooling (Storage, v2.0+)
-
-```csharp
-// v1.x: DbContext per scope
-builder.Services.AddDbContext<TaskStoreDbContext>();
-
-// DbContext factory (NOTE: AddDbContextFactory is NOT pooled)
-builder.Services.AddDbContextFactory<TaskStoreDbContext>(options =>
-    options.UseSqlServer(connectionString));
-
-// Pooled factory (what actually pools): contexts are reset and reused
-builder.Services.AddPooledDbContextFactory<TaskStoreDbContext>(options =>
-    options.UseSqlServer(connectionString));
-```
-
-The EverTask providers use `AddPooledDbContextFactory`, which leases a reset, reused context per operation.
-That cuts per-operation allocation (~-88% per write, ~-71% per task end-to-end) and GC pressure. The win is
-on allocations, not raw throughput: on a real database the round-trip dominates wall-clock. Plain
-`AddDbContextFactory` does not pool.
-
-### SQL Server Stored Procedures (v2.0+)
-
-```sql
--- Atomic status update + audit insert
-CREATE PROCEDURE [EverTask].[SetTaskStatus]
-    @TaskId UNIQUEIDENTIFIER,
-    @Status INT,
-    @AuditMessage NVARCHAR(MAX)
-AS
-BEGIN
-    BEGIN TRANSACTION
-
-    UPDATE [EverTask].[QueuedTasks]
-    SET [Status] = @Status
-    WHERE [PersistenceId] = @TaskId
-
-    INSERT INTO [EverTask].[TaskAudit] (...)
-    VALUES (...)
-
-    COMMIT TRANSACTION
-END
-```
-
-Status updates used to require multiple roundtrips. The stored procedure cuts that in half.
+- **SQL Server** calls a schema-aware stored procedure (`usp_SetTaskStatus`) that does the UPDATE and the conditional audit INSERT in one transaction: a single round-trip. (Recurring bookkeeping has its own procedures, `usp_UpdateCurrentRun` and `usp_CompleteRecurringRun`.)
+- **PostgreSQL** uses a writable CTE: one statement that UPDATEs the row and INSERTs the audit from its `RETURNING` set, atomic by construction, also a single round-trip.
+- **SQLite** (and the base EF Core path) wraps an `ExecuteUpdate` and the audit insert in an explicit transaction, so two round-trips, since SQLite has neither stored procedures nor that CTE form.
 
 ## Threading Model
 
-### Worker Service Thread
+### Queue consumers
 
-Each queue gets a single background thread that consumes from the `BoundedQueue`:
+Each worker queue is drained by a fixed pool of dedicated, long-lived consumers (`MaxDegreeOfParallelism` of them) started once at boot (`WorkerService.StartConsumers`, `src/EverTask/Worker/WorkerService.cs`). They all `await foreach` over the same channel and compete for items, and the channel hands each item to exactly one consumer. There's no per-item `Task.Run` and no semaphore on the read side: parallelism *is* the number of consumers, and backpressure comes from the bounded channel.
 
-```csharp
-protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-{
-    await foreach (var queue in _queueManager.GetAllQueues())
-    {
-        _ = ProcessQueueAsync(queue, stoppingToken); // Fire-and-forget per queue
-    }
-}
+### Scheduler threads
 
-private async Task ProcessQueueAsync(WorkerQueue queue, CancellationToken ct)
-{
-    await foreach (var task in queue.ReadAllAsync(ct))
-    {
-        // Execute with configured parallelism
-        await _semaphore.WaitAsync(ct);
+- **PeriodicTimerScheduler**: one background loop.
+- **ShardedScheduler**: one per shard.
 
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await ExecuteTaskAsync(task, ct);
-            }
-            finally
-            {
-                _semaphore.Release();
-            }
-        }, ct);
-    }
-}
-```
+### Execution
 
-### Scheduler Threads
+A consumer runs the task inline on its loop (a thread-pool thread), inside a fresh DI scope created per task, so the `DbContext` and the handler are never shared across concurrent tasks. The thread pool handles load balancing and degradation under pressure. `WorkerExecutor` also keeps an in-flight guard, so the same persistence id can't execute twice concurrently.
 
-- **PeriodicTimerScheduler**: 1 background thread
-- **ShardedScheduler**: N background threads (1 per shard)
+## Recovery & at-least-once delivery
 
-### Task Execution Threads
+A persisted task has to run even if the process dies between persistence and execution. Two mechanisms make that safe, and neither was covered above.
 
-Tasks execute on the thread pool via `Task.Run`:
+**Startup recovery.** When the host starts, the consumers come up *first*, then `ProcessPendingAsync` runs concurrently with them (`RunRecoveryAsync`). It reads back rows in a recoverable status (`WaitingQueue`, `Queued`, `Pending`, `InProgress`, `ServiceStopped`, plus recurring tasks parked between runs) and re-dispatches them. The order matters: starting recovery before the consumers would deadlock when the backlog is larger than the channel capacity. Recovery only touches rows created before a `recoveryCutoff` captured at startup, and the comparison is strict (`CreatedAtUtc <`), so a live dispatch sharing the same wall-clock tick isn't grabbed and re-run as if it were recovery.
 
-```csharp
-_ = Task.Run(async () =>
-{
-    using var scope = _serviceProvider.CreateScope();
-    var handler = scope.ServiceProvider.GetRequiredService<IEverTaskHandler<T>>();
+**Double-execution defense.** The delivery contract is at-least-once, and the guard against accidental in-process double delivery is the `TaskDeliveryRegistry` (one per host). It registers each persistence id from the moment it's written to a channel until that delivery terminally ends; a second write of the same id is rejected at the boundary (`EnqueueResult.DuplicateInProcess`), which recovery and live dispatch both treat as an idempotent skip. The discipline is exactly one `End` per delivery, in the outer `finally` of `WorkerExecutor.DoWork`. Because it's at-least-once and not exactly-once, handlers with side effects should still be idempotent, and a stable task key is the usual lever.
 
-    await retryPolicy.Execute(async ct =>
-    {
-        await handler.Handle(task, ct);
-    }, timeoutCts.Token);
-}, cancellationToken);
-```
-
-We let the .NET thread pool handle load balancing and graceful degradation under pressure. It's efficient and scales well naturally.
+A row whose type loads but whose payload won't deserialize stays recoverable for a few attempts, then gets poisoned (marked `Failed`) rather than retried forever. The full invariants live in `src/EverTask/CLAUDE.md` and the [Resilience](resilience.md) guide.
 
 ## Design Principles
 
@@ -653,3 +393,4 @@ durable per-task footprint is tracked in the storage optimization issues.
 - **[Scalability](scalability.md)** - Multi-queue and sharded scheduler
 - **[Getting Started](getting-started.md)** - Setup guide
 - **[Resilience](resilience.md)** - Error handling and retries
+- **[Serialization](storage/serialization.md)** - The payload contract and the compile-time analyzer

@@ -4,6 +4,10 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
+  <Folder Name="/analyzers/">
+    <Project Path="analyzers/EverTask.Analyzers/EverTask.Analyzers.csproj" />
+    <Project Path="analyzers/EverTask.Analyzers.CodeFixes/EverTask.Analyzers.CodeFixes.csproj" />
+  </Folder>
   <Folder Name="/benchmarks/">
     <Project Path="benchmarks/EverTask.Benchmarks/EverTask.Benchmarks.csproj" />
     <Project Path="benchmarks/EverTask.LoadHarness/EverTask.LoadHarness.csproj" />
@@ -44,5 +48,6 @@
     <Project Path="test/EverTask.Tests.Monitoring/EverTask.Tests.Monitoring.csproj" />
     <Project Path="test/EverTask.Tests.Storage/EverTask.Tests.Storage.csproj" />
     <Project Path="test/EverTask.Tests/EverTask.Tests.csproj" />
+    <Project Path="test/EverTask.Analyzers.Tests/EverTask.Analyzers.Tests.csproj" />
   </Folder>
 </Solution>

@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Analyzers MUST target netstandard2.0 (loaded by the C# compiler / IDE host, not a runtime).
+         Override the repo-wide multi-target from Directory.Build.props. -->
+    <TargetFrameworks></TargetFrameworks>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <IsPackable>false</IsPackable>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <!-- This project is not a published package: its DLL is bundled into EverTask.Abstractions
+         as an analyzer asset (analyzers/dotnet/cs). -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="EverTask.Analyzers.CodeFixes" />
+    <InternalsVisibleTo Include="EverTask.Analyzers.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Release tracking (RS2008): keep the rule list here in sync with DiagnosticDescriptors. -->
+    <AdditionalFiles Include="AnalyzerReleases.Shipped.md" />
+    <AdditionalFiles Include="AnalyzerReleases.Unshipped.md" />
+  </ItemGroup>
+
+</Project>

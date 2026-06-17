@@ -29,6 +29,28 @@ EverTask uses one private, isolated serializer configuration. It does not read y
 - **Newtonsoft attributes are ignored.** `[JsonProperty]`, `[JsonIgnore]`, and Newtonsoft's `[JsonConstructor]` do nothing here. Don't rely on them to rename, hide, or pick a constructor.
 - **`object` and `Dictionary<string, object>` come back as `JsonElement`.** You get the raw JSON node, not a boxed `int` or `string`. Read it explicitly in the handler.
 
+## Catching mistakes at build time
+
+The catch with all of the above is timing: a broken payload compiles, runs locally, and only falls over after a restart, on the recovery path. To close that gap EverTask ships a Roslyn analyzer inside the `EverTask.Abstractions` package. There's nothing to install or switch on. The moment a project references `IEverTask`, the analyzer runs in the IDE and in the build, and checks the same rules this page describes against every task type (and the types they pull in).
+
+| Rule | What it flags |
+|------|---------------|
+| ET0001 | A public field on a payload — it won't be serialized. A code fix turns it into a property. |
+| ET0002 | A property with no setter the serializer can reach and no matching constructor parameter — dropped on read. A code fix adds a public setter. |
+| ET0003 | A Newtonsoft attribute (`[JsonProperty]`, `[JsonIgnore]`, …) that System.Text.Json ignores. A code fix removes it or maps it to the STJ equivalent. |
+| ET0004 | An abstract or interface property with no `[JsonPolymorphic]`/`[JsonDerivedType]` declaration — it throws on recovery. A code fix scaffolds the attributes. |
+| ET0005 | An `object` or `Dictionary<string, object>` property that comes back as `JsonElement`. (Informational.) |
+| ET0006 | A type that won't round-trip — a delegate, `Stream`, `Type`, `IntPtr`, `DbContext`, a `ValueTuple`. Off by default, since the guess can misfire; turn it on if you want it. |
+| ET0007 | A type with more than one public constructor and no way for the serializer to pick one — recovery throws. |
+
+Every rule is a normal diagnostic, so you tune it in `.editorconfig`. Promote the ones you care about to errors, or opt into ET0006:
+
+```ini
+[*.cs]
+dotnet_diagnostic.ET0001.severity = error
+dotnet_diagnostic.ET0006.severity = warning
+```
+
 ## Designing a payload that survives
 
 Keep tasks as plain data. Primitives, `Guid`, `DateTimeOffset`, strings, simple collections, and nested records all round-trip cleanly.
@@ -96,6 +118,8 @@ Two behavior changes to know about:
 You can't, yet. The serializer is internal and isolated on purpose. That isolation is a feature: your app's global JSON configuration can't reach in and change how tasks are stored, which keeps recovery predictable and closes a gadget-deserialization hole.
 
 A pluggable `IEverTaskSerializer` is planned as a separate, additive change. Until then, the lever you have is the payload shape, not the serializer settings.
+
+Two things follow from that isolation. Your app's own System.Text.Json source generators don't apply to task storage: EverTask never looks at your `JsonSerializerContext`, so turning them on changes nothing here. And because the serializer is reflection-based, Native AOT and `JsonSerializerIsReflectionEnabledByDefault=false` aren't supported. There, serialization fails at runtime no matter how simple the payload is. AOT support is part of the planned pluggable serializer.
 
 ## When something goes missing
 
