@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore.Design;
+using Microsoft.EntityFrameworkCore.Design;
 
 namespace EverTask.Storage.SqlServer;
 
@@ -8,18 +8,15 @@ public class TaskStoreEfDbContextFactory : IDesignTimeDbContextFactory<SqlServer
 {
     public SqlServerTaskStoreContext CreateDbContext(string[] args)
     {
+        var schema           = new SqlServerTaskStoreOptions().SchemaName;
         var builder          = new DbContextOptionsBuilder<SqlServerTaskStoreContext>();
         var connectionString = "dbcontext";
         builder.UseSqlServer(connectionString,
-                   opt => opt.MigrationsHistoryTable(HistoryRepository.DefaultTableName, "EverTask"))
-               .ReplaceService<IMigrationsAssembly, DbSchemaAwareMigrationAssembly>();
+                   opt => opt.MigrationsHistoryTable(HistoryRepository.DefaultTableName, schema))
+               .ReplaceService<IMigrationsAssembly, DbSchemaAwareMigrationAssembly>()
+               .UseEverTaskSchema(schema);
 
-        var options = new OptionsWrapper<ITaskStoreOptions>(new SqlServerTaskStoreOptions
-        {
-            AutoApplyMigrations = true
-        });
-
-        return new SqlServerTaskStoreContext(builder.Options, options);
+        return new SqlServerTaskStoreContext(builder.Options);
     }
 }
 #endif

@@ -3,8 +3,9 @@ using Microsoft.EntityFrameworkCore;
 namespace EverTask.Storage.Sqlite;
 
 /// <summary>
-/// IDbContextFactory-based implementation of ITaskStoreDbContextFactory (high-performance).
-/// Uses DbContext pooling for 30-50% performance improvement over IServiceScopeFactory.
+/// Adapts the pooled <see cref="IDbContextFactory{TContext}"/> to <see cref="ITaskStoreDbContextFactory"/>.
+/// Backed by AddPooledDbContextFactory: each create leases a reset, reused context (so disposing it returns
+/// it to the pool), cutting per-operation allocation (~-88% measured) rather than raw throughput.
 /// </summary>
 public class SqliteDbContextFactoryAdapter(IDbContextFactory<SqliteTaskStoreContext> dbContextFactory) : ITaskStoreDbContextFactory
 {

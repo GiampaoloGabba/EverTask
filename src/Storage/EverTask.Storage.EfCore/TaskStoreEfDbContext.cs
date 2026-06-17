@@ -1,13 +1,12 @@
-﻿using Microsoft.Extensions.Options;
+﻿namespace EverTask.Storage.EfCore;
 
-namespace EverTask.Storage.EfCore;
-
-public abstract class TaskStoreEfDbContext<T>(
-    DbContextOptions<T> options,
-    IOptions<ITaskStoreOptions> storeOptions)
+// Single DbContextOptions<T> constructor -> pool-compatible (AddPooledDbContextFactory). The schema can no
+// longer be injected as a ctor dependency; it travels inside the options via EverTaskSchemaExtension and is
+// read back here. OnModelCreating + the schema-aware migrations keep reading the Schema property unchanged.
+public abstract class TaskStoreEfDbContext<T>(DbContextOptions<T> options)
     : DbContext(options), ITaskStoreDbContext where T : DbContext
 {
-    public string? Schema { get; } = storeOptions.Value.SchemaName;
+    public string? Schema { get; } = options.FindExtension<EverTaskSchemaExtension>()?.Schema;
 
     public DbSet<QueuedTask>       QueuedTasks       => Set<QueuedTask>();
     public DbSet<StatusAudit>      StatusAudit       => Set<StatusAudit>();

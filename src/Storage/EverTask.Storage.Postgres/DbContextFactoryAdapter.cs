@@ -3,8 +3,9 @@ using Microsoft.EntityFrameworkCore;
 namespace EverTask.Storage.Postgres;
 
 /// <summary>
-/// IDbContextFactory-based implementation of ITaskStoreDbContextFactory (high-performance, pooled).
-/// Uses DbContext pooling for a 30-50% performance improvement over IServiceScopeFactory.
+/// Adapts the pooled <see cref="IDbContextFactory{TContext}"/> to <see cref="ITaskStoreDbContextFactory"/>.
+/// Backed by AddPooledDbContextFactory: each create leases a reset, reused context (so disposing it returns
+/// it to the pool), cutting per-operation allocation (~-88% measured) rather than raw throughput.
 /// </summary>
 public class PostgresDbContextFactoryAdapter(IDbContextFactory<PostgresTaskStoreContext> dbContextFactory)
     : ITaskStoreDbContextFactory

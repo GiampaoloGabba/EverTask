@@ -14,13 +14,14 @@ namespace EverTask.Benchmarks;
 /// proc / writable CTE) opens a FRESH DbContext per call: <c>await contextFactory.CreateDbContextAsync()</c>.
 /// A task's lifecycle does ~4 such calls → ~4 DbContexts/task, and the providers register
 /// <c>AddDbContextFactory</c> (NOT pooled) despite comments/CHANGELOG claiming "built-in pooling".
-/// This A/B quantifies what <c>AddPooledDbContextFactory</c> would save.
+/// This A/B quantifies what <c>AddPooledDbContextFactory</c> saves.
 ///
-/// The production <see cref="SqliteTaskStoreContext"/> can't be pooled (its ctor takes a second
-/// parameter, <c>IOptions&lt;ITaskStoreOptions&gt;</c>, for the schema — EF pooling requires a single
-/// DbContextOptions ctor). So we measure: the REAL context non-pooled (production today), and a
-/// pool-compatible proxy context both non-pooled and pooled. Real vs proxy-non-pooled validates the
-/// proxy; proxy-non-pooled vs proxy-pooled is the achievable win.
+/// As of the pooling refactor the production <see cref="SqliteTaskStoreContext"/> IS poolable (its ctor
+/// now takes a single <c>DbContextOptions</c>; the schema travels via <c>UseEverTaskSchema</c>) and
+/// <c>AddSqliteStorage</c> registers <c>AddPooledDbContextFactory</c>. So <see cref="Create_Real_Pooled"/>
+/// resolves the production POOLED factory and should match <see cref="Create_Proxy_Pooled"/> — that is the
+/// end-to-end proof the win actually landed in production. The proxy pair (non-pooled baseline vs pooled)
+/// remains as the before/after contrast.
 /// </summary>
 [MemoryDiagnoser]
 public class DbContextPoolingBenchmark
@@ -43,7 +44,7 @@ public class DbContextPoolingBenchmark
         _dbPath = Path.Combine(Path.GetTempPath(), $"evertask-pool-bench-{Guid.NewGuid():N}.db");
         var cs = $"Data Source={_dbPath};Cache=Shared";
 
-        // Production wiring (non-pooled). AddSqliteStorage also migrates the schema (table QueuedTasks).
+        // Production wiring (now POOLED after the refactor). AddSqliteStorage also migrates the schema.
         var realServices = new ServiceCollection();
         realServices.AddLogging();
         realServices.AddEverTask(o => o.RegisterTasksFromAssembly(typeof(DbContextPoolingBenchmark).Assembly))
@@ -81,15 +82,16 @@ public class DbContextPoolingBenchmark
     // --- CreateDbContext + dispose: isolates the pure per-context allocation ---
 
     [Benchmark(Baseline = true)]
-    public async Task Create_Real_NonPooled()
-    {
-        await using var ctx = await _realFactory.CreateDbContextAsync();
-    }
-
-    [Benchmark]
     public async Task Create_Proxy_NonPooled()
     {
         await using var ctx = await _proxyNonPooled.CreateDbContextAsync();
+    }
+
+    // Production wiring, now pooled — should match Create_Proxy_Pooled (the win landed in production).
+    [Benchmark]
+    public async Task Create_Real_Pooled()
+    {
+        await using var ctx = await _realFactory.CreateDbContextAsync();
     }
 
     [Benchmark]

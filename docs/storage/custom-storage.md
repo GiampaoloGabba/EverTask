@@ -125,7 +125,10 @@ builder.Services.AddSingleton<ITaskStorage, RedisTaskStorage>();
 
 ## Implementing ITaskStoreDbContextFactory (v2.0+)
 
-If you're building an EF Core-based storage provider, implement the factory pattern to take advantage of DbContext pooling:
+If you're building an EF Core-based storage provider, implement the factory pattern and register it with
+`AddPooledDbContextFactory<T>` (NOT `AddDbContextFactory<T>`, which is not pooled) to take advantage of
+DbContext pooling. Because pooling requires a single `DbContextOptions<T>` constructor, route any schema
+through the options (e.g. `optionsBuilder.UseEverTaskSchema(schemaName)`) rather than a constructor dependency:
 
 ```csharp
 public interface ITaskStoreDbContextFactory

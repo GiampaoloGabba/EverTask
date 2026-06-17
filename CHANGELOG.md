@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance
+
+- **EF Core DbContext pooling actually enabled** (SQLite, SQL Server, PostgreSQL). The providers previously
+  registered `AddDbContextFactory<T>` — which is **not** pooled — while the comments and an earlier changelog
+  entry claimed pooling. They now use `AddPooledDbContextFactory<T>`, so each storage operation leases a
+  reset, reused context instead of allocating a fresh one. Measured **~-88% allocation per write**
+  (55 KB → 6.4 KB; create+dispose 6.6 KB → 104 B) via `DbContextPoolingBenchmark`, and **~-71% end-to-end**
+  per-task allocation (Postgres L8: ~256 KB → ~75 KB/task). The win is on per-task allocation and GC pressure,
+  not raw throughput (on a real database the round-trip dominates wall-clock). To satisfy pooling's
+  single-`DbContextOptions` constructor requirement, the schema now travels through the options as a custom
+  `IDbContextOptionsExtension` (`UseEverTaskSchema`) instead of a constructor-injected
+  `IOptions<ITaskStoreOptions>`. **No change to runtime semantics** — writes, recovery, audit, scheduling and
+  schema resolution (model + schema-aware migrations + hot-path SQL) are byte-for-byte identical.
+
+### Changed (breaking — DI/extensibility surface only, no runtime behavior change)
+
+- **The context constructor dropped its second parameter.** `TaskStoreEfDbContext<T>` and the concrete
+  `SqliteTaskStoreContext` / `SqlServerTaskStoreContext` / `PostgresTaskStoreContext` now take a single
+  `DbContextOptions<T>` (was `(DbContextOptions<T>, IOptions<ITaskStoreOptions>)`) — pooling requires a single
+  options constructor. Code that instantiates these contexts directly, or derives from
+  `TaskStoreEfDbContext<T>` and calls `base(options, storeOptions)`, must drop the second argument and route
+  the schema via `optionsBuilder.UseEverTaskSchema(schemaName)` instead.
+- **The concrete context type is no longer resolvable from DI on net8.0/net9.0.** `AddDbContextFactory<T>`
+  (default lifetime) incidentally registered the concrete context as a **shared singleton** (a thread-unsafe
+  footgun); `AddPooledDbContextFactory<T>` does not. So `GetRequiredService<SqlServerTaskStoreContext>()`
+  now throws on net8.0/net9.0 (EF re-registers it on net10.0). Resolve `ITaskStoreDbContext` (scoped) or
+  `ITaskStoreDbContextFactory` instead — both unchanged.
+
 ## [3.9.0] - 2026-06-16
 
 ### PostgreSQL storage provider (`EverTask.Storage.Postgres`)
@@ -820,10 +848,11 @@ public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(3, TimeSpan.F
   - Comprehensive test coverage: 12 unit tests, 8 integration tests
   - Full documentation in README with performance comparison table
 - **DbContext factory pattern**: `ITaskStoreDbContextFactory` abstraction for storage providers
-  - 30-50% performance improvement in storage operations
-  - Enables built-in EF Core DbContext pooling via `IDbContextFactory<T>`
   - Backward compatible with existing `IServiceScopeFactory` pattern
   - `ServiceScopeDbContextFactory` adapter for legacy scenarios
+  - **Correction**: this used `AddDbContextFactory<T>`, which is **not** pooled — the original claims of
+    "built-in DbContext pooling" and "30-50% improvement" here were inaccurate. Pooling was actually
+    enabled later via `AddPooledDbContextFactory<T>` (see the `[Unreleased]` Performance entry).
 - **Smart configuration defaults** that scale automatically with CPU cores:
   - `MaxDegreeOfParallelism`: `Environment.ProcessorCount * 2` (minimum 4, replaces hardcoded 1)
   - `ChannelCapacity`: `Environment.ProcessorCount * 200` (minimum 1000, replaces hardcoded 500)
@@ -834,7 +863,8 @@ public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(3, TimeSpan.F
 ### Changed
 - **Default scheduler**: `PeriodicTimerScheduler` now registered by default (replaces `TimerScheduler`)
 - **Storage implementations** (SqlServer, Sqlite):
-  - Use `AddDbContextFactory<T>` with built-in pooling instead of `AddDbContextPool`
+  - Use `AddDbContextFactory<T>` instead of `AddDbContextPool` (note: `AddDbContextFactory` is not pooled;
+    actual pooling came later via `AddPooledDbContextFactory<T>` — see the `[Unreleased]` Performance entry)
   - Register `ITaskStoreDbContextFactory` for high-performance DbContext creation
   - Scoped `ITaskStoreDbContext` registration now uses factory internally
 - **EfCore storage**: `EfCoreTaskStorage` now depends on `ITaskStoreDbContextFactory` (breaking change for custom storage implementations)
@@ -853,8 +883,9 @@ public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(3, TimeSpan.F
   - Zero CPU overhead when no tasks scheduled (vs continuous polling)
   - Faster task scheduling response time through immediate wake-up
 - **Storage improvements**:
-  - 30-50% faster storage operations through DbContext pooling
-  - Reduced memory allocations via context reuse
+  - DbContext factory abstraction (`ITaskStoreDbContextFactory`) — note: the factory registered here was
+    **not** pooled; the "30-50% faster through DbContext pooling" claim was inaccurate. Real pooling and the
+    measured allocation win arrived later via `AddPooledDbContextFactory<T>` (see `[Unreleased]`).
   - Better connection pool utilization
   - **SQL Server optimized status updates**: 50% reduction in database roundtrips for status changes
     - New `SqlServerTaskStorage` with stored procedure-based `SetStatus()` implementation

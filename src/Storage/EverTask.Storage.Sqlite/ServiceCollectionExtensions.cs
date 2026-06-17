@@ -25,11 +25,13 @@ public static class ServiceCollectionExtensions
             return options;
         });
 
-        // Register IDbContextFactory for DbContext creation with built-in pooling
-        // Pool size automatically managed by EF Core (typically cores * 2)
-        builder.Services.AddDbContextFactory<SqliteTaskStoreContext>(opt =>
+        // Pooled DbContext factory: contexts are reset and reused instead of allocated per operation,
+        // cutting per-write allocation (~-88% measured). Schema travels via UseEverTaskSchema because a
+        // pooled context may only take a single DbContextOptions ctor parameter.
+        builder.Services.AddPooledDbContextFactory<SqliteTaskStoreContext>(opt =>
         {
-            opt.UseSqlite(connectionString);
+            opt.UseSqlite(connectionString)
+               .UseEverTaskSchema(storeOptions.SchemaName);
         });
 
         // Register high-performance factory using IDbContextFactory

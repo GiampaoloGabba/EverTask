@@ -435,12 +435,19 @@ We were doing runtime casts on every execution. Now we cache handler options per
 // v1.x: DbContext per scope
 builder.Services.AddDbContext<TaskStoreDbContext>();
 
-// v2.0: DbContext factory with pooling
+// DbContext factory (NOTE: AddDbContextFactory is NOT pooled)
 builder.Services.AddDbContextFactory<TaskStoreDbContext>(options =>
+    options.UseSqlServer(connectionString));
+
+// Pooled factory (what actually pools): contexts are reset and reused
+builder.Services.AddPooledDbContextFactory<TaskStoreDbContext>(options =>
     options.UseSqlServer(connectionString));
 ```
 
-DbContext pooling alone gives us 30-50% faster storage operations and reduces memory allocations significantly.
+The EverTask providers use `AddPooledDbContextFactory`, which leases a reset, reused context per operation —
+cutting per-operation allocation (~-88% per write, ~-71% per task end-to-end) and GC pressure. The win is on
+allocations, not raw throughput (on a real database the round-trip dominates wall-clock). Plain
+`AddDbContextFactory` does **not** pool.
 
 ### SQL Server Stored Procedures (v2.0+)
 

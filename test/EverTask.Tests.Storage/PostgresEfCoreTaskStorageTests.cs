@@ -61,7 +61,9 @@ public class PostgresEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsync
         lock (_lock)
         {
             using var scope = serviceProvider.CreateScope();
-            var context = scope.ServiceProvider.GetRequiredService<PostgresTaskStoreContext>();
+            // The pooled factory does not register the concrete context for direct resolution; resolve the
+            // scoped ITaskStoreDbContext (a real PostgresTaskStoreContext created via the factory) instead.
+            var context = (DbContext)scope.ServiceProvider.GetRequiredService<ITaskStoreDbContext>();
             context.Database.Migrate();
         }
 

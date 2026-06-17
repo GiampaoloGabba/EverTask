@@ -10,19 +10,15 @@ public class TaskStoreEfDbContextFactory : IDesignTimeDbContextFactory<PostgresT
 {
     public PostgresTaskStoreContext CreateDbContext(string[] args)
     {
+        var schema           = new PostgresTaskStoreOptions().SchemaName;
         var builder          = new DbContextOptionsBuilder<PostgresTaskStoreContext>();
         var connectionString = "Host=localhost;Database=evertask_design;Username=postgres;Password=postgres";
         builder.UseNpgsql(connectionString,
-                   npg => npg.MigrationsHistoryTable(HistoryRepository.DefaultTableName, "evertask"))
-               .ReplaceService<IMigrationsAssembly, DbSchemaAwareMigrationAssembly>();
+                   npg => npg.MigrationsHistoryTable(HistoryRepository.DefaultTableName, schema))
+               .ReplaceService<IMigrationsAssembly, DbSchemaAwareMigrationAssembly>()
+               .UseEverTaskSchema(schema);
 
-        var options = new OptionsWrapper<ITaskStoreOptions>(new PostgresTaskStoreOptions
-        {
-            AutoApplyMigrations = true,
-            SchemaName          = "evertask"
-        });
-
-        return new PostgresTaskStoreContext(builder.Options, options);
+        return new PostgresTaskStoreContext(builder.Options);
     }
 }
 #endif

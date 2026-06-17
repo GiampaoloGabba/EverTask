@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore.Design;
+using Microsoft.EntityFrameworkCore.Design;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 namespace EverTask.Storage.Sqlite;
@@ -9,17 +9,14 @@ public class TaskStoreEfDbContextFactory : IDesignTimeDbContextFactory<SqliteTas
 {
     public SqliteTaskStoreContext CreateDbContext(string[] args)
     {
+        var schema           = new SqliteTaskStoreOptions().SchemaName;
         var builder          = new DbContextOptionsBuilder<SqliteTaskStoreContext>();
         var connectionString = "dbcontext";
         builder.UseSqlite(connectionString,
-                   opt => opt.MigrationsHistoryTable(HistoryRepository.DefaultTableName, "EverTask"));
+                   opt => opt.MigrationsHistoryTable(HistoryRepository.DefaultTableName, schema))
+               .UseEverTaskSchema(schema);
 
-        var options = new OptionsWrapper<ITaskStoreOptions>(new SqliteTaskStoreOptions
-        {
-            AutoApplyMigrations = true
-        });
-
-        return new SqliteTaskStoreContext(builder.Options, options);
+        return new SqliteTaskStoreContext(builder.Options);
     }
 }
 #endif

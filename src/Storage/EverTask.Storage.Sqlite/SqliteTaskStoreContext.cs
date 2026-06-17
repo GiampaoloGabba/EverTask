@@ -1,5 +1,4 @@
-﻿namespace EverTask.Storage.Sqlite;
+namespace EverTask.Storage.Sqlite;
 
-public class SqliteTaskStoreContext(
-    DbContextOptions<SqliteTaskStoreContext> options,
-    IOptions<ITaskStoreOptions> storeOptions) : TaskStoreEfDbContext<SqliteTaskStoreContext>(options, storeOptions);
+public class SqliteTaskStoreContext(DbContextOptions<SqliteTaskStoreContext> options)
+    : TaskStoreEfDbContext<SqliteTaskStoreContext>(options);
