@@ -48,7 +48,7 @@ public interface ITaskStorage
 ```
 
 The interface also exposes default-implemented members that built-in providers override with atomic
-writes — `TrySetQueuedIfRecoverable`, `CompleteRecurringRun`, `SetRecurringSeriesCompleted`,
+writes: `TrySetQueuedIfRecoverable`, `CompleteRecurringRun`, `SetRecurringSeriesCompleted`,
 `SetRecurringTaskPoisoned`, and the recovery-failure counter (`IncrementRecoveryFailure` /
 `ClearRecoveryFailure`). A custom store inherits the non-atomic fallbacks; override them only
 if your backend can make the check-and-set atomic. See `src/EverTask/Storage/ITaskStorage.cs` for the
@@ -258,7 +258,7 @@ public class CustomStorageTests
 
 ### PostgreSQL
 
-PostgreSQL is now a **built-in** provider — use [`EverTask.Storage.Postgres`](postgres-storage.md) (`AddPostgresStorage(...)`) instead of writing your own. The scenarios below remain useful for stores EverTask does not ship.
+PostgreSQL is now a **built-in** provider: use [`EverTask.Storage.Postgres`](postgres-storage.md) (`AddPostgresStorage(...)`) instead of writing your own. The scenarios below remain useful for stores EverTask does not ship.
 
 ### MongoDB
 

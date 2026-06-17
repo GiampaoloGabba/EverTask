@@ -182,16 +182,16 @@ This is **intentional** - it provides complete visibility into all execution att
 ## Performance Considerations
 
 ### When Disabled
-- **Zero overhead** — JIT optimizations eliminate all log capture code paths
+- **Zero overhead**: JIT optimizations eliminate all log capture code paths
 - Single `if` check per log call (negligible performance impact)
 
 ### When Enabled
-- **Minimal impact** — ~5-10ms overhead for typical tasks
+- **Minimal impact**: ~5-10ms overhead for typical tasks
 - ~100 bytes per log in memory, single bulk INSERT after task completion
-- **Logs persist even on failure** — Captured in the finally block for debugging failed tasks
+- **Logs persist even on failure**: Captured in the finally block for debugging failed tasks
 
 ### Always
-- **ILogger Always Invoked** — Standard Microsoft.Extensions.Logging overhead applies regardless of persistence settings
+- **ILogger Always Invoked**: Standard Microsoft.Extensions.Logging overhead applies regardless of persistence settings
 
 ## Best Practices
 

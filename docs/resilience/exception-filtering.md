@@ -146,13 +146,13 @@ public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(5, TimeSpan.F
 
 `HandleTransientDatabaseErrors()`:
 - `DbException`
-- `TimeoutException` (never retried — see note below)
+- `TimeoutException` (never retried, see note below)
 
 `HandleTransientNetworkErrors()`:
 - `HttpRequestException`
 - `SocketException`
 - `WebException`
-- `TaskCanceledException` (never retried — see note below)
+- `TaskCanceledException` (never retried, see note below)
 
 `HandleAllTransientErrors()`:
 - All of the above combined

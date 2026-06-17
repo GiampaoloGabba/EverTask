@@ -1,4 +1,4 @@
-# 04 — Resilience: retry, exception filtering, timeout, cancellation, shutdown
+# 04: Resilience: retry, exception filtering, timeout, cancellation, shutdown
 
 ## Retry policy
 
@@ -13,7 +13,7 @@ opt.SetDefaultRetryPolicy(new LinearRetryPolicy(3, TimeSpan.FromMilliseconds(500
 public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(5, TimeSpan.FromSeconds(1));
 ```
 
-**Default** (when nothing overrides): `LinearRetryPolicy(3, 500ms)` — 3 retries (4 total), retry
+**Default** (when nothing overrides): `LinearRetryPolicy(3, 500ms)`: 3 retries (4 total), retry
 everything **except** `OperationCanceledException` and `TimeoutException` (hardcoded fail-fast).
 A `null` handler `RetryPolicy` means "defer to queue/global", **not** "no retries".
 
@@ -30,20 +30,20 @@ public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(new[]
     { TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4), TimeSpan.FromSeconds(8) });
 ```
 
-For true exponential/jitter, implement `IRetryPolicy` (e.g. wrapping Polly) — its `Execute(...)`
+For true exponential/jitter, implement `IRetryPolicy` (e.g. wrapping Polly); its `Execute(...)`
 runs the action.
 
 ## Exception filtering (fluent on `LinearRetryPolicy`)
 
 ```csharp
-// Whitelist — retry ONLY these (and derived):
+// Whitelist: retry ONLY these (and derived):
 .Handle<DbException>().Handle<HttpRequestException>()
 .Handle(typeof(DbException), typeof(IOException))            // params overload
 
-// Blacklist — retry all EXCEPT these:
+// Blacklist: retry all EXCEPT these:
 .DoNotHandle<ArgumentException>().DoNotHandle<ValidationException>()
 
-// Predicate — takes precedence over whitelist/blacklist:
+// Predicate: takes precedence over whitelist/blacklist:
 .HandleWhen(ex => ex is HttpRequestException h && (int?)h.StatusCode >= 500)
 
 // Predefined sets:
@@ -57,7 +57,7 @@ predicate → (3) whitelist → (4) blacklist → (5) default retry-all. **Mixin
 blacklist throws `InvalidOperationException`.**
 
 > Note: the hardcoded guard means `TimeoutException` stays non-retryable even if a predefined set
-> nominally includes it — so `HandleTransientDatabaseErrors()` effectively whitelists `DbException`
+> nominally includes it, so `HandleTransientDatabaseErrors()` effectively whitelists `DbException`
 > only. To retry on timeout-like conditions, use `HandleWhen`.
 
 ## `OnRetry` callback
@@ -103,12 +103,12 @@ public override async Task Handle(BatchTask task, CancellationToken ct)
 }
 ```
 
-Let `OperationCanceledException` propagate — it routes to cancelled-by-user or cancelled-by-service.
+Let `OperationCanceledException` propagate: it routes to cancelled-by-user or cancelled-by-service.
 
 ## Graceful shutdown
 
 On shutdown, an in-flight task is marked **`ServiceStopped`** and re-queued on next startup
-(automatic, no config). For long tasks, support resumption — encode progress in the payload and
+(automatic, no config). For long tasks, support resumption: encode progress in the payload and
 re-dispatch with updated progress, and/or clean up before re-throwing:
 
 ```csharp
@@ -126,7 +126,7 @@ rather than being silently lost (recovery can't help an unpersisted task).
 
 Fires after retries are exhausted (`Failed`), on timeout (`TimeoutException`), cancellation
 (`OperationCanceledException`), or terminal rate-limit rejection (`RateLimitRejectedException`).
-The exception is **unwrapped** from the retry `AggregateException` — type-switch on the real one:
+The exception is **unwrapped** from the retry `AggregateException`: type-switch on the real one:
 
 ```csharp
 public override ValueTask OnError(Guid taskId, Exception? exception, string? message)

@@ -1,4 +1,4 @@
-# Template — registration in `Program.cs`
+# Template: registration in `Program.cs`
 
 Compose ONLY the lines for chosen features. Keep defaults; don't set knobs without a reason.
 
@@ -65,7 +65,7 @@ builder.Build().Run();
 .SetMaxDegreeOfParallelism(Environment.ProcessorCount * 4)
 .SetChannelOptions(5000)
 
-// resilience defaults (example override values — the framework default is LinearRetryPolicy(3, 500ms), no timeout)
+// resilience defaults (example override values; the framework default is LinearRetryPolicy(3, 500ms), no timeout)
 .SetDefaultRetryPolicy(new LinearRetryPolicy(3, TimeSpan.FromSeconds(1)))
 .SetDefaultTimeout(TimeSpan.FromMinutes(5))
 
@@ -81,5 +81,5 @@ builder.Build().Run();
 .AddQueue("background", q => q.SetMaxDegreeOfParallelism(2).SetFullBehavior(QueueFullBehavior.FallbackToDefault))
 ```
 
-Connection strings live in `appsettings.json` / user-secrets / env — never inline literals.
+Connection strings live in `appsettings.json` / user-secrets / env: never inline literals.
 With `AutoApplyMigrations = true` (default) the schema is created on first run.

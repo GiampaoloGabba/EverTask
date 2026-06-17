@@ -191,9 +191,9 @@ await dispatcher.Dispatch(
     builder => builder.RunNow().Then().EveryDay().MaxRuns(5));
 ```
 
-> **Note — run-count limit (tradeoff):** the run counter (`CurrentRunCount`) is a 32-bit `int`. An **unbounded**
+> **Note, run-count limit (tradeoff):** the run counter (`CurrentRunCount`) is a 32-bit `int`. An **unbounded**
 > recurring series (no `MaxRuns`) that somehow reaches `int.MaxValue` (~2.1 billion) real executions keeps
-> running, but the counter **saturates** at `int.MaxValue` instead of overflowing — the exact count is frozen
+> running, but the counter **saturates** at `int.MaxValue` instead of overflowing: the exact count is frozen
 > from there on. This is a deliberate choice (a wider `bigint` column was not worth it for a limit you would
 > only hit after decades of continuous runs of a single series). A bounded series ends at `MaxRuns` long before
 > this, and `MaxRuns` is itself capped at `int.MaxValue`.

@@ -35,13 +35,13 @@ The catch with all of the above is timing: a broken payload compiles, runs local
 
 | Rule | What it flags |
 |------|---------------|
-| ET0001 | A public field on a payload — it won't be serialized. A code fix turns it into a property. |
-| ET0002 | A property with no setter the serializer can reach and no matching constructor parameter — dropped on read. A code fix adds a public setter. |
+| ET0001 | A public field on a payload; it won't be serialized. A code fix turns it into a property. |
+| ET0002 | A property with no setter the serializer can reach and no matching constructor parameter; dropped on read. A code fix adds a public setter. |
 | ET0003 | A Newtonsoft attribute (`[JsonProperty]`, `[JsonIgnore]`, …) that System.Text.Json ignores. A code fix removes it or maps it to the STJ equivalent. |
-| ET0004 | An abstract or interface property with no `[JsonPolymorphic]`/`[JsonDerivedType]` declaration — it throws on recovery. A code fix scaffolds the attributes. |
+| ET0004 | An abstract or interface property with no `[JsonPolymorphic]`/`[JsonDerivedType]` declaration; it throws on recovery. A code fix scaffolds the attributes. |
 | ET0005 | An `object` or `Dictionary<string, object>` property that comes back as `JsonElement`. (Informational.) |
-| ET0006 | A type that won't round-trip — a delegate, `Stream`, `Type`, `IntPtr`, `DbContext`, a `ValueTuple`. Off by default, since the guess can misfire; turn it on if you want it. |
-| ET0007 | A type with more than one public constructor and no way for the serializer to pick one — recovery throws. |
+| ET0006 | A type that won't round-trip: a delegate, `Stream`, `Type`, `IntPtr`, `DbContext`, a `ValueTuple`. Off by default, since the guess can misfire; turn it on if you want it. |
+| ET0007 | A type with more than one public constructor and no way for the serializer to pick one; recovery throws. |
 
 Every rule is a normal diagnostic, so you tune it in `.editorconfig`. Promote the ones you care about to errors, or opt into ET0006:
 
@@ -150,6 +150,6 @@ public void Order_task_round_trips()
 
 ## Next steps
 
-- [Storage best practices](best-practices.md) — the full task-design checklist
-- [Task creation](../task-creation.md) — patterns for modeling work as tasks
-- [Custom storage](custom-storage.md) — plug in your own persistence layer
+- [Storage best practices](best-practices.md): the full task-design checklist
+- [Task creation](../task-creation.md): patterns for modeling work as tasks
+- [Custom storage](custom-storage.md): plug in your own persistence layer

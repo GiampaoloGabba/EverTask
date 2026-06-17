@@ -48,7 +48,7 @@ SetChannelOptions(BoundedChannelOptions options)
 // Simple capacity
 opt.SetChannelOptions(5000)
 
-// Custom configuration (keep FullMode = Wait — see warning below)
+// Custom configuration (keep FullMode = Wait; see warning below)
 opt.SetChannelOptions(new BoundedChannelOptions(5000)
 {
     FullMode = BoundedChannelFullMode.Wait
@@ -56,8 +56,8 @@ opt.SetChannelOptions(new BoundedChannelOptions(5000)
 ```
 
 **FullMode Options:**
-- `Wait`: Block until space is available (default) — **the only mode EverTask's queue-full handling supports**
-- `DropWrite` / `DropOldest` / `DropNewest`: ⚠ **Not recommended.** EverTask's queue-full detection and the scheduler's backoff/`QueueFullBehavior` rely on `TryWrite` rejecting when the channel is full. With `Drop*` modes `TryWrite` **never rejects**, so a write is treated as a successful enqueue even when the channel silently drops the item — the `QueueFull` signal (and the scheduler backoff that depends on it) never fires. A dropped task is **not silently lost**, though: the channel's `itemDropped` callback releases the delivery registration and reverts the victim's storage row to `WaitingQueue`, so startup recovery re-queues it later — but it will **not** run in the current process and there is no immediate backpressure. Use `Wait` (and tune capacity / `MaxDegreeOfParallelism`) instead of a `Drop*` mode.
+- `Wait`: Block until space is available (default). **The only mode EverTask's queue-full handling supports**
+- `DropWrite` / `DropOldest` / `DropNewest`: ⚠ **Not recommended.** EverTask's queue-full detection and the scheduler's backoff/`QueueFullBehavior` rely on `TryWrite` rejecting when the channel is full. With `Drop*` modes `TryWrite` **never rejects**, so a write is treated as a successful enqueue even when the channel silently drops the item: the `QueueFull` signal (and the scheduler backoff that depends on it) never fires. A dropped task is **not silently lost**, though: the channel's `itemDropped` callback releases the delivery registration and reverts the victim's storage row to `WaitingQueue`, so startup recovery re-queues it later, but it will **not** run in the current process and there is no immediate backpressure. Use `Wait` (and tune capacity / `MaxDegreeOfParallelism`) instead of a `Drop*` mode.
 
 ### SetMaxDegreeOfParallelism
 
@@ -123,7 +123,7 @@ opt.SetDefaultRetryPolicy(new MyExponentialBackoffPolicy())
 - `LinearRetryPolicy` is the only built-in policy; `retryCount` is the number of retries AFTER the initial attempt (e.g. `LinearRetryPolicy(3, ...)` = up to 4 executions), and both `retryCount` and `retryDelay` must be greater than zero.
 - Retries cannot be disabled via `LinearRetryPolicy`: to disable them, implement a trivial `IRetryPolicy` that invokes the action once; see [Custom Retry Policies](resilience/retry-policies.md#custom-retry-policies).
 
-**Exception filtering** (`LinearRetryPolicy`, fluent): by default every exception is retried **except** `OperationCanceledException` and `TimeoutException`, which are always fail-fast (hardcoded, cannot be overridden by a filter). Configure which exceptions retry with one of these modes (whitelist and blacklist **cannot** be mixed — doing so throws `InvalidOperationException`):
+**Exception filtering** (`LinearRetryPolicy`, fluent): by default every exception is retried **except** `OperationCanceledException` and `TimeoutException`, which are always fail-fast (hardcoded, cannot be overridden by a filter). Configure which exceptions retry with one of these modes (whitelist and blacklist **cannot** be mixed: doing so throws `InvalidOperationException`):
 
 ```csharp
 .Handle<DbException>().Handle<HttpRequestException>()        // whitelist: retry ONLY these (+ derived)
@@ -134,7 +134,7 @@ opt.SetDefaultRetryPolicy(new MyExponentialBackoffPolicy())
 .HandleAllTransientErrors()                                  // both presets combined
 ```
 
-Resolution priority: OCE/TimeoutException fail-fast → `HandleWhen` → whitelist → blacklist → retry-all. Because the OCE/TimeoutException guard runs **first**, any preset entry that is (or derives from) those types — `TaskCanceledException`, `TimeoutException` — is never retried even though it appears in the preset. See [Resilience › Exception Filtering](resilience/exception-filtering.md).
+Resolution priority: OCE/TimeoutException fail-fast → `HandleWhen` → whitelist → blacklist → retry-all. Because the OCE/TimeoutException guard runs **first**, any preset entry that is (or derives from) those types (`TaskCanceledException`, `TimeoutException`) is never retried even though it appears in the preset. See [Resilience › Exception Filtering](resilience/exception-filtering.md).
 
 ### SetDefaultTimeout
 
@@ -178,7 +178,7 @@ SetDefaultAuditLevel(AuditLevel auditLevel)
 
 **Parameters:**
 - `auditLevel` (AuditLevel): Audit verbosity level
-  - `Full` (default): Complete audit trail — `StatusAudit` for all status transitions and `RunsAudit` for every run
+  - `Full` (default): Complete audit trail: `StatusAudit` for all status transitions and `RunsAudit` for every run
   - `Minimal`: `StatusAudit` only on real errors; `RunsAudit` is **still written for every recurring run** (so run-frequency history is preserved) and `QueuedTask.LastExecutionUtc` is updated
   - `ErrorsOnly`: a `StatusAudit`/`RunsAudit` row is written only for a run that **records a non-empty exception string or ends in status `Failed`** (successful runs write neither; `QueuedTask` status is still updated to `Completed`)
   - `None`: no `StatusAudit`/`RunsAudit` rows at all
@@ -210,7 +210,7 @@ opt.SetDefaultAuditLevel(AuditLevel.None)
 
 ### Audit & Execution-Log Retention (`AddAuditCleanup`)
 
-Configure automatic retention to prevent unbounded growth of the audit and execution-log tables. Retention is enforced by the optional `AuditCleanupHostedService`, registered with **`AddAuditCleanup(policy, cleanupIntervalHours)`** — the single entry-point that actually applies the policy.
+Configure automatic retention to prevent unbounded growth of the audit and execution-log tables. Retention is enforced by the optional `AuditCleanupHostedService`, registered with **`AddAuditCleanup(policy, cleanupIntervalHours)`**, the single entry-point that actually applies the policy.
 
 > **Note:** retention is applied **only** by `AddAuditCleanup(policy, cleanupIntervalHours)`. An earlier `SetAuditRetentionPolicy(...)` on the builder never took effect (the service reads its policy only from `AuditCleanupOptions`) and has been removed; if you used it, pass the policy to `AddAuditCleanup` instead.
 
@@ -286,7 +286,7 @@ builder.Services.AddAuditCleanup(policy, cleanupIntervalHours: 12);
 | `MaxExecutionLogsPerTask` | `int?` | `null` | Per-task, cross-run cap: keep at most the latest N execution logs per task and delete the oldest beyond N |
 | `DeleteCompletedTasksAfterRetention` | `bool` | `false` | Hard-delete a completed non-recurring task once it is older than the longest retention window **and** has no audit rows |
 
-> `DeleteCompletedTasksWithAudits` is **`[Obsolete]`** — a legacy alias that forwards to `DeleteCompletedTasksAfterRetention`. Don't use it in new code; it remains only for source compatibility with pre-rename configs.
+> `DeleteCompletedTasksWithAudits` is **`[Obsolete]`**: a legacy alias that forwards to `DeleteCompletedTasksAfterRetention`. Don't use it in new code; it remains only for source compatibility with pre-rename configs.
 >
 > **When a completed task is deleted:** when it is older than the longest of `StatusAuditRetentionDays`/`RunsAuditRetentionDays`/`ErrorAuditRetentionDays` (measured from `LastExecutionUtc`, falling back to `CreatedAtUtc`) and has no remaining StatusAudit/RunsAudit rows. If no retention window is configured, no completed tasks are deleted (a non-positive window counts as disabled). **When a log-retention window or cap (`ExecutionLogRetentionDays` / `MaxExecutionLogsPerTask`) is active, a task that still has surviving logs is preserved**, so its logs are never cascade-deleted before their own window expires; once those logs age out the task is purged. With no log retention configured, deleting the task cascades to everything it owns, captured execution logs included.
 >
@@ -506,7 +506,7 @@ Configures the global infrastructure knobs of the keyed rate limiter (v3.7+). Se
 
 You can set up multiple queues to isolate different types of work and give them different priorities or resource allocations.
 
-> The `EverTaskServiceBuilder` returned by `AddEverTask(...)` also exposes a public `.Services` property (the underlying `IServiceCollection`), so you can register your own services mid-chain without breaking the fluent flow — e.g. `builder.Services.AddSingleton<IKeyedRateLimiter, MyRedisLimiter>()` or a custom `IGuidGenerator`. There is also `EnsureRecurringQueue()` to create the recurring queue with defaults without a configure action (normally unnecessary — both the `default` and `recurring` queues are auto-created during service registration, in `RegisterQueueManager`, if not configured). The well-known queue names are the public constants `QueueNames.Default` (`"default"`) and `QueueNames.Recurring` (`"recurring"`).
+> The `EverTaskServiceBuilder` returned by `AddEverTask(...)` also exposes a public `.Services` property (the underlying `IServiceCollection`), so you can register your own services mid-chain without breaking the fluent flow, e.g. `builder.Services.AddSingleton<IKeyedRateLimiter, MyRedisLimiter>()` or a custom `IGuidGenerator`. There is also `EnsureRecurringQueue()` to create the recurring queue with defaults without a configure action (normally unnecessary: both the `default` and `recurring` queues are auto-created during service registration, in `RegisterQueueManager`, if not configured). The well-known queue names are the public constants `QueueNames.Default` (`"default"`) and `QueueNames.Recurring` (`"recurring"`).
 
 ### ConfigureDefaultQueue
 
@@ -582,7 +582,7 @@ ConfigureRecurringQueue(Action<QueueConfiguration> configure)
 
 ### EnsureRecurringQueue
 
-Creates the recurring queue with default settings **only if it doesn't already exist**. Normally unnecessary: both the `default` and `recurring` queues are auto-created during service registration (`RegisterQueueManager`). Use it only if you want to guarantee the recurring queue exists without supplying a configure action (it is idempotent — a no-op when the queue is already present).
+Creates the recurring queue with default settings **only if it doesn't already exist**. Normally unnecessary: both the `default` and `recurring` queues are auto-created during service registration (`RegisterQueueManager`). Use it only if you want to guarantee the recurring queue exists without supplying a configure action (it is idempotent: a no-op when the queue is already present).
 
 **Signature:**
 ```csharp
@@ -632,7 +632,7 @@ Keyed rate limiting (v3.7+) constrains how often tasks of a type execute **per k
 Configuration lives in three places:
 
 1. **Per-handler policy**: the `RateLimitPolicy` property on the handler declares the limit.
-2. **Key source**: the task implements `IRateLimitedTask`, or the handler overrides `GetRateLimitKey`. If the key is null/empty — or the key selector **throws** — the exception is caught, a warning is logged, and the task runs **ungated** (fail-open), never failing the task over a key-resolution error.
+2. **Key source**: the task implements `IRateLimitedTask`, or the handler overrides `GetRateLimitKey`. If the key is null/empty (or the key selector **throws**), the exception is caught, a warning is logged, and the task runs **ungated** (fail-open), never failing the task over a key-resolution error.
 3. **Global knobs**: `SetRateLimiterOptions` bounds the limiter infrastructure.
 
 ### RateLimitPolicy (per handler)
@@ -667,19 +667,19 @@ public class SyncTenantHandler : EverTaskHandler<SyncTenantTask>
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `Permits` | `int` | — (constructor, required) | Public get-only property set from the constructor: executions allowed per `Period`. Must be > 0 |
-| `Period` | `TimeSpan` | — (constructor, required) | Public get-only property set from the constructor: the rolling window for `Permits`. Must be > 0 |
+| `Permits` | `int` | n/a (constructor, required) | Public get-only property set from the constructor: executions allowed per `Period`. Must be > 0 |
+| `Period` | `TimeSpan` | n/a (constructor, required) | Public get-only property set from the constructor: the rolling window for `Permits`. Must be > 0 |
 | `Burst` | `int` | `Permits` | Burst tolerance (≥ 1). `1` = strict even spacing (`Period / Permits` between executions); `Permits` = the full budget can front-load |
 | `ThrottleRetries` | `bool` | `true` | Retry attempts re-acquire the key's budget through the gate (the re-acquire happens before the per-attempt timeout starts, so a budget wait never erodes it). This is **not** an inline wait between attempts: if the next free slot is far, the retry path stops the in-process retry loop and **re-parks the task to the scheduler**; it fires again via redelivery, and the **retry attempt numbering restarts** from the redelivered execution. `false` lets retries run without re-acquiring budget. |
-| `StartEmpty` | `bool` | `false` | When `false` (default), a fresh bucket starts **full** — the entire burst is available immediately (a restart can front-load up to `Burst` executions). Set to `true` to start at the steady rate from the first execution, capping the post-restart burst |
+| `StartEmpty` | `bool` | `false` | When `false` (default), a fresh bucket starts **full**: the entire burst is available immediately (a restart can front-load up to `Burst` executions). Set to `true` to start at the steady rate from the first execution, capping the post-restart burst |
 | `MaxReservationHorizon` | `TimeSpan` | `1 hour` | Slots farther than this are never parked: terminal rejection (one-shot → `Failed` + `OnError`; recurring → occurrence skipped) |
-| `MaxInSlotWait` | `TimeSpan` | `1 second` | **No-op — retained for binary compatibility only.** The gate no longer waits inline on the consumer: every over-budget task (near or far slot) is re-parked to the scheduler and fires at its reserved slot via redelivery. An inline wait would head-of-line-block the single consumer (including unthrottled tasks behind it). |
+| `MaxInSlotWait` | `TimeSpan` | `1 second` | **No-op, retained for binary compatibility only.** The gate no longer waits inline on the consumer: every over-budget task (near or far slot) is re-parked to the scheduler and fires at its reserved slot via redelivery. An inline wait would head-of-line-block the single consumer (including unthrottled tasks behind it). |
 | `OverflowBehavior` | `RateLimitOverflowBehavior` | `WaitForCapacity` | `WaitForCapacity` defers over-budget tasks to their reserved slot; `Discard` terminally rejects them (one-shot → `Failed` + `OnError`; recurring → occurrence skipped) |
 
 **Notes:**
 - The policy is read **once per handler type** (first-wins cache); changing it requires a restart.
 - A policy without a key (see below) logs a warning once per task type and executes **ungated** (fail-safe).
-- **Limiter outage fails open.** If the `IKeyedRateLimiter` itself **throws** while acquiring budget (most relevant for a custom/distributed implementation — e.g. Redis unreachable), the gate logs a warning and lets the task execute **unthrottled** rather than failing it (the never-lose-a-task contract). The same fail-open applies when `MaxTrackedKeys` overflows. Only `OperationCanceledException` (service shutdown) propagates, leaving the task in a recoverable status for next-startup recovery.
+- **Limiter outage fails open.** If the `IKeyedRateLimiter` itself **throws** while acquiring budget (most relevant for a custom/distributed implementation, e.g. Redis unreachable), the gate logs a warning and lets the task execute **unthrottled** rather than failing it (the never-lose-a-task contract). The same fail-open applies when `MaxTrackedKeys` overflows. Only `OperationCanceledException` (service shutdown) propagates, leaving the task in a recoverable status for next-startup recovery.
 
 ### Rate-Limit Key Source
 
@@ -965,7 +965,7 @@ Sets the minimum log level for database persistence. Logs below this level are n
 **Note:** This only affects database persistence. ILogger receives all log levels regardless of this setting.
 
 #### SetMaxLogsPerTask(int? maxLogs)
-Sets the maximum number of logs to persist per task execution. Once this limit is reached, additional logs are not persisted (but still forwarded to ILogger) — except for a single appended **truncation marker** record noting that logs were dropped.
+Sets the maximum number of logs to persist per task execution. Once this limit is reached, additional logs are not persisted (but still forwarded to ILogger), except for a single appended **truncation marker** record noting that logs were dropped.
 
 **Parameters:**
 - `maxLogs` (int?): Maximum logs to persist. `null` = unlimited (not recommended for production)
@@ -1004,7 +1004,7 @@ AddMonitoringApi(Action<EverTaskApiOptions> configure)
 ```
 
 For apps that don't use the EverTask builder chain, there is an `IServiceCollection` variant:
-`services.AddEverTaskMonitoringApiStandalone(Action<EverTaskApiOptions>? configure = null)` — it does
+`services.AddEverTaskMonitoringApiStandalone(Action<EverTaskApiOptions>? configure = null)`: it does
 not auto-register SignalR monitoring and requires you to register `ITaskStorage` yourself.
 
 **Parameters:**
@@ -1081,7 +1081,7 @@ not auto-register SignalR monitoring and requires you to register `ITaskStorage`
 | `JwtIssuer` | `string` | `"EverTask.Monitor.Api"` | JWT issuer claim |
 | `JwtAudience` | `string` | `"EverTask.Monitor.Api"` | JWT audience claim |
 | `JwtExpirationHours` | `int` | `8` | JWT token TTL in hours |
-| `EnableCors` | `bool` | `true` | **Registers** a named CORS policy (`EverTaskMonitoringApi`); EverTask does NOT apply it — your app must (`app.UseCors(...)`). See note below |
+| `EnableCors` | `bool` | `true` | **Registers** a named CORS policy (`EverTaskMonitoringApi`); EverTask does NOT apply it: your app must (`app.UseCors(...)`). See note below |
 | `CorsAllowedOrigins` | `string[]` | `[]` | Origins for the registered policy (empty = allow-any). Only effective once the policy is actually applied |
 | `AllowedIpAddresses` | `string[]` | `[]` | IP address whitelist (empty = allow all IPs). Supports IPv4, IPv6, and CIDR notation |
 | `MagicLinkToken` | `string?` | `null` | Static token for magic link authentication. When set, enables instant access via `/api/auth/magic?token=...` |
@@ -1234,7 +1234,7 @@ options.EnableCors = true;
 options.EnableCors = false;
 ```
 
-> ⚠ **Important:** EverTask only *registers* this policy — it does **not** apply it (`MapEverTaskApi`/the startup filter never call `UseCors` or `RequireCors`). For cross-origin requests to actually be permitted, your application must apply the policy itself, e.g. `app.UseCors("EverTaskMonitoringApi")` in the pipeline. With API and dashboard on the same origin (the default embedded-UI setup) no CORS is needed.
+> ⚠ **Important:** EverTask only *registers* this policy; it does **not** apply it (`MapEverTaskApi`/the startup filter never call `UseCors` or `RequireCors`). For cross-origin requests to actually be permitted, your application must apply the policy itself, e.g. `app.UseCors("EverTaskMonitoringApi")` in the pipeline. With API and dashboard on the same origin (the default embedded-UI setup) no CORS is needed.
 
 **Notes:**
 - Relevant when the dashboard/frontend is hosted on a different origin from the API
@@ -1366,7 +1366,7 @@ Once configured, the monitoring API exposes REST endpoints for querying tasks an
 - `GET /dashboard/overview` - Dashboard statistics
 - `GET /queues` - Queue metrics
 - `GET /statistics/success-rate-trend` - Success rate trends
-- `GET /rate-limits` - Keyed rate-limit state (per-key parked count, next slot, tracked keys, fail-open count — in-memory, single-node)
+- `GET /rate-limits` - Keyed rate-limit state (per-key parked count, next slot, tracked keys, fail-open count; in-memory, single-node)
 
 See [Monitoring Dashboard](monitoring-dashboard.md) for complete API documentation.
 
@@ -1399,7 +1399,7 @@ app.Run();
 - Maps all API controllers
 - Serves embedded dashboard (if `EnableUI` is true)
 
-> `MapEverTaskApi()` does **not** wire JWT authentication middleware or apply a CORS policy. The JWT middleware is wired automatically by `AddMonitoringApi()` (via an `IStartupFilter`); the CORS policy is only **registered** by `AddMonitoringApi()` (`AddCors`) and is **not applied** — if you need it enforced, call `app.UseCors("EverTaskMonitoringApi")` yourself. No manual `UseEverTaskApiMiddleware()` call is needed (that method is obsolete).
+> `MapEverTaskApi()` does **not** wire JWT authentication middleware or apply a CORS policy. The JWT middleware is wired automatically by `AddMonitoringApi()` (via an `IStartupFilter`); the CORS policy is only **registered** by `AddMonitoringApi()` (`AddCors`) and is **not applied**: if you need it enforced, call `app.UseCors("EverTaskMonitoringApi")` yourself. No manual `UseEverTaskApiMiddleware()` call is needed (that method is obsolete).
 
 **Important Notes:**
 - The monitoring API handles SignalR setup completely autonomously:
@@ -1485,7 +1485,7 @@ app.MapEverTaskMonitorHub("/custom/hub", hub =>     // custom route + SignalR hu
 
 **Important Notes:**
 
-- **Hub Route**: When mapped by `MapEverTaskApi()` the route is **fixed** at `EverTaskApiOptions.SignalRHubPath` (`/evertask-monitoring/hub`, read-only). In **standalone** mode the route is **configurable** — `MapEverTaskMonitorHub(pattern)` accepts any pattern (defaulting to `/evertask-monitoring/hub`); if you choose a custom pattern, point your client at the same path.
+- **Hub Route**: When mapped by `MapEverTaskApi()` the route is **fixed** at `EverTaskApiOptions.SignalRHubPath` (`/evertask-monitoring/hub`, read-only). In **standalone** mode the route is **configurable**: `MapEverTaskMonitorHub(pattern)` accepts any pattern (defaulting to `/evertask-monitoring/hub`); if you choose a custom pattern, point your client at the same path.
 - **Log Streaming**: Execution logs are always available via ILogger and database persistence (if enabled)
 - **Performance Impact**: Enabling `IncludeExecutionLogs` significantly increases SignalR message size and network bandwidth
 - **Use Case**: Enable only when you need real-time log streaming to monitoring dashboards
@@ -1554,7 +1554,7 @@ connection.start()
 
 // Note: there are only two configurable options (SchemaName, AutoApplyMigrations).
 // DbContext pooling (via AddPooledDbContextFactory) and the status-update stored
-// procedures are always on — baked into the provider/migrations, not user-toggleable.
+// procedures are always on: baked into the provider/migrations, not user-toggleable.
 ```
 
 **Manual Migrations:**
@@ -1670,7 +1670,7 @@ PRAGMA temp_store=MEMORY;
 
 // Note: there are only two configurable options (SchemaName, AutoApplyMigrations).
 // DbContext pooling is always on. Status/run updates use single-statement data-modifying
-// CTEs (the Postgres analog of SQL Server's stored procedures) — versioned in C#, no DB objects.
+// CTEs (the Postgres analog of SQL Server's stored procedures): versioned in C#, no DB objects.
 ```
 
 **Connection String Examples:**
@@ -1696,7 +1696,7 @@ You can configure behavior at the handler level to override global defaults.
 
 ### Handler Properties
 
-The active handler-level settings (`Timeout`, `RetryPolicy`, `QueueName`, `RateLimitPolicy`) are `virtual` properties you override (expression-bodied / get-only — you don't assign them in a constructor). The obsolete `CpuBoundOperation` is the exception: a plain settable, non-virtual, no-op property (don't use it).
+The active handler-level settings (`Timeout`, `RetryPolicy`, `QueueName`, `RateLimitPolicy`) are `virtual` properties you override (expression-bodied / get-only: you don't assign them in a constructor). The obsolete `CpuBoundOperation` is the exception: a plain settable, non-virtual, no-op property (don't use it).
 
 ```csharp
 public class MyHandler : EverTaskHandler<MyTask>
@@ -1726,7 +1726,7 @@ public class MyHandler : EverTaskHandler<MyTask>
 - `RetryPolicy` (IRetryPolicy?): Handler-specific retry policy (falls back to queue, then global default)
 - `QueueName` (string?): Target queue for this handler. If the name is **not registered** (typo, or a queue you never added via `AddQueue`), routing logs a warning (`Queue '{name}' not found, falling back to 'default' queue`) and the task runs on the `default` queue; the per-queue retry/timeout resolution falls back to the `default` queue's config the same way, so an unknown name never throws and never silently drops the task.
 - `RateLimitPolicy` (RateLimitPolicy?): Per-key execution frequency constraint; the key comes from `IRateLimitedTask` on the task or a `GetRateLimitKey` override on the handler (see [Rate Limiting Configuration](#rate-limiting-configuration))
-- `CpuBoundOperation` (bool): **OBSOLETE — no effect.** Deprecated; EverTask's async execution is already non-blocking. For CPU-intensive synchronous work, use `Task.Run` inside `Handle`.
+- `CpuBoundOperation` (bool): **OBSOLETE, no effect.** Deprecated; EverTask's async execution is already non-blocking. For CPU-intensive synchronous work, use `Task.Run` inside `Handle`.
 
 **Overridable methods:**
 - `GetRateLimitKey(TTask task)`: derive the rate-limit bucket key from task data (e.g. `task.TenantId.ToString()`) without implementing `IRateLimitedTask`. Default reads `IRateLimitedTask.RateLimitKey`.
@@ -1739,7 +1739,7 @@ Every `ITaskDispatcher.Dispatch(...)` overload accepts these optional parameters
 | Parameter | Type | Default | Behavior |
 |-----------|------|---------|----------|
 | `auditLevel` | `AuditLevel?` | `null` → the global `SetDefaultAuditLevel` (default `Full`) | Per-dispatch override of the audit level for this task |
-| `taskKey` | `string?` | `null` (no deduplication) | Idempotency key (≤ 200 chars, stored-column length-limited). **Non-recurring**: `InProgress` → no-op; an **immediate one-shot whose delivery is already in flight** → no-op (returns existing id, before any status update); `Pending`/`Queued`/`WaitingQueue` → update; terminal (`Completed`/`Failed`/`Cancelled`/`ServiceStopped`) → remove + recreate. **Recurring**: `InProgress` → no-op; every other status incl. `Completed`/`Failed` → **update in place** (a recurring row is never "terminated"/replaced), preserving `NextRunUtc` + `CurrentRunCount` **only when `NextRunUtc.HasValue`** — an exhausted series (no stored next run) is recalculated instead of preserved; a re-dispatch with no recurring config (recurring→one-shot) is **discarded** to avoid destroying the schedule. Essential for idempotent recurring registration across restarts |
+| `taskKey` | `string?` | `null` (no deduplication) | Idempotency key (≤ 200 chars, stored-column length-limited). **Non-recurring**: `InProgress` → no-op; an **immediate one-shot whose delivery is already in flight** → no-op (returns existing id, before any status update); `Pending`/`Queued`/`WaitingQueue` → update; terminal (`Completed`/`Failed`/`Cancelled`/`ServiceStopped`) → remove + recreate. **Recurring**: `InProgress` → no-op; every other status incl. `Completed`/`Failed` → **update in place** (a recurring row is never "terminated"/replaced), preserving `NextRunUtc` + `CurrentRunCount` **only when `NextRunUtc.HasValue`**: an exhausted series (no stored next run) is recalculated instead of preserved; a re-dispatch with no recurring config (recurring to one-shot) is **discarded** to avoid destroying the schedule. Essential for idempotent recurring registration across restarts |
 | `cancellationToken` | `CancellationToken` | `default` | Cancels the **dispatch operation** (e.g. a blocking enqueue on a full `Wait` queue), not the task's execution |
 
 The scheduling discriminator (`TimeSpan` delay, `DateTimeOffset` time, or `Action<IRecurringTaskBuilder>`) is a positional argument that selects the overload.
@@ -1749,14 +1749,14 @@ The scheduling discriminator (`TimeSpan` delay, `DateTimeOffset` time, or `Actio
 The `Action<IRecurringTaskBuilder>` overload of `Dispatch` configures a recurring schedule via a fluent builder (`src/EverTask.Abstractions/IRecurringTaskBuilder.cs`). All times are **UTC**. Full feature docs: [Recurring Tasks](recurring-tasks.md).
 
 **Entry / first run:**
-- `Schedule()` — pure recurring, no initial one-off run.
-- `RunNow()` / `RunDelayed(TimeSpan)` / `RunAt(DateTimeOffset)` → `.Then()` — run once first (now / after a delay / at a time), then follow the recurring schedule.
+- `Schedule()`: pure recurring, no initial one-off run.
+- `RunNow()` / `RunDelayed(TimeSpan)` / `RunAt(DateTimeOffset)` → `.Then()`: run once first (now / after a delay / at a time), then follow the recurring schedule.
 
 **Interval:**
 - `Every(int n)` followed by `.Seconds()` / `.Minutes()` / `.Hours()` / `.Days()` / `.Weeks()` / `.Months()`.
 - `EverySecond()` / `EveryMinute()` / `EveryHour()` / `EveryDay()` / `EveryWeek()` / `EveryMonth()`.
-- `OnHours()` — every hour (1-hour interval; refine with `.AtMinute(...)`).
-- `OnDays(params DayOfWeek[])` — specific weekdays; `OnMonths(params int[])` — specific months.
+- `OnHours()`: every hour (1-hour interval; refine with `.AtMinute(...)`).
+- `OnDays(params DayOfWeek[])`: specific weekdays; `OnMonths(params int[])`: specific months.
 
 **Refinement:**
 - Hour → `.AtMinute(0–59)`; minute → `.AtSecond(0–59)`.
@@ -1764,7 +1764,7 @@ The `Action<IRecurringTaskBuilder>` overload of `Dispatch` configures a recurrin
 - Week → `.OnDay(DayOfWeek)` / `.OnDays(params DayOfWeek[])` → then `.AtTime(...)`.
 - Month → `.OnDay(1–31)` / `.OnDays(params int[])` / `.OnFirst(DayOfWeek)` → then `.AtTime(...)`.
 
-**Cron:** `UseCron("expr")` — 5-field (`min hour dom month dow`) or 6-field (with seconds), via Cronos. **Overrides** every other interval call; invalid expressions throw `ArgumentException` on the first schedule calculation.
+**Cron:** `UseCron("expr")`: 5-field (`min hour dom month dow`) or 6-field (with seconds), via Cronos. **Overrides** every other interval call; invalid expressions throw `ArgumentException` on the first schedule calculation.
 
 **Limits:** `.RunUntil(DateTimeOffset)` (must be future) and `.MaxRuns(int)` (counts real executions only; occurrences skipped to realign after downtime do not consume the budget). Stops at whichever is reached first.
 
@@ -1936,7 +1936,7 @@ What EverTask actually checks at startup:
 
 **Warnings:**
 - **Global** `MaxDegreeOfParallelism == 1`: a startup warning is logged (a single consumer is usually a bad idea in production); the value is honored as-is
-- **Per-queue** `MaxDegreeOfParallelism < 1`: clamped to **1 consumer** at startup with a warning (prevents a zero-consumer deadlock) — never treated as "unlimited". (The per-queue path clamps `< 1`; the global-level warning fires specifically at `== 1`.)
+- **Per-queue** `MaxDegreeOfParallelism < 1`: clamped to **1 consumer** at startup with a warning (prevents a zero-consumer deadlock), never treated as "unlimited". (The per-queue path clamps `< 1`; the global-level warning fires specifically at `== 1`.)
 
 **Behaviors to be aware of (no error raised):**
 - Re-adding a queue with an existing name silently **replaces** the previous configuration

@@ -1,8 +1,8 @@
-# 07 — Monitoring & logging
+# 07: Monitoring & logging
 
 Three monitoring tiers (pick by need) + Serilog + persistent DB logs.
 
-## Tier 1 — In-code event subscription (no extra package)
+## Tier 1: In-code event subscription (no extra package)
 
 Subscribe to the worker executor's event in a singleton service:
 
@@ -25,13 +25,13 @@ public class TaskMonitoringService
 
 `EverTaskEventData(Guid TaskId, DateTimeOffset EventDateUtc, string Severity, string TaskType,
 string TaskHandlerType, string TaskParameters, string Message, string? Exception = null,
-IReadOnlyList<TaskExecutionLog>? ExecutionLogs = null)` — positional record; `Severity` is a string
+IReadOnlyList<TaskExecutionLog>? ExecutionLogs = null)`: positional record; `Severity` is a string
 (compare with `nameof(SeverityLevel.Error)` etc.). Events: Started/Completed/Failed/Cancelled/
 Timeout/RecurringScheduled + rate-limit deferred/fail-open/rejected. Handler is
 `Func<EverTaskEventData, Task>`; keep it fast (fire-and-forget slow work). Monitoring failures
 never block task execution.
 
-## Tier 2 — SignalR events — `EverTask.Monitor.AspnetCore.SignalR`
+## Tier 2: SignalR events (`EverTask.Monitor.AspnetCore.SignalR`)
 
 Four overloads (all on `EverTaskServiceBuilder`, all return it):
 
@@ -62,7 +62,7 @@ await c.start();
 
 Multi-server: add a backplane (`AddSignalR().AddAzureSignalR(...)` or `.AddStackExchangeRedis(...)`).
 
-## Tier 3 — Dashboard + REST API — `EverTask.Monitor.Api`
+## Tier 3: Dashboard + REST API (`EverTask.Monitor.Api`)
 
 Full embedded React dashboard + REST API; auto-registers SignalR. **ASP.NET Core only.**
 
@@ -90,31 +90,31 @@ Full embedded React dashboard + REST API; auto-registers SignalR. **ASP.NET Core
 an optional `Action<HttpConnectionDispatcherOptions>` to tune the SignalR hub connection.
 
 > ⚠ **CORS is registered but NOT applied.** `EnableCors = true` only **registers** a named CORS policy
-> (`EverTaskMonitoringApi`) — EverTask's pipeline never calls `UseCors`/`RequireCors`, so the policy has
+> (`EverTaskMonitoringApi`); EverTask's pipeline never calls `UseCors`/`RequireCors`, so the policy has
 > no effect until **you** apply it in your app (e.g. `app.UseCors("EverTaskMonitoringApi")`). Setting
 > `CorsAllowedOrigins` alone does nothing for the monitoring endpoints. (`BasePath`, `ApiBasePath`,
-> `UIBasePath`, `SignalRHubPath` are read-only computed properties — don't try to set them.)
+> `UIBasePath`, `SignalRHubPath` are read-only computed properties; don't try to set them.)
 
 Fixed paths: dashboard `/evertask-monitoring`, API `/evertask-monitoring/api`, hub
 `/evertask-monitoring/hub`. Auth is a custom JWT middleware (IP whitelist first → JWT via
 `Authorization: Bearer` or `?access_token=`). Login: `POST /evertask-monitoring/api/auth/login`
-`{username,password}`. Default creds `admin`/`admin` — **always change in production.** Magic link
+`{username,password}`. Default creds `admin`/`admin`: **always change in production.** Magic link
 when `MagicLinkToken` set: `GET .../api/auth/magic?token=...`.
 
 REST endpoints (under `/evertask-monitoring/api`): `GET /tasks` (filter status/queue/type/date,
 paged ≤100), `/tasks/{id}` (+ `/status-audit`, `/runs-audit`, `/execution-logs`),
 `/dashboard/overview`, `/dashboard/recent-activity`, `/queues`, `/queues/{name}/tasks`,
 `/statistics/{success-rate-trend|task-types|execution-times}`, `/rate-limits` (per-key parked count,
-next slot, tracked keys, fail-open count — in-memory, single-node), `/config` (no auth).
+next slot, tracked keys, fail-open count; in-memory, single-node), `/config` (no auth).
 
-Standalone (no `EverTaskServiceBuilder`): `services.AddEverTaskMonitoringApiStandalone(...)` —
+Standalone (no `EverTaskServiceBuilder`): `services.AddEverTaskMonitoringApiStandalone(...)`;
 then you must register `ITaskStorage` yourself. It does **not** auto-register SignalR monitoring,
 and there is no `IServiceCollection` overload of `AddSignalRMonitoring` (that method exists only on
 `EverTaskServiceBuilder`). `MapEverTaskApi()` still maps the hub endpoint, but without the monitor
 subscription no live events are pushed; for live dashboard updates use
 `AddEverTask(...).AddMonitoringApi(...)`.
 
-## Serilog — `EverTask.Logging.Serilog`
+## Serilog (`EverTask.Logging.Serilog`)
 
 Replaces EverTask's internal `IEverTaskLogger<T>` with a **dedicated** Serilog pipeline (separate
 from the host's `ILogger`).

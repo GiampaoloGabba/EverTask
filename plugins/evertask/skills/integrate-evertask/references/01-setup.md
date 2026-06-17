@@ -1,4 +1,4 @@
-# 01 — Setup & DI configuration
+# 01: Setup & DI configuration
 
 The entry point and every option. Defaults are auto-sized and good; set an option only when
 the user has a concrete reason.
@@ -6,7 +6,7 @@ the user has a concrete reason.
 ## Entry point
 
 ```csharp
-// IServiceCollection extension — returns EverTaskServiceBuilder for chaining
+// IServiceCollection extension: returns EverTaskServiceBuilder for chaining
 public static EverTaskServiceBuilder AddEverTask(
     this IServiceCollection services,
     Action<EverTaskServiceConfiguration>? configure = null)
@@ -24,7 +24,7 @@ builder.Services.AddEverTask(opt =>
     .AddMemoryStorage();
 ```
 
-## `EverTaskServiceConfiguration` — every option
+## `EverTaskServiceConfiguration`: every option
 
 ### Required: assembly registration
 
@@ -37,9 +37,9 @@ builder.Services.AddEverTask(opt =>
 
 | Method | Default | Notes |
 |---|---|---|
-| `SetMaxDegreeOfParallelism(int)` | `Math.Max(4, ProcessorCount*2)` (≈16 on 8-core) | Concurrent workers on the **default** queue. `1` logs a startup warning; any value `< 1` is clamped to 1 consumer (with a warning) — there is no "unlimited" mode. |
+| `SetMaxDegreeOfParallelism(int)` | `Math.Max(4, ProcessorCount*2)` (≈16 on 8-core) | Concurrent workers on the **default** queue. `1` logs a startup warning; any value `< 1` is clamped to 1 consumer (with a warning); there is no "unlimited" mode. |
 | `SetChannelOptions(int capacity)` | `Math.Max(1000, ProcessorCount*200)` (≈1600 on 8-core) | Bounded channel capacity for the default queue; full-mode stays `Wait`. |
-| `SetChannelOptions(BoundedChannelOptions)` | as above, `FullMode=Wait` | Full replacement (FullMode, SingleReader/Writer, AllowSynchronousContinuations). **Keep `FullMode=Wait`** — `Drop*` modes bypass the `QueueFull` signal/backpressure (a dropped item is reverted to `WaitingQueue` and recovered at startup, but won't run in-process). |
+| `SetChannelOptions(BoundedChannelOptions)` | as above, `FullMode=Wait` | Full replacement (FullMode, SingleReader/Writer, AllowSynchronousContinuations). **Keep `FullMode=Wait`**: `Drop*` modes bypass the `QueueFull` signal/backpressure (a dropped item is reverted to `WaitingQueue` and recovered at startup, but won't run in-process). |
 
 Guidance: CPU-bound → `ProcessorCount`; I/O-bound → `ProcessorCount × 2–4`. Capacity: low 500–1000,
 moderate 2000–5000, high 10000+.
@@ -63,11 +63,11 @@ moderate 2000–5000, high 10000+.
 | Method | Default | Notes |
 |---|---|---|
 | `SetUseLazyHandlerResolution(bool)` | `true` | Adaptive: immediate / recurring ≥5min / delayed ≥30min use lazy mode; shorter intervals eager. |
-| `DisableLazyHandlerResolution()` | — | Convenience for `SetUseLazyHandlerResolution(false)`. |
+| `DisableLazyHandlerResolution()` | (n/a) | Convenience for `SetUseLazyHandlerResolution(false)`. |
 
 ### Persistent logger (handler logs → DB)
 
-`WithPersistentLogger(Action<PersistentLoggerOptions>)` — auto-enables DB persistence; logs are
+`WithPersistentLogger(Action<PersistentLoggerOptions>)` auto-enables DB persistence; logs are
 always also forwarded to `ILogger`.
 
 | `PersistentLoggerOptions` | Default | Notes |
@@ -79,7 +79,7 @@ Pair with `AddAuditCleanup(...)` (see `03-storage.md`) to bound table growth.
 
 ### Sharded scheduler (high scheduling load only)
 
-`UseShardedScheduler(int shardCount = 0)` — `0` auto-scales to `Math.Max(4, ProcessorCount)`.
+`UseShardedScheduler(int shardCount = 0)`: `0` auto-scales to `Math.Max(4, ProcessorCount)`.
 Use only when sustained `Schedule()` rate is very high (>~10k/sec) or 100k+ tasks scheduled at
 once, and profiling shows scheduler lock contention. Does **not** raise execution throughput.
 See `06-rate-limiting-queues.md`.
@@ -95,22 +95,22 @@ See `06-rate-limiting-queues.md`.
 | `MaxKeyLength` | `256` | Longer keys are SHA-256 hashed. |
 | `EmitDeferralEvents` | `true` | Aggregated deferral monitoring events. |
 
-## `EverTaskServiceBuilder` — chaining (post-`AddEverTask`)
+## `EverTaskServiceBuilder`: chaining (post-`AddEverTask`)
 
 ```csharp
 .ConfigureDefaultQueue(Action<QueueConfiguration>)   // tune the auto-created "default" queue
 .AddQueue(string name, Action<QueueConfiguration>?)  // create a named queue
 .ConfigureRecurringQueue(Action<QueueConfiguration>) // tune the auto-created "recurring" queue
 .EnsureRecurringQueue()                              // idempotently create the recurring queue
-.Services                                            // escape hatch: the underlying IServiceCollection — register your own singletons mid-chain (e.g. a TaskMonitoringService, a custom IKeyedRateLimiter, IGuidGenerator)
+.Services                                            // escape hatch: the underlying IServiceCollection; register your own singletons mid-chain (e.g. a TaskMonitoringService, a custom IKeyedRateLimiter, IGuidGenerator)
 // + storage / logging / monitoring extension methods (see their reference files)
 ```
 
 Well-known names: `QueueNames.Default = "default"` (always created), `QueueNames.Recurring = "recurring"`
-(both auto-created during service registration — `RegisterQueueManager` — if not configured). Full
+(both auto-created during service registration, via `RegisterQueueManager`, if not configured). Full
 queue semantics in `06-rate-limiting-queues.md`.
 
-## Fully-loaded example (every knob — copy only what is needed)
+## Fully-loaded example (every knob; copy only what is needed)
 
 ```csharp
 var everTask = builder.Services.AddEverTask(opt => opt
@@ -136,7 +136,7 @@ builder.Services.AddAuditCleanup(
     AuditRetentionPolicy.WithErrorPriority(successRetentionDays: 30, errorRetentionDays: 90),
     cleanupIntervalHours: 24);
 
-// Web apps only — after builder.Build():
+// Web apps only, after builder.Build():
 app.MapEverTaskApi();
 ```
 
@@ -146,5 +146,5 @@ app.MapEverTaskApi();
 - Workload type → `MaxDegreeOfParallelism`; expected burst size → channel capacity.
 - Need retry/timeout tuning, rate limiting, multi-queue, monitoring, Serilog, persistent logs?
   Each maps to a reference file; wire only what's chosen.
-- Throw on persistence failure (default true) — flip to false only for best-effort/test.
+- Throw on persistence failure (default true): flip to false only for best-effort/test.
 - High `Schedule()` rate → sharded scheduler (rare).

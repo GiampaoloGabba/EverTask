@@ -1,4 +1,4 @@
-# Template — task records + handlers
+# Template: task records + handlers
 
 Tasks are `record … : IEverTask` with **public properties only, IDs not entities**
 (validate against `references/08-payload-contract.md`). Handlers use **primary constructors** for DI.
@@ -89,7 +89,7 @@ public class SyncTenantDataHandler(IExternalApi api) : EverTaskHandler<SyncTenan
 }
 ```
 
-## Polymorphic payload (when a property must hold a base/interface type — avoids ET0004)
+## Polymorphic payload (when a property must hold a base/interface type, avoids ET0004)
 
 ```csharp
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "$kind")]

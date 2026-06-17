@@ -1,4 +1,4 @@
-# Template — idempotent recurring-task registrar
+# Template: idempotent recurring-task registrar
 
 Register recurring tasks at startup with a stable `taskKey` so app restarts update (not duplicate)
 them. Use a hosted service. Works in both web apps and worker services.
@@ -14,7 +14,7 @@ public sealed class RecurringTasksRegistrar(ITaskDispatcher dispatcher) : IHoste
             r => r.Schedule().EveryDay().AtTime(new TimeOnly(3, 0)),
             taskKey: "daily-cleanup");
 
-        // Every 5 minutes — high frequency → minimal audit
+        // Every 5 minutes, high frequency → minimal audit
         await dispatcher.Dispatch(
             new HealthCheckTask(),
             r => r.Schedule().Every(5).Minutes(),
@@ -41,6 +41,6 @@ builder.Services.AddHostedService<RecurringTasksRegistrar>();
 Notes:
 - `taskKey` ≤ 200 chars, case-sensitive. Per-entity: `taskKey: $"report-{userId}"`.
 - Re-dispatch with the same key + new schedule updates a Pending/Queued task in place.
-- All times are UTC — convert local times before `AtTime`/`RunAt`.
+- All times are UTC: convert local times before `AtTime`/`RunAt`.
 - `UseCron(...)` overrides every other interval call; never combine them.
-- Skipped occurrences after downtime are logged only — they don't count against `MaxRuns`.
+- Skipped occurrences after downtime are logged only: they don't count against `MaxRuns`.

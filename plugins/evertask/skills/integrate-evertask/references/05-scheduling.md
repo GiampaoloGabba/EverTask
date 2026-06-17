@@ -1,4 +1,4 @@
-# 05 — Scheduling: delayed, scheduled, recurring
+# 05: Scheduling: delayed, scheduled, recurring
 
 All schedules execute in **UTC**. Convert local times before passing to `AtTime`/`RunAt`.
 
@@ -9,7 +9,7 @@ await dispatcher.Dispatch(task, TimeSpan.FromMinutes(30));            // relativ
 await dispatcher.Dispatch(task, new DateTimeOffset(2026,1,1,9,0,0, TimeSpan.Zero)); // absolute (past → immediate)
 ```
 
-## Recurring — fluent builder
+## Recurring: fluent builder
 
 ```csharp
 await dispatcher.Dispatch(task, r => r.Schedule().EveryDay().AtTime(new TimeOnly(3,0)), taskKey: "daily-cleanup");
@@ -30,7 +30,7 @@ await dispatcher.Dispatch(task, r => r.Schedule().EveryDay().AtTime(new TimeOnly
 
 | Call | Meaning |
 |---|---|
-| `UseCron("expr")` | cron (see below). **Overrides all other interval calls — never combine.** |
+| `UseCron("expr")` | cron (see below). **Overrides all other interval calls; never combine.** |
 | `Every(n).Seconds()/.Minutes()/.Hours()/.Days()/.Weeks()/.Months()` | every N units |
 | `EverySecond()/EveryMinute()/EveryHour()/EveryDay()/EveryWeek()/EveryMonth()` | every 1 unit |
 | `OnHours()` | every hour (1-hour interval; refine with `.AtMinute(...)`) |
@@ -48,7 +48,7 @@ Terminal limits (chainable at most endpoints): `.RunUntil(DateTimeOffset)` (must
 `.MaxRuns(int)` (counts real executions only). Both → stops at whichever comes first.
 
 > ⚠️ **Docs-vs-code gotchas:** `OnLast(DayOfWeek)` appears in the docs but is **not implemented**
-> (only `OnFirst` exists). `GetAllRecurringTasksAsync` in best-practices docs is illustrative —
+> (only `OnFirst` exists). `GetAllRecurringTasksAsync` in best-practices docs is illustrative:
 > the real query is `ITaskStorage.Get(t => t.IsRecurring)`.
 
 ### Examples
@@ -67,7 +67,7 @@ r => r.Schedule().EveryDay().RunUntil(trialEndDate)                    // until 
 ## Cron
 
 Library: **Cronos**. 5-field standard (`min hour dom month dow`) or 6-field with seconds
-(`sec min hour dom month dow`) — auto-detected by field count; an invalid expression throws
+(`sec min hour dom month dow`), auto-detected by field count; an invalid expression throws
 `ArgumentException` on the first schedule calculation (or explicit `Validate()`), not at the
 `UseCron(...)` call itself (parsing is lazy). Supports `*`, `*/n`, `n-m`, `n,m`, and Cronos `?`. DOW 0–6 (Sun=0).
 
@@ -83,8 +83,8 @@ Use the fluent API for simple readable patterns; cron for multi-constraint windo
 ## Idempotent registration (essential for recurring)
 
 Register recurring tasks at startup with a stable `taskKey` so restarts don't duplicate them.
-Behavior by existing status is in `02-tasks-and-handlers.md` (#taskKey). Use an `IHostedService`
-— see `templates/RecurringRegistrar.md`.
+Behavior by existing status is in `02-tasks-and-handlers.md` (#taskKey). Use an `IHostedService`;
+see `templates/RecurringRegistrar.md`.
 
 ```csharp
 await dispatcher.Dispatch(new DailyCleanupTask(),
@@ -102,10 +102,10 @@ Per-entity keys: `taskKey: $"report-{userId}"` or `"tenant-{tenantId}:billing"`.
 ## Schedule-drift behavior
 
 Next run is computed from the **scheduled** time, not actual execution time, so late runs don't
-drift forward. After downtime, missed occurrences are **skipped** (logged only — they do NOT count
+drift forward. After downtime, missed occurrences are **skipped** (logged only; they do NOT count
 against `MaxRuns` and produce no audit rows); the schedule resumes at the next valid future slot
 (no catch-up storm). For calendar schedules (`OnDays`, monthly, etc.) the resume point walks to the
-next *real* occurrence on the grid — e.g. an `OnDays(Mon,Wed,Fri)` task always lands on a listed
+next *real* occurrence on the grid, e.g. an `OnDays(Mon,Wed,Fri)` task always lands on a listed
 day, never an arbitrary interval-arithmetic slot.
 
 ## Wizard decision points

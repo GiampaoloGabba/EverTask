@@ -134,7 +134,7 @@ Rules and behavior:
 dispatch → queue → consumer dequeues → rate-limit gate:
   ├─ budget available  → execute now
   └─ otherwise → reserve the slot, re-park into the in-memory scheduler
-                 (near or far slot alike — the consumer never waits inline, so it stays
+                 (near or far slot alike: the consumer never waits inline, so it stays
                   free for the next item; lazy, no handler pinned; storage untouched, status stays Queued)
 slot fires → task re-enters the queue (the usual SetQueued write) → gate redeems the
              reservation → executes
@@ -226,13 +226,13 @@ public override RateLimitPolicy? RateLimitPolicy =>
 
 | Option | Default | What it does |
 |---|---|---|
-| `Permits` / `Period` | — (constructor) | The average rate: at most `Permits` executions per `Period` per key. Steady emission interval = `Period / Permits`. |
+| `Permits` / `Period` | none (constructor) | The average rate: at most `Permits` executions per `Period` per key. Steady emission interval = `Period / Permits`. |
 | `Burst` | same value as `Permits` | Cap on the budget a key can save up while idle = max executions that may run back-to-back after a quiet stretch. `Permits` (default): the whole per-period budget can be spent at once; `1`: strictly even spacing, never two in a row. Does not change the average rate, only how bunched executions may be. |
 | `ThrottleRetries` | `true` | Retry attempts re-acquire budget before running, so retries of a rate-limited API call respect the same limit. `false`: retries bypass the limiter. |
 | `StartEmpty` | `false` | Budget of a brand-new bucket (first time a key is seen, or any key after a restart, since the limiter is in-memory). `false`: starts with the full `Burst` saved up, so the first `Burst` tasks run immediately. `true`: starts with nothing saved, so after the first task the steady pacing applies right away; this caps the post-restart spike. |
 | `MaxReservationHorizon` | 1 hour | If the next available slot for a key is farther away than this, the task is rejected instead of parked: one-shot tasks fail with `RateLimitRejectedException` (delivered to `OnError`), recurring occurrences are skipped. |
-| `MaxInSlotWait` | 1 second | **No-op — retained for binary compatibility only.** The gate never waits inline on the consumer; every over-budget task (near or far slot) is re-parked to the scheduler and fires at its reserved slot via redelivery. |
-| `OverflowBehavior` | `WaitForCapacity` | What happens when a key has no budget: `WaitForCapacity` reserves a slot and defers; `Discard` rejects immediately — one-shot tasks fail (terminal `Failed`, typed exception to `OnError`), recurring occurrences are skipped (series continues, no callback). |
+| `MaxInSlotWait` | 1 second | **No-op, retained for binary compatibility only.** The gate never waits inline on the consumer; every over-budget task (near or far slot) is re-parked to the scheduler and fires at its reserved slot via redelivery. |
+| `OverflowBehavior` | `WaitForCapacity` | What happens when a key has no budget: `WaitForCapacity` reserves a slot and defers; `Discard` rejects immediately: one-shot tasks fail (terminal `Failed`, typed exception to `OnError`), recurring occurrences are skipped (series continues, no callback). |
 
 Global infrastructure knobs:
 

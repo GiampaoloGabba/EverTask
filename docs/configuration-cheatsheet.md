@@ -25,8 +25,8 @@ Every EverTask configuration option at a glance: one row per option with its def
 | `SetUseLazyHandlerResolution` | `bool` | `true` (adaptive) | `DisableLazyHandlerResolution()` to opt out |
 | `WithPersistentLogger` | `Action<PersistentLoggerOptions>` | Disabled | Persists handler logs to DB; logs ALWAYS go to ILogger regardless |
 | `SetRateLimiterOptions` | `Action<RateLimiterOptions>` | See below | Keyed rate limiter global knobs (v3.7+) |
-| `RegisterTasksFromAssembly` | `Assembly` | — | Scan one assembly for handlers (required) |
-| `RegisterTasksFromAssemblies` | `params Assembly[]` | — | Scan multiple assemblies |
+| `RegisterTasksFromAssembly` | `Assembly` | n/a | Scan one assembly for handlers (required) |
+| `RegisterTasksFromAssemblies` | `params Assembly[]` | n/a | Scan multiple assemblies |
 
 > **Audit / execution-log retention** is not a builder method: register it with `services.AddAuditCleanup(policy, cleanupIntervalHours: 24)` (IServiceCollection extension, EF Core storage package). Trims audits and execution logs (`ExecutionLogRetentionDays` / `MaxExecutionLogsPerTask`); any knob `<= 0` is treated as disabled. See [Configuration Reference](configuration-reference.md).
 
@@ -47,13 +47,13 @@ Every EverTask configuration option at a glance: one row per option with its def
 
 | Property | Default | Notes |
 |----------|---------|-------|
-| `Permits` | — (ctor, required) | Public get-only; executions allowed per `Period`. Must be > 0 |
-| `Period` | — (ctor, required) | Public get-only; the window for `Permits`. Must be > 0 |
+| `Permits` | n/a (ctor, required) | Public get-only; executions allowed per `Period`. Must be > 0 |
+| `Period` | n/a (ctor, required) | Public get-only; the window for `Permits`. Must be > 0 |
 | `Burst` | `Permits` | ≥ 1; `1` = strict even spacing |
 | `ThrottleRetries` | `true` | Retries re-acquire budget through the gate (never erodes the per-attempt timeout). Not an inline wait: a far slot **re-parks** the task and it fires via redelivery, **restarting** retry attempt numbering |
 | `StartEmpty` | `false` | `false` = new bucket starts **full** (burst available immediately); `true` = starts at steady rate (caps post-restart burst) |
 | `MaxReservationHorizon` | `1 hour` | Farther slots → terminal rejection |
-| `MaxInSlotWait` | `1 second` | **No-op (binary-compat only)** — over-budget tasks always re-park to the scheduler; no inline consumer wait |
+| `MaxInSlotWait` | `1 second` | **No-op (binary-compat only)**: over-budget tasks always re-park to the scheduler; no inline consumer wait |
 | `OverflowBehavior` | `WaitForCapacity` | `Discard` rejects over-budget tasks: one-shot → `Failed` + `OnError`; recurring → occurrence skipped (series continues, no callback) |
 
 **Key source**: task implements `IRateLimitedTask`, or handler overrides `GetRateLimitKey(task)`. Null/empty key → task runs **ungated** (warning logged); if the key selector **throws**, it is caught, logged, and the task also runs ungated (fail-open).
@@ -75,7 +75,7 @@ Every EverTask configuration option at a glance: one row per option with its def
 
 → [Reference: Storage Configuration](configuration-reference.md#storage-configuration)
 
-Not a builder method — register on `IServiceCollection` (EF Core storage providers only): `services.AddAuditCleanup(policy, cleanupIntervalHours: 24)`. Build the policy with a factory (`AuditRetentionPolicy.WithUniformRetention(days)` or `WithErrorPriority(successDays, errorDays)`) or set properties directly. Any knob `<= 0` is treated as disabled.
+Not a builder method; register on `IServiceCollection` (EF Core storage providers only): `services.AddAuditCleanup(policy, cleanupIntervalHours: 24)`. Build the policy with a factory (`AuditRetentionPolicy.WithUniformRetention(days)` or `WithErrorPriority(successDays, errorDays)`) or set properties directly. Any knob `<= 0` is treated as disabled.
 
 | `AuditRetentionPolicy` | Default | Notes |
 |------------------------|---------|-------|
@@ -96,7 +96,7 @@ Not a builder method — register on `IServiceCollection` (EF Core storage provi
 
 → [Reference: Queue Configuration](configuration-reference.md#queue-configuration)
 
-Builder methods: `ConfigureDefaultQueue(...)`, `AddQueue(name, configure?)`, `ConfigureRecurringQueue(...)`, `EnsureRecurringQueue()` (rarely needed: `AddEverTask` auto-creates the recurring queue). The builder also exposes `.Services` (the underlying `IServiceCollection`) so you can register your own singletons mid-chain (e.g. a custom `IKeyedRateLimiter` or `IGuidGenerator`). Note: if a custom/distributed `IKeyedRateLimiter` **throws** (e.g. Redis down), the gate **fails open** — the task runs unthrottled with a warning, never failing over a limiter outage. The well-known names are the constants `QueueNames.Default` (`"default"`) and `QueueNames.Recurring` (`"recurring"`).
+Builder methods: `ConfigureDefaultQueue(...)`, `AddQueue(name, configure?)`, `ConfigureRecurringQueue(...)`, `EnsureRecurringQueue()` (rarely needed: `AddEverTask` auto-creates the recurring queue). The builder also exposes `.Services` (the underlying `IServiceCollection`) so you can register your own singletons mid-chain (e.g. a custom `IKeyedRateLimiter` or `IGuidGenerator`). Note: if a custom/distributed `IKeyedRateLimiter` **throws** (e.g. Redis down), the gate **fails open**: the task runs unthrottled with a warning, never failing over a limiter outage. The well-known names are the constants `QueueNames.Default` (`"default"`) and `QueueNames.Recurring` (`"recurring"`).
 
 Defaults differ between the auto-created `default`/`recurring` queues (inherit the global settings, `QueueFullBehavior.Wait`) and queues created via `AddQueue` (see Default column):
 
@@ -104,7 +104,7 @@ Defaults differ between the auto-created `default`/`recurring` queues (inherit t
 |--------|-----------|-------------------------------|-------|
 | `SetMaxDegreeOfParallelism` | `int` | `1` (sequential!) | `default`/`recurring` inherit the global value |
 | `SetChannelCapacity` | `int` | `500` | `default`/`recurring` inherit the global capacity |
-| `SetChannelOptions` | `BoundedChannelOptions` | — | Replaces the queue's whole channel options (FullMode, SingleReader/Writer, ...) |
+| `SetChannelOptions` | `BoundedChannelOptions` | n/a | Replaces the queue's whole channel options (FullMode, SingleReader/Writer, ...) |
 | `SetFullBehavior` | `QueueFullBehavior` | `FallbackToDefault` | `Wait` / `FallbackToDefault` / `ThrowException`, immediate dispatches only; the auto-created `default` queue uses `Wait`. `FallbackToDefault` = non-blocking try on target, then re-route to the `default` queue with **blocking `Wait` backpressure** (the task then runs on the default queue, so it does **not** honor the target queue's parallelism/isolation; if the target *is* the default queue it degenerates to plain `Wait`) |
 | `SetDefaultTimeout` | `TimeSpan?` | unset → global | Chain: handler → queue → global (v3.7+) |
 | `SetDefaultRetryPolicy` | `IRetryPolicy?` | unset → global | Chain: handler → queue → global (v3.7+) |
@@ -145,7 +145,7 @@ Defaults differ between the auto-created `default`/`recurring` queues (inherit t
 
 → [Reference: Monitoring Configuration](configuration-reference.md#monitoring-configuration)
 
-`AddMonitoringApi(opt => ...)` + `app.MapEverTaskApi()` (package `EverTask.Monitor.Api`). `MapEverTaskApi` accepts an optional `Action<HttpConnectionDispatcherOptions>` to tune the SignalR hub connection. Fixed paths: dashboard `/evertask-monitoring`, API `/evertask-monitoring/api`, SignalR hub `/evertask-monitoring/hub`. For setups without the EverTask builder there is `services.AddEverTaskMonitoringApiStandalone(opt => ...)` (you must register `ITaskStorage` yourself). It does **not** wire SignalR monitoring, and there is **no `IServiceCollection` overload of `AddSignalRMonitoring`** (it exists only on `EverTaskServiceBuilder`). `MapEverTaskApi` still maps the hub endpoint, but without the monitor subscription no live events are pushed — for live dashboard updates use the builder path (`AddEverTask(...).AddMonitoringApi(...)`).
+`AddMonitoringApi(opt => ...)` + `app.MapEverTaskApi()` (package `EverTask.Monitor.Api`). `MapEverTaskApi` accepts an optional `Action<HttpConnectionDispatcherOptions>` to tune the SignalR hub connection. Fixed paths: dashboard `/evertask-monitoring`, API `/evertask-monitoring/api`, SignalR hub `/evertask-monitoring/hub`. For setups without the EverTask builder there is `services.AddEverTaskMonitoringApiStandalone(opt => ...)` (you must register `ITaskStorage` yourself). It does **not** wire SignalR monitoring, and there is **no `IServiceCollection` overload of `AddSignalRMonitoring`** (it exists only on `EverTaskServiceBuilder`). `MapEverTaskApi` still maps the hub endpoint, but without the monitor subscription no live events are pushed; for live dashboard updates use the builder path (`AddEverTask(...).AddMonitoringApi(...)`).
 
 | EverTaskApiOptions | Default | Notes |
 |--------------------|---------|-------|
@@ -154,7 +154,7 @@ Defaults differ between the auto-created `default`/`recurring` queues (inherit t
 | `Username` / `Password` | `"admin"` / `"admin"` | CHANGE IN PRODUCTION |
 | `EnableAuthentication` | `true` | JWT on API + hub |
 | `JwtSecret` | `null` (random 256-bit per instance) | Set explicitly (≥ 32 bytes) for multi-instance deployments |
-| `JwtIssuer` / `JwtAudience` | `"EverTask.Monitor.Api"` | — |
+| `JwtIssuer` / `JwtAudience` | `"EverTask.Monitor.Api"` | n/a |
 | `JwtExpirationHours` | `8` | Token TTL |
 | `EnableCors` | `true` | ⚠ Only **registers** a named CORS policy (`EverTaskMonitoringApi`); EverTask does **not** apply it (no `UseCors`/`RequireCors`). To enforce CORS you must apply it yourself in your app pipeline |
 | `CorsAllowedOrigins` | `[]` (allow all) | Origins for the registered policy (used only when non-empty + the policy is actually applied). Restrict in production |
@@ -166,7 +166,7 @@ Defaults differ between the auto-created `default`/`recurring` queues (inherit t
 | `UIBasePath` | `/evertask-monitoring` | **read-only** computed; fixed |
 | `SignalRHubPath` | `/evertask-monitoring/hub` | **read-only** computed; fixed |
 
-`AddSignalRMonitoring(...)` (package `EverTask.Monitor.AspnetCore.SignalR`) — 4 overloads: `AddSignalRMonitoring()`, `(Action<SignalRMonitoringOptions>)`, `(Action<HubOptions>)`, `(Action<HubOptions>, Action<SignalRMonitoringOptions>)`. When used **standalone** (without `AddMonitoringApi`), you MUST also call `app.MapEverTaskMonitorHub()` after `Build()` — it maps the hub **and** subscribes the monitor, so without it no events are broadcast. Overloads: `MapEverTaskMonitorHub()` (default path), `MapEverTaskMonitorHub("/custom")`, `MapEverTaskMonitorHub("/custom", hub => { ... })`. Options:
+`AddSignalRMonitoring(...)` (package `EverTask.Monitor.AspnetCore.SignalR`): 4 overloads: `AddSignalRMonitoring()`, `(Action<SignalRMonitoringOptions>)`, `(Action<HubOptions>)`, `(Action<HubOptions>, Action<SignalRMonitoringOptions>)`. When used **standalone** (without `AddMonitoringApi`), you MUST also call `app.MapEverTaskMonitorHub()` after `Build()`: it maps the hub **and** subscribes the monitor, so without it no events are broadcast. Overloads: `MapEverTaskMonitorHub()` (default path), `MapEverTaskMonitorHub("/custom")`, `MapEverTaskMonitorHub("/custom", hub => { ... })`. Options:
 
 | Option | Default | Notes |
 |--------|---------|-------|
@@ -180,11 +180,11 @@ Defaults differ between the auto-created `default`/`recurring` queues (inherit t
 |----------|------|---------|-------|
 | `Timeout` | `TimeSpan?` | Inherits queue/global | Per-attempt timeout |
 | `RetryPolicy` | `IRetryPolicy?` | Inherits queue/global | Per-handler retry |
-| `QueueName` | `string?` | `"default"` (`"recurring"` for recurring tasks) | Target queue. An **unregistered/unknown** name logs a warning and falls back to the `default` queue — both for routing **and** for the retry/timeout config resolution (the task runs on `default` with `default`'s config). |
+| `QueueName` | `string?` | `"default"` (`"recurring"` for recurring tasks) | Target queue. An **unregistered/unknown** name logs a warning and falls back to the `default` queue, both for routing **and** for the retry/timeout config resolution (the task runs on `default` with `default`'s config). |
 | `RateLimitPolicy` | `RateLimitPolicy?` | `null` (no limit) | Per-key throttling (v3.7+) |
 | `GetRateLimitKey(task)` | `string?` (override) | reads `IRateLimitedTask.RateLimitKey` | Derive the throttle key without changing the task type |
 
-> Obsolete: `CpuBoundOperation` (bool) still exists on the handler but is `[Obsolete]` and has **no effect** — do not set it. For CPU-bound work, use `Task.Run` inside `Handle`.
+> Obsolete: `CpuBoundOperation` (bool) still exists on the handler but is `[Obsolete]` and has **no effect**: do not set it. For CPU-bound work, use `Task.Run` inside `Handle`.
 
 ## Dispatch Parameters
 

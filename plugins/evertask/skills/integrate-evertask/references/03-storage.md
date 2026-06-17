@@ -1,4 +1,4 @@
-# 03 — Storage / persistence
+# 03: Storage / persistence
 
 Exactly one storage call is mandatory after `AddEverTask(...)`.
 
@@ -17,7 +17,7 @@ Exactly one storage call is mandatory after `AddEverTask(...)`.
 Per-provider constraints: SQLite = no schema, single writer, client-side `DateTimeOffset`
 filtering; Postgres `SchemaName` lowercase only; In-Memory = no audit, no persistence, no cleanup.
 
-## In-Memory (core `EverTask` package — no NuGet)
+## In-Memory (core `EverTask` package, no NuGet)
 
 ```csharp
 .AddMemoryStorage()   // no options
@@ -26,7 +26,7 @@ filtering; Postgres `SchemaName` lowercase only; In-Memory = no audit, no persis
 Singleton `MemoryTaskStorage`. Lost on restart; not for production, durable scheduling, or
 multi-instance.
 
-## SQL Server — `EverTask.Storage.SqlServer`
+## SQL Server: `EverTask.Storage.SqlServer`
 
 ```csharp
 .AddSqlServerStorage(string connectionString, Action<SqlServerTaskStoreOptions>? configure = null)
@@ -45,7 +45,7 @@ Pooled DbContext factory + stored proc `usp_SetTaskStatus` (status + conditional
 round-trip). Schema is runtime-configurable. Tables: `QueuedTasks`, `StatusAudit`, `RunsAudit`,
 `TaskExecutionLogs`, `__EFMigrationsHistory` (all under `SchemaName`).
 
-## PostgreSQL — `EverTask.Storage.Postgres`
+## PostgreSQL: `EverTask.Storage.Postgres`
 
 ```csharp
 .AddPostgresStorage(string connectionString, Action<PostgresTaskStoreOptions>? configure = null)
@@ -53,14 +53,14 @@ round-trip). Schema is runtime-configurable. Tables: `QueuedTasks`, `StatusAudit
 
 | Option | Default | Notes |
 |---|---|---|
-| `SchemaName` | `"evertask"` | **Lowercase only** (`^[a-z_][a-z0-9_]*$`) — identifiers are double-quoted, so mixed-case becomes permanently case-sensitive. `null` → `public`. |
+| `SchemaName` | `"evertask"` | **Lowercase only** (`^[a-z_][a-z0-9_]*$`): identifiers are double-quoted, so mixed-case becomes permanently case-sensitive. `null` → `public`. |
 | `AutoApplyMigrations` | `true` | Same as SQL Server. |
 
 Connection: `Host=localhost;Database=evertask;Username=evertask;Password=***`. All
 `DateTimeOffset` → `timestamptz` (UTC). Pooled factory + writable-CTE single-statement status/run
 updates (no stored DB objects). UUID v7 ids.
 
-## SQLite — `EverTask.Storage.Sqlite`
+## SQLite: `EverTask.Storage.Sqlite`
 
 ```csharp
 .AddSqliteStorage(string connectionString = "Data Source=EverTask.db", Action<SqliteTaskStoreOptions>? configure = null)
@@ -70,14 +70,14 @@ updates (no stored DB objects). UUID v7 ids.
 
 | Option | Default | Notes |
 |---|---|---|
-| `SchemaName` | `""` | **Must stay `""`** — SQLite has no schemas. |
+| `SchemaName` | `""` | **Must stay `""`** (SQLite has no schemas). |
 | `AutoApplyMigrations` | `true` | Critical for `:memory:` (schema re-applied every start). |
 
 Connection options: file `Data Source=evertask.db`; WAL `Data Source=evertask.db;Mode=ReadWriteCreate;Cache=Shared`;
 in-memory `Data Source=:memory:;Mode=Memory;Cache=Shared`.
 
 Caveats: single writer (multiple readers OK); EF can't translate `DateTimeOffset` ordering, so
-`SqliteTaskStorage` overrides ~9 methods with client-side filtering — large backlogs (>~10k pending)
+`SqliteTaskStorage` overrides ~9 methods with client-side filtering; large backlogs (>~10k pending)
 load more into memory on recovery. Use SQL Server/Postgres for high write concurrency.
 
 ## Audit levels
@@ -93,11 +93,11 @@ parameter on every `Dispatch(...)`.
 | `None` | never | never | extreme frequency |
 
 The single source of truth for these decisions is `AuditPolicy.cs` (`ShouldCreateStatusAudit` /
-`ShouldCreateRunsAudit`). Key distinction: `Minimal` vs `ErrorsOnly` differ **only** in RunsAudit —
+`ShouldCreateRunsAudit`). Key distinction: `Minimal` vs `ErrorsOnly` differ **only** in RunsAudit:
 `Minimal` still writes a RunsAudit row for *every* recurring run (so you keep run-frequency history),
 while `ErrorsOnly` writes RunsAudit only for a run with a non-empty exception string or status `Failed`.
 
-Every audit row is a synchronous write — drop the level for high-frequency or heavily-throttled
+Every audit row is a synchronous write: drop the level for high-frequency or heavily-throttled
 task types to improve throughput.
 
 ## Audit retention / cleanup (EF Core providers only)
@@ -116,7 +116,7 @@ settable: `StatusAuditRetentionDays`, `RunsAuditRetentionDays`, `ErrorAuditReten
 24h, from the `cleanupIntervalHours` arg) and `InitialDelay` (default 1 min before the first sweep).
 Requires an EF Core storage; warns + disables itself for custom non-EF storage.
 
-## Inspecting tasks at runtime — the `QueuedTask` shape
+## Inspecting tasks at runtime: the `QueuedTask` shape
 
 `ITaskStorage.Get(...)` / `GetByTaskKey(...)` return `EverTask.Storage.QueuedTask`, the materialized
 row. Useful public read members for building status/inspection logic without reading source:
@@ -141,9 +141,9 @@ single-transaction; forward `AuditLevel`; match recoverable statuses to `QueuedT
 Optionally implement `ITaskStorageStatistics` to avoid O(backlog) reads in the dashboard.
 
 > To add a new **EF Core relational** provider package (MySQL, Oracle, …), use the separate
-> `new-relational-storage-provider` skill — it has the mandatory per-DB verification matrix.
+> `new-relational-storage-provider` skill: it has the mandatory per-DB verification matrix.
 
-**Advanced — custom ID generation:** the persistence-id generator is `IGuidGenerator` (default
+**Advanced, custom ID generation:** the persistence-id generator is `IGuidGenerator` (default
 `DefaultGuidGenerator` emitting DB-friendly temporally-ordered UUIDs), registered via
 `TryAddSingleton`. Register your own with `services.AddSingleton<IGuidGenerator, MyGen>()` **before**
 `AddEverTask` to control index-fragmentation behavior for a specific DB engine. Niche; defaults are fine.

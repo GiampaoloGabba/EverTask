@@ -24,34 +24,34 @@ Tasks can be CPU-bound or I/O-bound, long- or short-running. Works with ASP.NET 
 ## Key Features
 
 ### Core execution
-- **Background execution** — fire-and-forget, scheduled, and recurring tasks
-- **No database polling** — the scheduler lives in memory and runs through channels; the database is written, not polled in a loop
-- **Persistence** — tasks resume after a restart (SQL Server, PostgreSQL, SQLite, In-Memory)
-- **Fluent scheduling** — recurring tasks by minute, hour, day, week, month, or cron
-- **Idempotent registration** — a task key keeps duplicate recurring registrations out
+- **Background execution**: fire-and-forget, scheduled, and recurring tasks
+- **No database polling**: the scheduler lives in memory and runs through channels; the database is written, not polled in a loop
+- **Persistence**: tasks resume after a restart (SQL Server, PostgreSQL, SQLite, In-Memory)
+- **Fluent scheduling**: recurring tasks by minute, hour, day, week, month, or cron
+- **Idempotent registration**: a task key keeps duplicate recurring registrations out
 
 ### Performance & scalability
-- **Multi-queue** — isolate workloads by priority, resource type, or business domain
-- **Keyed rate limiting** — throttle per tenant/account/resource against external API limits, without blocking workers or other keys
-- **Light scheduler** — minimal lock contention, zero CPU when idle
-- **Sharded scheduler** — optional, for high scheduling load
-- **Lower overhead** — reflection caching and lazy serialization
+- **Multi-queue**: isolate workloads by priority, resource type, or business domain
+- **Keyed rate limiting**: throttle per tenant/account/resource against external API limits, without blocking workers or other keys
+- **Light scheduler**: minimal lock contention, zero CPU when idle
+- **Sharded scheduler**: optional, for high scheduling load
+- **Lower overhead**: reflection caching and lazy serialization
 
 ### Monitoring
-- **Dashboard + REST API** — an embedded React UI for monitoring and analytics
-- **Real-time updates** — SignalR push with event-driven cache invalidation
-- **Execution log capture** — a proxy logger with optional database persistence and configurable retention
-- **Audit levels** — tune how much audit history you keep, to control table growth
+- **Dashboard + REST API**: an embedded React UI for monitoring and analytics
+- **Real-time updates**: SignalR push with event-driven cache invalidation
+- **Execution log capture**: a proxy logger with optional database persistence and configurable retention
+- **Audit levels**: tune how much audit history you keep, to control table growth
 
 ### Resilience
-- **Retry policies** — built-in linear retry, custom policies, Polly integration, exception filtering
-- **Timeouts** — global and per-task
+- **Retry policies**: built-in linear retry, custom policies, Polly integration, exception filtering
+- **Timeouts**: global and per-task
 
 ### Developer experience
-- **Extensible** — custom storage, retry policies, and schedulers
-- **Serilog integration** — structured logging
+- **Extensible**: custom storage, retry policies, and schedulers
+- **Serilog integration**: structured logging
 - **Async throughout**
-- **Compile-time payload analyzer** — a Roslyn analyzer (ET0001–ET0007) bundled in `EverTask.Abstractions`
+- **Compile-time payload analyzer**: a Roslyn analyzer (ET0001–ET0007) bundled in `EverTask.Abstractions`
   catches System.Text.Json contract violations in the IDE/build, with code fixes (see below)
 
 
@@ -118,24 +118,14 @@ await _dispatcher.Dispatch(new SendWelcomeEmailTask(dto.Email, dto.Name));
 
 ## AI-assisted setup (agent skill)
 
-EverTask ships an **agent skill** that integrates the library for you: it picks the packages, wires
-`AddEverTask(...)` to your needs, and scaffolds tasks/handlers that already satisfy the payload
-analyzers. The skill is plain `SKILL.md` markdown, so it works with any AI coding agent that
-supports the Agent Skills convention, or that you can point at a folder of instructions.
-
-On [Claude Code](https://claude.com/claude-code) it installs in one step from the marketplace in
-this repo:
+This repo ships an agent skill that wires up EverTask for you. On [Claude Code](https://claude.com/claude-code):
 
 ```text
 /plugin marketplace add GiampaoloGabba/EverTask
 /plugin install evertask@evertask
 ```
 
-Then `/reload-plugins` and either describe what you want ("add EverTask with PostgreSQL and a
-nightly cleanup job") or invoke `/evertask:integrate-evertask`. For other agents, copy
-`plugins/evertask/skills/integrate-evertask/` into your agent's skills/instructions directory. See
-the [agent skill guide](https://GiampaoloGabba.github.io/EverTask/agent-skill.html) for
-details, alternatives, and how to try it without installing.
+Then `/reload-plugins` and run `/evertask:integrate-evertask`. For other agents, copy `plugins/evertask/skills/integrate-evertask/` into your skills directory. Full guide: [agent skill](https://GiampaoloGabba.github.io/EverTask/agent-skill.html).
 
 ## Documentation
 
@@ -214,7 +204,7 @@ public record SyncTenantData(Guid TenantId) : IEverTask, IRateLimitedTask
 
 public class SyncTenantDataHandler : EverTaskHandler<SyncTenantData>
 {
-    // Each tenant gets 15 calls per minute — other tenants are unaffected
+    // Each tenant gets 15 calls per minute; other tenants are unaffected
     public override RateLimitPolicy? RateLimitPolicy =>
         new RateLimitPolicy(15, TimeSpan.FromMinutes(1));
 
@@ -299,17 +289,17 @@ bundled in `EverTask.Abstractions` (no extra package, no runtime dependency) cat
 
 | Rule | Default | What it catches |
 |------|---------|-----------------|
-| **ET0001** | Warning | Public field on a payload (STJ serializes properties only) — *code fix: convert to property* |
-| **ET0002** | Warning | Property with a non-public setter and no matching constructor parameter (dropped on read) — *code fix* |
-| **ET0003** | Warning | Newtonsoft.Json attribute (ignored by STJ) — *code fix: remove / map to the STJ equivalent* |
-| **ET0004** | Warning | Abstract/interface property without `[JsonPolymorphic]`+`[JsonDerivedType]` (throws on recovery) — *code fix: scaffold* |
+| **ET0001** | Warning | Public field on a payload (STJ serializes properties only). *Code fix: convert to property* |
+| **ET0002** | Warning | Property with a non-public setter and no matching constructor parameter (dropped on read). *Code fix* |
+| **ET0003** | Warning | Newtonsoft.Json attribute (ignored by STJ). *Code fix: remove / map to the STJ equivalent* |
+| **ET0004** | Warning | Abstract/interface property without `[JsonPolymorphic]`+`[JsonDerivedType]` (throws on recovery). *Code fix: scaffold* |
 | **ET0005** | Info | `object` / `Dictionary<string,object>` (comes back as `JsonElement`) |
 | **ET0006** | Off (opt-in) | Types unlikely to round-trip (delegate, `Stream`, `Type`, `IntPtr`, `DbContext`, `ValueTuple`, …) |
 | **ET0007** | Warning | Multiple public constructors, none parameterless or `[JsonConstructor]` (STJ throws on recovery) |
 
 Every rule is configurable via `.editorconfig` (e.g. `dotnet_diagnostic.ET0001.severity = error`).
 
-> Note: the payload serializer is reflection-based and isolated — a consumer's own STJ source generators don't
+> Note: the payload serializer is reflection-based and isolated: a consumer's own STJ source generators don't
 > affect it, and Native AOT / reflection-disabled builds are unsupported (see `EverTask.Abstractions` docs).
 
 [View Complete Changelog](CHANGELOG.md)

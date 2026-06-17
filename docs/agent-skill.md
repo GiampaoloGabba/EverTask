@@ -6,19 +6,9 @@ nav_order: 90
 
 # AI-assisted integration (agent skill)
 
-EverTask ships an **agent skill** that walks an AI coding agent through integrating EverTask into
-*your* project: it picks the right packages, wires `AddEverTask(...)` with the options you actually
-need, and scaffolds task records + handlers that already satisfy the System.Text.Json payload
-analyzers (ET0001–ET0007). It asks you the decisions it cannot infer (storage backend, scheduling,
-retry, rate limiting, monitoring) and reads only the reference material for the features you choose.
+EverTask ships an agent skill that integrates the library into your project: it picks the packages, wires `AddEverTask(...)`, and scaffolds tasks and handlers that pass the payload analyzers (ET0001–ET0007). It asks you only the decisions it can't infer (storage, scheduling, retry, rate limiting, monitoring).
 
-The skill itself is plain `SKILL.md` markdown (the Agent Skills convention) plus reference files —
-**portable across agents**: any AI coding agent that supports the convention, or that you can point
-at a folder of instructions, can use it. The **one-step marketplace install below is specific to
-[Claude Code](https://claude.com/claude-code)** (the `/plugin` system and marketplaces are a Claude
-Code feature); for other agents, see [Other agents](#other-agents). Note NuGet is never involved —
-agents discover skills from their skills directory or (on Claude Code) from installed plugins, never
-from the NuGet package cache.
+Install it on [Claude Code](https://claude.com/claude-code) with the one step below, or point any other agent at the folder (see [Other agents](#other-agents)).
 
 ## Install on Claude Code (recommended)
 
@@ -39,7 +29,7 @@ now available, namespaced as `/evertask:integrate-evertask`.
 
 ## Use it
 
-Once installed, you usually don't need to invoke it explicitly — describe what you want and the
+Once installed, you usually don't need to invoke it explicitly: describe what you want and the
 agent triggers the skill automatically:
 
 > "Add EverTask to this API with PostgreSQL storage and a nightly cleanup job."
@@ -87,6 +77,6 @@ claude --plugin-dir ./plugins/evertask
 
 The skill is a router (`SKILL.md`) plus focused, on-demand reference files mirroring the
 documentation: setup & DI, tasks & handlers, storage, resilience, scheduling, rate-limiting &
-queues, monitoring & logging, and the payload contract — with copy-paste code templates. It is
+queues, monitoring & logging, and the payload contract, with copy-paste code templates. It is
 read-oriented and analyzer-aware: the payload checklist matches the Roslyn rules bundled in
 `EverTask.Abstractions`, so scaffolded tasks compile clean under warnings-as-errors.

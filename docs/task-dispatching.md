@@ -55,7 +55,7 @@ When you dispatch a task, it gets persisted to storage (if configured), added to
 
 ### When to Use
 
-Use fire-and-forget tasks for processing that doesn't need to block the HTTP response - things like sending emails, updating caches, or generating thumbnails. They're perfect for background operations that should start immediately but don't need to complete before you return a response.
+Use fire-and-forget tasks for processing that doesn't need to block the HTTP response, such as sending emails, updating caches, or generating thumbnails. They start immediately but don't need to finish before you return a response.
 
 ### Example: User Registration
 
@@ -89,7 +89,7 @@ await _dispatcher.Dispatch(
 
 ### When to Use
 
-Delayed tasks work great for reminders, follow-ups, retry mechanisms with backoff, or any time-based workflow where you want something to happen after a specific amount of time passes.
+Delayed tasks suit reminders, follow-ups, retry mechanisms with backoff, or any workflow where something should happen after a specific amount of time passes.
 
 ### Example: Order Processing Workflow
 
@@ -115,7 +115,7 @@ await _dispatcher.Dispatch(
 
 ### Delay Precision
 
-The delay scheduler is pretty precise - tasks typically execute within milliseconds of the scheduled time under normal load. Starting in v2.0, we use `PeriodicTimerScheduler` for high-precision timing. And like everything else in EverTask, delayed tasks persist across application restarts, so you don't lose them if your app goes down.
+The delay scheduler is precise: tasks typically execute within milliseconds of the scheduled time under normal load. Since v2.0 the timing comes from `PeriodicTimerScheduler`. Delayed tasks persist across application restarts, so you don't lose them if your app goes down.
 
 ## Scheduled Tasks
 
@@ -131,7 +131,7 @@ await _dispatcher.Dispatch(
 
 ### When to Use
 
-Scheduled tasks are ideal when you need something to happen at a specific date and time - maintenance windows, scheduled reports, marketing campaign launches, or any time-zone specific operations.
+Scheduled tasks fit when you need something to happen at a specific date and time: maintenance windows, scheduled reports, campaign launches, or time-zone specific operations.
 
 ### Example: Campaign Management
 
@@ -391,7 +391,7 @@ await _dispatcher.Dispatch(
     taskKey: "daily-report"); // Prevents duplicate registration
 ```
 
-Every `Dispatch` overload accepts the same three optional parameters after the scheduling argument: `auditLevel` (per-dispatch override of how much audit trail to persist), `taskKey` (the idempotency key shown above), and `cancellationToken` (cancels the dispatch operation itself, such as a blocking enqueue on a full queue — not the task's execution). Each is optional and can be passed by name:
+Every `Dispatch` overload accepts the same three optional parameters after the scheduling argument: `auditLevel` (per-dispatch override of how much audit trail to persist), `taskKey` (the idempotency key shown above), and `cancellationToken` (cancels the dispatch operation itself, such as a blocking enqueue on a full queue, not the task's execution). Each is optional and can be passed by name:
 
 ```csharp
 await _dispatcher.Dispatch(

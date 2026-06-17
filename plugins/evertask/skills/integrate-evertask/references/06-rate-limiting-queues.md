@@ -1,8 +1,8 @@
-# 06 — Keyed rate limiting, multi-queue, scalability, sharded scheduler
+# 06: Keyed rate limiting, multi-queue, scalability, sharded scheduler
 
 ## Keyed rate limiting (v3.7+)
 
-Throttle a task type per key (tenant / account / resource) — useful when a handler calls an
+Throttle a task type per key (tenant / account / resource): useful when a handler calls an
 external API with per-key limits. **It limits frequency, not parallelism.**
 
 Declare the policy on the handler and supply the key on the task:
@@ -37,21 +37,21 @@ new RateLimitPolicy(int permits, TimeSpan period)   // permits > 0, period > 0
 | `ThrottleRetries` | `true` | Retries re-acquire budget through the gate (before the per-attempt timeout). Not inline: a far slot **re-parks** the task → fires via redelivery, **restarting** retry attempt numbering. Set false for cheap local-only retries. |
 | `StartEmpty` | `false` | New key starts full. `true` to avoid a burst right after restart. |
 | `MaxReservationHorizon` | `1 hour` | Backlog beyond this → terminal per `OverflowBehavior`. |
-| `MaxInSlotWait` | `1 second` | **No-op — retained for binary compatibility only.** The gate never waits inline on the consumer anymore: every over-budget task (near or far slot) is re-parked to the scheduler and fires at its reserved slot via redelivery. (An inline wait would head-of-line-block the single consumer.) |
+| `MaxInSlotWait` | `1 second` | **No-op, retained for binary compatibility only.** The gate never waits inline on the consumer anymore: every over-budget task (near or far slot) is re-parked to the scheduler and fires at its reserved slot via redelivery. (An inline wait would head-of-line-block the single consumer.) |
 | `OverflowBehavior` | `WaitForCapacity` | or `Discard` (immediate terminal `Failed`). |
 
-Model: GCRA token bucket per `(taskType, key)` — different task types never share a key's budget.
+Model: GCRA token bucket per `(taskType, key)`: different task types never share a key's budget.
 Steady emission = `period/permits`; `Burst` caps idle accumulation.
 
 **Deferral invariant:** a deferral writes **nothing** to storage; the parked task stays `Queued`
 (already covered by recovery). Terminal rejections (horizon exceeded or `Discard`) call `OnError`
 with `RateLimitRejectedException`; plain deferrals call no callback.
 
-**Multi-instance:** rate limiting is **per-instance** — divide the external budget across instances
+**Multi-instance:** rate limiting is **per-instance**: divide the external budget across instances
 (15/min API, 3 instances → ~5/min each). A distributed limiter seam exists
 (`services.AddSingleton<IKeyedRateLimiter, MyImpl>()` before `AddEverTask`) but no built-in
 distributed implementation ships. **Fail-open:** if a custom limiter *throws* (e.g. Redis down),
-the gate logs a warning and runs the task **unthrottled** — a limiter outage never fails a task
+the gate logs a warning and runs the task **unthrottled**: a limiter outage never fails a task
 (`MaxTrackedKeys` overflow fails open the same way). Only shutdown `OperationCanceledException`
 propagates (task stays recoverable).
 
@@ -62,7 +62,7 @@ single-node): `ParkedTaskCount`, `MaxParkedTasks`, `TrackedKeyCount`, `FailOpenC
 it for health checks / metrics export / alerting. (The monitoring dashboard surfaces the same via
 `GET /evertask-monitoring/api/rate-limits`.)
 
-Global infrastructure knobs (`SetRateLimiterOptions`) — see `01-setup.md`.
+Global infrastructure knobs (`SetRateLimiterOptions`): see `01-setup.md`.
 
 ## Multi-queue
 
@@ -82,7 +82,7 @@ Route a handler with `public override string? QueueName => "high-priority";`.
 `SetChannelOptions(BoundedChannelOptions)`, `SetDefaultRetryPolicy`, `SetDefaultTimeout`,
 `SetFullBehavior`.
 
-**New-queue defaults** (via `AddQueue`): parallelism `1` (sequential — set it explicitly!),
+**New-queue defaults** (via `AddQueue`): parallelism `1` (sequential, set it explicitly!),
 capacity `500`, `FullBehavior = FallbackToDefault`.
 
 Calling `AddQueue` again with the same name **replaces** the previous configuration. Raw object
@@ -92,7 +92,7 @@ channel capacity `2000` with `FullMode = Wait`, `SingleReader = false`, `SingleW
 
 `QueueFullBehavior` (immediate dispatches only; scheduler-triggered dispatches use non-blocking
 write + backoff): `Wait` (block, cancellable) | `FallbackToDefault` (non-blocking try on target,
-then re-route to the `default` queue with blocking `Wait` backpressure — the task then runs on the
+then re-route to the `default` queue with blocking `Wait` backpressure; the task then runs on the
 default queue, so it does **not** honor the target's parallelism/isolation; if target *is* default
 it's plain `Wait`) | `ThrowException` (`QueueFullException`; task stays `WaitingQueue`, recovered on
 restart).
@@ -103,13 +103,13 @@ handler → queue default → global default. A task rerouted by `FallbackToDefa
 queue's retry/timeout config; an **unregistered** `QueueName` falls back to `default` for both routing
 and retry/timeout config.
 
-## Scalability — two independent axes
+## Scalability: two independent axes
 
 - **Execution throughput** is storage-bound (DB round-trips/task). Indicative (Ryzen 9 7950X,
   .NET 10, audit off): Postgres ~2,500/s, SQLite ~200/s (single writer; parallelism doesn't help).
   Levers: faster DB, lower audit level, fewer round-trips. **Neither multi-queue nor the sharded
   scheduler raises this.**
-- **Scheduling load** (`Schedule()` rate, in-memory timed count) is CPU/contention-bound — the
+- **Scheduling load** (`Schedule()` rate, in-memory timed count) is CPU/contention-bound: the
   sharded scheduler targets this only.
 
 Recommendations: start with defaults; measure with the dashboard; tune queue parallelism → add
@@ -125,7 +125,7 @@ opt.UseShardedScheduler(shardCount: 8);  // explicit (recommended 4–16)
 
 Shards the in-memory priority queue across N independent timers/locks. ~300 bytes + 1 thread per
 shard; failure-isolated; seamless (same `IScheduler`, no storage/handler changes). Enable only for
-sustained high `Schedule()` rates with proven contention — not to speed up execution.
+sustained high `Schedule()` rates with proven contention, not to speed up execution.
 
 ## Wizard decision points
 
