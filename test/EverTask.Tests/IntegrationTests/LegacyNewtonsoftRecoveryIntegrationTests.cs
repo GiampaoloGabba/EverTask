@@ -1,6 +1,5 @@
 using EverTask.Scheduler.Recurring;
 using EverTask.Scheduler.Recurring.Intervals;
-using EverTask.Serialization;
 using EverTask.Storage;
 using EverTask.Tests.TestHelpers;
 using Microsoft.Extensions.DependencyInjection;
@@ -59,53 +58,46 @@ public class LegacyNewtonsoftRecoveryIntegrationTests : IsolatedIntegrationTestB
     }
 
     [Fact]
-    public async Task Recovers_legacy_recurring_row_preserving_DayInterval_OnDays_schedule()
+    public async Task Recovers_and_actually_executes_legacy_recurring_row_on_correct_payload()
     {
+        // B4: a row written by the LEGACY producer that is RECURRING (IsRecurring + legacy RecurringTask
+        // metadata) and DUE must be revived by recovery and ACTUALLY EXECUTED on its exact payload. The prior
+        // test set NextRunUtc 30 minutes in the future (so it never executed) and asserted by re-deserializing
+        // the SEED bytes — green even if recovery had dropped the schedule. Here the schedule fires within a
+        // second and the proof is the HANDLER running on the recovered payload (ResilienceTestState), not a
+        // re-read of the seed.
         var state = new ResilienceTestState();
         await CreateMemoryHostWithStateAsync(state, startHost: false);
 
-        var original = new RecurringTask
-        {
-            DayInterval = new DayInterval(0, new[] { DayOfWeek.Monday, DayOfWeek.Friday })
-            {
-                OnTimes = new[] { new TimeOnly(9, 0) }
-            }
-        };
-        var taskId = Guid.NewGuid();
+        var legacySchedule = new RecurringTask { SecondInterval = new SecondInterval(1) };
+        var taskId         = Guid.NewGuid();
 
-        // Recurring row between runs (Completed + future NextRunUtc) → revived by recovery.
+        // Recurring row between runs (Completed) whose next occurrence is already DUE (past NextRunUtc), so
+        // recovery revives AND fires it.
         await Storage.Persist(new QueuedTask
         {
             Id              = taskId,
-            Type            = new LegacyPayloadProbeTask("ignored").GetType().AssemblyQualifiedName!,
-            Request         = LegacyJson(new LegacyPayloadProbeTask("ignored")),
+            Type            = new LegacyPayloadProbeTask(EmojiPayload).GetType().AssemblyQualifiedName!,
+            Request         = LegacyJson(new LegacyPayloadProbeTask(EmojiPayload)),
             Handler         = "seeded-by-test",
             Status          = QueuedTaskStatus.Completed,
             IsRecurring     = true,
-            RecurringTask   = LegacyJson(original),
-            NextRunUtc      = DateTimeOffset.UtcNow.AddMinutes(30),
+            RecurringTask   = LegacyJson(legacySchedule),
+            NextRunUtc      = DateTimeOffset.UtcNow.AddSeconds(-1),
             CurrentRunCount = 1,
             CreatedAtUtc    = DateTimeOffset.UtcNow.AddMinutes(-5)
         });
 
         await Host!.StartAsync();
 
-        // The recurring row is revived (still recoverable, not poisoned) after startup recovery.
-        var revived = await TaskWaitHelper.WaitUntilAsync(
-            async () => (await Storage.GetAll()).FirstOrDefault(t => t.Id == taskId),
-            t => t is { IsRecurring: true } && t.Status != QueuedTaskStatus.Failed,
+        // The legacy recurring row really executed (revived + fired), on the exact 4-byte emoji payload.
+        await TaskWaitHelper.WaitForConditionAsync(() => state.CapturedPayloads.Contains(EmojiPayload),
             timeoutMs: 10000);
 
-        revived.ShouldNotBeNull();
-
-        // No schedule loss: the persisted (legacy) recurring metadata still deserializes under STJ with the
-        // OnDays constraint intact and the SAME next occurrence as before the migration.
-        var restored = EverTaskJson.Deserialize<RecurringTask>(revived!.RecurringTask!)!;
-        restored.DayInterval.ShouldNotBeNull();
-        restored.DayInterval!.OnDays.ShouldBe(new[] { DayOfWeek.Monday, DayOfWeek.Friday });
-
-        var anchor = new DateTimeOffset(2026, 6, 17, 8, 0, 0, TimeSpan.Zero);
-        restored.DayInterval.GetNextOccurrence(anchor)
-            .ShouldBe(original.DayInterval!.GetNextOccurrence(anchor));
+        // And it stayed a live recurring task (advanced, not poisoned) — recovery honored the legacy schedule.
+        var revived = (await Storage.GetAll()).First(t => t.Id == taskId);
+        revived.IsRecurring.ShouldBeTrue();
+        revived.Status.ShouldNotBe(QueuedTaskStatus.Failed,
+            "a legacy recurring row must be revived and executed, never poisoned");
     }
 }

@@ -8,7 +8,10 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" />
+    <!-- Design-time only: PrivateAssets="all" stops it (and its EFCore.Design -> Newtonsoft.Json transitive)
+         from leaking into the consumer's dependency graph (P2-3). PrivateAssets on the CPM <PackageVersion>
+         does NOT propagate — it must live on the <PackageReference>. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" PrivateAssets="all" IncludeAssets="runtime; build; native; contentfiles; analyzers; buildtransitive" />
     <PackageReference Include="UUIDNext" />
     <!-- Direct reference to override vulnerable transitive 9.0.0 (NU1903) -->
     <PackageReference Include="System.Security.Cryptography.Xml" />

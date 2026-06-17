@@ -18,6 +18,23 @@ public class RecurringTask
     //used for serialization/deserialization
     public RecurringTask() { }
 
+    /// <summary>
+    /// Validates every interval present on this schedule, throwing on corrupt-but-deserializable metadata: an
+    /// unparseable cron, an out-of-range OnDays/OnHours/OnMonths selector, or a negative Interval. Invoked right
+    /// after a recovery deserialize so corrupt schedule metadata is routed to the TERMINAL poison path (B1)
+    /// instead of throwing downstream at next-run (a bounded per-restart failure) or producing a wrong schedule.
+    /// </summary>
+    public void Validate()
+    {
+        CronInterval?.Validate();
+        SecondInterval?.Validate();
+        MinuteInterval?.Validate();
+        HourInterval?.Validate();
+        DayInterval?.Validate();
+        WeekInterval?.Validate();
+        MonthInterval?.Validate();
+    }
+
 
     public DateTimeOffset? CalculateNextRun(DateTimeOffset current, int currentRun, bool isRecovery = false)
     {

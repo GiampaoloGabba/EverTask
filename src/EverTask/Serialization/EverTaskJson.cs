@@ -29,8 +29,6 @@ internal static class EverTaskJson
 
     // Serialize(object?) is LOAD-BEARING: a root typed as object makes STJ serialize the CONCRETE runtime
     // type's properties. Do NOT make this generic (Serialize<T>) — that would emit {} for an IEverTask root.
-    // Serialize(object?) is LOAD-BEARING: a root typed as object makes STJ serialize the CONCRETE runtime
-    // type's properties. Do NOT make this generic (Serialize<T>) — that would emit {} for an IEverTask root.
     internal static string Serialize(object? value) =>
         JsonSerializer.Serialize(value, Options);
 

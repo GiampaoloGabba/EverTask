@@ -40,7 +40,14 @@ internal sealed class TolerantEnumConverter<T> : JsonConverter<T> where T : stru
 
             case JsonTokenType.Number:
                 var underlying = Enum.GetUnderlyingType(typeof(T));
-                // Read with the enum's actual underlying width, then box back to the enum.
+                // Read with the enum's actual underlying width, then box back to the enum. The per-width
+                // getters are NOT redundant with the GetInt64 fallback (P2-8): GetByte/GetSByte/GetInt16/...
+                // ENFORCE the underlying type's range, so a number outside it (e.g. 300 for a byte-backed enum)
+                // throws here rather than silently truncating. ACCEPTED DIVERGENCE from Newtonsoft (P2-2):
+                // Newtonsoft would materialize an out-of-range/undefined numeric enum value; here it throws,
+                // which the recovery path turns into a CLEAN bounded/terminal poison (fail-safe), never silent
+                // corruption. Defined-value enforcement for recurring schedules is handled upstream by
+                // RecurringTask.Validate() (B2).
                 if (underlying == typeof(int))    return (T)Enum.ToObject(typeof(T), reader.GetInt32());
                 if (underlying == typeof(uint))   return (T)Enum.ToObject(typeof(T), reader.GetUInt32());
                 if (underlying == typeof(long))   return (T)Enum.ToObject(typeof(T), reader.GetInt64());

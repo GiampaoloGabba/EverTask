@@ -591,6 +591,67 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         }
     }
 
+    /// <summary>
+    /// Terminally poisons a recurring row during recovery: sets Failed AND clears
+    /// <see cref="QueuedTask.NextRunUtc"/> in ONE tracked SaveChanges (= one transaction), so the row stops
+    /// satisfying <see cref="QueuedTask.IsRecoverable"/> and is never resurrected (P0-1). Inherited unchanged
+    /// by Sqlite and SQL Server (a once-per-row terminal write — no counter/next-run proc is involved, exactly
+    /// like <see cref="SetRecurringSeriesCompleted"/>). Errors are SWALLOWED (logged, not rethrown), matching
+    /// <see cref="SetStatus"/>: a failed poison must not break the recovery of sibling tasks; the row simply
+    /// stays recoverable and is retried at the next restart.
+    /// </summary>
+    public virtual async Task SetRecurringTaskPoisoned(Guid taskId, Exception exception, AuditLevel auditLevel,
+                                                       CancellationToken ct = default)
+    {
+        logger.LogInformation("Poison recurring Task {taskId} terminally", taskId);
+
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+
+        try
+        {
+            var task = await dbContext.QueuedTasks
+                                      .Where(x => x.Id == taskId)
+                                      .FirstOrDefaultAsync(ct)
+                                      .ConfigureAwait(false);
+
+            if (task == null)
+            {
+                logger.LogWarning("Task {taskId} not found for recurring poison", taskId);
+                return;
+            }
+
+            var now = UtcNowNormalized;
+            var ex  = exception.ToDetailedString();
+
+            // Status audit (Failed always audits) + the status transition + the NextRunUtc clear flush in ONE
+            // SaveChanges. Clearing NextRunUtc atomically with Failed is what keeps the poisoned recurring row
+            // out of IsRecoverable (else recovery revives and re-poisons it at every restart — P0-1).
+            if (AuditPolicy.ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Failed, exception))
+            {
+                dbContext.StatusAudit.Add(new StatusAudit
+                {
+                    QueuedTaskId = taskId,
+                    UpdatedAtUtc = now,
+                    NewStatus    = QueuedTaskStatus.Failed,
+                    Exception    = ex
+                });
+            }
+
+            task.Status           = QueuedTaskStatus.Failed;
+            task.Exception        = ex;
+            task.LastExecutionUtc = now;
+            task.NextRunUtc       = null;
+
+            await dbContext.SaveChangesAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception e)
+        {
+            // Swallow (like SetStatus): a failed poison must not abort the recovery of other tasks. The row
+            // stays recoverable and is retried at the next restart.
+            logger.LogCritical(e, "Unable to poison recurring task {taskId}", taskId);
+        }
+    }
+
     public virtual async Task<QueuedTask?> GetByTaskKey(string taskKey, CancellationToken ct = default)
     {
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct);

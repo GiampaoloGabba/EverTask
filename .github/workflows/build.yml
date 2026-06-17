@@ -64,3 +64,13 @@ jobs:
       - name: Test (EverTask.Tests.Storage - exclude SQL Server + Postgres)
         run: dotnet test test/EverTask.Tests.Storage/EverTask.Tests.Storage.csproj --no-restore --verbosity normal --framework net9.0 --filter "FullyQualifiedName!~SqlServerEfCoreTaskStorageTests&FullyQualifiedName!~PostgresEfCoreTaskStorageTests&FullyQualifiedName!~AuditLevelIntegrationTests"
 
+      # P2-7: the (de)serializer is the migration-critical surface (STJ 10.0.9 is pinned uniformly across TFMs,
+      # but cross-TFM agreement must be pinned by tests too). Run the DETERMINISTIC serialization + schedule
+      # validation suites on net8.0 and net10.0 as well. Timing-sensitive recovery integration stays net9-only
+      # (multi-target full runs are flaky on GitHub Actions — see the note above).
+      - name: Test serialization across TFMs (net8.0)
+        run: dotnet test test/EverTask.Tests/EverTask.Tests.csproj --no-restore --verbosity normal --framework net8.0 --filter "FullyQualifiedName~Serialization|FullyQualifiedName~IntervalValidation"
+
+      - name: Test serialization across TFMs (net10.0)
+        run: dotnet test test/EverTask.Tests/EverTask.Tests.csproj --no-restore --verbosity normal --framework net10.0 --filter "FullyQualifiedName~Serialization|FullyQualifiedName~IntervalValidation"
+

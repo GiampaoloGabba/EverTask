@@ -314,33 +314,55 @@ public class WorkerService(
                 if (!string.IsNullOrEmpty(taskInfo.RecurringTask))
                 {
                     scheduledTask = EverTaskJson.Deserialize<RecurringTask>(taskInfo.RecurringTask);
+
+                    // B2: a schedule that DESERIALIZES but is corrupt (an unparseable cron, an out-of-range
+                    // OnDays/OnHours/OnMonths, a negative Interval) must be treated like un-deserializable
+                    // metadata — validate it HERE so the throw lands in the recurring poison guard below (which
+                    // terminalizes the row and clears NextRunUtc), instead of throwing downstream at next-run (a
+                    // bounded per-restart failure) or scheduling a wrong/never-firing occurrence.
+                    scheduledTask?.Validate();
                 }
             }
             catch (Exception e)
             {
                 recurringMetadataError = e;
-                logger.LogError(e, "Unable to deserialize recurring task info with id {TaskId}", taskInfo.Id);
+                scheduledTask          = null; // ensure the IsRecurring && scheduledTask == null poison guard fires
+                logger.LogError(e, "Unable to deserialize or validate recurring task info with id {TaskId}", taskInfo.Id);
             }
 
             // Get audit level from task info (null means Full for backward compatibility)
             var auditLevel = taskInfo.AuditLevel.HasValue ? (AuditLevel)taskInfo.AuditLevel.Value : AuditLevel.Full;
 
-            // CU3/L44: a recurring row whose RecurringTask metadata no longer deserializes must NOT be
-            // silently demoted to a one-shot. As a one-shot it would dispatch successfully (so the L18
-            // poison counter never fires), recovery would skip UpdateTask, the row would stay recurring
-            // and recoverable, and the same occurrence would be re-executed once per restart forever.
-            // Corrupt recurring metadata is not transient (it cannot heal across restarts), so poison the
-            // row immediately with an error record instead of running it.
-            if (taskInfo.IsRecurring && !string.IsNullOrEmpty(taskInfo.RecurringTask) && scheduledTask == null)
+            // A recovery POISON must be TERMINAL for a recurring row (P0-1): SetRecurringTaskPoisoned clears
+            // NextRunUtc atomically with Failed, so IsRecoverable stops returning it. A plain SetStatus(Failed)
+            // leaves NextRunUtc set, and a recurring Failed row with NextRunUtc != null is revived and
+            // re-poisoned at every restart (or re-executed once per restart if the cause healed). A one-shot
+            // row has no NextRunUtc to clear, so SetStatus(Failed) terminalizes it correctly. This local helper
+            // routes every poison site to the right primitive; it is used ONLY on poison paths (never on a
+            // recurring run's transient failure, which must keep NextRunUtc to retry the next occurrence).
+            Task Poison(ITaskStorage storage, Exception error) =>
+                taskInfo.IsRecurring
+                    ? storage.SetRecurringTaskPoisoned(taskInfo.Id, error, auditLevel, token)
+                    : storage.SetStatus(taskInfo.Id, QueuedTaskStatus.Failed, error, auditLevel, null, token);
+
+            // CU3/L44 + P0-2: a recurring row that cannot be reconstructed as a recurring schedule must NOT be
+            // silently demoted to a one-shot. This covers BOTH corrupt metadata (RecurringTask present but it no
+            // longer deserializes) AND missing metadata (RecurringTask null/empty): in either case scheduledTask
+            // stays null. As a one-shot it would dispatch successfully (so the L18 poison counter never fires),
+            // recovery would skip UpdateTask, the row would stay recurring and recoverable, and the same
+            // occurrence would be re-executed once per restart forever. This is not transient (it cannot heal
+            // across restarts), so poison the row TERMINALLY (Failed + NextRunUtc cleared) instead of running it.
+            if (taskInfo.IsRecurring && scheduledTask == null)
             {
                 var error = recurringMetadataError
-                            ?? new InvalidOperationException("Recurring task metadata could not be deserialized");
-                await taskStorage.SetStatus(taskInfo.Id, QueuedTaskStatus.Failed, error, auditLevel, null, token)
-                                 .ConfigureAwait(false);
+                            ?? new InvalidOperationException(
+                                "Recurring task metadata is missing or could not be deserialized");
+                await Poison(taskStorage, error).ConfigureAwait(false);
                 Interlocked.Increment(ref permanentFailures);
                 logger.LogError(error,
-                    "Recurring task {TaskId} has corrupt recurring metadata and was poisoned (marked Failed) " +
-                    "so it is not re-executed as a one-shot at every restart", taskInfo.Id);
+                    "Recurring task {TaskId} has missing or corrupt recurring metadata and was poisoned " +
+                    "terminally (marked Failed, NextRunUtc cleared) so it is not revived or re-executed as a " +
+                    "one-shot at every restart", taskInfo.Id);
                 return;
             }
 
@@ -389,8 +411,7 @@ public class WorkerService(
 
                     if (attempts >= MaxRecoveryDispatchAttempts)
                     {
-                        await taskStorage.SetStatus(taskInfo.Id, QueuedTaskStatus.Failed, ex, auditLevel, null, token)
-                                         .ConfigureAwait(false);
+                        await Poison(taskStorage, ex).ConfigureAwait(false);
                         Interlocked.Increment(ref permanentFailures);
                         logger.LogError(ex,
                             "Pending task {TaskId} failed re-dispatch {Attempts} time(s) and is poisoned (marked Failed); " +
@@ -405,28 +426,34 @@ public class WorkerService(
                     }
                 }
             }
-            else if (typeWasLoadable && payloadError != null)
+            else if (typeWasLoadable)
             {
-                // B3/F7: the task TYPE is loadable but its persisted payload could not be deserialized in
-                // this build (an unrecognized legacy/serializer format). Unlike an unloadable type, this can
-                // heal (a serializer fix, a code change), so do NOT terminalize on the first restart. Count
-                // it durably with the SAME bounded mechanism as a transient re-dispatch failure: the row
-                // stays recoverable until the attempt limit, then is poisoned so it does not retry forever.
+                // B3/F7: the task TYPE is loadable but it produced no runnable instance (task == null). Either
+                // the persisted payload could not be deserialized (payloadError != null, an unrecognized
+                // legacy/serializer format) OR it deserialized to null (P2-1: e.g. a literal "null" Request) —
+                // which previously fell into the "type not loadable" branch below and was poisoned immediately
+                // with a misleading reason, bypassing the bounded retry. Both are a loadable type with an
+                // unusable payload that MIGHT heal (a serializer fix, a code change), so do NOT terminalize on
+                // the first restart: count it durably with the SAME bounded mechanism as a transient
+                // re-dispatch failure (recoverable until the attempt limit, then poisoned so it does not retry
+                // forever).
+                var error = payloadError
+                            ?? new InvalidOperationException(
+                                "Task payload deserialized to null for a loadable type");
                 var attempts = await taskStorage.IncrementRecoveryFailure(taskInfo.Id, token).ConfigureAwait(false);
 
                 if (attempts >= MaxRecoveryDispatchAttempts)
                 {
-                    await taskStorage.SetStatus(taskInfo.Id, QueuedTaskStatus.Failed, payloadError, auditLevel, null, token)
-                                     .ConfigureAwait(false);
+                    await Poison(taskStorage, error).ConfigureAwait(false);
                     Interlocked.Increment(ref permanentFailures);
-                    logger.LogError(payloadError,
-                        "Pending task {TaskId} has a loadable type but an unreadable payload after {Attempts} attempt(s) " +
+                    logger.LogError(error,
+                        "Pending task {TaskId} has a loadable type but an unusable payload after {Attempts} attempt(s) " +
                         "and is poisoned (marked Failed); it will no longer be retried", taskInfo.Id, attempts);
                 }
                 else
                 {
                     Interlocked.Increment(ref transientFailures);
-                    logger.LogWarning(payloadError,
+                    logger.LogWarning(error,
                         "Pending task {TaskId} has a loadable type but its payload could not be deserialized " +
                         "(attempt {Attempts}/{Max}); the task stays recoverable and will be retried at the next startup",
                         taskInfo.Id, attempts, MaxRecoveryDispatchAttempts);
@@ -441,13 +468,9 @@ public class WorkerService(
 
                 if (itemStorage != null)
                 {
-                    await itemStorage.SetStatus(
-                        taskInfo.Id,
-                        QueuedTaskStatus.Failed,
-                        new Exception("Unable to create the IBackground task from the specified properties"),
-                        auditLevel,
-                        null,
-                        token).ConfigureAwait(false);
+                    await Poison(itemStorage,
+                        new Exception("Unable to create the IBackground task from the specified properties"))
+                        .ConfigureAwait(false);
                 }
 
                 Interlocked.Increment(ref permanentFailures);

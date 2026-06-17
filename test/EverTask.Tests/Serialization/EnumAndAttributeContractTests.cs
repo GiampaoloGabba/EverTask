@@ -70,6 +70,19 @@ public class EnumAndAttributeContractTests
         EverTaskJson.Deserialize<Perms>(flagsJson).ShouldBe(Perms.Read | Perms.Write);
     }
 
+    public record EnumHolder(Perms X);
+
+    [Fact]
+    public void Reads_string_numeric_enum_value()
+    {
+        // P2-9: a legacy/peer producer can write an enum value as a QUOTED number ("2"). The tolerant
+        // converter must parse it back to the underlying value, both as a scalar and as an object property
+        // ({"X":"2"}). Pinned here so net8/net9/net10 agree (the converter is the only reader of this form).
+        EverTaskJson.Deserialize<Perms>("\"2\"").ShouldBe(Perms.Write);
+        EverTaskJson.Deserialize<Perms>("2").ShouldBe(Perms.Write);
+        EverTaskJson.Deserialize<EnumHolder>("{\"X\":\"2\"}")!.X.ShouldBe(Perms.Write);
+    }
+
     // --- Newtonsoft member attributes are NOT honored by STJ (documented contract, pinned here) ---
 
     public record AttributedTask(

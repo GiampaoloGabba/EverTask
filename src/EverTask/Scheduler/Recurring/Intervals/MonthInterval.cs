@@ -26,7 +26,10 @@ public class MonthInterval : IInterval
     public TimeOnly[] OnTimes
     {
         get => _onTimes;
-        set => _onTimes = value.OrderBy(t => t).ToArray(); // Always keep sorted
+        // Null-tolerant (P1-1): a persisted "OnTimes":null must not crash the deserialize — default to
+        // midnight, like the field initializer. An EMPTY array stays empty (an already-safe "no time-of-day
+        // constraint" state), so it must NOT be rewritten. Otherwise keep sorted.
+        set => _onTimes = value is null ? [new TimeOnly(0, 0)] : value.OrderBy(t => t).ToArray();
     }
     // Settable (like OnDays) so System.Text.Json repopulates it on deserialization — a get-only property is
     // silently dropped on round-trip, losing the month constraint (F11).
@@ -34,8 +37,28 @@ public class MonthInterval : IInterval
 
     public void Validate()
     {
+        if (Interval < 0)
+            throw new ArgumentException("Invalid Month Interval, the interval cannot be negative.",
+                nameof(MonthInterval));
+
         if (Interval == 0 && !OnMonths.Any())
             throw new ArgumentException("Invalid Month Interval, you must specify at least one month.",
+                nameof(MonthInterval));
+
+        // Out-of-range month/day selectors deserialize but throw downstream at NextValidMonth/NextValidDay —
+        // validate them here so recovery poisons the row cleanly (B2/gap #2).
+        foreach (var month in OnMonths)
+            if (month < 1 || month > 12)
+                throw new ArgumentException($"Invalid Month Interval, '{month}' is not a valid month (1-12).",
+                    nameof(MonthInterval));
+
+        foreach (var day in OnDays)
+            if (day < 1 || day > 31)
+                throw new ArgumentException($"Invalid Month Interval, '{day}' is not a valid day of month (1-31).",
+                    nameof(MonthInterval));
+
+        if (OnDay is < 1 or > 31)
+            throw new ArgumentException($"Invalid Month Interval, OnDay '{OnDay}' is not a valid day of month (1-31).",
                 nameof(MonthInterval));
     }
 

@@ -4,6 +4,7 @@ using EverTask.Storage.EfCore;
 using EverTask.Storage;
 using EverTask.Scheduler.Recurring;
 using EverTask.Scheduler.Recurring.Intervals;
+using EverTask.Serialization;
 using Shouldly;
 using EverTask.Tests.TestHelpers;
 using Newtonsoft.Json;
@@ -463,6 +464,40 @@ public abstract class EfCoreTaskStorageTestsBase
         // The finalized row must no longer be recoverable (NextRunUtc cleared).
         (await _storage.TrySetQueuedIfRecoverable(task.Id, AuditLevel.Full))
             .ShouldBeFalse("a finalized (NextRunUtc-cleared) series must not be revived by recovery");
+    }
+
+    [Fact]
+    public async Task SetRecurringTaskPoisoned_should_mark_Failed_and_clear_NextRunUtc_so_it_is_not_recoverable()
+    {
+        // B1/P0-1: a recurring row poisoned during recovery must be TERMINAL — Failed AND NextRunUtc cleared
+        // in one atomic write — so it stops satisfying IsRecoverable and is never resurrected/re-poisoned at
+        // every restart. A plain SetStatus(Failed) would leave NextRunUtc set and the row recoverable.
+        var now  = DateTimeOffset.UtcNow;
+        var task = new QueuedTask
+        {
+            Id              = GetGuidForProvider(),
+            CreatedAtUtc    = now,
+            Type            = "RecPoison", Request = "{}", Handler = "H",
+            Status          = QueuedTaskStatus.Completed, // recurring row between runs
+            IsRecurring     = true,
+            NextRunUtc      = now.AddMinutes(5),
+            CurrentRunCount = 2
+        };
+        await _storage.Persist(task);
+
+        await _storage.SetRecurringTaskPoisoned(task.Id, new InvalidOperationException("corrupt metadata"),
+            AuditLevel.Full);
+
+        var row = (await _storage.Get(x => x.Id == task.Id))[0];
+        row.Status.ShouldBe(QueuedTaskStatus.Failed, "a poisoned recurring row is terminal");
+        row.NextRunUtc.ShouldBeNull("NextRunUtc must be cleared so recovery cannot resurrect the poisoned series");
+        row.Exception.ShouldNotBeNull("the poison reason is recorded");
+        row.IsRecoverable(DateTimeOffset.UtcNow)
+            .ShouldBeFalse("a poisoned (NextRunUtc-cleared) recurring row must not be recoverable (P0-1)");
+
+        // And the atomic conditional re-queue must refuse it.
+        (await _storage.TrySetQueuedIfRecoverable(task.Id, AuditLevel.Full))
+            .ShouldBeFalse("a poisoned recurring row must not be revived by recovery");
     }
 
     [Fact]
@@ -1977,6 +2012,12 @@ public abstract class EfCoreTaskStorageTestsBase
         var row = (await _storage.Get(x => x.Id == id))[0];
         row.Request.ShouldBe(legacyRequest, "the legacy emoji payload must round-trip through the DB unchanged");
         row.Request.ShouldContain("🚀", Case.Sensitive);
+
+        // P2-4: don't stop at DB byte fidelity — exercise the REAL recovery READ path (EverTaskJson) on the
+        // bytes that came back from this provider, asserting the TYPED payload, not just the raw string.
+        var recovered = EverTaskJson.Deserialize<EverTask.Tests.LegacyPayloadProbeTask>(row.Request)!;
+        recovered.Text.ShouldBe(emojiPayload,
+            "the legacy emoji payload must deserialize back to the exact string via the real STJ read path");
     }
 
     [Fact]
@@ -2009,6 +2050,13 @@ public abstract class EfCoreTaskStorageTestsBase
         var row = (await _storage.Get(x => x.Id == id))[0];
         row.RecurringTask.ShouldBe(legacyRecurring,
             "the legacy recurring schedule metadata must round-trip through the DB unchanged");
+
+        // P2-4: exercise the REAL recovery READ path on the bytes from this provider and assert the TYPED
+        // schedule (OnDays) survived — not just the raw JSON string. This is exactly what recovery does.
+        var recovered = EverTaskJson.Deserialize<RecurringTask>(row.RecurringTask!)!;
+        recovered.DayInterval.ShouldNotBeNull();
+        recovered.DayInterval!.OnDays.ShouldBe(new[] { DayOfWeek.Monday, DayOfWeek.Friday },
+            "the legacy DayInterval.OnDays schedule must deserialize back typed via the real STJ read path");
     }
 
     #endregion

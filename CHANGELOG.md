@@ -37,6 +37,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`DayInterval.OnDays` and `WeekInterval.OnDays` now have public setters** (like `MonthInterval`), and every
   interval keeps a public parameterless constructor marked with the STJ `[JsonConstructor]`, checked by a
   build-time test. STJ drops a non-public setter, which would have quietly lost the OnDays schedule on recovery.
+- **Recovery validates a recurring schedule after deserialization** (`RecurringTask.Validate()`). An unparseable
+  cron, an out-of-range `OnDays`/`OnHours`/`OnMonths`, or a negative `Interval` is now poisoned cleanly at
+  recovery. Before, it deserialized fine and threw later, when the next run was calculated.
+
+### Fixed
+
+- **A poisoned recurring row is now terminal.** This fixes a data-loss / double-execution bug. Recovery poisons a
+  recurring task with the new `ITaskStorage.SetRecurringTaskPoisoned`, which sets `Failed` and clears
+  `NextRunUtc` in one atomic write (overridden in Memory and EfCore, inherited by SqlServer, Sqlite and
+  Postgres). Plain `SetStatus(Failed)` left `NextRunUtc` set, so `QueuedTask.IsRecoverable` kept bringing the row
+  back and re-poisoning it on every restart. If the original failure had cleared, it ran the task again, once per
+  restart.
+- **A recurring row with missing or corrupt `RecurringTask` metadata is poisoned instead of running as a
+  one-shot.** The recovery guard in `WorkerService.ProcessRecoveredTaskAsync` now triggers on
+  `IsRecurring && scheduledTask == null`, and the "loadable type, unreadable payload" branch reports the right
+  reason.
+- **`"OnTimes": null` no longer crashes deserialization** on `DayInterval`/`WeekInterval`/`MonthInterval`. The
+  setter treats null as midnight. An empty array still means "no time-of-day constraint", unchanged.
+- **Storage packages no longer drag in `Newtonsoft.Json`.** `Microsoft.EntityFrameworkCore.Tools` is now
+  `PrivateAssets="all"` in the SqlServer, Sqlite and Postgres projects, so its `EFCore.Design`/`Newtonsoft.Json`
+  chain stays out of the consumer's dependency graph.
+
+### Tests
+
+- **Recovery, poison and legacy-to-STJ read paths are covered end-to-end on real storage** (Memory, SQLite, SQL
+  Server and PostgreSQL full-host): terminal recurring poison across restarts, corrupt-schedule poisoning, and
+  legacy Newtonsoft rows recovered and run on their exact payload. CI now runs the serialization and validation
+  suites on net8.0 and net10.0 too, not just net9.0.
 
 ### Removed
 

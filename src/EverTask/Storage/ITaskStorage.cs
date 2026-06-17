@@ -206,6 +206,47 @@ public interface ITaskStorage
     }
 
     /// <summary>
+    /// Poisons a RECURRING task TERMINALLY during startup recovery: sets <see cref="QueuedTaskStatus.Failed"/>
+    /// AND clears <see cref="QueuedTask.NextRunUtc"/> in ONE atomic write, so the row stops satisfying
+    /// <see cref="QueuedTask.IsRecoverable"/> and is never resurrected by recovery (P0-1).
+    /// </summary>
+    /// <remarks>
+    /// A plain <see cref="SetStatus"/>(Failed) leaves <see cref="QueuedTask.NextRunUtc"/> set, and a recurring
+    /// Failed row with a non-null NextRunUtc stays <see cref="QueuedTask.IsRecoverable"/> — so recovery revives
+    /// it and re-poisons it at every restart (an infinite re-poison loop), or, if the underlying cause healed,
+    /// re-dispatches and EXECUTES it once per restart (violating at-most-once-after-poison). Clearing NextRunUtc
+    /// atomically with Failed is what terminalizes the series.
+    /// <para>
+    /// Use ONLY on the recovery POISON (terminalization) paths. A recurring run's TRANSIENT failure must keep
+    /// going through <see cref="SetStatus"/>(Failed) WITHOUT clearing NextRunUtc, so the occurrence stays
+    /// recoverable and the series retries the next slot.
+    /// </para>
+    /// <para>
+    /// Default interface member: a non-atomic two-write fallback (<see cref="SetStatus"/>(Failed) then clear
+    /// <see cref="QueuedTask.NextRunUtc"/> via <see cref="UpdateTask"/>) for custom storages that have not
+    /// overridden it. Built-in providers (Memory/EfCore and the relational providers by inheritance) override
+    /// it with a single transactional write — mirroring <see cref="SetRecurringSeriesCompleted"/>.
+    /// </para>
+    /// </remarks>
+    /// <param name="taskId">The ID of the recurring task to poison.</param>
+    /// <param name="exception">The exception recorded as the poison reason.</param>
+    /// <param name="auditLevel">Audit level for this task.</param>
+    /// <param name="ct">Optional cancellation token.</param>
+    async Task SetRecurringTaskPoisoned(Guid taskId, Exception exception, AuditLevel auditLevel,
+                                        CancellationToken ct = default)
+    {
+        await SetStatus(taskId, QueuedTaskStatus.Failed, exception, auditLevel, null, ct).ConfigureAwait(false);
+
+        var rows = await Get(t => t.Id == taskId, ct).ConfigureAwait(false);
+        var row  = rows.Length > 0 ? rows[0] : null;
+        if (row is { NextRunUtc: not null })
+        {
+            row.NextRunUtc = null;
+            await UpdateTask(row, ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
     /// Increments and returns the persistent count of failed startup-recovery re-dispatch attempts for
     /// a task (L18). The caller poisons the task (marks it <see cref="QueuedTaskStatus.Failed"/>) once the
     /// returned count reaches its configured limit, so a persistently failing re-dispatch is not retried

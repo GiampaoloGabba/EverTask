@@ -48,6 +48,17 @@ public class CronInterval : IInterval
 
     public CronExpression ParseCronExpression() => GetParsedExpression();
 
+    /// <summary>
+    /// Validates that the cron expression parses (correct field count + Cronos-parseable). A persisted cron
+    /// string that is corrupt/empty-but-set deserializes fine but throws at the next-run calculation — calling
+    /// this right after a recovery deserialize routes the throw to the terminal poison path (B2/gap #1).
+    /// </summary>
+    public void Validate()
+    {
+        if (!string.IsNullOrEmpty(CronExpression))
+            GetParsedExpression(); // throws ArgumentException on an unparseable cron expression
+    }
+
     public DateTimeOffset? GetNextOccurrence(DateTimeOffset current) =>
         GetParsedExpression().GetNextOccurrence(current, TimeZoneInfo.Utc)?.ToUniversalTime();
 }

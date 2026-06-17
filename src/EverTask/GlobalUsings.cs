@@ -19,4 +19,8 @@ global using Microsoft.Extensions.Logging;
 using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("EverTask.Tests")]
+// B4/P2-4: lets the storage integration tests assert the REAL recovery read path (EverTaskJson.Deserialize)
+// against rows written by the legacy producer — proving typed payload/schedule recovery, not just DB byte
+// fidelity. Same trust already extended to EverTask.Tests; the serializer stays internal to consumers.
+[assembly: InternalsVisibleTo("EverTask.Tests.Storage")]
 [assembly: InternalsVisibleTo("DynamicProxyGenAssembly2")]

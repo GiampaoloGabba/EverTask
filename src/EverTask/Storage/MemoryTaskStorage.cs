@@ -348,6 +348,44 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         return Task.CompletedTask;
     }
 
+    /// <inheritdoc />
+    public Task SetRecurringTaskPoisoned(Guid taskId, Exception exception, AuditLevel auditLevel,
+                                         CancellationToken ct = default)
+    {
+        logger.LogInformation("Poison recurring Task {taskId} terminally", taskId);
+
+        lock (_pendingTasksLock)
+        {
+            var task = _pendingTasks.FirstOrDefault(x => x.Id == taskId);
+            if (task == null)
+                return Task.CompletedTask;
+
+            var now = DateTimeOffset.UtcNow;
+            var ex  = exception.ToDetailedString();
+
+            // Status -> Failed (+ status audit, LastExecutionUtc) AND NextRunUtc cleared together under the
+            // store lock. Clearing NextRunUtc is what keeps the poisoned recurring row out of IsRecoverable
+            // (a Failed recurring row with NextRunUtc != null is resurrected and re-poisoned at every restart).
+            if (AuditPolicy.ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Failed, exception))
+            {
+                task.StatusAudits.Add(new StatusAudit
+                {
+                    QueuedTaskId = taskId,
+                    UpdatedAtUtc = now,
+                    NewStatus    = QueuedTaskStatus.Failed,
+                    Exception    = ex
+                });
+            }
+
+            task.Status           = QueuedTaskStatus.Failed;
+            task.Exception        = ex;
+            task.LastExecutionUtc = now;
+            task.NextRunUtc       = null;
+        }
+
+        return Task.CompletedTask;
+    }
+
     public Task<QueuedTask?> GetByTaskKey(string taskKey, CancellationToken ct = default)
     {
         lock (_pendingTasksLock)

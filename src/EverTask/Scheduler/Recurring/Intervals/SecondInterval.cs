@@ -12,5 +12,12 @@ public class SecondInterval : IInterval
     }
     public int Interval { get; init; }
 
+    public void Validate()
+    {
+        if (Interval < 0)
+            throw new ArgumentException("Invalid Second Interval, the interval cannot be negative.",
+                nameof(SecondInterval));
+    }
+
     public DateTimeOffset? GetNextOccurrence(DateTimeOffset current) => current.AddSeconds(Interval);
 }
