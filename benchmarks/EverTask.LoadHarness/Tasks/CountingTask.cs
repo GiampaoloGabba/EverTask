@@ -4,8 +4,14 @@ using EverTask.LoadHarness.Infra;
 
 namespace EverTask.LoadHarness.Tasks;
 
-/// <summary>Carries the dispatch timestamp so the handler can record dispatch→handler latency.</summary>
-public sealed record CountingTask(long DispatchTicks) : IEverTask;
+/// <summary>
+/// Carries the dispatch timestamp so the handler can record dispatch→handler latency, plus an OPTIONAL
+/// payload string (<c>--payload</c>) so a scenario can size the serialized task body. <c>Payload</c> is
+/// null by default (the historical tiny/primitive task), so existing runs are byte-identical; when set it
+/// is the same string reference on every dispatch, so the per-task cost is the serializer re-serializing
+/// it once at <c>Persist</c> (where Newtonsoft→STJ shows up on the durable path).
+/// </summary>
+public sealed record CountingTask(long DispatchTicks, string? Payload = null) : IEverTask;
 
 /// <summary>
 /// No-op handler that signals completion + records latency through the per-run <see cref="RunContext"/>.

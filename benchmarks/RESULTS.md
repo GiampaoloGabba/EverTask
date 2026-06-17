@@ -184,37 +184,112 @@ Postgres** (GC-pressure-sensitive) and is **flat on SqlServer** (write/round-tri
 allocations and GC pauses, not the DB round-trip. The **p999 tail halves on Postgres** (9.2 → 4.1 ms),
 the GC-pause reduction showing up where it matters.
 
-The residual ~70 KB/task is **not** DbContext anymore: it's the Newtonsoft payload serialization at
-`Persist`, the `SqlParameter[]` arrays, and the engine's ~4.5 KB/task. The Newtonsoft → System.Text.Json
-switch is the next allocation frontier (see P-G).
+The residual ~70 KB/task is **not** DbContext anymore: it's the payload serialization at `Persist`, the
+`SqlParameter[]` arrays, and the engine's ~4.5 KB/task. The Newtonsoft → System.Text.Json switch attacks
+the serialization slice — measured in P-G (serializer micro) and P-H (end-to-end durable A/B).
 
 ---
 
-## P-G — Task payload serialization (Newtonsoft baseline)
+## P-G — Task payload serialization: Newtonsoft → System.Text.Json (A/B)
 
-`PayloadSerializationBenchmark` — the **BEFORE** baseline for the Newtonsoft → System.Text.Json switch.
-Replicates EverTask's serializer settings exactly (`EverTaskJson` is internal: `TypeNameHandling.None` —
-the concrete type is stored in `QueuedTask.Type` and deserialized to it, no `$type` markers). `Serialize`
-is what `ToQueuedTask()` pays at dispatch; `Deserialize` is what recovery / monitoring pay.
+`PayloadSerializationBenchmark` — both serializers measured in **one run** (Newtonsoft = baseline) so the
+deltas are apples-to-apples, no cross-run machine drift. Settings replicated exactly on both sides: OLD =
+Newtonsoft `TypeNameHandling.None`; NEW = the STJ options `EverTaskJson` now uses (PascalCase /
+case-insensitive read / relaxed encoder / `AllowReadingFromString`; the internal tolerant-enum converter is
+N/A for these enum-free payloads). `Serialize` is what `ToQueuedTask()` pays at dispatch; `Deserialize` is
+what recovery / monitoring pay. The concrete type lives in `QueuedTask.Type`, so neither emits `$type`.
 
 ShortRun (3 warmup + 3 iterations), same machine as P-A. **Allocations are reliable** (deterministic);
-**times are directional** (high CV at ShortRun). After the STJ switch, re-run `--filter
-*PayloadSerialization*` for the per-payload after.
+**times are directional** (high CV at ShortRun).
 
-| Payload | Serialize alloc | Deserialize alloc | Serialize (≈) | Deserialize (≈) |
-|---------|----------------:|------------------:|--------------:|----------------:|
-| tiny (primitives) | 1.65 KB | 3.11 KB | 0.31 µs | 0.61 µs |
-| blob 1K (string) | 7.38 KB | 8.98 KB | 0.98 µs | 1.44 µs |
-| nested (50-item graph) | 31.91 KB | 35.22 KB | 17.0 µs | 27.9 µs |
-| blob 64K (string) | 272.92 KB | 639.18 KB | 66.2 µs | 156.7 µs |
+| Payload | Op | Newtonsoft alloc | STJ alloc | Alloc Δ | Newtonsoft (≈) | STJ (≈) |
+|---------|----|-----------------:|----------:|--------:|---------------:|--------:|
+| tiny (primitives)     | Serialize   |   1,688 B |     216 B | **-87%** |   310 ns |   124 ns |
+| tiny (primitives)     | Deserialize |   3,184 B |     176 B | **-94%** |   640 ns |   242 ns |
+| blob 1K (string)      | Serialize   |   7,552 B |   2,184 B | **-71%** | 1,111 ns |   270 ns |
+| blob 1K (string)      | Deserialize |   9,200 B |   2,224 B | **-76%** | 1,906 ns |   395 ns |
+| nested (50-item graph)| Serialize   |  32,680 B |   8,680 B | **-73%** |  20.2 µs |  10.6 µs |
+| nested (50-item graph)| Deserialize |  36,064 B |  12,168 B | **-66%** |  32.0 µs |  13.9 µs |
+| blob 64K (string)     | Serialize   | 279,521 B | 131,250 B | **-53%** |  79.2 µs |  38.7 µs |
+| blob 64K (string)     | Deserialize | 654,632 B | 131,290 B | **-80%** | 194.5 µs |  40.8 µs |
 
 Reads:
-- **Even a trivial task pays ~1.65 KB to serialize** — part of the ~70 KB/task residual from P-F (Persist
-  serializes once per dispatch).
-- **Allocation explodes super-linearly with size**: blob 64K serializes in **272 KB** (~4× the payload)
-  and deserializes in **639 KB** (~10×), all of it on the **LOH/Gen2** (Gen0=Gen1=Gen2 for blob64k) —
-  expensive Gen2 pauses under load. The nested graph pays ~8× its on-wire size.
-- **Deserialize costs more than Serialize** (~1.5–2.4× allocation) — the path recovery and monitoring pay.
+- **STJ cuts serialization allocation 53–94%** across the board, and is ~2–5× faster. The win grows toward
+  the small/primitive payloads (`tiny` serialize -87%, deserialize -94%) because Newtonsoft's fixed
+  per-call overhead (writer + contract + buffers) dwarfs the actual data there.
+- **The LOH/Gen2 blowup is tamed**: Newtonsoft deserialized a 64K blob in **639 KB all on Gen2**; STJ does
+  it in **131 KB** (-80%) and in ~1/5 the time. A 64K payload still lands on the LOH (the 64K string itself
+  is a large object), but STJ stops *multiplying* it.
+- **Deserialize — the recovery/monitoring path — wins biggest** (up to -94%), exactly where it was the
+  heavier half under Newtonsoft (1.5–2.4× serialize).
 
-This is where System.Text.Json (pooled UTF-8 buffers, direct byte writing) is expected to win most: the
-large/nested payloads and the LOH pressure. `tiny` should drop toward ~0.3–0.5 KB with source-gen.
+---
+
+## P-H — STJ vs Newtonsoft end-to-end (load harness, real A/B, same machine)
+
+The serializer micro (P-G) isolates the layer; this is what the **whole task lifecycle** pays. Captured by
+temporarily reverting the shipped serializer to Newtonsoft and re-running the LoadHarness on the same
+machine/Docker (a true A/B, not a reconstruction). Engine alloc is `GC.GetTotalAllocatedBytes` per task;
+durable runs use Postgres/SqlServer (Testcontainers, WSL2), audit none, parallelism 16. Smoke-level,
+directional — DB throughput swings ±~8% run-to-run.
+
+### Engine layer (A4W — real engine, no persistence)
+
+| Serializer | Allocated/task |
+|------------|---------------:|
+| Newtonsoft | 4,540 B |
+| **STJ**    | **3,334 B (-27%)** |
+
+The serializer is the only thing that changed; the ~1.2 KB/task drop is the `tiny` serialize delta from
+P-G landing in the engine total. (Engine *throughput* is too noisy here — CV >6% — to attribute.)
+
+### Durable lifecycle (L8 Postgres) — allocation scales with payload, throughput is DB-bound
+
+| Payload | Newtonsoft alloc/task | STJ alloc/task | Alloc Δ | Newtonsoft thr | STJ thr | Newtonsoft p99 | STJ p99 |
+|---------|----------------------:|---------------:|--------:|---------------:|--------:|---------------:|--------:|
+| tiny | 75,068 B | 73,658 B | **-1.9%** | 2,556/s | 2,635/s | 3.9 ms | 3.2 ms |
+| 1K   | 81,018 B | 75,760 B | **-6.5%** | 2,690/s | 2,480/s | 3.3 ms | 3.5 ms |
+| 64K  | 355,650 B | 262,270 B | **-26%** | 1,400/s | 1,431/s | 10.9 ms | **6.2 ms (-43%)** |
+
+SqlServer tiny mirrors Postgres: ~68 KB/task either way (745/s Newtonsoft baseline → 784/s STJ), i.e. flat.
+
+Reads (**this is the honest answer for real apps on a durable DB**):
+- **On a tiny task (the recommended "pass IDs, keep it small" shape) STJ is ~invisible on the durable
+  path**: serialization is only ~1.4 KB of the ~73 KB/task, the rest is the EF command pipeline +
+  `SqlParameter[]` + the DB round-trip. So the durable allocation barely moves and throughput is flat
+  (DB-bound — the win does NOT show up as more tasks/sec).
+- **The win grows with payload size**: -1.9% (tiny) → -6.5% (1K) → -26% (64K). The bigger the task body,
+  the more of the per-task allocation is serialization, and that is exactly the slice STJ shrinks.
+- **Where it matters most under load: the tail.** At 64K, STJ cuts ~93 KB/task and **halves p99 latency
+  (10.9 → 6.2 ms)** — the Gen2/LOH pressure Newtonsoft generated was showing up as GC-pause tail, and STJ
+  removes it. Throughput stays flat (the Postgres round-trip, not CPU/GC, caps it).
+- **Net**: STJ is a clear win on the engine layer (-27%) and on the serialize/deserialize APIs (-53…-94%,
+  P-G), and on the durable path it pays off proportionally to payload size and most visibly in tail
+  latency. With tiny ID-only tasks it is allocation-neutral on the durable path — but never negative, and
+  it drops the Newtonsoft dependency entirely.
+
+---
+
+## P-I — net9 → net10 (runtime + EF Core 10): faster on CPU, same durable footprint
+
+Benchmark TFM moved **net9.0 → net10.0** (`benchmarks/Directory.Build.props`), which also swaps EF Core
+9.0.17 → 10.0.9 and the .NET 9 → .NET 10 runtime. Same machine; STJ on both sides (System.Text.Json was
+already pinned to 10.0.9, so only the runtime/EF changed).
+
+- **Serializer micro — allocations identical, times faster.** Managed allocation is deterministic, so every
+  cell matches net9 to the byte; the runtime only moved *time*: Newtonsoft nested serialize 20.2 → 14.5 µs
+  (-28%), STJ nested 10.6 → 7.4 µs (-30%), Newtonsoft 64K deserialize 195 → 158 µs (-19%). The
+  STJ-vs-Newtonsoft ratios are unchanged — P-G's conclusions are TFM-invariant.
+- **Engine (A4W)**: 3,334 → **3,207 B/task** (-4%); throughput steadier (CV 3.9% vs net9's noisy 16%).
+- **Durable (L8 Postgres, STJ)** — the headline for real apps:
+
+  | Payload | net9 alloc/task | net10 alloc/task | net9 thr | net10 thr |
+  |---------|----------------:|-----------------:|---------:|----------:|
+  | tiny | 73,658 B | 74,067 B | 2,635/s | 2,544/s |
+  | 1K   | 75,760 B | 76,154 B | 2,480/s | 2,610/s |
+  | 64K  | 262,270 B | 269,697 B | 1,431/s | 1,395/s |
+
+**Read: net10 / EF Core 10 did NOT shrink the durable per-task allocation, nor move durable throughput**
+(both flat within run-to-run noise). The .NET 10 gains land on CPU-bound work — serialization, the engine —
+not on the DB-round-trip-bound durable path. **So the storage-layer opportunities below are exactly as
+relevant on net10 as on net9** — upgrading the runtime does not recover the ~73 KB/task durable footprint.

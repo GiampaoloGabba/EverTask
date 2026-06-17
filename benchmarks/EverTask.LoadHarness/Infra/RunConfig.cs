@@ -42,6 +42,11 @@ public sealed record RunConfig
     /// <summary>Where the raw JSON report is written.</summary>
     public string OutputDir { get; init; } = "benchmarks/results";
 
+    /// <summary>Task payload body size: none (tiny/primitives, default) | 1k | 64k | &lt;n&gt;[k]. Sizes the
+    /// string the engine serializes at Persist — the axis where the Newtonsoft→STJ switch pays off on the
+    /// durable path (a tiny task is dominated by the DB layer, a real payload by serialization).</summary>
+    public string Payload { get; init; } = "none";
+
     public static RunConfig Parse(IReadOnlyList<string> args, int startIndex)
     {
         var cfg = new RunConfig();
@@ -61,10 +66,22 @@ public sealed record RunConfig
                 "--warmup"      => cfg with { Warmup = int.Parse(val) },
                 "--measured"    => cfg with { Measured = int.Parse(val) },
                 "--out"         => cfg with { OutputDir = val },
+                "--payload"     => cfg with { Payload = val.ToLowerInvariant() },
                 _               => cfg
             };
         }
         return cfg;
+    }
+
+    /// <summary>The payload body as a string the engine serializes, or null for the tiny/primitive task.
+    /// "1k"/"64k" use binary KB (1024) to match the serialization micro's <c>new string('x', 1024)</c>.</summary>
+    public string? BuildPayload()
+    {
+        var spec = Payload.Trim();
+        if (spec is "" or "none" or "tiny" or "0") return null;
+        char suffix = char.ToLowerInvariant(spec[^1]);
+        int chars = suffix == 'k' ? int.Parse(spec[..^1]) * 1024 : int.Parse(spec);
+        return chars <= 0 ? null : new string('x', chars);
     }
 
     // Accept human-friendly counts: 1_000_000, 1000000, 1m, 100k.

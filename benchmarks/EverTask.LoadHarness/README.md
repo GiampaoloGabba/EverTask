@@ -34,6 +34,8 @@ Common knobs (defaults in `Infra/RunConfig.cs`):
 --storage inmemory  inmemory | sqlite | sqlserver | postgres   (A3/A4S/L8/LDP; sqlserver/postgres need Docker)
 --poll-interval 1000   A3 polling period in ms
 --audit full        L8/LDP audit level: none | minimal | errorsonly | full (full = engine default, heavy)
+--payload none      task body size for L8/A4W: none (tiny/primitives) | 1k | 64k | <n>[k] (sizes the
+                    serialized payload — the axis where Newtonsoft→STJ pays off on the durable path)
 --warmup 3          discarded iterations (JIT/PGO + thread-pool ramp-up)
 --measured 7        measured iterations
 --out benchmarks/results   JSON report directory

@@ -18,11 +18,15 @@ public abstract class EngineScenarioBase : IScenario
     public abstract string Description { get; }
 
     private HostHandle? _host;
+    private string? _payload;
 
     public async Task SetupAsync(RunConfig cfg, CancellationToken ct)
     {
         _host = await HostFactory.CreateAsync(cfg, StorageMode, ct);
+        _payload = cfg.BuildPayload(); // built once; the same reference is serialized on every dispatch
         Console.WriteLine($"  storage: {_host.Description}");
+        if (_payload is not null)
+            Console.WriteLine($"  payload: {_payload.Length:N0} chars");
     }
 
     public Task TeardownAsync() => _host is null ? Task.CompletedTask : _host.DisposeAsync().AsTask();
@@ -44,7 +48,7 @@ public abstract class EngineScenarioBase : IScenario
             producers[p] = Task.Run(async () =>
             {
                 for (long i = 0; i < perProducer; i++)
-                    await dispatcher.Dispatch(new CountingTask(Stopwatch.GetTimestamp()), cancellationToken: ct)
+                    await dispatcher.Dispatch(new CountingTask(Stopwatch.GetTimestamp(), _payload), cancellationToken: ct)
                                     .ConfigureAwait(false);
             }, ct);
         }
