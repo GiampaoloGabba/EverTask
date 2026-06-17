@@ -7,18 +7,20 @@ nav_order: 2
 
 # Sharded Scheduler
 
-For extreme high-load scenarios, EverTask offers a sharded scheduler that splits the workload across multiple independent shards. This reduces lock contention and boosts throughput when you're dealing with massive scheduling loads.
+For workloads that register timed or recurring tasks at a very high rate, EverTask offers a sharded scheduler that splits the scheduler's priority queue across multiple independent shards, reducing lock contention on `Schedule()`.
+
+> The sharded scheduler is a scheduling-side optimization. It raises the rate of `Schedule()` calls you can sustain and the number of tasks you can keep scheduled at once. It does not make tasks execute faster; execution is storage-bound (see [Scalability](scalability.md#measured-performance-indicative)). If your bottleneck is task execution, sharding the scheduler won't help.
 
 ## When to Use
 
 Consider the sharded scheduler if you're hitting:
 
-- Sustained load above 10,000 `Schedule()` calls/second
-- Burst spikes exceeding 20,000 `Schedule()` calls/second
-- 100,000+ tasks scheduled at once
-- High lock contention in profiling (over 5% CPU time spent in scheduler operations)
+- A high sustained rate of `Schedule()` calls (timed/recurring registrations)
+- Bursts of scheduling activity the single priority queue can't absorb
+- A very large number of tasks scheduled concurrently
+- Profiling that shows significant CPU time in the scheduler's priority-queue lock
 
-> **Note**: The default `PeriodicTimerScheduler` (v2.0+) handles most workloads just fine. Only reach for the sharded scheduler when you've measured actual performance problems.
+> **Note**: The default `PeriodicTimerScheduler` handles most workloads just fine. Reach for the sharded scheduler only when profiling shows the *scheduler* (not the storage) is the bottleneck.
 
 ## Configuration
 
@@ -44,15 +46,19 @@ Automatically scale based on CPU cores:
 .UseShardedScheduler(shardCount: Environment.ProcessorCount) // Scale with CPUs
 ```
 
-## Performance Comparison
+## How it compares (architectural, not yet benchmarked)
 
-| Metric | Default Scheduler | Sharded Scheduler (8 shards) |
-|--------|------------------|----------------------------|
-| `Schedule()` throughput | ~5-10k/sec | ~15-30k/sec |
-| Lock contention | Moderate | Low (8x reduction) |
-| Scheduled tasks capacity | ~50-100k | ~200k+ |
-| Memory overhead | Baseline | +2-3KB (negligible) |
-| Background threads | 1 | N (shard count) |
+| Metric | Default (PeriodicTimer) | Sharded (N shards) |
+|--------|-------------------------|--------------------|
+| Priority queues | 1 (single lock) | N (contention divided ~N) |
+| Background timers/threads | 1 | N |
+| Memory overhead | baseline | ~300 B per shard |
+| `Schedule()`-call contention under load | higher | lower |
+| Task-execution throughput | baseline | same (storage-bound) |
+
+> Those differences are an architectural property, not a measured multiplier: fewer threads contend on each
+> queue, and work spreads across N parallel queues. We haven't benchmarked the scheduling axis yet. Expect
+> lower scheduler contention, not a task-execution speedup.
 
 ## How It Works
 
@@ -74,10 +80,10 @@ Task C (ID: ghi789) → Shard 7
 ## Trade-offs
 
 **Pros:**
-- ✅ 2-4x throughput improvement for high-load scenarios
-- ✅ Better spike handling (independent shard processing)
+- ✅ Lower lock contention on `Schedule()` (the single priority-queue lock is split across shards)
+- ✅ Better burst handling (independent shard processing)
 - ✅ Complete failure isolation (issues in one shard don't affect others)
-- ✅ Reduced lock contention (divided by shard count)
+- ✅ Higher sustainable `Schedule()`-call rate and scheduled-task count (scheduling axis only)
 
 **Cons:**
 - ❌ Additional memory (~300 bytes per shard - negligible)

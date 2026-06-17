@@ -63,7 +63,7 @@ await _dispatcher.Dispatch(new SendEmailTask("user@example.com", "Hello!"));
 - [Resilience](resilience.md) - Handle failures with retry policies and timeouts
 - **[Scalability](scalability.md)** - Performance and scalability features
   - [Multi-Queue Support](multi-queue.md) - Workload isolation by priority or domain
-  - [Sharded Scheduler](sharded-scheduler.md) - Extreme load support (>10k tasks/sec)
+  - [Sharded Scheduler](sharded-scheduler.md) - Lower scheduler lock contention under high Schedule() call rates
   - [Keyed Rate Limiting](rate-limiting.md) - Per-tenant/per-resource throttling against external API limits
 - **[Monitoring](monitoring.md)** - Complete monitoring guide
   - [Custom Event Monitoring](monitoring-events.md) - Event system and integrations

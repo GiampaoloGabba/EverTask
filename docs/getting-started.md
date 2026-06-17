@@ -226,4 +226,4 @@ Now that you've got EverTask running, dive into these topics:
 - For CPU-intensive tasks, decrease it to avoid overloading your cores
 - If your queue is constantly full, bump up `ChannelCapacity`
 - Consider [multi-queue configuration](multi-queue.md) to isolate different workloads
-- For very high loads (>10k tasks/sec), enable the [sharded scheduler](sharded-scheduler.md)
+- For a high rate of scheduled or recurring registrations (`Schedule()` calls), consider the [sharded scheduler](sharded-scheduler.md). It helps the scheduling side, not task-execution throughput, which is storage-bound

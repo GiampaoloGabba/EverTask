@@ -1489,8 +1489,9 @@ connection.start()
     // Auto-apply migrations (default: true)
     opt.AutoApplyMigrations = true;
 
-    // Connection pooling (enabled by default in v2.0+)
-    // Uses DbContextFactory for 30-50% performance improvement
+    // DbContext pooling (enabled by default via AddPooledDbContextFactory)
+    // Leases a reset, reused context per operation: an allocation/GC win
+    // (~-88% per write, ~-71% per task), not a tasks/sec multiplier
 
     // Stored procedures (enabled by default in v2.0+)
     // Reduces roundtrips for status updates
@@ -1513,9 +1514,9 @@ sqlcmd -S localhost -d EverTaskDb -i migration.sql
 
 EverTask uses stored procedures for critical operations:
 
-- `[EverTask].[usp_SetTaskStatus]` (v2.0+): Atomic status update + audit insert
-- `[EverTask].[usp_UpdateCurrentRun]` (v3.6+): Single-roundtrip recurring-run update
-- Performance: 50% fewer roundtrips for status changes
+- `[EverTask].[usp_SetTaskStatus]` (v2.0+): status update + audit insert in one round-trip and one transaction
+- `[EverTask].[usp_UpdateCurrentRun]` (v3.6+): single-round-trip recurring-run update
+- The procs do the audit insert and status update in one round-trip instead of two statements, kept atomic. That saves a round-trip on the status-change path; it is not a task-throughput multiplier
 
 **Connection String Options:**
 
@@ -1587,7 +1588,7 @@ PRAGMA temp_store=MEMORY;
 
 **Limitations:**
 - No schema support (unlike SQL Server)
-- Not recommended for high-concurrency scenarios (>100 tasks/sec)
+- Single writer: tops out around a couple hundred tasks/sec on this hardware, and parallelism does not help
 - Best for: Single-server deployments, development, small workloads
 
 ## Handler Configuration

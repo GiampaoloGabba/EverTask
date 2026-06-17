@@ -21,7 +21,7 @@ Every EverTask configuration option at a glance: one row per option with its def
 | `SetDefaultTimeout` | `TimeSpan?` | `null` (no timeout) | Global per-attempt timeout |
 | `SetDefaultAuditLevel` | `AuditLevel` | `Full` | Audit trail verbosity (see table below) |
 | `SetThrowIfUnableToPersist` | `bool` | `true` | Throw on storage save failure |
-| `UseShardedScheduler` | `int shardCount = 0` | Off (`PeriodicTimerScheduler`); auto-scale when 0 | For >10k `Schedule()`/sec loads |
+| `UseShardedScheduler` | `int shardCount = 0` | Off (`PeriodicTimerScheduler`); auto-scale when 0 | High `Schedule()`-call rates (scheduling axis, not task-execution throughput) |
 | `SetUseLazyHandlerResolution` | `bool` | `true` (adaptive) | `DisableLazyHandlerResolution()` to opt out |
 | `WithPersistentLogger` | `Action<PersistentLoggerOptions>` | Disabled | Persists handler logs to DB; logs ALWAYS go to ILogger regardless |
 | `SetRateLimiterOptions` | `Action<RateLimiterOptions>` | See below | Keyed rate limiter global knobs (v3.7+) |
@@ -163,7 +163,7 @@ Defaults differ between the auto-created `default`/`recurring` queues (inherit t
 | **CPU-bound** | `ProcessorCount` | Small (100–500) | Heavy computation |
 | **I/O-bound** | `ProcessorCount × 4` | Large (5000+) | API/DB/file operations |
 | **Mixed** | Separate queues | Varies | Different configs per queue |
-| **Extreme load** | `ProcessorCount × 4+` | 10000+ | Enable sharded scheduler |
+| **High `Schedule()` rate** | `ProcessorCount × 4+` | 10000+ | Sharded scheduler (scheduling axis only; execution stays storage-bound) |
 
 ## See Also
 

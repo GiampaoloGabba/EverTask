@@ -100,15 +100,17 @@ Version 2.0 introduces significant performance improvements for SQL Server stora
 
 ### DbContext Pooling
 
-DbContext pooling is automatically enabled in v2.0+, which reduces the overhead of creating new contexts and improves storage operation performance by 30-50%:
+DbContext pooling is enabled, so each storage operation rents a context from a pool instead of constructing a fresh one:
 
 ```csharp
 .AddSqlServerStorage(connectionString)
 ```
 
+Measured effect (`benchmarks/RESULTS.md`, P-F), and it's provider-agnostic since it's the EF context machinery: per-context allocation drops ~98% (≈6,600 B to ≈104 B) and per-write allocation ~88% on the storage hot path. This is an allocation, GC-pressure, and tail-latency win, not a raw tasks/sec increase. On the end-to-end durable path (measured on PostgreSQL, the representative durable provider on this hardware) it cut per-task allocation ~71% and roughly halved the p999 latency tail, while throughput stayed bound by the database round-trip. The same pooling applies to SQL Server; an end-to-end SQL Server figure is pending a measurement on real hardware (the Docker/WSL2 numbers are I/O-penalized).
+
 ### Stored Procedures
 
-The SetStatus operation now uses a stored procedure that atomically updates the task status and inserts an audit record in a single database roundtrip. This cuts database calls in half while guaranteeing transactional consistency.
+The SetStatus operation uses a stored procedure that performs the status update and the audit-record insert in a **single round-trip and a single transaction**, instead of two statements, while guaranteeing transactional consistency.
 
 ## Connection String Configuration
 

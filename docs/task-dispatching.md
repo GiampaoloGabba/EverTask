@@ -410,7 +410,7 @@ await _dispatcher.Dispatch(new SendBulkEmailTask(users.Select(u => u.Id).ToList(
 
 ### High-Load Scenarios
 
-If you're pushing extreme dispatch rates (think 10,000+ tasks per second), enable the sharded scheduler to auto-scale with your CPU cores:
+If you register delayed or recurring tasks at a very high rate, the sharded scheduler spreads the scheduler's priority queue across shards to cut lock contention on `Schedule()`. It does not speed up immediate dispatch or task execution; those are bounded by the channel and your storage, not the scheduler:
 
 ```csharp
 builder.Services.AddEverTask(opt =>

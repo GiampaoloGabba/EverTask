@@ -22,16 +22,18 @@ Control audit trail verbosity with the `AuditLevel` enum:
 
 ## Database Impact
 
-**Example** (100 tasks running every 5 minutes):
+Audit rows are **synchronous database writes on the task execution path**, so the audit level directly changes how much work the storage layer does per task. What each level writes (from `AuditPolicy`):
 
-| Audit Level | Daily Audit Records | Storage Reduction |
-|-------------|---------------------|-------------------|
-| Full | ~2,304 records/day | Baseline |
-| Minimal | ~576 records/day | 75% reduction |
-| ErrorsOnly | ~903 records/day* | 60% reduction |
-| None | 0 records/day | 100% reduction |
+| Level | StatusAudit rows | RunsAudit rows (recurring) | On a clean success run |
+|-------|------------------|----------------------------|------------------------|
+| **Full** | one per status transition | one per run | the most rows |
+| **Minimal** | only on real errors | one per run | one run-history row |
+| **ErrorsOnly** | only on real errors | only on errors | **no audit rows** |
+| **None** | never | never | no audit rows |
 
-*Assuming typical failure rates. Only errors generate audit records.
+Total audit rows ≈ *executions × records-per-execution*, so the cost scales with how often your tasks run. Example: 100 recurring tasks every 5 minutes = 100 × (1440 / 5) = **28,800 runs/day**. At **Full**, each run writes one RunsAudit row plus a StatusAudit row per transition; at **ErrorsOnly**, a clean day writes essentially nothing (only failures record). The exact ratio between levels depends on your success/failure mix and how many status transitions each run goes through.
+
+> **Higher audit means more writes, which means lower task throughput.** That is expected, not a bug: every audit row is an extra synchronous DB write, and task execution is [storage-bound](../scalability.md#measured-performance-indicative). The same goes for the **persistent proxy logger** (`WithPersistentLogger`): each captured log line is one more `TaskExecutionLog` write per execution. Turn audit down (or the persistent logger off) on high-frequency tasks where you don't need the trail.
 
 ## Global Default Configuration
 
@@ -119,7 +121,7 @@ await dispatcher.Dispatch(
     taskKey: "health-check");
 ```
 
-**Performance Impact**: 75% reduction in audit writes compared to Full.
+**Write cost**: drops the per-transition StatusAudit rows on success (keeps one RunsAudit row per run), so a clean run writes far fewer rows than Full.
 
 ### ErrorsOnly
 
@@ -139,7 +141,7 @@ await dispatcher.Dispatch(
     taskKey: "cleanup-old-files");
 ```
 
-**Performance Impact**: 60% reduction in audit writes (assuming typical failure rates).
+**Write cost**: on a clean success run, no audit rows at all; only failures write a StatusAudit + RunsAudit row.
 
 ### None
 

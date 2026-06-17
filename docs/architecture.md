@@ -25,7 +25,7 @@ EverTask is a high-performance background task execution library built for persi
 - **Event-driven scheduling** instead of polling
 - **Aggressive caching** to minimize allocations
 - **Fully asynchronous** execution from top to bottom
-- **Handles extreme loads** (>10k tasks/sec without breaking a sweat)
+- **Storage-bound task execution**: throughput is set by your database (a few synchronous round-trips per task), not by the engine (see [Scalability](scalability.md#measured-performance-indicative))
 - **Built-in resilience** with retry policies, timeouts, and graceful degradation
 
 ### Component Overview
@@ -289,17 +289,20 @@ public class PeriodicTimerScheduler : IScheduler
 
 The scheduler uses dynamic delays, sleeping only until the next task is due. When idle, it uses zero CPU. New tasks signal immediately for wake-up, resulting in minimal lock contention compared to the old timer-based approach.
 
-**Performance Comparison:**
+**Scheduler comparison** (qualitative; we haven't benchmarked the `Schedule()`-rate axis yet):
 
-| Scheduler | CPU Usage (Idle) | Lock Contention | Throughput |
-|-----------|------------------|-----------------|------------|
-| TimerScheduler (v1.x) | ~0.5-1% | Moderate | ~5-10k/sec |
-| PeriodicTimerScheduler (v2.0+) | ~0% | Low | ~10-15k/sec |
-| ShardedScheduler (v2.0+) | ~0% | Very Low | ~20-40k/sec |
+| Scheduler | CPU Usage (Idle) | `Schedule()` lock contention |
+|-----------|------------------|------------------------------|
+| TimerScheduler (v1.x) | ~0.5-1% | Moderate |
+| PeriodicTimerScheduler | ~0% | Low (single priority queue) |
+| ShardedScheduler | ~0% | Very Low (N parallel queues) |
 
-### ShardedScheduler (v2.0+, Opt-in)
+> These rows describe the **scheduling** side (how `Schedule()` calls contend on the priority-queue lock),
+> not task-execution throughput, which is storage-bound and the same for all three.
 
-For extreme high-load scenarios (>10k Schedule() calls/sec):
+### ShardedScheduler (Opt-in)
+
+For a high rate of `Schedule()` calls (the scheduling axis, not a task-execution speedup):
 
 ```csharp
 public class ShardedScheduler : IScheduler
@@ -332,7 +335,7 @@ public class ShardedScheduler : IScheduler
 }
 ```
 
-Sharding distributes the work across multiple independent schedulers, each operating in parallel. Lock contention gets divided by the shard count, and issues in one shard won't affect others. You'll see 2-4x throughput improvement for workloads exceeding 10k Schedule() calls per second.
+Sharding distributes the work across multiple independent schedulers, each operating in parallel. Lock contention on the priority queue gets divided across the shards, and issues in one shard won't affect others. This raises the rate of `Schedule()` calls the scheduler can sustain; it does **not** change task-execution throughput (storage-bound).
 
 The trade-off? You'll use additional memory (around 300 bytes per shard) and additional threads (one per shard), plus debugging becomes slightly more complex.
 
@@ -362,7 +365,7 @@ var factory = _wrapperCache.GetOrAdd(task.GetType(), type =>
 var wrapper = factory(task);
 ```
 
-We compile the reflection once and cache it. Repeated dispatches of the same task type went from 150μs to 10μs - a 93% improvement.
+We compile the reflection once into an expression factory and cache it per task type, so repeated dispatches of the same type skip the `MakeGenericType` + `Activator.CreateInstance` cost on the hot path.
 
 ### Lazy Serialization (Dispatcher)
 
@@ -408,7 +411,7 @@ var taskJson = _taskJsonCache.GetValue(task, t => EverTaskJson.Serialize(t));
 var typeName = _typeNameCache.GetOrAdd(task.GetType(), t => t.AssemblyQualifiedName);
 ```
 
-Monitoring events were triggering 60k-80k JSON serializations per 10k tasks. Now it's down to around 10-20 - a 99% reduction.
+Monitoring previously re-serialized the task JSON on every event. Now it serializes once per task (cached in a weak table, collected with the task) and reuses it across that task's events, so a burst of events no longer re-serializes the same payload.
 
 ### Handler Options Caching (Worker Executor)
 
@@ -427,7 +430,7 @@ var options = _optionsCache.GetOrAdd(handler.GetType(), _ => new HandlerOptionsC
 });
 ```
 
-We were doing runtime casts on every execution. Now we cache handler options per type, cutting casts from 10k to around 100 per 10k executions.
+We were reading the timeout/retry options via a runtime cast on every execution. Now they're resolved once per handler type and cached, so each execution reads them from the cache instead of re-casting.
 
 ### DbContext Pooling (Storage, v2.0+)
 
@@ -444,10 +447,10 @@ builder.Services.AddPooledDbContextFactory<TaskStoreDbContext>(options =>
     options.UseSqlServer(connectionString));
 ```
 
-The EverTask providers use `AddPooledDbContextFactory`, which leases a reset, reused context per operation —
-cutting per-operation allocation (~-88% per write, ~-71% per task end-to-end) and GC pressure. The win is on
-allocations, not raw throughput (on a real database the round-trip dominates wall-clock). Plain
-`AddDbContextFactory` does **not** pool.
+The EverTask providers use `AddPooledDbContextFactory`, which leases a reset, reused context per operation.
+That cuts per-operation allocation (~-88% per write, ~-71% per task end-to-end) and GC pressure. The win is
+on allocations, not raw throughput: on a real database the round-trip dominates wall-clock. Plain
+`AddDbContextFactory` does not pool.
 
 ### SQL Server Stored Procedures (v2.0+)
 
@@ -608,33 +611,41 @@ Extension points let you adapt EverTask to your specific requirements without fo
 
 ## Performance Characteristics
 
-### Throughput
+> Indicative, smoke-level numbers from one machine (Ryzen 9 7950X, .NET 10 / EF Core 10, databases in
+> Docker/WSL2, audit off, small payloads, 16 concurrent producers). Order of magnitude, not a guarantee:
+> measure in your own environment. Full methodology and data: `benchmarks/RESULTS.md`. See also
+> [Scalability](scalability.md#measured-performance-indicative).
 
-| Scenario | Throughput | Notes |
-|----------|-----------|-------|
-| In-memory, fire-and-forget | ~50k-100k tasks/sec | Limited by CPU |
-| SQL Server persistence | ~5k-10k tasks/sec | Limited by database |
-| Scheduled tasks (default) | ~5k-10k Schedule()/sec | PeriodicTimerScheduler |
-| Scheduled tasks (sharded) | ~20k-40k Schedule()/sec | ShardedScheduler |
+### Throughput (task execution, storage-bound)
+
+| Backend | Indicative throughput | Notes |
+|---------|-----------------------|-------|
+| PostgreSQL | ~2,500 tasks/sec | scales with parallelism + connection pool |
+| SQLite | ~200 tasks/sec | single writer; parallelism does not help |
+| Engine only (no persistence) | hundreds of k/sec | diagnostic ceiling; durability off, not a real-app number |
+
+The durable rows are what real apps see. SQL Server is omitted: our only figure is from Docker under WSL2
+(I/O-penalized, not representative), pending a measurement on real hardware. Scheduling rate (`Schedule()`
+calls/sec) is a separate axis we haven't benchmarked yet (see [Sharded Scheduler](sharded-scheduler.md)).
 
 ### Latency
 
-| Operation | Latency | Notes |
-|-----------|---------|-------|
-| Dispatch (in-memory) | ~10-50μs | Reflection cached |
-| Dispatch (SQL Server) | ~1-5ms | Database write |
-| Schedule | ~10-50μs | Priority queue insert |
-| Task execution start | <10ms | From dispatch to handler start |
+| Path | Measured | Notes |
+|------|----------|-------|
+| Dispatch → handler start, PostgreSQL | p50 ~2.3 ms | under concurrent load; includes the SetInProgress write |
+| `await Dispatch()` call, in-memory | microseconds | enqueue to the channel, no database |
+| `await Dispatch()` call, durable | single-digit ms | a database write on the calling thread |
 
-### Memory
+### Memory (GC allocation per task, not steady-state RAM)
 
-| Component | Memory Usage | Notes |
-|-----------|--------------|-------|
-| Base overhead | ~1-2 MB | Core services |
-| Per task (queued) | ~500 bytes | TaskHandlerExecutor |
-| Per task (scheduled) | ~600 bytes | QueuedTask in priority queue |
-| Per shard | ~300 bytes | ShardedScheduler |
-| Caches (total) | ~5-10 KB | Expression, type, JSON caches |
+| Path | Allocation/task | Notes |
+|------|-----------------|-------|
+| Engine only (no persistence) | ~3.2 KB | after the System.Text.Json switch |
+| PostgreSQL (durable, tiny payload) | ~73 KB | EF command pipeline + `SqlParameter[]` arrays dominate |
+| Per shard (ShardedScheduler) | ~300 bytes | fixed overhead per shard |
+
+Larger payloads add serialization allocation on top (see `benchmarks/RESULTS.md` P-G/P-H). Reducing the
+durable per-task footprint is tracked in the storage optimization issues.
 
 ## Next Steps
 
