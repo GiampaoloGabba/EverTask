@@ -7,7 +7,7 @@ nav_order: 9
 
 # Best Practices
 
-Follow these best practices to build robust, resilient background task systems with EverTask.
+Best practices for retry policies, exception filtering, timeouts, cancellation, and error handling.
 
 ## Retry Policies
 

@@ -7,7 +7,7 @@ nav_order: 4
 
 # Dashboard UI Guide
 
-The EverTask dashboard is a modern React interface that gives you complete visibility into your background tasks. Think of it as your mission control for monitoring task execution, debugging failures, and understanding performance patterns.
+The EverTask dashboard is a React interface for monitoring task execution, debugging failures, and spotting performance patterns.
 
 > **Note**: The dashboard is currently **read-only** (v3.3). You can view, analyze, filter, and export all task data, but task management operations (stop, restart, cancel) will be added in future releases.
 
@@ -37,7 +37,7 @@ The Recent Activity feed shows the last 50 events as they happen, so you can wat
 
 ### Task List & Filtering
 
-Find any task quickly with powerful filtering: status (Queued, In Progress, Completed, Failed, Cancelled), queue name, task type, or date range. Combine filters to narrow down exactly what you need: "Show me all failed payment tasks from yesterday in the critical queue."
+Filter tasks by status (Queued, In Progress, Completed, Failed, Cancelled), queue name, task type, or date range. Combine filters to narrow down exactly what you need: "Show me all failed payment tasks from yesterday in the critical queue."
 
 Search is instant and works across task IDs, types, and parameters. Pagination keeps things fast even with millions of tasks in storage.
 

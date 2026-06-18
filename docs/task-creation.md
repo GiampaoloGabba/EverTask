@@ -90,7 +90,7 @@ public class ProcessOrderHandler : EverTaskHandler<ProcessOrderTask>
 
 ### Dependency Injection
 
-Handlers support dependency injection out of the box - just inject whatever services you need through the constructor:
+Handlers support constructor dependency injection: inject whatever services you need.
 
 ```csharp
 public class SendNotificationHandler : EverTaskHandler<SendNotificationTask>

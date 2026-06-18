@@ -188,10 +188,10 @@ The provider is tested end-to-end against a real PostgreSQL container (Testconta
 Use PostgreSQL storage when:
 - Running in production at scale
 - Need high availability
-- Require robust, server-side querying
+- Require server-side querying
 - Want an open-source database with no licensing cost
 - Have existing PostgreSQL infrastructure
-- Need enterprise-grade reliability
+- Need high reliability
 
 Consider alternatives when:
 - Running small-scale applications (use SQLite)

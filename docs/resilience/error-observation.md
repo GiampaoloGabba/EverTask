@@ -106,5 +106,5 @@ public override async Task Handle(MyTask task, CancellationToken cancellationTok
 ## Next Steps
 
 - **[Retry Callbacks](retry-callbacks.md)** - Track retry attempts
-- **[Best Practices](best-practices.md)** - Build robust error handling strategies
+- **[Best Practices](best-practices.md)** - Patterns and pitfalls
 - **[Monitoring](../monitoring.md)** - Track task failures and retries

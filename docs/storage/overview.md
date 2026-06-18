@@ -14,7 +14,7 @@ Storage providers persist tasks and their state. With persistent storage, tasks 
 | Provider | Use Case | Pros | Cons |
 |----------|----------|------|------|
 | **In-Memory** | Development, Testing | Fast, no setup | Data lost on restart |
-| **SQL Server** | Production, Enterprise | Robust, scalable, stored procedures | Requires SQL Server |
+| **SQL Server** | Production, Enterprise | Scalable, ACID, stored procedures | Requires SQL Server |
 | **PostgreSQL** | Production, Open-source | Relational, scalable, server-side queries, writable-CTE optimizations | Requires PostgreSQL |
 | **SQLite** | Small-scale production, Single-server | Simple, file-based, no server | Limited concurrent writes |
 
@@ -22,10 +22,10 @@ Storage providers persist tasks and their state. With persistent storage, tasks 
 
 ### In-Memory Storage
 
-Perfect for development and testing when you don't need task persistence.
+For development and testing when you don't need persistence.
 
-- Zero setup - works out of the box
-- Fast performance
+- Zero setup
+- Fast
 - No external dependencies
 - Tasks lost on application restart
 - Not suitable for production
@@ -34,7 +34,7 @@ Perfect for development and testing when you don't need task persistence.
 
 ### SQL Server Storage
 
-Enterprise-grade storage for production environments.
+Storage for production environments.
 
 - Production-ready
 - Highly scalable
@@ -94,14 +94,14 @@ Implement custom storage providers for Redis, MongoDB, or any other database.
 **Use SQL Server when:**
 - Running in production at scale
 - Need high availability
-- Require robust querying
+- Require server-side querying
 - Have existing SQL Server infrastructure
-- Need enterprise-grade reliability
+- Need high reliability
 
 **Use PostgreSQL when:**
 - Running in production at scale
 - Need high availability with an open-source database
-- Require robust, server-side querying
+- Require server-side querying
 - Have existing PostgreSQL infrastructure
 - Want no database licensing cost
 

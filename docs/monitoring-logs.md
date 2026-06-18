@@ -9,7 +9,7 @@ nav_order: 5
 
 **Available since:** v3.0
 
-EverTask provides a built-in log capture system that records logs written during task execution. The logger acts as a **proxy** that ALWAYS forwards logs to the standard ILogger infrastructure (console, file, Serilog, Application Insights, etc.) and **optionally** persists them to the database for audit trails.
+A built-in log capture system records logs written during task execution. It is a **proxy** that ALWAYS forwards logs to the standard ILogger infrastructure (console, file, Serilog, Application Insights, etc.) and **optionally** persists them to the database for audit trails.
 
 ## Why Use Log Capture?
 
@@ -177,7 +177,7 @@ public class RetryTaskHandler : EverTaskHandler<RetryTask>
 }
 ```
 
-This is **intentional** - it provides complete visibility into all execution attempts.
+This is **intentional**: it keeps the full record of every execution attempt.
 
 ## Performance Considerations
 

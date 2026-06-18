@@ -21,8 +21,8 @@ builder.Services.AddEverTask(opt =>
 
 ## Characteristics
 
-- Zero setup - works out of the box
-- Fast performance
+- Zero setup
+- Fast
 - No external dependencies
 - Tasks lost on application restart
 - Not suitable for production

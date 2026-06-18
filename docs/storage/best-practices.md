@@ -33,8 +33,8 @@ Pick the right storage provider for your scenario:
 **Choose SQL Server when:**
 - Production at scale
 - High availability requirements
-- Need robust querying
-- Enterprise-grade reliability needed
+- Need server-side querying
+- High reliability needed
 
 **Choose Custom Storage when:**
 - Specific database requirements

@@ -129,4 +129,4 @@ public override async Task Handle(MyTask task, CancellationToken cancellationTok
 
 - **[Timeout Management](timeout-management.md)** - Configure task timeouts
 - **[Graceful Shutdown](graceful-shutdown.md)** - Handle application restarts
-- **[Best Practices](best-practices.md)** - Build robust cancellation strategies
+- **[Best Practices](best-practices.md)** - Patterns and pitfalls

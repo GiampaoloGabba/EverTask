@@ -7,14 +7,14 @@ has_children: true
 
 # Workflows
 
-This guide covers techniques for coordinating and managing complex task execution workflows. Learn how to chain tasks, build multi-step processes, and orchestrate sophisticated business workflows.
+This guide covers coordinating multi-step work: chaining tasks, building pipelines, and orchestration patterns.
 
 ## Overview
 
-EverTask provides powerful capabilities for building complex, multi-step workflows:
+Two ways to coordinate multi-step work:
 
 - **[Task Orchestration](task-orchestration.md)**: Chain tasks, handle cancellation, and reschedule dynamically
-- **[Custom Workflows](custom-workflows.md)**: Build sophisticated business processes with state machines and sagas
+- **[Custom Workflows](custom-workflows.md)**: Build multi-step processes with state machines and sagas
 
 ## When to Use Task Orchestration
 

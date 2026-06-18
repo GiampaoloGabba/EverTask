@@ -7,7 +7,7 @@ nav_order: 1
 
 # Resilience & Error Handling Overview
 
-EverTask provides comprehensive resilience features to help you build fault-tolerant background tasks that can recover from transient failures automatically.
+Resilience features that recover from transient failures automatically and fail fast on the permanent ones.
 
 ## Key Features
 
@@ -92,4 +92,4 @@ Start with [Retry Policies](retry-policies.md) to learn the basics, then explore
 - **[Exception Filtering](exception-filtering.md)** - Fail-fast on permanent errors
 - **[Retry Callbacks](retry-callbacks.md)** - Track and debug retry attempts
 - **[Timeout Management](timeout-management.md)** - Prevent runaway tasks
-- **[Best Practices](best-practices.md)** - Build robust, resilient systems
+- **[Best Practices](best-practices.md)** - Patterns and pitfalls

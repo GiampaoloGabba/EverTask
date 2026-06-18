@@ -7,7 +7,7 @@ has_children: true
 
 # Monitoring
 
-EverTask provides comprehensive monitoring capabilities to give you full visibility into your background tasks. Whether you need a ready-to-use web dashboard or want to build custom integrations, EverTask has you covered.
+EverTask monitors your background tasks two ways: a ready-to-use web dashboard with a REST API, or an event system you can wire into your own tooling.
 
 ## Two Approaches to Monitoring
 
@@ -15,18 +15,18 @@ EverTask provides comprehensive monitoring capabilities to give you full visibil
 
 **[→ Monitoring Dashboard Guide](monitoring-dashboard.md)**
 
-A complete, production-ready monitoring solution with minimal setup:
+A dashboard and REST API with minimal setup:
 
-- **Embedded React Dashboard** - Modern UI with real-time updates
-- **REST API** - Full-featured API for programmatic access
-- **Real-Time Events** - SignalR integration with intelligent throttling
-- **Authentication** - JWT-based security
-- **Ready in Minutes** - Add `.AddMonitoringApi()` and you're done
+- **Embedded React Dashboard** - real-time updates
+- **REST API** - programmatic access to tasks and stats
+- **Real-Time Events** - SignalR with debounced cache invalidation
+- **Authentication** - JWT
+- **One call** - add `.AddMonitoringApi()` and map it
 
 **Perfect for:**
 - Quick setup and immediate visibility
 - Production monitoring dashboards
-- Teams that want a complete solution out of the box
+- Teams that want a dashboard without building one
 - Applications that need both UI and API access
 
 **Quick Start:**

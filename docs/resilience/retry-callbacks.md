@@ -191,7 +191,7 @@ public override async ValueTask OnRetry(Guid taskId, int attemptNumber, Exceptio
 
 ## Combining Exception Filtering and OnRetry
 
-You can use both features together for comprehensive retry handling:
+You can use both features together:
 
 ```csharp
 public class RobustDatabaseHandler : EverTaskHandler<DatabaseTask>
@@ -286,4 +286,4 @@ public class SlowHandler : EverTaskHandler<SlowTask>
 
 - **[Exception Filtering](exception-filtering.md)** - Configure which exceptions trigger retries
 - **[Retry Policies](retry-policies.md)** - Core retry policy concepts
-- **[Best Practices](best-practices.md)** - Build robust retry strategies
+- **[Best Practices](best-practices.md)** - Patterns and pitfalls

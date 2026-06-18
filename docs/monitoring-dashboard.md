@@ -7,7 +7,7 @@ nav_order: 2
 
 # Monitoring Dashboard
 
-EverTask provides a comprehensive monitoring dashboard with REST API endpoints and an embedded React UI for real-time task monitoring, analytics, and management.
+A monitoring dashboard with a REST API and an embedded React UI for real-time task monitoring and analytics.
 
 ![Dashboard Overview]({{ '/assets/screenshots/1.png' | relative_url }})
 
@@ -43,12 +43,12 @@ The monitoring system can be used in two modes:
 
 ### Version 3.3 - Feature Complete (Read-Only Monitoring)
 
-The dashboard and API are **feature complete for read-only monitoring** in version 3.3. This release provides comprehensive observability and analytics capabilities for complete visibility into your task execution pipeline.
+The dashboard and API are **feature complete for read-only monitoring** in version 3.3: observability and analytics over your task pipeline, without write operations.
 
 **Current Capabilities (v3.3):**
 - ✅ Complete read-only monitoring and observability
 - ✅ Real-time task status updates via SignalR with event-driven cache invalidation
-- ✅ Comprehensive analytics (success rates, execution times, task distribution)
+- ✅ Analytics (success rates, execution times, task distribution)
 - ✅ Detailed execution logs visualization with filtering and export
 - ✅ Multi-queue monitoring and advanced task filtering
 - ✅ Audit trail visualization (status history, execution runs)

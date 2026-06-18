@@ -246,4 +246,4 @@ public class BadHandler : EverTaskHandler<BadTask>
 
 - **[Retry Callbacks](retry-callbacks.md)** - Track and monitor retry attempts
 - **[Retry Policies](retry-policies.md)** - Core retry policy concepts
-- **[Best Practices](best-practices.md)** - Build robust retry strategies
+- **[Best Practices](best-practices.md)** - Patterns and pitfalls

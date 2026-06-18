@@ -7,7 +7,7 @@ nav_order: 6
 
 # Recurring Tasks Best Practices
 
-Follow these guidelines to build robust, maintainable recurring task systems.
+Best practices for task keys, schedule choice, long-running tasks, time zones, and limits.
 
 ## 1. Always Use Task Keys for Recurring Tasks
 

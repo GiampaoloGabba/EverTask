@@ -7,11 +7,11 @@ has_children: true
 
 # Recurring Tasks
 
-EverTask provides a powerful fluent API for scheduling recurring tasks, from simple hourly jobs to complex cron-based schedules.
+Schedule work that runs on a repeating cadence, from an hourly job to a cron schedule.
 
 ## Overview
 
-Recurring tasks are a core feature of EverTask that enable you to schedule work that executes on a regular basis. Whether you need simple hourly tasks or complex cron-based schedules, EverTask provides both a type-safe fluent API and full cron expression support.
+Recurring tasks run on a schedule you define with either a type-safe fluent API or a cron expression. The schedule is persisted, so it survives restarts.
 
 **Key Features:**
 - **Fluent API**: Type-safe, readable schedule building
@@ -133,8 +133,8 @@ public async Task UpdateUserReportSchedule(string userId, TimeOnly newTime)
 Start with the [Overview](recurring-tasks/overview.md) to learn about recurring task features, or jump directly to:
 - **[Fluent Scheduling API](recurring-tasks/fluent-api.md)** - Type-safe schedule building
 - **[Cron Expressions](recurring-tasks/cron-expressions.md)** - Complex scheduling patterns
-- **[Best Practices](recurring-tasks/best-practices.md)** - Build robust recurring systems
+- **[Best Practices](recurring-tasks/best-practices.md)** - Patterns and pitfalls
 
 ---
 
-> **Note**: Recurring tasks persist across application restarts. Your schedules survive even if your app crashes or redeploys!
+> **Note**: Recurring schedules are persisted, so they survive restarts and redeploys.

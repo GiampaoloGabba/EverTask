@@ -7,7 +7,7 @@ nav_order: 4
 
 # SQL Server Storage
 
-SQL Server provides enterprise-grade storage for production environments.
+SQL Server storage for production environments.
 
 ## Installation
 
@@ -171,9 +171,9 @@ The SetStatus operation uses a stored procedure that performs the status update 
 Use SQL Server storage when:
 - Running in production at scale
 - Need high availability
-- Require robust querying
+- Require server-side querying
 - Have existing SQL Server infrastructure
-- Need enterprise-grade reliability
+- Need high reliability
 
 Consider alternatives when:
 - Running small-scale applications (use SQLite)

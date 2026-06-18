@@ -135,4 +135,4 @@ The per-attempt `Timeout` is never eroded by [keyed rate limiting](../rate-limit
 
 - **[Cancellation Tokens](cancellation-tokens.md)** - Implement cooperative cancellation
 - **[Graceful Shutdown](graceful-shutdown.md)** - Handle application restarts
-- **[Best Practices](best-practices.md)** - Build robust timeout strategies
+- **[Best Practices](best-practices.md)** - Patterns and pitfalls

@@ -248,4 +248,4 @@ When a handler also declares a [RateLimitPolicy](../rate-limiting.md), retry att
 
 - **[Exception Filtering](exception-filtering.md)** - Configure which exceptions trigger retries
 - **[Retry Callbacks](retry-callbacks.md)** - Track retry attempts and implement circuit breakers
-- **[Best Practices](best-practices.md)** - Build robust retry strategies
+- **[Best Practices](best-practices.md)** - Patterns and pitfalls

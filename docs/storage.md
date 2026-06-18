@@ -22,10 +22,10 @@ Learn about the available storage providers, their characteristics, and how to c
 Configure audit trail levels to control database bloat from high-frequency tasks. Learn about Full, Minimal, ErrorsOnly, and None audit levels.
 
 ### [In-Memory Storage](storage/in-memory-storage.md)
-Fast, zero-setup storage perfect for development and testing. Tasks are lost on application restart.
+Fast, zero-setup storage for development and testing. Tasks are lost on restart.
 
 ### [SQL Server Storage](storage/sql-server-storage.md)
-Enterprise-grade storage for production environments with DbContext pooling, stored procedures, and schema management.
+Storage for production with DbContext pooling, stored procedures, and schema management.
 
 ### [PostgreSQL Storage](storage/postgres-storage.md)
 Relational, open-source storage for production with DbContext pooling, schema-aware migrations, and writable-CTE optimizations, comparable to the SQL Server provider.

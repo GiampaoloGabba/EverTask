@@ -7,7 +7,7 @@ nav_order: 1
 
 # Recurring Tasks Overview
 
-EverTask provides a powerful fluent API for scheduling recurring tasks, from simple hourly jobs to complex cron-based schedules.
+Schedule recurring tasks with a type-safe fluent API or cron, from an hourly job to a cron schedule.
 
 ## Key Features
 

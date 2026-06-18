@@ -88,4 +88,4 @@ public override async Task Handle(IdempotentTask task, CancellationToken cancell
 
 - **[Cancellation Tokens](cancellation-tokens.md)** - Implement cooperative cancellation
 - **[Error Observation](error-observation.md)** - Track and respond to errors
-- **[Best Practices](best-practices.md)** - Build robust shutdown strategies
+- **[Best Practices](best-practices.md)** - Patterns and pitfalls

@@ -7,11 +7,11 @@ has_children: true
 
 # Resilience & Error Handling
 
-EverTask helps you build fault-tolerant background tasks that can recover from transient failures automatically.
+Recover from transient failures automatically, and fail fast on the ones that won't fix themselves.
 
 ## Overview
 
-Building resilient background task systems requires handling failures gracefully, retrying transient errors, managing timeouts, and ensuring graceful shutdown. EverTask provides comprehensive resilience features to make this easy.
+Resilient task handling comes down to a few things: retrying transient errors, failing fast on permanent ones, bounding runtime with timeouts, and recovering cleanly across restarts. EverTask covers each.
 
 **Key Features:**
 - **Retry Policies**: Automatically retry failed tasks with configurable policies
@@ -93,7 +93,7 @@ public override async Task Handle(MyTask task, CancellationToken cancellationTok
 
 ## Common Patterns
 
-### Robust Database Handler
+### Database Handler with Retries
 ```csharp
 public class RobustDatabaseHandler : EverTaskHandler<DatabaseTask>
 {
@@ -147,8 +147,8 @@ public class HttpApiHandler : EverTaskHandler<HttpApiTask>
 Start with the [Overview](resilience/overview.md) to learn about resilience features, or jump directly to:
 - **[Retry Policies](resilience/retry-policies.md)** - Configure automatic retry behavior
 - **[Exception Filtering](resilience/exception-filtering.md)** - Fail-fast on permanent errors
-- **[Best Practices](resilience/best-practices.md)** - Build robust, resilient systems
+- **[Best Practices](resilience/best-practices.md)** - Patterns and pitfalls
 
 ---
 
-> **Note**: Proper resilience configuration is critical for production systems. Start with sensible defaults and tune based on your specific workload characteristics!
+> **Note**: Start with the defaults and tune to your workload.
