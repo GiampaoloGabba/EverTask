@@ -203,5 +203,6 @@ Consider alternatives when:
 - **[Audit Configuration](audit-configuration.md)** - Optimize database with audit levels
 - **[Best Practices](best-practices.md)** - Storage optimization strategies
 - **[SQL Server Storage](sql-server-storage.md)** - Enterprise SQL Server alternative
+- **[MySQL / MariaDB Storage](mysql-storage.md)** - MySQL/MariaDB alternative
 - **[SQLite Storage](sqlite-storage.md)** - Lightweight alternative
 - **[Custom Storage](custom-storage.md)** - Implement your own provider

@@ -184,5 +184,7 @@ Consider alternatives when:
 
 - **[Audit Configuration](audit-configuration.md)** - Optimize database with audit levels
 - **[Best Practices](best-practices.md)** - Storage optimization strategies
+- **[PostgreSQL Storage](postgres-storage.md)** - Open-source relational alternative
+- **[MySQL / MariaDB Storage](mysql-storage.md)** - MySQL/MariaDB alternative
 - **[SQLite Storage](sqlite-storage.md)** - Lightweight alternative
 - **[Custom Storage](custom-storage.md)** - Implement your own provider

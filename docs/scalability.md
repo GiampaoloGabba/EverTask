@@ -98,7 +98,8 @@ the database sets the ceiling, not EverTask. Indicative throughput, audit off:
 SQLite is a single writer (a local file), so it runs much lower and gets nothing from parallelism: around
 200/sec on this machine. SQL Server is left out on purpose. The only figure we have comes from Docker under
 WSL2, where its I/O is heavily penalized and not representative, so we'll publish a number once it's
-measured on real hardware.
+measured on real hardware. MySQL and MariaDB run the same server-side relational profile as PostgreSQL
+(recovery and cleanup run on the server); we haven't benchmarked them separately yet.
 
 Neither multi-queue nor the sharded scheduler raises this number; they handle scheduling and isolation, not
 execution. The levers for execution throughput live on the storage side: a faster database, fewer

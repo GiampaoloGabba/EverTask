@@ -102,7 +102,7 @@ See local CLAUDE.md files for implementation details.
 ## Ops Quick Facts
 
 - **Package Management**: Central Package Management (`Directory.Packages.props`) — do NOT add `<PackageReference>` versions in .csproj, add to Directory.Packages.props
-- **Version**: defined in `Directory.Build.props` (lockstep across all packages; current 3.10.0)
+- **Version**: defined in `Directory.Build.props` (lockstep across all packages; current 3.11.0)
 - **CI/CD**: Build on push/PR to master (`.github/workflows/build.yml`), manual release workflow (`.github/workflows/release.yml`)
 - **MediatR Attribution**: Core files adapted from MediatR (Apache 2.0) — see attribution comments in Dispatcher.cs, TaskHandlerExecutor.cs, TaskHandlerWrapper.cs, HandlerRegistrar.cs
 - **Public option changes (anti-stale)**: when adding or changing a public configuration option/default (service, queue, storage, audit/retention, rate-limit, monitoring/logging, or handler property/dispatch parameter), update ALL THREE in the same PR: `docs/configuration-cheatsheet.md`, `docs/configuration-reference.md`, AND the integration skill (`plugins/evertask/skills/integrate-evertask/`). The cheatsheet must stay exhaustive (one row per option) and the skill must not go stale.

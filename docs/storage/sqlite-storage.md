@@ -146,5 +146,7 @@ Consider alternatives when:
 
 - **[Storage Overview](overview.md)** - Compare storage providers
 - **[SQL Server Storage](sql-server-storage.md)** - Enterprise storage alternative
+- **[PostgreSQL Storage](postgres-storage.md)** - Open-source relational alternative
+- **[MySQL / MariaDB Storage](mysql-storage.md)** - MySQL/MariaDB alternative
 - **[Audit Configuration](audit-configuration.md)** - Optimize database with audit levels
 - **[Best Practices](best-practices.md)** - Storage optimization strategies

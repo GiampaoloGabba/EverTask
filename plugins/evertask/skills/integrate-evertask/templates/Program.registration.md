@@ -47,6 +47,16 @@ builder.Services.AddEverTask(opt => opt
         .WriteTo.File("logs/evertask-.txt", rollingInterval: RollingInterval.Day));
 ```
 
+## MySQL / MariaDB
+
+```csharp
+builder.Services.AddEverTask(opt => opt
+        .RegisterTasksFromAssembly(typeof(Program).Assembly))
+    .AddMySqlStorage(builder.Configuration.GetConnectionString("EverTaskDb")!);
+    // net9.0/net10.0 only; NO SchemaName (a MySQL "schema" is a database).
+    // Optional: o => o.ServerVersion = new MariaDbServerVersion(new Version(10, 11)) to skip auto-detect.
+```
+
 ## Worker service (SQL/Postgres, no dashboard)
 
 ```csharp

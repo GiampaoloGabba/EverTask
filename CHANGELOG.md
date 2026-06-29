@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.11.0] - 2026-06-30
+
 ### Changed (breaking — task payload serialization moved to System.Text.Json)
 
 - **Tasks and recurring metadata are now (de)serialized with System.Text.Json instead of Newtonsoft.Json**

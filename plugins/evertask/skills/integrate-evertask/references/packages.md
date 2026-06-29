@@ -3,7 +3,7 @@
 Resolve the package set from the user's storage choice + selected capabilities. The version is
 governed lockstep by `Directory.Build.props` in this repo; for an external consumer, take the
 latest published version of each package (they release in lockstep). Current repo package version:
-**3.10.0**.
+**3.11.0**.
 
 | Feature / choice | Package | Notes |
 |---|---|---|
