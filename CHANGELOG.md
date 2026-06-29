@@ -23,6 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **MySQL / MariaDB storage provider** (`EverTask.Storage.MySql`, `AddMySqlStorage(...)`), built on the
+  maintained Microting fork of Pomelo (`Microting.EntityFrameworkCore.MySql`). Targets net9.0/net10.0 (the
+  fork has no EF Core 8 build). Inherits the optimized, server-side EF Core base like the Postgres provider,
+  with one read-path override (the completed-task purge, because a MySQL `DELETE ... LIMIT` does not honor a
+  correlated `EXISTS` guard). The hot writes (`SetStatus`, `UpdateCurrentRun`, `CompleteRecurringRun`) use
+  stored procedures for a single atomic round-trip — the MySQL/MariaDB analog of SQL Server's procedures and
+  PostgreSQL's writable CTEs (MySQL has read-only CTEs and no `UPDATE ... RETURNING`). No schema option (a MySQL
+  "schema" is a database). Tested end-to-end against a real MariaDB 10.11 container, on net9.0 and net10.0. See
+  `docs/storage/mysql-storage.md`.
 - **Roslyn analyzer bundled in the `EverTask.Abstractions` package** (`analyzers/dotnet/cs`, no runtime
   dependency) that checks the System.Text.Json payload contract at compile time, so violations that used to
   surface only on recovery now show up in the IDE and the build (#14). The rules: public field not serialized

@@ -245,12 +245,13 @@ Two more caches sit on the execution side. Monitoring events carry the task's JS
 
 ### Pooled DbContext + provider-specific hot writes
 
-The EF Core providers (SQL Server, PostgreSQL, SQLite) register `AddPooledDbContextFactory`, not a per-operation context, so each write leases a reset, reused `DbContext`. (The in-memory store keeps its state in process and uses no `DbContext`.) That cuts per-operation allocation sharply (~-88% per write, ~-71% per task end to end) and the GC pressure with it. On a real database the round-trip dominates wall-clock, so this is an allocation win, not a throughput one. Plain `AddDbContextFactory` does *not* pool.
+The EF Core providers (SQL Server, PostgreSQL, MySQL/MariaDB, SQLite) register `AddPooledDbContextFactory`, not a per-operation context, so each write leases a reset, reused `DbContext`. (The in-memory store keeps its state in process and uses no `DbContext`.) That cuts per-operation allocation sharply (~-88% per write, ~-71% per task end to end) and the GC pressure with it. On a real database the round-trip dominates wall-clock, so this is an allocation win, not a throughput one. Plain `AddDbContextFactory` does *not* pool.
 
 The status write itself is the hot one: it runs on every state change and adds an audit row. Each provider keeps it to as few round-trips as possible and commits the row update and the audit row together, but the mechanism differs:
 
 - **SQL Server** calls a schema-aware stored procedure (`usp_SetTaskStatus`) that does the UPDATE and the conditional audit INSERT in one transaction: a single round-trip. (Recurring bookkeeping has its own procedures, `usp_UpdateCurrentRun` and `usp_CompleteRecurringRun`.)
 - **PostgreSQL** uses a writable CTE: one statement that UPDATEs the row and INSERTs the audit from its `RETURNING` set, atomic by construction, also a single round-trip.
+- **MySQL / MariaDB** calls stored procedures (`usp_SetTaskStatus`, `usp_UpdateCurrentRun`, `usp_CompleteRecurringRun`): MySQL has read-only CTEs and no `UPDATE ... RETURNING`, so a stored procedure is the only single-statement form. Each does the UPDATE and the conditional audit INSERT in one transaction: a single round-trip. (The `ErrorsOnly` runs-audit gate is decided server-side from the row's own status/exception.)
 - **SQLite** (and the base EF Core path) wraps an `ExecuteUpdate` and the audit insert in an explicit transaction, so two round-trips, since SQLite has neither stored procedures nor that CTE form.
 
 ## Threading Model

@@ -15,6 +15,8 @@
     <PackageReference Include="Respawn" />
     <PackageReference Include="Testcontainers.MsSql" />
     <PackageReference Include="Testcontainers.PostgreSql" />
+    <!-- MySQL/MariaDB provider (Microting) ships net9/net10 only; reference it (and its test module) only there -->
+    <PackageReference Include="Testcontainers.MariaDb" Condition="'$(TargetFramework)' != 'net8.0'" />
     <PackageReference Include="xunit" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="Shouldly" />
@@ -29,6 +31,7 @@
     <ProjectReference Include="..\..\src\Storage\EverTask.Storage.Sqlite\EverTask.Storage.Sqlite.csproj" />
     <ProjectReference Include="..\..\src\Storage\EverTask.Storage.SqlServer\EverTask.Storage.SqlServer.csproj" />
     <ProjectReference Include="..\..\src\Storage\EverTask.Storage.Postgres\EverTask.Storage.Postgres.csproj" />
+    <ProjectReference Include="..\..\src\Storage\EverTask.Storage.MySql\EverTask.Storage.MySql.csproj" Condition="'$(TargetFramework)' != 'net8.0'" />
     <ProjectReference Include="..\EverTask.Tests\EverTask.Tests.csproj" />
   </ItemGroup>
 

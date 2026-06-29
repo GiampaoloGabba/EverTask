@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Microting.EntityFrameworkCore.MySql (the maintained fork; upstream Pomelo is abandoned) starts at
+         9.0.x and ships NO EF Core 8 build. Override Directory.Build.props (net8.0;net9.0;net10.0) to drop
+         net8 for THIS package only; the core library stays multi-target net8/9/10. -->
+    <TargetFrameworks>net9.0;net10.0</TargetFrameworks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\EverTask.Storage.EfCore\EverTask.Storage.EfCore.csproj" />
+    <ProjectReference Include="..\..\EverTask\EverTask.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microting.EntityFrameworkCore.MySql" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+    <!-- Design-time only: PrivateAssets="all" stops it (and its EFCore.Design -> Newtonsoft.Json transitive)
+         from leaking into the consumer's dependency graph. PrivateAssets on the CPM <PackageVersion> does NOT
+         propagate — it must live on the <PackageReference>. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" PrivateAssets="all" IncludeAssets="runtime; build; native; contentfiles; analyzers; buildtransitive" />
+    <PackageReference Include="UUIDNext" />
+    <!-- Direct reference to override vulnerable transitive 9.0.0 (NU1903), like the other providers -->
+    <PackageReference Include="System.Security.Cryptography.Xml" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\..\assets\logo-nuget.png" Pack="true" PackagePath="" />
+    <None Include="..\..\..\README.md" Pack="true" PackagePath="" />
+  </ItemGroup>
+
+</Project>

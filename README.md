@@ -6,6 +6,7 @@
 [![NuGet](https://img.shields.io/nuget/vpre/EverTask.Storage.SqlServer.svg?label=EverTask.Storage.SqlServer)](https://www.nuget.org/packages/EverTask.Storage.SqlServer)
 [![NuGet](https://img.shields.io/nuget/vpre/EverTask.Storage.Sqlite.svg?label=EverTask.Storage.Sqlite)](https://www.nuget.org/packages/EverTask.Storage.Sqlite)
 [![NuGet](https://img.shields.io/nuget/vpre/EverTask.Storage.Postgres.svg?label=EverTask.Storage.Postgres)](https://www.nuget.org/packages/EverTask.Storage.Postgres)
+[![NuGet](https://img.shields.io/nuget/vpre/EverTask.Storage.MySql.svg?label=EverTask.Storage.MySql)](https://www.nuget.org/packages/EverTask.Storage.MySql)
 [![NuGet](https://img.shields.io/nuget/vpre/EverTask.Storage.EfCore.svg?label=EverTask.Storage.EfCore)](https://www.nuget.org/packages/EverTask.Storage.EfCore)
 [![NuGet](https://img.shields.io/nuget/vpre/EverTask.Logging.Serilog.svg?label=EverTask.Logging.Serilog)](https://www.nuget.org/packages/EverTask.Logging.Serilog)
 [![NuGet](https://img.shields.io/nuget/vpre/EverTask.Monitor.AspnetCore.SignalR.svg?label=EverTask.Monitor.AspnetCore.SignalR)](https://www.nuget.org/packages/EverTask.Monitor.AspnetCore.SignalR)
@@ -26,7 +27,7 @@ Tasks can be CPU-bound or I/O-bound, long- or short-running. Works with ASP.NET 
 ### Core execution
 - **Background execution**: fire-and-forget, scheduled, and recurring tasks
 - **No database polling**: the scheduler lives in memory and runs through channels; the database is written, not polled in a loop
-- **Persistence**: tasks resume after a restart (SQL Server, PostgreSQL, SQLite, In-Memory)
+- **Persistence**: tasks resume after a restart (SQL Server, PostgreSQL, MySQL/MariaDB, SQLite, In-Memory)
 - **Fluent scheduling**: recurring tasks by minute, hour, day, week, month, or cron
 - **Idempotent registration**: a task key keeps duplicate recurring registrations out
 
@@ -63,7 +64,7 @@ Tasks can be CPU-bound or I/O-bound, long- or short-running. Works with ASP.NET 
 
 ```bash
 dotnet add package EverTask
-dotnet add package EverTask.Storage.SqlServer  # Or EverTask.Storage.Postgres / EverTask.Storage.Sqlite
+dotnet add package EverTask.Storage.SqlServer  # Or EverTask.Storage.Postgres / EverTask.Storage.MySql / EverTask.Storage.Sqlite
 ```
 
 ### Configuration
@@ -141,7 +142,7 @@ Then `/reload-plugins` and run `/evertask:integrate-evertask`. For other agents,
 - **[Monitoring](https://GiampaoloGabba.github.io/EverTask/monitoring.html)** - Complete monitoring guide (Dashboard, Events, and Logs)
 - **[Scalability](https://GiampaoloGabba.github.io/EverTask/scalability.html)** - Multi-queue support, keyed rate limiting, and sharded scheduler for high-load scenarios
 - **[Task Orchestration](https://GiampaoloGabba.github.io/EverTask/advanced-features.html)** - Chain tasks, build workflows, and coordinate complex processes
-- **[Storage Configuration](https://GiampaoloGabba.github.io/EverTask/storage.html)** - SQL Server, PostgreSQL, SQLite, In-Memory, custom implementations
+- **[Storage Configuration](https://GiampaoloGabba.github.io/EverTask/storage.html)** - SQL Server, PostgreSQL, MySQL/MariaDB, SQLite, In-Memory, custom implementations
 - **[Configuration](https://GiampaoloGabba.github.io/EverTask/configuration.html)** - Configure EverTask (Reference + Cheatsheet)
 - **[Agent Skill](https://GiampaoloGabba.github.io/EverTask/agent-skill.html)** - AI-assisted integration: install the skill and let an agent wire up EverTask (one-step on Claude Code)
 - **[Architecture & Internals](https://GiampaoloGabba.github.io/EverTask/architecture.html)** - How EverTask works under the hood
@@ -312,6 +313,7 @@ Every rule is configurable via `.editorconfig` (e.g. `dotnet_diagnostic.ET0001.s
   - [EverTask.Storage.SqlServer](https://www.nuget.org/packages/EverTask.Storage.SqlServer) - SQL Server storage
   - [EverTask.Storage.Sqlite](https://www.nuget.org/packages/EverTask.Storage.Sqlite) - SQLite storage
   - [EverTask.Storage.Postgres](https://www.nuget.org/packages/EverTask.Storage.Postgres) - PostgreSQL storage
+  - [EverTask.Storage.MySql](https://www.nuget.org/packages/EverTask.Storage.MySql) - MySQL/MariaDB storage
   - [EverTask.Storage.EfCore](https://www.nuget.org/packages/EverTask.Storage.EfCore) - EF Core base storage
   - [EverTask.Logging.Serilog](https://www.nuget.org/packages/EverTask.Logging.Serilog) - Serilog integration
   - [EverTask.Monitor.AspnetCore.SignalR](https://www.nuget.org/packages/EverTask.Monitor.AspnetCore.SignalR) - Real-time monitoring
@@ -333,7 +335,7 @@ On the roadmap:
 - **Adaptive Throttling**: Dynamic throttling based on system resources
 - **Workflow Orchestration**: Complex workflow and saga orchestration with fluent API
 - **Additional Monitoring**: Sentry Crons, Application Insights, OpenTelemetry support
-- **More Storage Options**: MySQL, Redis, Cosmos DB (PostgreSQL shipped)
+- **More Storage Options**: Redis, Cosmos DB (PostgreSQL and MySQL/MariaDB shipped)
 
 ## Contributing
 

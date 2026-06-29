@@ -120,12 +120,14 @@ Defaults differ between the auto-created `default`/`recurring` queues (inherit t
 | `AddMemoryStorage()` | core | Dev/test only: tasks lost on restart |
 | `AddSqlServerStorage(cs, opt?)` | `EverTask.Storage.SqlServer` | Options: `SqlServerTaskStoreOptions`; DbContext pooling + stored procedures |
 | `AddPostgresStorage(cs, opt?)` | `EverTask.Storage.Postgres` | Options: `PostgresTaskStoreOptions`; DbContext pooling + writable-CTE optimizations |
+| `AddMySqlStorage(cs, opt?)` | `EverTask.Storage.MySql` | Options: `MySqlTaskStoreOptions`; DbContext pooling + stored-proc hot writes; server-side base (no schema; net9/net10 only) |
 | `AddSqliteStorage(cs?, opt?)` | `EverTask.Storage.Sqlite` | Options: `SqliteTaskStoreOptions`; `cs` defaults to `"Data Source=EverTask.db"` |
 
 | Option (all EF Core store option types) | Default | Notes |
 |----------------------------------|---------|-------|
-| `SchemaName` | SQL Server: `"EverTask"`; PostgreSQL: `"evertask"`; SQLite: `""` | PostgreSQL: lowercase only (`null` = `public`); SQL Server: `null` = dbo; SQLite: must stay `""` (no schema concept) |
+| `SchemaName` | SQL Server: `"EverTask"`; PostgreSQL: `"evertask"`; SQLite & MySQL/MariaDB: `""` | PostgreSQL: lowercase only (`null` = `public`); SQL Server: `null` = dbo; SQLite & MySQL/MariaDB: must stay `""` (no schema concept — MySQL rejects a non-empty value) |
 | `AutoApplyMigrations` | `true` | Disable for manual migrations in production |
+| `ServerVersion` (MySQL/MariaDB only) | `null` → `ServerVersion.AutoDetect` | Set an explicit `MariaDbServerVersion`/`MySqlServerVersion` to skip the startup auto-detect connection |
 
 ## Logging
 

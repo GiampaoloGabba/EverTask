@@ -53,12 +53,13 @@ With those four steps in place, EverTask persists the task, executes it in the b
   - [Task Dispatching](task-dispatching.md) - Execute tasks immediately or on a schedule
 
 ### Core Concepts
-- **[Storage](storage.md)** - Choose your persistence layer (SQL Server, PostgreSQL, SQLite, or in-memory)
+- **[Storage](storage.md)** - Choose your persistence layer (SQL Server, PostgreSQL, MySQL/MariaDB, SQLite, or in-memory)
   - [Overview](storage/overview.md) - Picking a provider
   - [Audit Configuration](storage/audit-configuration.md) - Audit levels and retention
   - [In-Memory Storage](storage/in-memory-storage.md) - Zero-infra storage for dev and tests
   - [SQL Server Storage](storage/sql-server-storage.md) - Setup and schema
   - [PostgreSQL Storage](storage/postgres-storage.md) - Setup and schema
+  - [MySQL / MariaDB Storage](storage/mysql-storage.md) - Setup and connection strings
   - [SQLite Storage](storage/sqlite-storage.md) - Setup and connection strings
   - [Custom Storage](storage/custom-storage.md) - Implement ITaskStorage
   - [Serialization](storage/serialization.md) - System.Text.Json payload contract

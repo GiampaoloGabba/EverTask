@@ -59,6 +59,7 @@ jobs:
           dotnet pack src/Storage/EverTask.Storage.SqlServer/EverTask.Storage.SqlServer.csproj --no-build -o nupkg
           dotnet pack src/Storage/EverTask.Storage.Sqlite/EverTask.Storage.Sqlite.csproj --no-build -o nupkg
           dotnet pack src/Storage/EverTask.Storage.Postgres/EverTask.Storage.Postgres.csproj --no-build -o nupkg
+          dotnet pack src/Storage/EverTask.Storage.MySql/EverTask.Storage.MySql.csproj --no-build -o nupkg
           dotnet pack src/Logging/EverTask.Logging.Serilog/EverTask.Logging.Serilog.csproj --no-build -o nupkg
           dotnet pack src/Monitoring/EverTask.Monitor.AspnetCore.SignalR/EverTask.Monitor.AspnetCore.SignalR.csproj --no-build -o nupkg
           dotnet pack src/Monitoring/EverTask.Monitor.Api/EverTask.Monitor.Api.csproj --no-build -o nupkg

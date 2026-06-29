@@ -2,7 +2,7 @@
 layout: default
 title: Custom Storage
 parent: Storage
-nav_order: 7
+nav_order: 8
 ---
 
 # Custom Storage
@@ -259,6 +259,10 @@ public class CustomStorageTests
 ### PostgreSQL
 
 PostgreSQL is now a **built-in** provider: use [`EverTask.Storage.Postgres`](postgres-storage.md) (`AddPostgresStorage(...)`) instead of writing your own. The scenarios below remain useful for stores EverTask does not ship.
+
+### MySQL / MariaDB
+
+MySQL and MariaDB are also **built-in**: use [`EverTask.Storage.MySql`](mysql-storage.md) (`AddMySqlStorage(...)`) instead of writing your own.
 
 ### MongoDB
 

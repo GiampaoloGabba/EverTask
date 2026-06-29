@@ -30,6 +30,9 @@ Storage for production with DbContext pooling, stored procedures, and schema man
 ### [PostgreSQL Storage](storage/postgres-storage.md)
 Relational, open-source storage for production with DbContext pooling, schema-aware migrations, and writable-CTE optimizations, comparable to the SQL Server provider.
 
+### [MySQL / MariaDB Storage](storage/mysql-storage.md)
+Relational, open-source storage for production with server-side recovery and cleanup, comparable to the SQL Server and PostgreSQL providers. Supports MySQL 8.0+ and MariaDB 10.11+ (net9.0/net10.0 only).
+
 ### [SQLite Storage](storage/sqlite-storage.md)
 Lightweight, file-based storage ideal for small-scale production and single-server deployments.
 
@@ -84,6 +87,15 @@ builder.Services.AddEverTask(opt =>
     opt.RegisterTasksFromAssembly(typeof(Program).Assembly);
 })
 .AddPostgresStorage("Host=localhost;Database=evertask;Username=evertask;Password=***");
+```
+
+### Production Setup (MySQL / MariaDB)
+```csharp
+builder.Services.AddEverTask(opt =>
+{
+    opt.RegisterTasksFromAssembly(typeof(Program).Assembly);
+})
+.AddMySqlStorage("Server=localhost;Database=evertask;User=root;Password=***");
 ```
 
 ## Next Steps

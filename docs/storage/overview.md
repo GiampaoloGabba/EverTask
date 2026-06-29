@@ -16,6 +16,7 @@ Storage providers persist tasks and their state. With persistent storage, tasks 
 | **In-Memory** | Development, Testing | Fast, no setup | Data lost on restart |
 | **SQL Server** | Production, Enterprise | Scalable, ACID, stored procedures | Requires SQL Server |
 | **PostgreSQL** | Production, Open-source | Relational, scalable, server-side queries, writable-CTE optimizations | Requires PostgreSQL |
+| **MySQL/MariaDB** | Production, Open-source | Relational, scalable, server-side recovery & cleanup | Requires MySQL 8.0+ / MariaDB 10.11+ (net9.0/net10.0 only) |
 | **SQLite** | Small-scale production, Single-server | Simple, file-based, no server | Limited concurrent writes |
 
 ## Storage Provider Details
@@ -59,6 +60,20 @@ Relational, open-source storage for production, comparable to the SQL Server pro
 - Requires a PostgreSQL instance
 
 **Learn more:** [PostgreSQL Storage](postgres-storage.md)
+
+### MySQL / MariaDB Storage
+
+Relational, open-source storage for production, comparable to the SQL Server and PostgreSQL providers.
+
+- Production-ready
+- Open-source (no licensing cost)
+- Highly scalable, multi-server
+- ACID transactions
+- Server-side querying for all recovery and cleanup operations
+- Supports MySQL 8.0+ and MariaDB 10.11+ (net9.0/net10.0 only)
+- Requires a MySQL or MariaDB instance
+
+**Learn more:** [MySQL / MariaDB Storage](mysql-storage.md)
 
 ### SQLite Storage
 
@@ -105,6 +120,13 @@ Implement custom storage providers for Redis, MongoDB, or any other database.
 - Have existing PostgreSQL infrastructure
 - Want no database licensing cost
 
+**Use MySQL / MariaDB when:**
+- Running in production at scale
+- Need high availability with an open-source database
+- Require server-side querying
+- Have existing MySQL or MariaDB infrastructure
+- Want no database licensing cost
+
 **Use SQLite when:**
 - Running a small application
 - Single-server deployment
@@ -124,6 +146,7 @@ Implement custom storage providers for Redis, MongoDB, or any other database.
 - **[In-Memory Storage](in-memory-storage.md)** - Development and testing setup
 - **[SQL Server Storage](sql-server-storage.md)** - Production SQL Server configuration
 - **[PostgreSQL Storage](postgres-storage.md)** - Production open-source configuration
+- **[MySQL / MariaDB Storage](mysql-storage.md)** - Production open-source configuration
 - **[SQLite Storage](sqlite-storage.md)** - Lightweight production setup
 - **[Custom Storage](custom-storage.md)** - Implement your own storage provider
 - **[Best Practices](best-practices.md)** - Storage selection and optimization

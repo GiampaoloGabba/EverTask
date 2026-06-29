@@ -33,7 +33,7 @@ multi-queue isolation, and monitoring. Multi-targets net8.0/net9.0/net10.0.
 
 1. **One storage call is mandatory.** `AddEverTask(...)` must be followed by exactly one of
    `.AddMemoryStorage()`, `.AddSqlServerStorage(...)`, `.AddPostgresStorage(...)`,
-   `.AddSqliteStorage(...)`. Without it the app fails at startup.
+   `.AddMySqlStorage(...)`, `.AddSqliteStorage(...)`. Without it the app fails at startup.
 2. **At least one assembly must be registered** inside the options lambda
    (`RegisterTasksFromAssembly(...)`), or `AddEverTask` throws `ArgumentException`.
 3. **The payload contract is enforced by analyzers** shipped inside `EverTask.Abstractions`

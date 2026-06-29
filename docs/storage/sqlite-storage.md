@@ -2,7 +2,7 @@
 layout: default
 title: SQLite Storage
 parent: Storage
-nav_order: 6
+nav_order: 7
 ---
 
 # SQLite Storage

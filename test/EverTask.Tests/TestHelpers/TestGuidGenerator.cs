@@ -53,4 +53,11 @@ public static class TestGuidGenerator
     /// Use in PostgreSQL storage tests.
     /// </summary>
     public static Guid NewForPostgres() => _postgresGenerator.NewDatabaseFriendly();
+
+    /// <summary>
+    /// Generates GUID v7 for MySQL/MariaDB char(36) storage. The canonical lowercase-hex string sorts
+    /// temporally (timestamp in the leading bytes), matching the (CreatedAtUtc, Id) keyset — same v7 family
+    /// as PostgreSQL/SQLite, NOT the v8 SQL Server variant.
+    /// </summary>
+    public static Guid NewForMySql() => _postgresGenerator.NewDatabaseFriendly();
 }

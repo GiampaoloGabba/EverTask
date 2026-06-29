@@ -822,6 +822,39 @@ AddPostgresStorage(string connectionString, Action<PostgresTaskStoreOptions>? co
 - `SchemaName` (string?): Database schema name (default: "evertask", **must be lowercase**; null = `public` schema)
 - `AutoApplyMigrations` (bool): Auto-apply EF Core migrations (default: true)
 
+### AddMySqlStorage
+
+Uses MySQL or MariaDB (via Microting.EntityFrameworkCore.MySql) for persistent storage. **Targets net9.0/net10.0 only.**
+
+**Signature:**
+```csharp
+AddMySqlStorage(string connectionString, Action<MySqlTaskStoreOptions>? configure = null)
+```
+
+**Parameters:**
+- `connectionString` (string): MySQL/MariaDB connection string (e.g. `Server=localhost;Database=evertask;User=...;Password=...`)
+- `configure` (Action, optional): Storage configuration options
+
+**Examples:**
+```csharp
+// Basic
+.AddMySqlStorage("Server=localhost;Database=evertask;User=evertask;Password=***")
+
+// With options
+.AddMySqlStorage(
+    connectionString,
+    opt =>
+    {
+        opt.AutoApplyMigrations = true;
+        opt.ServerVersion = new MariaDbServerVersion(new Version(10, 11)); // optional, skips auto-detect
+    })
+```
+
+**MySqlTaskStoreOptions Properties:**
+- `AutoApplyMigrations` (bool): Auto-apply EF Core migrations (default: true)
+- `ServerVersion` (ServerVersion?): Explicit server version (default: null = `ServerVersion.AutoDetect`)
+- `SchemaName` (string?): Defaults to `""` and must stay empty — MySQL/MariaDB have no sub-database schema (a "schema" is a database).
+
 ### AddSqliteStorage
 
 Uses SQLite for persistent storage.
@@ -1688,6 +1721,48 @@ PRAGMA temp_store=MEMORY;
 **Notes / limitations:**
 - `SchemaName` lowercase-only (see above).
 - All `DateTimeOffset` values map to `timestamptz` (UTC).
+- Full multi-server / high-write-concurrency support (unlike SQLite).
+
+### MySQL / MariaDB Storage Options
+
+**Package:** `EverTask.Storage.MySql` (targets net9.0/net10.0 only)
+
+**Advanced Configuration:**
+
+```csharp
+.AddMySqlStorage(connectionString, opt =>
+{
+    // Auto-apply migrations (default: true). Disable for DBA-controlled / staged deploys.
+    opt.AutoApplyMigrations = true;
+
+    // Optional explicit server version. Default null -> ServerVersion.AutoDetect(connectionString)
+    // (one short connect at startup). Set to skip the probe.
+    opt.ServerVersion = new MariaDbServerVersion(new Version(10, 11));
+})
+
+// Note: there is NO SchemaName option. MySQL/MariaDB have no sub-database schema (a "schema" IS a
+// database, chosen by the connection string), so the tables live in the connection's database.
+// DbContext pooling is always on. The provider inherits the optimized, server-side EF Core base, and the
+// hot writes (SetStatus / UpdateCurrentRun / CompleteRecurringRun) use stored procedures: single-statement,
+// atomic, one round-trip (the SQL Server analog; MySQL has no writable CTE / UPDATE...RETURNING).
+```
+
+**Connection String Examples:**
+
+```csharp
+// Basic
+"Server=localhost;Database=evertask;User=evertask;Password=***"
+
+// With port + SSL
+"Server=db.example.com;Port=3306;Database=evertask;User=app;Password=***;SslMode=Required"
+```
+
+**Manual Migrations:** same pattern as SQL Server, using `--context MySqlTaskStoreContext`.
+
+**Notes / limitations:**
+- No schema concept (see above).
+- Built on Microting.EntityFrameworkCore.MySql (maintained Pomelo fork); MySQL 8.0+ and MariaDB 10.11+.
+- All `DateTimeOffset` values map to `datetime(6)` (UTC).
 - Full multi-server / high-write-concurrency support (unlike SQLite).
 
 ## Handler Configuration

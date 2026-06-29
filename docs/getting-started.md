@@ -21,6 +21,7 @@ dotnet add package EverTask.Abstractions
 # Storage providers
 dotnet add package EverTask.Storage.SqlServer
 dotnet add package EverTask.Storage.Postgres
+dotnet add package EverTask.Storage.MySql
 dotnet add package EverTask.Storage.Sqlite
 
 # Optional packages
@@ -56,7 +57,7 @@ var app = builder.Build();
 app.Run();
 ```
 
-> **Note:** In-memory storage works great for development and testing, but you'll lose all tasks when the application restarts. For production, use SQL Server, PostgreSQL, or SQLite instead.
+> **Note:** In-memory storage works great for development and testing, but you'll lose all tasks when the application restarts. For production, use SQL Server, PostgreSQL, MySQL/MariaDB, or SQLite instead.
 
 ## Advanced Configuration
 
@@ -203,7 +204,7 @@ Now that you've got EverTask running, dive into these topics:
 - **[Task Orchestration](advanced-features.md)** - Continuations and workflow patterns
 - **[Scalability](scalability.md)** - Multi-queue and sharded scheduler
 - **[Monitoring](monitoring.md)** - Track task execution with events and SignalR integration
-- **[Storage Configuration](storage.md)** - SQL Server, PostgreSQL, SQLite, and custom storage implementations
+- **[Storage Configuration](storage.md)** - SQL Server, PostgreSQL, MySQL/MariaDB, SQLite, and custom storage implementations
 
 ## Troubleshooting
 

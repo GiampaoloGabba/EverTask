@@ -907,8 +907,9 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     // Bounded delete batch: large enough to be efficient, small enough to avoid lock escalation on
     // transactional providers (SQL Server escalates around ~5000 row locks per statement). Shared by the
     // age-based base deletes (BatchDeleteAsync), the count-cap trim and the SQLite client-side overrides
-    // (DeleteByIdsAsync), so the whole storage layer deletes in one consistent granularity.
-    internal const int CleanupBatchSize = 100;
+    // (DeleteByIdsAsync), so the whole storage layer deletes in one consistent granularity. protected internal
+    // so a derived provider in another assembly (e.g. MySqlTaskStorage) can bound its own select-then-delete loop.
+    protected internal const int CleanupBatchSize = 100;
 
     /// <summary>
     /// Deletes rows matching <paramref name="predicate"/> in bounded batches of <see cref="CleanupBatchSize"/>

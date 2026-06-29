@@ -14,7 +14,7 @@ public static EverTaskServiceBuilder AddEverTask(
 
 - Throws `ArgumentException` if `configure` is null **or no assembly is registered** inside it.
 - **Must be followed by exactly one storage call** (`.AddMemoryStorage()` / `.AddSqlServerStorage(...)` /
-  `.AddSqliteStorage(...)` / `.AddPostgresStorage(...)`).
+  `.AddSqliteStorage(...)` / `.AddPostgresStorage(...)` / `.AddMySqlStorage(...)`).
 
 ### Minimal
 

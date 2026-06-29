@@ -12,6 +12,7 @@ latest published version of each package (they release in lockstep). Current rep
 | In-Memory storage | (none) | Built into `EverTask`; just call `.AddMemoryStorage()`. |
 | SQL Server storage | `EverTask.Storage.SqlServer` | Pulls `EverTask.Storage.EfCore` + EF SqlServer. |
 | PostgreSQL storage | `EverTask.Storage.Postgres` | Pulls `EverTask.Storage.EfCore` + Npgsql. |
+| MySQL / MariaDB storage | `EverTask.Storage.MySql` | Pulls `EverTask.Storage.EfCore` + Microting MySQL provider. **net9.0/net10.0 only.** |
 | SQLite storage | `EverTask.Storage.Sqlite` | Pulls `EverTask.Storage.EfCore` + EF Sqlite. |
 | Audit retention/cleanup | `EverTask.Storage.EfCore` | `AddAuditCleanup(...)`; already transitive via any relational provider. |
 | SignalR monitoring (events) | `EverTask.Monitor.AspnetCore.SignalR` | ASP.NET Core; `MapEverTaskMonitorHub()`. |
@@ -42,3 +43,5 @@ latest published version of each package (they release in lockstep). Current rep
 
 All packages (core, storage, monitoring, SignalR, Serilog) multi-target **net8.0/net9.0/net10.0**
 (inherited from `Directory.Build.props`; no project overrides this). net8.0 is the minimum.
+**Exception:** `EverTask.Storage.MySql` targets **net9.0/net10.0 only** — its underlying Microting
+provider has no EF Core 8 build.

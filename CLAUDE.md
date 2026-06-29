@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 EverTask is a .NET background task execution library inspired by MediatR. It provides persistent, resilient task execution with support for scheduled, delayed, and recurring tasks. Multi-targets **net8.0, net9.0, net10.0** (see `Directory.Build.props`).
 
-**Key Features**: Request/handler pattern, persistent storage (SQL Server, PostgreSQL, SQLite, In-Memory), retry policies with exception filtering, scheduled/recurring tasks (cron + fluent API), keyed rate limiting (per tenant/account/resource), lifecycle callbacks, timeout handling, monitoring integrations.
+**Key Features**: Request/handler pattern, persistent storage (SQL Server, PostgreSQL, MySQL/MariaDB, SQLite, In-Memory), retry policies with exception filtering, scheduled/recurring tasks (cron + fluent API), keyed rate limiting (per tenant/account/resource), lifecycle callbacks, timeout handling, monitoring integrations.
 
 ## File Organization Principle
 
@@ -18,7 +18,7 @@ EverTask is a .NET background task execution library inspired by MediatR. It pro
 
 - **src/EverTask**: Core library (dispatcher, worker executor, scheduler, in-memory storage)
 - **src/EverTask.Abstractions**: Lightweight interfaces package (IEverTask, ITaskDispatcher, IEverTaskHandler)
-- **src/Storage/**: Persistence providers (EfCore, SqlServer, Postgres, Sqlite)
+- **src/Storage/**: Persistence providers (EfCore, SqlServer, Postgres, MySql, Sqlite)
 - **src/Logging/**: Logging integrations (Serilog)
 - **src/Monitoring/**: Monitoring integrations (SignalR)
 - **analyzers/**: Roslyn payload-contract analyzer (`EverTask.Analyzers` + `.CodeFixes`, netstandard2.0), bundled into the `EverTask.Abstractions` package
@@ -117,6 +117,7 @@ See local CLAUDE.md files for implementation details.
 | **Recurring** | `src/EverTask/Scheduler/Recurring/CLAUDE.md` | Cron scheduling, builder flow, calculation gotchas |
 | **SQL Server** | `src/Storage/EverTask.Storage.SqlServer/CLAUDE.md` | Setup, schema-aware migrations, Docker testing |
 | **PostgreSQL** | `src/Storage/EverTask.Storage.Postgres/CLAUDE.md` | Npgsql, schema-aware (Option B), writable-CTE optimizations, Testcontainers |
+| **MySQL/MariaDB** | `src/Storage/EverTask.Storage.MySql/CLAUDE.md` | Microting fork, no schema, server-side base + one override, net9/net10, Testcontainers MariaDB |
 | **SQLite** | `src/Storage/EverTask.Storage.Sqlite/CLAUDE.md` | Setup, connection strings |
 | **EF Core** | `src/Storage/EverTask.Storage.EfCore/CLAUDE.md` | Base EF Core implementation |
 | **Serilog** | `src/Logging/EverTask.Logging.Serilog/CLAUDE.md` | Serilog integration |

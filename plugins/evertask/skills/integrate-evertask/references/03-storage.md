@@ -15,7 +15,8 @@ Exactly one storage call is mandatory after `AddEverTask(...)`.
 | Redis / Mongo / Cosmos / DynamoDB | **Custom `ITaskStorage`** | Not built-in; implement + register singleton. |
 
 Per-provider constraints: SQLite = no schema, single writer, client-side `DateTimeOffset`
-filtering; Postgres `SchemaName` lowercase only; In-Memory = no audit, no persistence, no cleanup.
+filtering; Postgres `SchemaName` lowercase only; MySQL/MariaDB = no schema (a "schema" is a
+database), net9.0/net10.0 only; In-Memory = no audit, no persistence, no cleanup.
 
 ## In-Memory (core `EverTask` package, no NuGet)
 
@@ -59,6 +60,25 @@ round-trip). Schema is runtime-configurable. Tables: `QueuedTasks`, `StatusAudit
 Connection: `Host=localhost;Database=evertask;Username=evertask;Password=***`. All
 `DateTimeOffset` → `timestamptz` (UTC). Pooled factory + writable-CTE single-statement status/run
 updates (no stored DB objects). UUID v7 ids.
+
+## MySQL / MariaDB: `EverTask.Storage.MySql`  (net9.0/net10.0 only)
+
+```csharp
+.AddMySqlStorage(string connectionString, Action<MySqlTaskStoreOptions>? configure = null)
+```
+
+| Option | Default | Notes |
+|---|---|---|
+| `AutoApplyMigrations` | `true` | Same as the others. |
+| `ServerVersion` | `null` | `null` → `ServerVersion.AutoDetect(cs)`; set `new MariaDbServerVersion(new Version(10,11))` to skip the probe. |
+| `SchemaName` | `""` | **Must stay `""`** (MySQL/MariaDB have no sub-database schema; a "schema" is a database). |
+
+Connection: `Server=localhost;Database=evertask;User=evertask;Password=***`. Built on the maintained
+Microting fork of Pomelo; MySQL 8.0+ / MariaDB 10.11+. All `DateTimeOffset` → `datetime(6)` (UTC),
+server-side like Postgres. Pooled factory + UUID v7 ids (stored as `char(36)`). One read-path override
+(completed-task purge: a MySQL `DELETE ... LIMIT` ignores a correlated `EXISTS` guard). Hot writes
+(SetStatus/UpdateCurrentRun/CompleteRecurringRun) use stored procedures (single-statement, atomic; the
+ErrorsOnly runs-audit gate decided server-side), the analog of SQL Server's procs / Postgres' CTEs.
 
 ## SQLite: `EverTask.Storage.Sqlite`
 
