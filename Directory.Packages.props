@@ -126,6 +126,11 @@
     <PackageVersion Include="Swashbuckle.AspNetCore" Version="8.1.4" />
     <PackageVersion Include="System.IdentityModel.Tokens.Jwt" Version="8.19.1" />
     <PackageVersion Include="UUIDNext" Version="4.2.4" />
+    <!-- Pinned: the SQLitePCLRaw.lib.e_sqlite3 bundled by EF Core Sqlite's transitive 2.1.x is flagged by
+         GHSA-2m69-gcr7-jv3q (bundles SQLite < 3.50.2). 3.0.x bundles a patched SQLite and falls outside the
+         advisory's affected range (<= 2.1.11). Direct reference in EverTask.Storage.Sqlite overrides the
+         transitive (NU1903 under TreatWarningsAsErrors). -->
+    <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
   </ItemGroup>
   <ItemGroup>
     <PackageVersion Include="Testcontainers.MsSql" Version="4.12.0" />

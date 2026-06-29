@@ -15,6 +15,9 @@
     <PackageReference Include="UUIDNext" />
     <!-- Direct reference to override vulnerable transitive 9.0.0 (NU1903) -->
     <PackageReference Include="System.Security.Cryptography.Xml" />
+    <!-- Direct reference to override the vulnerable transitive SQLitePCLRaw bundled by EF Core Sqlite
+         (GHSA-2m69-gcr7-jv3q, SQLite < 3.50.2); 3.0.x bundles a patched SQLite. -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
   </ItemGroup>
 
   <ItemGroup>
