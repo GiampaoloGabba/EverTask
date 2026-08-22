@@ -42,9 +42,9 @@ public sealed class AuditCleanupHostedService : BackgroundService
         _initialDelay    = options.InitialDelay;
 
         if (_storage == null)
-            _logger.LogWarning("AuditCleanupHostedService requires an EF Core task storage; cleanup is disabled for the configured storage.");
+            _logger.LogWarning("AuditCleanupHostedService requires an EF Core task storage; cleanup is disabled for the configured storage");
         else if (_retentionPolicy == null)
-            _logger.LogWarning("AuditCleanupHostedService started but no AuditRetentionPolicy configured. Service will run but perform no cleanup.");
+            _logger.LogWarning("AuditCleanupHostedService started but no AuditRetentionPolicy configured. Service will run but perform no cleanup");
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -182,7 +182,7 @@ public sealed class AuditCleanupHostedService : BackgroundService
             if (value is <= 0)
                 _logger.LogWarning(
                     "AuditRetentionPolicy.{Knob} is {Value} (<= 0) and is treated as DISABLED. " +
-                    "Provide a positive value to enable it, or null to disable it explicitly.",
+                    "Provide a positive value to enable it, or null to disable it explicitly",
                     knob, value);
         }
 

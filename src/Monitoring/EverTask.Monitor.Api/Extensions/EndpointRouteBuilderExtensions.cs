@@ -1,7 +1,7 @@
-using EverTask.Monitor.AspnetCore.SignalR;
 using EverTask.Monitor.Api.Infrastructure;
 using EverTask.Monitor.Api.Middleware;
 using EverTask.Monitor.Api.Options;
+using EverTask.Monitor.AspnetCore.SignalR;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Connections;

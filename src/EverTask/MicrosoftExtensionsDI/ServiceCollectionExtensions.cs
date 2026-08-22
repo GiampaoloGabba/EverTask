@@ -1,4 +1,4 @@
-﻿using EverTask.Configuration;
+using EverTask.Configuration;
 using EverTask.RateLimiting;
 
 namespace Microsoft.Extensions.DependencyInjection;

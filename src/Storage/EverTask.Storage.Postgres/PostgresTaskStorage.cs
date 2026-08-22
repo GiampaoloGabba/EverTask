@@ -21,22 +21,16 @@ namespace EverTask.Storage.Postgres;
 /// transactional contract. No stored object and no migration are needed (the SQL lives here in versioned C#).
 /// </para>
 /// </summary>
-public class PostgresTaskStorage : EfCoreTaskStorage
+// NOTE: not a primary constructor. The base captures contextFactory/logger too, so a primary
+// constructor whose parameters are used in the body would capture them twice (CS9107).
+public class PostgresTaskStorage(
+    ITaskStoreDbContextFactory contextFactory,
+    IEverTaskLogger<PostgresTaskStorage> logger,
+    IOptions<ITaskStoreOptions> storeOptions)
+    : EfCoreTaskStorage(contextFactory, logger)
 {
-    private readonly ITaskStoreDbContextFactory _contextFactory;
-    private readonly IEverTaskLogger<PostgresTaskStorage> _logger;
-    private readonly string _schema;
-
-    public PostgresTaskStorage(
-        ITaskStoreDbContextFactory contextFactory,
-        IEverTaskLogger<PostgresTaskStorage> logger,
-        IOptions<ITaskStoreOptions> storeOptions)
-        : base(contextFactory, logger)
-    {
-        _contextFactory = contextFactory;
-        _logger         = logger;
-        _schema         = string.IsNullOrEmpty(storeOptions.Value.SchemaName) ? "public" : storeOptions.Value.SchemaName!;
-    }
+    private readonly ITaskStoreDbContextFactory _contextFactory = contextFactory;
+    private readonly string _schema = string.IsNullOrEmpty(storeOptions.Value.SchemaName) ? "public" : storeOptions.Value.SchemaName!;
 
     /// <summary>
     /// Sets task status via a single data-modifying CTE: the conditional StatusAudit insert and the row
@@ -49,7 +43,7 @@ public class PostgresTaskStorage : EfCoreTaskStorage
     public override async Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception, AuditLevel auditLevel,
                                          double? executionTimeMs = null, CancellationToken ct = default)
     {
-        _logger.LogInformation("Set Task {TaskId} with Status {Status} using PostgreSQL writable CTE", taskId, status);
+        logger.LogInformation("Set Task {TaskId} with Status {Status} using PostgreSQL writable CTE", taskId, status);
 
         await using var dbContext = await _contextFactory.CreateDbContextAsync(ct);
 
@@ -79,8 +73,7 @@ SELECT @taskId, now(), @status, @exception FROM updated WHERE @createAudit;";
 
         try
         {
-            await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(sql, new object[]
-            {
+            await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(sql, [
                 new NpgsqlParameter("taskId", taskId),
                 new NpgsqlParameter("status", status.ToString()),
                 new NpgsqlParameter("exception", (object?)exString ?? DBNull.Value),
@@ -88,13 +81,13 @@ SELECT @taskId, now(), @status, @exception FROM updated WHERE @createAudit;";
                 new NpgsqlParameter("hasExecTime", executionTimeMs.HasValue),
                 new NpgsqlParameter("execTime", executionTimeMs ?? 0d),
                 new NpgsqlParameter("createAudit", createAudit)
-            }, ct).ConfigureAwait(false);
+            ], ct).ConfigureAwait(false);
         }
         catch (Exception e)
         {
             // Same swallow contract as the base SetStatus / usp_SetTaskStatus (NOT the rethrow contract of
             // the run-counter writes below).
-            _logger.LogCritical(e, "Unable to update the status {Status} for taskId {TaskId}", status, taskId);
+            logger.LogCritical(e, "Unable to update the status {Status} for taskId {TaskId}", status, taskId);
         }
     }
 
@@ -109,7 +102,7 @@ SELECT @taskId, now(), @status, @exception FROM updated WHERE @createAudit;";
     public override async Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
                                                 AuditLevel auditLevel)
     {
-        _logger.LogInformation("Update the current run counter for Task {TaskId} using PostgreSQL writable CTE", taskId);
+        logger.LogInformation("Update the current run counter for Task {TaskId} using PostgreSQL writable CTE", taskId);
 
         await using var dbContext = await _contextFactory.CreateDbContextAsync();
 
@@ -130,19 +123,17 @@ WHERE (@auditLevel IN (0, 1))
 
         try
         {
-            await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(sql, new object[]
-            {
+            await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(sql,
                 new NpgsqlParameter("taskId", taskId),
                 new NpgsqlParameter("execTime", executionTimeMs),
                 new NpgsqlParameter("nextRun", (object?)nextRun?.ToUniversalTime() ?? DBNull.Value),
-                new NpgsqlParameter("auditLevel", (int)auditLevel)
-            }).ConfigureAwait(false);
+                new NpgsqlParameter("auditLevel", (int)auditLevel)).ConfigureAwait(false);
         }
         catch (Exception e)
         {
             // Residual D: propagate (do NOT swallow) — a failed counter persist must not advance the schedule
             // on unpersisted state; the recoverable row is re-run instead.
-            _logger.LogCritical(e, "Update the current run counter for Task for taskId {TaskId}", taskId);
+            logger.LogCritical(e, "Update the current run counter for Task for taskId {TaskId}", taskId);
             throw;
         }
     }
@@ -158,7 +149,7 @@ WHERE (@auditLevel IN (0, 1))
     public override async Task CompleteRecurringRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
                                                     AuditLevel auditLevel)
     {
-        _logger.LogInformation("Complete recurring run for Task {TaskId} using PostgreSQL writable CTE", taskId);
+        logger.LogInformation("Complete recurring run for Task {TaskId} using PostgreSQL writable CTE", taskId);
 
         await using var dbContext = await _contextFactory.CreateDbContextAsync();
 
@@ -190,19 +181,17 @@ SELECT @taskId, now(), @execTime, 'Completed', NULL FROM updated WHERE @runsAudi
 
         try
         {
-            await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(sql, new object[]
-            {
+            await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(sql,
                 new NpgsqlParameter("taskId", taskId),
                 new NpgsqlParameter("execTime", executionTimeMs),
                 new NpgsqlParameter("nextRun", (object?)nextRun?.ToUniversalTime() ?? DBNull.Value),
                 new NpgsqlParameter("statusAudit", statusAudit),
-                new NpgsqlParameter("runsAudit", runsAudit)
-            }).ConfigureAwait(false);
+                new NpgsqlParameter("runsAudit", runsAudit)).ConfigureAwait(false);
         }
         catch (Exception e)
         {
             // Residual D: propagate — a failed completion must not advance the schedule on unpersisted state.
-            _logger.LogCritical(e, "Unable to complete recurring run for taskId {TaskId}", taskId);
+            logger.LogCritical(e, "Unable to complete recurring run for taskId {TaskId}", taskId);
             throw;
         }
     }

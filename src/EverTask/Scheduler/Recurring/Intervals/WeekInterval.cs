@@ -1,9 +1,11 @@
+using System.Text.Json.Serialization;
+
 namespace EverTask.Scheduler.Recurring.Intervals;
 
 public class WeekInterval : IInterval
 {
     //used for serialization/deserialization
-    [System.Text.Json.Serialization.JsonConstructor]
+    [JsonConstructor]
     public WeekInterval() { }
 
     public WeekInterval(int interval)

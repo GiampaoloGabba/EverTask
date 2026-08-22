@@ -1,12 +1,12 @@
-using EverTask.Monitor.Api.Infrastructure;
-using EverTask.Monitor.Api.Options;
-using Microsoft.AspNetCore.Routing;
 #if NET9_0_OR_GREATER
 using Scalar.AspNetCore;
 #else
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 #endif
+using EverTask.Monitor.Api.Infrastructure;
+using EverTask.Monitor.Api.Options;
+using Microsoft.AspNetCore.Routing;
 
 namespace EverTask.Monitor.Api.Scalar.Infrastructure;
 

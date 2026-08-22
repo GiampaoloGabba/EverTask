@@ -8,11 +8,11 @@ public class DailyTimeSchedulerBuilder(RecurringTask task) : IDailyTimeScheduler
             throw new InvalidOperationException("DayInterval, WeekInterval, or MonthInterval must be set");
 
         if (task.DayInterval != null)
-            task.DayInterval.OnTimes = new[] { time.ToUniversalTime() };
+            task.DayInterval.OnTimes = [time.ToUniversalTime()];
         else if (task.WeekInterval != null)
-            task.WeekInterval.OnTimes = new[] { time.ToUniversalTime() };
+            task.WeekInterval.OnTimes = [time.ToUniversalTime()];
         else if (task.MonthInterval != null)
-            task.MonthInterval.OnTimes = new[] { time.ToUniversalTime() };
+            task.MonthInterval.OnTimes = [time.ToUniversalTime()];
 
         return new BuildableSchedulerBuilder(task);
     }

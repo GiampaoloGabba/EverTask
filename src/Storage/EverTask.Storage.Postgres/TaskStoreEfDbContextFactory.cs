@@ -1,5 +1,4 @@
 using Microsoft.EntityFrameworkCore.Design;
-using Microsoft.EntityFrameworkCore.Migrations;
 
 namespace EverTask.Storage.Postgres;
 

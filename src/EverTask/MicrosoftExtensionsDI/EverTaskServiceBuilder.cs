@@ -56,9 +56,9 @@ public class EverTaskServiceBuilder
         {
             Name = name,
             MaxDegreeOfParallelism = 1,
-            ChannelOptions = new System.Threading.Channels.BoundedChannelOptions(500)
+            ChannelOptions = new BoundedChannelOptions(500)
             {
-                FullMode = System.Threading.Channels.BoundedChannelFullMode.Wait
+                FullMode = BoundedChannelFullMode.Wait
             },
             QueueFullBehavior = QueueFullBehavior.FallbackToDefault
         };
@@ -79,8 +79,8 @@ public class EverTaskServiceBuilder
         if (!_configuration.Queues.TryGetValue(QueueNames.Recurring, out var recurringQueue))
         {
             // Clone default queue configuration
-            var defaultQueue = _configuration.Queues.ContainsKey(QueueNames.Default)
-                ? _configuration.Queues[QueueNames.Default]
+            var defaultQueue = _configuration.Queues.TryGetValue(QueueNames.Default, out var configuredDefault)
+                ? configuredDefault
                 : new QueueConfiguration
                 {
                     Name = QueueNames.Default,
@@ -108,8 +108,8 @@ public class EverTaskServiceBuilder
     {
         if (!_configuration.Queues.ContainsKey(QueueNames.Recurring))
         {
-            var defaultQueue = _configuration.Queues.ContainsKey(QueueNames.Default)
-                ? _configuration.Queues[QueueNames.Default]
+            var defaultQueue = _configuration.Queues.TryGetValue(QueueNames.Default, out var configuredDefault)
+                ? configuredDefault
                 : new QueueConfiguration
                 {
                     Name = QueueNames.Default,

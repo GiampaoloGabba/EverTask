@@ -1,3 +1,4 @@
+using EverTask.Monitor.Api.Conventions;
 using EverTask.Monitor.Api.Infrastructure;
 using EverTask.Monitor.Api.Options;
 using EverTask.Monitor.Api.Services;
@@ -73,7 +74,7 @@ public static class ServiceCollectionExtensions
             {
                 // Prefix + ApiExplorer group for the monitoring controllers only (host controllers untouched)
                 mvcOptions.Conventions.Add(
-                    new Conventions.RoutePrefixConvention(options.BasePath, options.OpenApiDocumentName));
+                    new RoutePrefixConvention(options.BasePath, options.OpenApiDocumentName));
             })
             .AddApplicationPart(typeof(ServiceCollectionExtensions).Assembly);
 
@@ -160,7 +161,7 @@ public static class ServiceCollectionExtensions
             {
                 // Prefix + ApiExplorer group for the monitoring controllers only (host controllers untouched)
                 mvcOptions.Conventions.Add(
-                    new Conventions.RoutePrefixConvention(options.BasePath, options.OpenApiDocumentName));
+                    new RoutePrefixConvention(options.BasePath, options.OpenApiDocumentName));
             })
             .AddApplicationPart(typeof(ServiceCollectionExtensions).Assembly);
 

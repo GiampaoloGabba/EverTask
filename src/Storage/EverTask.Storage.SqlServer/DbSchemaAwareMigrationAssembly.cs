@@ -19,7 +19,7 @@ public class DbSchemaAwareMigrationAssembly(
     {
         ArgumentNullException.ThrowIfNull(activeProvider);
 
-        var hasCtorWithSchema = migrationClass.GetConstructor(new[] { typeof(ITaskStoreDbContext) }) is not null;
+        var hasCtorWithSchema = migrationClass.GetConstructor([typeof(ITaskStoreDbContext)]) is not null;
 
         if (!hasCtorWithSchema || _context is not ITaskStoreDbContext schema)
             return base.CreateMigration(migrationClass, activeProvider);

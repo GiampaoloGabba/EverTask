@@ -1,14 +1,15 @@
-﻿using Cronos;
+﻿using System.Text.Json.Serialization;
+using Cronos;
 
 namespace EverTask.Scheduler.Recurring.Intervals;
 
 public class CronInterval : IInterval
 {
-    private Cronos.CronExpression? _parsedExpression;
+    private CronExpression? _parsedExpression;
     private string _cronExpression = "";
 
     //used for serialization/deserialization
-    [System.Text.Json.Serialization.JsonConstructor]
+    [JsonConstructor]
     public CronInterval() { }
 
     public CronInterval(string cronExpression)
@@ -29,7 +30,7 @@ public class CronInterval : IInterval
         }
     }
 
-    private Cronos.CronExpression GetParsedExpression()
+    private CronExpression GetParsedExpression()
     {
         if (_parsedExpression != null)
             return _parsedExpression;

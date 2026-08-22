@@ -1,7 +1,5 @@
 using EverTask.Abstractions;
 using EverTask.Logger;
-using EverTask.Storage.EfCore;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace EverTask.Storage.Sqlite;
@@ -10,17 +8,12 @@ namespace EverTask.Storage.Sqlite;
 /// SQLite-specific task storage implementation.
 /// Overrides RetrievePending() to work around SQLite's DateTimeOffset comparison limitations.
 /// </summary>
-public class SqliteTaskStorage : EfCoreTaskStorage
+// The primary-ctor 'contextFactory' is deliberately re-declared as a private field: the base captures it too,
+// and using the parameter directly from a method body would capture the same value twice (CS9107).
+public class SqliteTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTaskLogger<SqliteTaskStorage> logger)
+    : EfCoreTaskStorage(contextFactory, logger)
 {
-    private readonly ITaskStoreDbContextFactory _contextFactory;
-    private readonly IEverTaskLogger<SqliteTaskStorage> _logger;
-
-    public SqliteTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTaskLogger<SqliteTaskStorage> logger)
-        : base(contextFactory, logger)
-    {
-        _contextFactory = contextFactory;
-        _logger = logger;
-    }
+    private readonly ITaskStoreDbContextFactory _contextFactory = contextFactory;
 
     /// <summary>
     /// Retrieves pending tasks using keyset pagination, applying RunUntil filtering in memory
@@ -30,7 +23,7 @@ public class SqliteTaskStorage : EfCoreTaskStorage
     {
         await using var dbContext = await _contextFactory.CreateDbContextAsync(ct);
 
-        _logger.LogInformation("Retrieving Pending Tasks (SQLite keyset: lastCreatedAt={LastCreatedAt}, lastId={LastId}, take={Take})",
+        logger.LogInformation("Retrieving Pending Tasks (SQLite keyset: lastCreatedAt={LastCreatedAt}, lastId={LastId}, take={Take})",
             lastCreatedAt, lastId, take);
 
         var now = DateTimeOffset.UtcNow;
@@ -79,7 +72,7 @@ public class SqliteTaskStorage : EfCoreTaskStorage
 
         var transitioned = await TrySetQueuedClientSideAsync(dbContext, taskId, DateTimeOffset.UtcNow, auditLevel, ct).ConfigureAwait(false);
         if (!transitioned)
-            _logger.LogDebug("Task {taskId} is no longer recoverable, skipping SetQueued", taskId);
+            logger.LogDebug("Task {taskId} is no longer recoverable, skipping SetQueued", taskId);
 
         return transitioned;
     }

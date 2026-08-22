@@ -1,5 +1,5 @@
-﻿using System.Diagnostics;
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using EverTask.Configuration;
 using EverTask.Logging;
@@ -296,7 +296,7 @@ public class WorkerExecutor(
                 var setLogCaptureMethod = handlerInterface.GetMethod(nameof(IEverTaskHandler<IEverTask>.SetLogCapture));
                 if (setLogCaptureMethod != null)
                 {
-                    setLogCaptureMethod.Invoke(handler, new object[] { logCapture });
+                    setLogCaptureMethod.Invoke(handler, [logCapture]);
                 }
             }
 

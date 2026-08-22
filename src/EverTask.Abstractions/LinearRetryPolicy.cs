@@ -27,9 +27,9 @@ public class LinearRetryPolicy : IRetryPolicy
     /// <summary>
     /// Creates a linear retry policy with a fixed retry count and delay.
     /// </summary>
-    /// <param name="retryCount">Number of retry attempts (must be > 0)</param>
-    /// <param name="retryDelay">Delay between each retry attempt (must be > TimeSpan.Zero)</param>
-    /// <exception cref="ArgumentOutOfRangeException">Thrown when retryCount <= 0 or retryDelay <= TimeSpan.Zero</exception>
+    /// <param name="retryCount">Number of retry attempts (must be &gt; 0)</param>
+    /// <param name="retryDelay">Delay between each retry attempt (must be &gt; TimeSpan.Zero)</param>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when retryCount &lt;= 0 or retryDelay &lt;= TimeSpan.Zero</exception>
     public LinearRetryPolicy(int retryCount, TimeSpan retryDelay)
     {
         if (retryCount <= 0)
@@ -44,10 +44,10 @@ public class LinearRetryPolicy : IRetryPolicy
     /// <summary>
     /// Creates a linear retry policy with custom delays for each retry attempt.
     /// </summary>
-    /// <param name="retryDelays">Array of delays for each retry attempt (must contain at least one element with all values > TimeSpan.Zero)</param>
+    /// <param name="retryDelays">Array of delays for each retry attempt (must contain at least one element with all values &gt; TimeSpan.Zero)</param>
     /// <exception cref="ArgumentNullException">Thrown when retryDelays is null</exception>
     /// <exception cref="ArgumentException">Thrown when retryDelays is empty</exception>
-    /// <exception cref="ArgumentOutOfRangeException">Thrown when any delay is <= TimeSpan.Zero</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when any delay is &lt;= TimeSpan.Zero</exception>
     public LinearRetryPolicy(TimeSpan[] retryDelays)
     {
         ArgumentNullException.ThrowIfNull(retryDelays);

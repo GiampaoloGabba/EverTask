@@ -30,12 +30,12 @@ public static class TaskStorageExtensions
     /// </summary>
     /// <param name="storage">The task storage instance.</param>
     /// <param name="taskId">The task identifier.</param>
-    /// <param name="pageNumber">Page number (1-based). Must be >= 1.</param>
-    /// <param name="pageSize">Number of logs per page. Must be >= 1 and <= 1000.</param>
+    /// <param name="pageNumber">Page number (1-based). Must be &gt;= 1.</param>
+    /// <param name="pageSize">Number of logs per page. Must be &gt;= 1 and &lt;= 1000.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Read-only list of execution logs for the requested page.</returns>
     /// <exception cref="ArgumentNullException">Thrown if storage is null.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">Thrown if pageNumber < 1, pageSize < 1, or pageSize > 1000.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown if pageNumber &lt; 1, pageSize &lt; 1, or pageSize &gt; 1000.</exception>
     public static async Task<IReadOnlyList<TaskExecutionLog>> GetLogsAsync(
         this ITaskStorage storage,
         Guid taskId,

@@ -1,9 +1,11 @@
-﻿namespace EverTask.Scheduler.Recurring.Intervals;
+﻿using System.Text.Json.Serialization;
+
+namespace EverTask.Scheduler.Recurring.Intervals;
 
 public class DayInterval : IInterval
 {
     //used for serialization/deserialization
-    [System.Text.Json.Serialization.JsonConstructor]
+    [JsonConstructor]
     public DayInterval() { }
 
     public DayInterval(int interval)

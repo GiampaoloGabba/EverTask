@@ -34,7 +34,7 @@ public class TaskQueryService : ITaskQueryService
         var query = allTasks.AsQueryable();
 
         // Apply filters
-        if (filter.Statuses != null && filter.Statuses.Count > 0)
+        if (filter.Statuses is { Count: > 0 })
         {
             query = query.Where(t => filter.Statuses.Contains(t.Status));
         }
@@ -190,14 +190,13 @@ public class TaskQueryService : ITaskQueryService
         // Get all logs for the task
         var allLogs = await _storage.GetExecutionLogsAsync(taskId, ct);
 
-        // Apply level filter if specified
-        var filteredLogs = allLogs.AsEnumerable();
-        if (!string.IsNullOrWhiteSpace(levelFilter))
-        {
-            filteredLogs = filteredLogs.Where(l => l.Level.Equals(levelFilter, StringComparison.OrdinalIgnoreCase));
-        }
+        // Apply level filter if specified. Materialized once: the count and the page below both
+        // enumerate it, and re-running the predicate per enumeration is pure waste.
+        IReadOnlyList<TaskExecutionLog> filteredLogs = string.IsNullOrWhiteSpace(levelFilter)
+            ? allLogs
+            : allLogs.Where(l => l.Level.Equals(levelFilter, StringComparison.OrdinalIgnoreCase)).ToList();
 
-        var totalCount = filteredLogs.Count();
+        var totalCount = filteredLogs.Count;
 
         // Apply pagination and map to DTOs
         var logs = filteredLogs

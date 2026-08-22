@@ -47,13 +47,12 @@ public sealed class Et0001FieldToPropertyCodeFix : CodeFixProvider
         {
             var declaration = SyntaxFactory.PropertyDeclaration(type.WithoutTrailingTrivia(), variable.Identifier.WithoutTrivia())
                 .WithModifiers(modifiers)
-                .WithAccessorList(SyntaxFactory.AccessorList(SyntaxFactory.List(new[]
-                {
+                .WithAccessorList(SyntaxFactory.AccessorList(SyntaxFactory.List([
                     SyntaxFactory.AccessorDeclaration(SyntaxKind.GetAccessorDeclaration)
-                        .WithSemicolonToken(SyntaxFactory.Token(SyntaxKind.SemicolonToken)),
+                                 .WithSemicolonToken(SyntaxFactory.Token(SyntaxKind.SemicolonToken)),
                     SyntaxFactory.AccessorDeclaration(SyntaxKind.SetAccessorDeclaration)
-                        .WithSemicolonToken(SyntaxFactory.Token(SyntaxKind.SemicolonToken)),
-                })));
+                        .WithSemicolonToken(SyntaxFactory.Token(SyntaxKind.SemicolonToken))
+                ])));
 
             if (variable.Initializer is not null)
                 declaration = declaration

@@ -10,26 +10,21 @@ namespace EverTask.Storage.SqlServer;
 /// <c>UpdateCurrentRun</c> and <c>CompleteRecurringRun</c> — to use stored procedures for optimal
 /// performance (a single atomic roundtrip each). Everything else is inherited from the EF Core base.
 /// </summary>
-public class SqlServerTaskStorage : EfCoreTaskStorage
+// The primary-ctor 'contextFactory' is deliberately re-declared as a private field: the base captures it too,
+// and using the parameter directly from a method body would capture the same value twice (CS9107).
+public class SqlServerTaskStorage(
+    ITaskStoreDbContextFactory contextFactory,
+    IEverTaskLogger<SqlServerTaskStorage> logger,
+    IOptions<ITaskStoreOptions> storeOptions)
+    : EfCoreTaskStorage(contextFactory, logger)
 {
-    private readonly ITaskStoreDbContextFactory _contextFactory;
-    private readonly IEverTaskLogger<SqlServerTaskStorage> _logger;
-    private readonly string _schema;
+    private readonly ITaskStoreDbContextFactory _contextFactory = contextFactory;
+    private readonly string _schema = string.IsNullOrEmpty(storeOptions.Value.SchemaName) ? "dbo" : storeOptions.Value.SchemaName!;
 
-    public SqlServerTaskStorage(
-        ITaskStoreDbContextFactory contextFactory,
-        IEverTaskLogger<SqlServerTaskStorage> logger,
-        IOptions<ITaskStoreOptions> storeOptions)
-        : base(contextFactory, logger)
-    {
-        _contextFactory = contextFactory;
-        _logger = logger;
-        // Must match the migrations' schema fallback (dbo) so the hot-path procs resolve to where they were
-        // created. A null/empty SchemaName lands the procs in dbo; the old `?? "EverTask"` made runtime EXEC
-        // a different schema than the procs lived in -> proc-not-found, swallowed in SetStatus, recoverable
-        // row -> re-dispatch -> double execution. Mirrors PostgresTaskStorage's `?? "public"`.
-        _schema = string.IsNullOrEmpty(storeOptions.Value.SchemaName) ? "dbo" : storeOptions.Value.SchemaName!;
-    }
+    // Must match the migrations' schema fallback (dbo) so the hot-path procs resolve to where they were
+    // created. A null/empty SchemaName lands the procs in dbo; the old `?? "EverTask"` made runtime EXEC
+    // a different schema than the procs lived in -> proc-not-found, swallowed in SetStatus, recoverable
+    // row -> re-dispatch -> double execution. Mirrors PostgresTaskStorage's `?? "public"`.
 
     /// <summary>
     /// Sets task status using optimized stored procedure.
@@ -38,7 +33,7 @@ public class SqlServerTaskStorage : EfCoreTaskStorage
     public override async Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception, AuditLevel auditLevel,
                                             double? executionTimeMs = null, CancellationToken ct = default)
     {
-        _logger.LogInformation("Set Task {TaskId} with Status {Status} using SQL Server stored procedure", taskId, status);
+        logger.LogInformation("Set Task {TaskId} with Status {Status} using SQL Server stored procedure", taskId, status);
 
         await using var dbContext = await _contextFactory.CreateDbContextAsync(ct);
 
@@ -64,7 +59,7 @@ public class SqlServerTaskStorage : EfCoreTaskStorage
         }
         catch (Exception e)
         {
-            _logger.LogCritical(e, "Unable to update the status {Status} for taskId {TaskId}", status, taskId);
+            logger.LogCritical(e, "Unable to update the status {Status} for taskId {TaskId}", status, taskId);
         }
     }
 
@@ -80,7 +75,7 @@ public class SqlServerTaskStorage : EfCoreTaskStorage
     public override async Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
                                                 AuditLevel auditLevel)
     {
-        _logger.LogInformation("Update the current run counter for Task {TaskId} using SQL Server stored procedure", taskId);
+        logger.LogInformation("Update the current run counter for Task {TaskId} using SQL Server stored procedure", taskId);
 
         await using var dbContext = await _contextFactory.CreateDbContextAsync();
 
@@ -90,19 +85,16 @@ public class SqlServerTaskStorage : EfCoreTaskStorage
 
             await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(
                 sql,
-                [
-                    new SqlParameter("@TaskId", taskId),
-                    new SqlParameter("@ExecutionTimeMs", executionTimeMs),
-                    new SqlParameter("@NextRunUtc", (object?)nextRun ?? DBNull.Value),
-                    new SqlParameter("@AuditLevel", (int)auditLevel)
-                ]
-            ).ConfigureAwait(false);
+                new SqlParameter("@TaskId", taskId),
+                new SqlParameter("@ExecutionTimeMs", executionTimeMs),
+                new SqlParameter("@NextRunUtc", (object?)nextRun ?? DBNull.Value),
+                new SqlParameter("@AuditLevel", (int)auditLevel)).ConfigureAwait(false);
         }
         catch (Exception e)
         {
             // Residual D: propagate (do not swallow) so a failed counter persist does not advance the
             // schedule on unpersisted state; the recoverable row is re-run instead.
-            _logger.LogCritical(e, "Update the current run counter for Task for taskId {TaskId}", taskId);
+            logger.LogCritical(e, "Update the current run counter for Task for taskId {TaskId}", taskId);
             throw;
         }
     }
@@ -120,7 +112,7 @@ public class SqlServerTaskStorage : EfCoreTaskStorage
     public override async Task CompleteRecurringRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
                                                     AuditLevel auditLevel)
     {
-        _logger.LogInformation("Complete recurring run for Task {TaskId} using SQL Server stored procedure", taskId);
+        logger.LogInformation("Complete recurring run for Task {TaskId} using SQL Server stored procedure", taskId);
 
         await using var dbContext = await _contextFactory.CreateDbContextAsync();
 
@@ -130,20 +122,17 @@ public class SqlServerTaskStorage : EfCoreTaskStorage
 
             await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(
                 sql,
-                [
-                    new SqlParameter("@TaskId", taskId),
-                    new SqlParameter("@ExecutionTimeMs", executionTimeMs),
-                    new SqlParameter("@NextRunUtc", (object?)nextRun ?? DBNull.Value),
-                    new SqlParameter("@AuditLevel", (int)auditLevel)
-                ]
-            ).ConfigureAwait(false);
+                new SqlParameter("@TaskId", taskId),
+                new SqlParameter("@ExecutionTimeMs", executionTimeMs),
+                new SqlParameter("@NextRunUtc", (object?)nextRun ?? DBNull.Value),
+                new SqlParameter("@AuditLevel", (int)auditLevel)).ConfigureAwait(false);
         }
         catch (Exception e)
         {
             // Residual D: propagate (do not swallow) — a failed completion must NOT advance the schedule on
             // unpersisted state; the recoverable row is re-run instead. Same contract as UpdateCurrentRun,
             // deliberately NOT the swallow pattern of SetStatus.
-            _logger.LogCritical(e, "Unable to complete recurring run for taskId {TaskId}", taskId);
+            logger.LogCritical(e, "Unable to complete recurring run for taskId {TaskId}", taskId);
             throw;
         }
     }

@@ -103,12 +103,11 @@ public sealed class Et0004ScaffoldPolymorphismCodeFix : CodeFixProvider
         var fqn = derived.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
         var alias = ToAlias(derived.Name);
 
-        var args = SyntaxFactory.SeparatedList(new[]
-        {
+        var args = SyntaxFactory.SeparatedList([
             SyntaxFactory.AttributeArgument(SyntaxFactory.TypeOfExpression(SyntaxFactory.ParseTypeName(fqn))),
             SyntaxFactory.AttributeArgument(
-                SyntaxFactory.LiteralExpression(SyntaxKind.StringLiteralExpression, SyntaxFactory.Literal(alias))),
-        });
+                SyntaxFactory.LiteralExpression(SyntaxKind.StringLiteralExpression, SyntaxFactory.Literal(alias)))
+        ]);
 
         return AttributeList(SyntaxFactory.Attribute(SyntaxFactory.ParseName($"{StjNamespace}.JsonDerivedType"))
             .WithArgumentList(SyntaxFactory.AttributeArgumentList(args)));

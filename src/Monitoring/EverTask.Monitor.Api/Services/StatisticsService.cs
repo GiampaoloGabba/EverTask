@@ -1,4 +1,3 @@
-using EverTask.Configuration;
 using EverTask.Monitor.Api.DTOs.Dashboard;
 using EverTask.Monitor.Api.DTOs.Queues;
 using EverTask.Monitor.Api.DTOs.Statistics;
@@ -104,7 +103,7 @@ public class StatisticsService : IStatisticsService
 
                 // Calculate average execution time for completed tasks
                 var completedWithExecTime = queueTasks
-                    .Where(t => t.Status == QueuedTaskStatus.Completed && t.ExecutionTimeMs > 0)
+                    .Where(t => t is { Status: QueuedTaskStatus.Completed, ExecutionTimeMs: > 0 })
                     .ToList();
 
                 var avgExecutionTimeMs = completedWithExecTime.Any()
@@ -169,9 +168,8 @@ public class StatisticsService : IStatisticsService
         };
 
         var completedTasks = allTasks
-            .Where(t => t.Status == QueuedTaskStatus.Completed &&
-                       t.ExecutionTimeMs > 0 &&
-                       t.CreatedAtUtc >= startDate)
+            .Where(t => t is { Status: QueuedTaskStatus.Completed, ExecutionTimeMs: > 0 } &&
+                        t.CreatedAtUtc >= startDate)
             .ToList();
 
         var result = new List<ExecutionTimeDto>();
@@ -252,7 +250,7 @@ public class StatisticsService : IStatisticsService
 
             // Calculate average execution time for completed tasks
             var completedWithExecTime = queueTasks
-                .Where(t => t.Status == QueuedTaskStatus.Completed && t.ExecutionTimeMs > 0)
+                .Where(t => t is { Status: QueuedTaskStatus.Completed, ExecutionTimeMs: > 0 })
                 .ToList();
 
             var avgExecutionTimeMs = completedWithExecTime.Any()

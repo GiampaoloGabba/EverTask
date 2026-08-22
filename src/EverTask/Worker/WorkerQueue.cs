@@ -1,5 +1,3 @@
-using System.Collections.Concurrent;
-using System.Runtime.CompilerServices;
 using EverTask.Configuration;
 using EverTask.RateLimiting;
 

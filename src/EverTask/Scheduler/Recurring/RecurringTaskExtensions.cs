@@ -20,6 +20,15 @@ public static class RecurringTaskExtensions
     /// <param name="scheduledTime">The scheduled time to calculate from (usually the last scheduled execution time)</param>
     /// <param name="currentRun">The current run count</param>
     /// <param name="referenceTime">Optional reference time for "now" comparison. If null, uses DateTimeOffset.UtcNow</param>
+    /// <param name="isRecovery">
+    /// True on the startup-recovery path, where the first run's time was already decided at dispatch: the
+    /// initial-run configuration (InitialDelay/RunNow/SpecificRunTime) must not be re-applied while skipping
+    /// forward, and the skip count is anchored on the stored (slipped) occurrence.
+    /// </param>
+    /// <param name="computeSkippedCount">
+    /// When false, the logging-only skipped count is suppressed (returned as 0). Used by the rate-limit
+    /// skip-ahead path, where "now" is the limiter's far-future slot and a missed count up to it is noise.
+    /// </param>
     /// <returns>A NextRunResult containing the next valid run time and the count of skipped occurrences</returns>
     /// <remarks>
     /// Realignment is calendar-aware via the single <see cref="RecurringTask.NextOccurrenceStrictlyAfter"/>

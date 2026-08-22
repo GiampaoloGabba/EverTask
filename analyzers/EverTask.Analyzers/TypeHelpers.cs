@@ -28,7 +28,7 @@ internal static class TypeHelpers
             {
                 var element = named.TypeArguments[0];
                 var isEnumerableOfElement = named.AllInterfaces
-                    .Concat(new[] { named })
+                    .Concat([named])
                     .Any(i => i.OriginalDefinition.SpecialType == SpecialType.System_Collections_Generic_IEnumerable_T &&
                               SymbolEqualityComparer.Default.Equals(i.TypeArguments.FirstOrDefault(), element));
                 if (isEnumerableOfElement)
@@ -50,7 +50,7 @@ internal static class TypeHelpers
         if (type is not INamedTypeSymbol named)
             return false;
 
-        var candidates = named.AllInterfaces.Concat(new[] { named });
+        var candidates = named.AllInterfaces.Concat([named]);
         foreach (var candidate in candidates)
         {
             if (candidate.TypeArguments.Length == 2 &&

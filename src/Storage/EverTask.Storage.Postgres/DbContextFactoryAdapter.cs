@@ -1,5 +1,3 @@
-using Microsoft.EntityFrameworkCore;
-
 namespace EverTask.Storage.Postgres;
 
 /// <summary>

@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using EverTask.Abstractions;
 using EverTask.Configuration;
 
 namespace EverTask.Handler;

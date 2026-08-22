@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Hosting;
+﻿using EverTask.Configuration;
+using Microsoft.Extensions.Hosting;
 
 namespace EverTask.Worker;
 
@@ -90,7 +91,7 @@ public class WorkerService(
         var queueConfig = queue switch
         {
             WorkerQueue wq => wq.Configuration,
-            _ => new Configuration.QueueConfiguration
+            _ => new QueueConfiguration
             {
                 Name = queueName,
                 MaxDegreeOfParallelism = configuration.MaxDegreeOfParallelism
@@ -253,7 +254,7 @@ public class WorkerService(
             // mirrors ExecuteDispatch's routing (stored QueueName, else Recurring/Default), so a group
             // maps to exactly one worker queue: a wedged queue can only stall its own group's slots.
             var byQueue = pendingTasks.GroupBy(t =>
-                t.QueueName ?? (t.IsRecurring ? Configuration.QueueNames.Recurring : Configuration.QueueNames.Default));
+                t.QueueName ?? (t.IsRecurring ? QueueNames.Recurring : QueueNames.Default));
 
             await Task.WhenAll(byQueue.Select(group =>
                 Parallel.ForEachAsync(group, options, ProcessRecoveredTaskAsync))).ConfigureAwait(false);

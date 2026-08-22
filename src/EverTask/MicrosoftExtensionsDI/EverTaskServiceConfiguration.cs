@@ -1,5 +1,4 @@
-﻿using EverTask.Abstractions;
-using EverTask.Configuration;
+﻿using EverTask.Configuration;
 using EverTask.RateLimiting;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -39,10 +38,10 @@ public class EverTaskServiceConfiguration
     /// When enabled, handlers are recreated at execution time based on task scheduling:
     /// - Immediate tasks use lazy mode (the worker resolves a fresh handler in its per-task scope;
     ///   an eager instance resolved at dispatch would be pinned in the root container until shutdown)
-    /// - Recurring tasks with intervals >= 5 minutes use lazy mode (memory efficient)
-    /// - Recurring tasks with intervals < 5 minutes use eager mode (performance efficient)
-    /// - Delayed tasks with delay >= 30 minutes use lazy mode
-    /// - Delayed tasks with delay < 30 minutes use eager mode
+    /// - Recurring tasks with intervals &gt;= 5 minutes use lazy mode (memory efficient)
+    /// - Recurring tasks with intervals &lt; 5 minutes use eager mode (performance efficient)
+    /// - Delayed tasks with delay &gt;= 30 minutes use lazy mode
+    /// - Delayed tasks with delay &lt; 30 minutes use eager mode
     /// Default: true
     /// </summary>
     public bool UseLazyHandlerResolution { get; set; } = true;

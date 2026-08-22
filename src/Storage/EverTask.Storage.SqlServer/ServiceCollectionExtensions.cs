@@ -1,4 +1,4 @@
-﻿using EverTask.Abstractions;
+using EverTask.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 

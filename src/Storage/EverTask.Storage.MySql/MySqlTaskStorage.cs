@@ -22,17 +22,12 @@ namespace EverTask.Storage.MySql;
 /// exactly (the <c>ErrorsOnly</c> RunsAudit gate is decided server-side from the row's own Status/Exception).
 /// </para>
 /// </summary>
-public class MySqlTaskStorage : EfCoreTaskStorage
+// NOTE: not a primary constructor. The base captures contextFactory/logger too, so a primary
+// constructor whose parameters are used in the body would capture them twice (CS9107).
+public class MySqlTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTaskLogger<MySqlTaskStorage> logger)
+    : EfCoreTaskStorage(contextFactory, logger)
 {
-    private readonly ITaskStoreDbContextFactory _contextFactory;
-    private readonly IEverTaskLogger<MySqlTaskStorage> _logger;
-
-    public MySqlTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTaskLogger<MySqlTaskStorage> logger)
-        : base(contextFactory, logger)
-    {
-        _contextFactory = contextFactory;
-        _logger         = logger;
-    }
+    private readonly ITaskStoreDbContextFactory _contextFactory = contextFactory;
 
     /// <summary>
     /// Sets task status via the <c>usp_SetTaskStatus</c> stored procedure (one atomic round-trip). The audit
@@ -44,7 +39,7 @@ public class MySqlTaskStorage : EfCoreTaskStorage
     public override async Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception, AuditLevel auditLevel,
                                          double? executionTimeMs = null, CancellationToken ct = default)
     {
-        _logger.LogInformation("Set Task {TaskId} with Status {Status} using MySQL stored procedure", taskId, status);
+        logger.LogInformation("Set Task {TaskId} with Status {Status} using MySQL stored procedure", taskId, status);
 
         await using var dbContext = await _contextFactory.CreateDbContextAsync(ct);
 
@@ -63,20 +58,19 @@ public class MySqlTaskStorage : EfCoreTaskStorage
         {
             await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(
                 "CALL usp_SetTaskStatus(@TaskId, @Status, @Exception, @CreateAudit, @StampLast, @ExecutionTimeMs)",
-                new object[]
-                {
+                [
                     new MySqlParameter("@TaskId", taskId.ToString()),
                     new MySqlParameter("@Status", status.ToString()),
                     new MySqlParameter("@Exception", (object?)ex ?? DBNull.Value),
                     new MySqlParameter("@CreateAudit", createAudit),
                     new MySqlParameter("@StampLast", stampLast),
                     new MySqlParameter("@ExecutionTimeMs", (object?)executionTimeMs ?? DBNull.Value)
-                }, ct).ConfigureAwait(false);
+                ], ct).ConfigureAwait(false);
         }
         catch (Exception e)
         {
             // Same swallow contract as the base SetStatus (NOT the rethrow contract of the run-counter writes).
-            _logger.LogCritical(e, "Unable to update the status {Status} for taskId {TaskId}", status, taskId);
+            logger.LogCritical(e, "Unable to update the status {Status} for taskId {TaskId}", status, taskId);
         }
     }
 
@@ -99,7 +93,7 @@ public class MySqlTaskStorage : EfCoreTaskStorage
             return;
         }
 
-        _logger.LogInformation("Update the current run counter for Task {TaskId} using MySQL stored procedure", taskId);
+        logger.LogInformation("Update the current run counter for Task {TaskId} using MySQL stored procedure", taskId);
 
         await using var dbContext = await _contextFactory.CreateDbContextAsync();
 
@@ -107,19 +101,16 @@ public class MySqlTaskStorage : EfCoreTaskStorage
         {
             await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(
                 "CALL usp_UpdateCurrentRun(@TaskId, @ExecutionTimeMs, @NextRunUtc, @AuditLevel)",
-                new object[]
-                {
-                    new MySqlParameter("@TaskId", taskId.ToString()),
-                    new MySqlParameter("@ExecutionTimeMs", executionTimeMs),
-                    new MySqlParameter("@NextRunUtc", (object?)nextRun?.UtcDateTime ?? DBNull.Value),
-                    new MySqlParameter("@AuditLevel", (int)auditLevel)
-                }).ConfigureAwait(false);
+                new MySqlParameter("@TaskId", taskId.ToString()),
+                new MySqlParameter("@ExecutionTimeMs", executionTimeMs),
+                new MySqlParameter("@NextRunUtc", (object?)nextRun?.UtcDateTime ?? DBNull.Value),
+                new MySqlParameter("@AuditLevel", (int)auditLevel)).ConfigureAwait(false);
         }
         catch (Exception e)
         {
             // Residual D: propagate (do NOT swallow) — a failed counter persist must not advance the schedule on
             // unpersisted state; the recoverable row is re-run instead.
-            _logger.LogCritical(e, "Update the current run counter for Task for taskId {TaskId}", taskId);
+            logger.LogCritical(e, "Update the current run counter for Task for taskId {TaskId}", taskId);
             throw;
         }
     }
@@ -135,7 +126,7 @@ public class MySqlTaskStorage : EfCoreTaskStorage
     public override async Task CompleteRecurringRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
                                                     AuditLevel auditLevel)
     {
-        _logger.LogInformation("Complete recurring run for Task {TaskId} using MySQL stored procedure", taskId);
+        logger.LogInformation("Complete recurring run for Task {TaskId} using MySQL stored procedure", taskId);
 
         await using var dbContext = await _contextFactory.CreateDbContextAsync();
 
@@ -146,19 +137,16 @@ public class MySqlTaskStorage : EfCoreTaskStorage
         {
             await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(
                 "CALL usp_CompleteRecurringRun(@TaskId, @ExecutionTimeMs, @NextRunUtc, @CreateStatusAudit, @CreateRunsAudit)",
-                new object[]
-                {
-                    new MySqlParameter("@TaskId", taskId.ToString()),
-                    new MySqlParameter("@ExecutionTimeMs", executionTimeMs),
-                    new MySqlParameter("@NextRunUtc", (object?)nextRun?.UtcDateTime ?? DBNull.Value),
-                    new MySqlParameter("@CreateStatusAudit", statusAudit),
-                    new MySqlParameter("@CreateRunsAudit", runsAudit)
-                }).ConfigureAwait(false);
+                new MySqlParameter("@TaskId", taskId.ToString()),
+                new MySqlParameter("@ExecutionTimeMs", executionTimeMs),
+                new MySqlParameter("@NextRunUtc", (object?)nextRun?.UtcDateTime ?? DBNull.Value),
+                new MySqlParameter("@CreateStatusAudit", statusAudit),
+                new MySqlParameter("@CreateRunsAudit", runsAudit)).ConfigureAwait(false);
         }
         catch (Exception e)
         {
             // Residual D: propagate — a failed completion must not advance the schedule on unpersisted state.
-            _logger.LogCritical(e, "Unable to complete recurring run for taskId {TaskId}", taskId);
+            logger.LogCritical(e, "Unable to complete recurring run for taskId {TaskId}", taskId);
             throw;
         }
     }

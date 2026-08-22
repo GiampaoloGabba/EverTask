@@ -1,3 +1,6 @@
+using System.Data.Common;
+using System.Net;
+using System.Net.Sockets;
 using EverTask.Resilience;
 
 namespace EverTask.Abstractions;
@@ -26,7 +29,7 @@ public static class RetryPolicyExtensions
             throw new ArgumentNullException(nameof(policy));
 
         return policy.Handle(
-            typeof(System.Data.Common.DbException),
+            typeof(DbException),
             typeof(TimeoutException)
         );
     }
@@ -51,8 +54,8 @@ public static class RetryPolicyExtensions
 
         return policy.Handle(
             typeof(HttpRequestException),
-            typeof(System.Net.Sockets.SocketException),
-            typeof(System.Net.WebException),
+            typeof(SocketException),
+            typeof(WebException),
             typeof(TaskCanceledException)
         );
     }
