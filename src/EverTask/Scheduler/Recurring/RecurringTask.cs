@@ -420,7 +420,7 @@ public class RecurringTask
         if (SpecificRunTime.HasValue)
             parts.Add($"Run at {SpecificRunTime.Value.ToLocalTime():yyyy-MM-dd HH:mm:ss}");
 
-        if (parts.Any())
+        if (parts.Count > 0)
             parts.Add("then");
 
         if (CronInterval != null)

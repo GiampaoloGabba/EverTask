@@ -20,7 +20,7 @@ public static class HostFactory
 {
     public static async Task<HostHandle> CreateAsync(RunConfig cfg, string storageMode, CancellationToken ct = default)
     {
-        Provisioned? prov = storageMode == "null"
+        var prov = storageMode == "null"
             ? null
             : await StorageProvisioner.ProvisionAsync(cfg.Storage, ct);
 

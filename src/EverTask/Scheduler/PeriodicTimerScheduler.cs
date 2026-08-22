@@ -156,7 +156,7 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
                 {
                     // Coda vuota: dormi fino a quando Schedule() chiama Release()
                     _logger.LogDebug("Queue empty, sleeping until next task scheduled");
-                    await _wakeUpSignal.WaitAsync(cancellationToken);
+                    await _wakeUpSignal.WaitAsync(cancellationToken).ConfigureAwait(false);
 
                     // Resetta il flag di wake-up dopo aver consumato il segnale
                     Interlocked.Exchange(ref _wakeUpPending, 0);
@@ -167,7 +167,7 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
                     var waitTime = delay < _checkInterval ? delay : _checkInterval;
 
                     // Usa WaitAsync con timeout invece di Task.Delay per permettere wake-up anticipato
-                    var signaled = await _wakeUpSignal.WaitAsync(waitTime, cancellationToken);
+                    var signaled = await _wakeUpSignal.WaitAsync(waitTime, cancellationToken).ConfigureAwait(false);
 
                     // Resetta il flag solo se il semaforo è stato effettivamente segnalato
                     if (signaled)

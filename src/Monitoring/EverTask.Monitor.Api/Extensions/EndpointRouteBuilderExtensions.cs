@@ -129,7 +129,7 @@ public static class EndpointRouteBuilderExtensions
             context.Response.Headers.CacheControl = "public, max-age=31536000"; // 1 year cache for assets
 
             await using var stream = fileInfo.CreateReadStream();
-            await stream.CopyToAsync(context.Response.Body);
+            await stream.CopyToAsync(context.Response.Body).ConfigureAwait(false);
         }).ExcludeFromDescription();
 
         // Map favicon and other root files (only files with extensions, not subroutes like /tasks)
@@ -159,7 +159,7 @@ public static class EndpointRouteBuilderExtensions
 
             context.Response.ContentType = contentType;
             await using var stream = fileInfo.CreateReadStream();
-            await stream.CopyToAsync(context.Response.Body);
+            await stream.CopyToAsync(context.Response.Body).ConfigureAwait(false);
         }).ExcludeFromDescription();
 
         // Map index.html for root UI path
@@ -170,12 +170,12 @@ public static class EndpointRouteBuilderExtensions
             if (!fileInfo.Exists)
             {
                 context.Response.StatusCode = 404;
-                await context.Response.WriteAsync("Dashboard UI not found. Make sure the package was built with UI enabled.");
+                await context.Response.WriteAsync("Dashboard UI not found. Make sure the package was built with UI enabled.").ConfigureAwait(false);
                 return;
             }
 
             await using var stream = fileInfo.CreateReadStream();
-            await stream.CopyToAsync(context.Response.Body);
+            await stream.CopyToAsync(context.Response.Body).ConfigureAwait(false);
         }).ExcludeFromDescription();
 
         // SPA fallback routing (serve index.html for all UI subroutes). The pattern is
@@ -211,12 +211,12 @@ public static class EndpointRouteBuilderExtensions
             if (!fileInfo.Exists)
             {
                 context.Response.StatusCode = 404;
-                await context.Response.WriteAsync("Dashboard UI not found. Make sure the package was built with UI enabled.");
+                await context.Response.WriteAsync("Dashboard UI not found. Make sure the package was built with UI enabled.").ConfigureAwait(false);
                 return;
             }
 
             await using var stream = fileInfo.CreateReadStream();
-            await stream.CopyToAsync(context.Response.Body);
+            await stream.CopyToAsync(context.Response.Body).ConfigureAwait(false);
         });
 
         return endpoints;

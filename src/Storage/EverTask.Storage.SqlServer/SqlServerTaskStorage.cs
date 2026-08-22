@@ -35,7 +35,7 @@ public class SqlServerTaskStorage(
     {
         logger.LogInformation("Set Task {TaskId} with Status {Status} using SQL Server stored procedure", taskId, status);
 
-        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         var exString = exception.ToDetailedString();
 
@@ -77,7 +77,7 @@ public class SqlServerTaskStorage(
     {
         logger.LogInformation("Update the current run counter for Task {TaskId} using SQL Server stored procedure", taskId);
 
-        await using var dbContext = await _contextFactory.CreateDbContextAsync();
+        await using var dbContext = await _contextFactory.CreateDbContextAsync().ConfigureAwait(false);
 
         try
         {
@@ -114,7 +114,7 @@ public class SqlServerTaskStorage(
     {
         logger.LogInformation("Complete recurring run for Task {TaskId} using SQL Server stored procedure", taskId);
 
-        await using var dbContext = await _contextFactory.CreateDbContextAsync();
+        await using var dbContext = await _contextFactory.CreateDbContextAsync().ConfigureAwait(false);
 
         try
         {

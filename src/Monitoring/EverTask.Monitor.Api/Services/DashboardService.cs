@@ -29,7 +29,7 @@ public class DashboardService : IDashboardService
     /// <inheritdoc />
     public async Task<OverviewDto> GetOverviewAsync(DateRange range, CancellationToken ct = default)
     {
-        var allTasks = await _storage.GetAll(ct);
+        var allTasks = await _storage.GetAll(ct).ConfigureAwait(false);
         var now = DateTimeOffset.UtcNow;
 
         // Convert DateRange to filter dates
@@ -61,8 +61,7 @@ public class DashboardService : IDashboardService
         // Calculate from StatusAudits: time from InProgress to Completed/Failed
         var executionTimes = filteredTasks
             .Where(t => (t.Status == QueuedTaskStatus.Completed || t.Status == QueuedTaskStatus.Failed)
-                        && t.StatusAudits != null
-                        && t.StatusAudits.Any())
+                        && t.StatusAudits is { Count: > 0 })
             .Select(t =>
             {
                 var audits = t.StatusAudits.OrderBy(a => a.UpdatedAtUtc).ToList();
@@ -80,7 +79,7 @@ public class DashboardService : IDashboardService
             .Select(duration => duration!.Value)
             .ToList();
 
-        var avgExecutionTimeMs = executionTimes.Any()
+        var avgExecutionTimeMs = executionTimes.Count > 0
             ? executionTimes.Average()
             : 0.0;
 
@@ -113,7 +112,7 @@ public class DashboardService : IDashboardService
     /// <inheritdoc />
     public async Task<List<RecentActivityDto>> GetRecentActivityAsync(int limit = 50, CancellationToken ct = default)
     {
-        var allTasks = await _storage.GetAll(ct);
+        var allTasks = await _storage.GetAll(ct).ConfigureAwait(false);
 
         return allTasks
             .OrderByDescending(t => t.CreatedAtUtc)

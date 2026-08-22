@@ -41,7 +41,7 @@ public class MySqlTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTa
     {
         logger.LogInformation("Set Task {TaskId} with Status {Status} using MySQL stored procedure", taskId, status);
 
-        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         var ex          = exception.ToDetailedString();
         var createAudit = AuditPolicy.ShouldCreateStatusAudit(auditLevel, status, exception);
@@ -95,7 +95,7 @@ public class MySqlTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTa
 
         logger.LogInformation("Update the current run counter for Task {TaskId} using MySQL stored procedure", taskId);
 
-        await using var dbContext = await _contextFactory.CreateDbContextAsync();
+        await using var dbContext = await _contextFactory.CreateDbContextAsync().ConfigureAwait(false);
 
         try
         {
@@ -128,7 +128,7 @@ public class MySqlTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTa
     {
         logger.LogInformation("Complete recurring run for Task {TaskId} using MySQL stored procedure", taskId);
 
-        await using var dbContext = await _contextFactory.CreateDbContextAsync();
+        await using var dbContext = await _contextFactory.CreateDbContextAsync().ConfigureAwait(false);
 
         var statusAudit = AuditPolicy.ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Completed, null);
         var runsAudit   = AuditPolicy.ShouldCreateRunsAudit(auditLevel, QueuedTaskStatus.Completed, null);
@@ -165,7 +165,7 @@ public class MySqlTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTa
     public override async Task<int> CleanupCompletedTasks(DateTimeOffset cutoff, bool preserveTasksWithLogs,
                                                           CancellationToken ct = default)
     {
-        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         // Resolve a BOUNDED page of ids, delete them by PK, repeat — never materializing the whole candidate set
         // (a large first/backlog run would otherwise load millions of Guids into memory). Each iteration re-runs

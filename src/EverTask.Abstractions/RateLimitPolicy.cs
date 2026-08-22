@@ -113,7 +113,7 @@ public sealed class RateLimitPolicy
     /// are admitted at the steady rate from the first one. This also limits the effect of a
     /// forward NTP clock jump.
     /// </remarks>
-    public bool StartEmpty { get; init; } = false;
+    public bool StartEmpty { get; init; }
 
     /// <summary>
     /// Gets the maximum scheduling horizon for a deferred task. When the next available slot for

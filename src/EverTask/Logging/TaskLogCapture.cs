@@ -19,8 +19,8 @@ internal sealed class TaskLogCapture : ITaskLogCaptureInternal
     private readonly int? _maxPersistedLogs;
     private readonly List<TaskExecutionLog>? _logs;
     private readonly object? _lock;
-    private int _sequenceNumber = 0;
-    private int _truncatedLogCount = 0;
+    private int _sequenceNumber;
+    private int _truncatedLogCount;
 
     public TaskLogCapture(
         ILogger logger,

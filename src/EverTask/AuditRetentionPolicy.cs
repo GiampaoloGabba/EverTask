@@ -3,7 +3,8 @@ namespace EverTask;
 /// <summary>
 /// Defines retention policies for audit and diagnostic data.
 /// Controls how long records are retained in the StatusAudit, RunsAudit and TaskExecutionLog tables.
-/// Retention is enforced by the optional <see cref="AuditCleanupHostedService"/>.
+/// Retention is enforced by the optional <c>AuditCleanupHostedService</c> (it lives in
+/// EverTask.Storage.EfCore, which references this assembly, so it cannot be cref'd from here).
 /// </summary>
 /// <remarks>
 /// Every day/count knob below uses the same convention: <c>null</c> means "unlimited / disabled" and any

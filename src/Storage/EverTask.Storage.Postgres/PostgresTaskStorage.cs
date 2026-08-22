@@ -45,7 +45,7 @@ public class PostgresTaskStorage(
     {
         logger.LogInformation("Set Task {TaskId} with Status {Status} using PostgreSQL writable CTE", taskId, status);
 
-        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         var exString    = exception.ToDetailedString();
         var createAudit = AuditPolicy.ShouldCreateStatusAudit(auditLevel, status, exception);
@@ -104,7 +104,7 @@ SELECT @taskId, now(), @status, @exception FROM updated WHERE @createAudit;";
     {
         logger.LogInformation("Update the current run counter for Task {TaskId} using PostgreSQL writable CTE", taskId);
 
-        await using var dbContext = await _contextFactory.CreateDbContextAsync();
+        await using var dbContext = await _contextFactory.CreateDbContextAsync().ConfigureAwait(false);
 
         var sql = $@"
 WITH updated AS (
@@ -151,7 +151,7 @@ WHERE (@auditLevel IN (0, 1))
     {
         logger.LogInformation("Complete recurring run for Task {TaskId} using PostgreSQL writable CTE", taskId);
 
-        await using var dbContext = await _contextFactory.CreateDbContextAsync();
+        await using var dbContext = await _contextFactory.CreateDbContextAsync().ConfigureAwait(false);
 
         var statusAudit = AuditPolicy.ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Completed, null);
         var runsAudit   = AuditPolicy.ShouldCreateRunsAudit(auditLevel, QueuedTaskStatus.Completed, null);

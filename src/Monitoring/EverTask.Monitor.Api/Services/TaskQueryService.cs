@@ -30,7 +30,7 @@ public class TaskQueryService : ITaskQueryService
     public async Task<TasksPagedResponse> GetTasksAsync(TaskFilter filter, PaginationParams pagination, CancellationToken ct = default)
     {
         // Get all tasks from storage
-        var allTasks = await _storage.GetAll(ct);
+        var allTasks = await _storage.GetAll(ct).ConfigureAwait(false);
         var query = allTasks.AsQueryable();
 
         // Apply filters
@@ -111,7 +111,7 @@ public class TaskQueryService : ITaskQueryService
     /// <inheritdoc />
     public async Task<TaskDetailDto?> GetTaskDetailAsync(Guid id, CancellationToken ct = default)
     {
-        var tasks = await _storage.Get(t => t.Id == id, ct);
+        var tasks = await _storage.Get(t => t.Id == id, ct).ConfigureAwait(false);
         var task = tasks.FirstOrDefault();
 
         if (task == null)
@@ -157,7 +157,7 @@ public class TaskQueryService : ITaskQueryService
     /// <inheritdoc />
     public async Task<List<StatusAuditDto>> GetStatusAuditAsync(Guid id, CancellationToken ct = default)
     {
-        var tasks = await _storage.Get(t => t.Id == id, ct);
+        var tasks = await _storage.Get(t => t.Id == id, ct).ConfigureAwait(false);
         var task = tasks.FirstOrDefault();
 
         if (task == null)
@@ -172,7 +172,7 @@ public class TaskQueryService : ITaskQueryService
     /// <inheritdoc />
     public async Task<List<RunsAuditDto>> GetRunsAuditAsync(Guid id, CancellationToken ct = default)
     {
-        var tasks = await _storage.Get(t => t.Id == id, ct);
+        var tasks = await _storage.Get(t => t.Id == id, ct).ConfigureAwait(false);
         var task = tasks.FirstOrDefault();
 
         if (task == null)
@@ -188,7 +188,7 @@ public class TaskQueryService : ITaskQueryService
     public async Task<ExecutionLogsResponse> GetExecutionLogsAsync(Guid taskId, int skip = 0, int take = 100, string? levelFilter = null, CancellationToken ct = default)
     {
         // Get all logs for the task
-        var allLogs = await _storage.GetExecutionLogsAsync(taskId, ct);
+        var allLogs = await _storage.GetExecutionLogsAsync(taskId, ct).ConfigureAwait(false);
 
         // Apply level filter if specified. Materialized once: the count and the page below both
         // enumerate it, and re-running the predicate per enumeration is pure waste.
@@ -221,7 +221,7 @@ public class TaskQueryService : ITaskQueryService
         // The standard/recurring split needs IsRecurring, which ITaskStorageStatistics does not
         // expose: the list is materialized once and every count derives from it (a separate
         // statistics roundtrip would be strictly more work on top of the same materialization).
-        var allTasksList = (await _storage.GetAll(ct)).ToList();
+        var allTasksList = (await _storage.GetAll(ct).ConfigureAwait(false)).ToList();
 
         var all       = allTasksList.Count;
         var recurring = allTasksList.Count(t => t.IsRecurring);

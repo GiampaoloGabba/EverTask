@@ -14,7 +14,7 @@ public static class ServiceCollectionExtensions
     public static EverTaskServiceBuilder AddSignalRMonitoring(this EverTaskServiceBuilder builder)
     {
         // Register default options
-        builder.Services.Configure<SignalRMonitoringOptions>(options => { });
+        builder.Services.Configure<SignalRMonitoringOptions>(_ => { });
         builder.Services.AddSignalR();
         builder.Services.TryAddSingleton<ITaskMonitor, SignalRTaskMonitor>();
 
@@ -46,7 +46,7 @@ public static class ServiceCollectionExtensions
                                                               Action<HubOptions> hubConfiguration)
     {
         // Register default monitoring options
-        builder.Services.Configure<SignalRMonitoringOptions>(options => { });
+        builder.Services.Configure<SignalRMonitoringOptions>(_ => { });
         builder.Services.AddSignalR(hubConfiguration);
         builder.Services.TryAddSingleton<ITaskMonitor, SignalRTaskMonitor>();
 

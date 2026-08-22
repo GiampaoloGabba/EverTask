@@ -78,7 +78,7 @@ public class WorkerQueueRecoveryGuardTests
         };
 
         bool          registrationHeldDuringRevert = false;
-        EnqueueResult concurrentInWindow           = EnqueueResult.Enqueued;
+        var concurrentInWindow           = EnqueueResult.Enqueued;
 
         // Probe the rollback window from inside the revert (SetStatus -> WaitingQueue).
         storage.OnSetStatus = async (id, status) =>

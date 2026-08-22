@@ -9,7 +9,7 @@ public class SqlServerDbContextFactoryAdapter(IDbContextFactory<SqlServerTaskSto
 {
     public async ValueTask<ITaskStoreDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default)
     {
-        var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
         return dbContext;
     }
 }

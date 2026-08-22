@@ -42,7 +42,7 @@ public class DashboardControllerTests : MonitoringTestBase
         activities.ShouldNotBeNull();
         activities.Count.ShouldBeLessThanOrEqualTo(limit);
 
-        if (activities.Any())
+        if (activities.Count > 0)
         {
             var first = activities.First();
             first.TaskId.ShouldNotBe(Guid.Empty);

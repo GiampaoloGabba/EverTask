@@ -67,10 +67,10 @@ public class WorkerExecutor(
 
         // Cast only once per handler type (first time): cache the RAW overrides
         return handlerInstance is IEverTaskHandlerOptions handlerOpts
-            ? new HandlerOptionsCache(handlerOpts.RetryPolicy, handlerOpts.Timeout,
-                                      onRetryMethod, onStartedMethod, onCompletedMethod, onErrorMethod)
-            : new HandlerOptionsCache(null, null,
-                                      onRetryMethod, onStartedMethod, onCompletedMethod, onErrorMethod);
+                   ? new HandlerOptionsCache(handlerOpts.RetryPolicy, handlerOpts.Timeout,
+                       onRetryMethod, onStartedMethod, onCompletedMethod, onErrorMethod)
+                   : new HandlerOptionsCache(null, null,
+                       onRetryMethod, onStartedMethod, onCompletedMethod, onErrorMethod);
     }
 
     // GetOrAdd is idempotent, so callers may populate the cache in any order (ExecuteTask or the
@@ -210,7 +210,7 @@ public class WorkerExecutor(
         //Task storage could be a dbcontext wich is not thread safe.
         //So its safer to just use a new scope for each task
         await using var scope       = serviceScopeFactory.CreateAsyncScope();
-        ITaskStorage? taskStorage = scope.ServiceProvider.GetService<ITaskStorage>();
+        var taskStorage = scope.ServiceProvider.GetService<ITaskStorage>();
 
         // Create log capture instance (always logs to ILogger, optionally persists)
         // Will be injected with proper handler type after handler resolution
@@ -271,13 +271,13 @@ public class WorkerExecutor(
                         ).ConfigureAwait(false);
                     }
 
-                    return;  // Cannot proceed without handler
+                    return; // Cannot proceed without handler
                 }
             }
             else
             {
                 // Eager mode: use existing handler instance
-                handler = task.Handler!;  // Non-null assertion safe (validated at dispatch)
+                handler = task.Handler!; // Non-null assertion safe (validated at dispatch)
             }
 
             // Create log capture with proper handler type for ILogger<THandler>
@@ -303,11 +303,13 @@ public class WorkerExecutor(
             RegisterInfo(task, "Starting task with id {0}.", task.PersistenceId);
 
             if (taskStorage != null)
-                await taskStorage.SetInProgress(task.PersistenceId, task.AuditLevel, serviceToken).ConfigureAwait(false);
+                await taskStorage.SetInProgress(task.PersistenceId, task.AuditLevel, serviceToken)
+                                 .ConfigureAwait(false);
 
             await ExecuteCallback(GetStartedCallback(task, handler), task, "Started").ConfigureAwait(false);
 
-            var execution = await ExecuteTask(task, handler, scope.ServiceProvider, serviceToken, taskStorage);
+            var execution = await ExecuteTask(task, handler, serviceToken)
+                                .ConfigureAwait(false);
             executionTime = execution.ExecutionTimeMs;
 
             if (execution.Deferred)
@@ -334,7 +336,8 @@ public class WorkerExecutor(
                         task.PersistenceId, task.RateLimitKey!);
 
                     if (taskStorage != null)
-                        await taskStorage.SetQueued(task.PersistenceId, task.AuditLevel, serviceToken).ConfigureAwait(false);
+                        await taskStorage.SetQueued(task.PersistenceId, task.AuditLevel, serviceToken)
+                                         .ConfigureAwait(false);
 
                     // Skipped occurrence: the finally must advance the schedule WITHOUT consuming MaxRuns,
                     // skipping ahead to the limiter's next available slot.
@@ -363,7 +366,8 @@ public class WorkerExecutor(
             // by the finally's atomic CompleteRecurringRun (CU14/L29); a separate SetCompleted here would
             // re-open the crash window. Non-recurring tasks have no advance, so they complete here.
             if (taskStorage != null && task.RecurringTask == null)
-                await taskStorage.SetCompleted(task.PersistenceId, executionTime, task.AuditLevel).ConfigureAwait(false);
+                await taskStorage.SetCompleted(task.PersistenceId, executionTime, task.AuditLevel)
+                                 .ConfigureAwait(false);
 
             recurringRunCompleted = task.RecurringTask != null;
 
@@ -371,13 +375,15 @@ public class WorkerExecutor(
 
             // Get logs for completion event (if capture is enabled)
             var capturedLogs = logCapture?.GetPersistedLogs();
-            RegisterInfo(task, capturedLogs, "Task with id {0} was completed in {1} ms.", task.PersistenceId, executionTime);
+            RegisterInfo(task, capturedLogs, "Task with id {0} was completed in {1} ms.", task.PersistenceId,
+                executionTime);
         }
         catch (Exception ex)
         {
             // Get logs for error event (if capture is enabled)
             var capturedLogs = logCapture?.GetPersistedLogs();
-            await HandleExceptionAsync(ex, task, handler, capturedLogs, serviceToken, taskStorage);
+            await HandleExceptionAsync(ex, task, handler, capturedLogs, serviceToken, taskStorage)
+                .ConfigureAwait(false);
         }
         finally
         {
@@ -389,9 +395,13 @@ public class WorkerExecutor(
             if (!task.IsLazy)
             {
                 if (task.HandlerScope != null)
-                    await ExecuteDisposeHandlerScope(task.HandlerScope);
+                    await ExecuteDisposeHandlerScope(task.HandlerScope).ConfigureAwait(false);
+                // The analyzer reads `handler` as non-null because it is declared `= null!`, but this
+                // finally also runs when the try threw BEFORE the assignment (e.g. the entry
+                // ThrowIfCancellationRequested), and then it really is null. The check must stay.
+                // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
                 else if (handler != null)
-                    await ExecuteDisposeHandler(handler);
+                    await ExecuteDisposeHandler(handler).ConfigureAwait(false);
             }
 
             // Save persisted logs (AFTER handler disposal, BEFORE recurring scheduling)
@@ -411,15 +421,17 @@ public class WorkerExecutor(
                         if (persistedLogs.Count > 0)
                         {
                             // Use CancellationToken.None to ensure logs are saved even if task was cancelled
-                            await taskStorage.SaveExecutionLogsAsync(task.PersistenceId, persistedLogs, CancellationToken.None)
-                                .ConfigureAwait(false);
+                            await taskStorage.SaveExecutionLogsAsync(task.PersistenceId, persistedLogs,
+                                                 CancellationToken.None)
+                                             .ConfigureAwait(false);
                         }
                     }
                 }
                 catch (Exception logSaveEx)
                 {
                     // Log the error but don't fail the task
-                    logger.LogError(logSaveEx, "Failed to persist execution logs for task {TaskId}", task.PersistenceId);
+                    logger.LogError(logSaveEx, "Failed to persist execution logs for task {TaskId}",
+                        task.PersistenceId);
                 }
             }
 
@@ -429,7 +441,8 @@ public class WorkerExecutor(
             // CURRENT occurrence is still parked in the scheduler (run-count integrity)
             if (!rateLimitDeferred)
                 await QueueNextOccourrence(task, executionTime, taskStorage, markCompleted: recurringRunCompleted,
-                                           countsAsRun: skippedOccurrenceSlot == null, skipAheadTo: skippedOccurrenceSlot);
+                        countsAsRun: skippedOccurrenceSlot == null, skipAheadTo: skippedOccurrenceSlot)
+                    .ConfigureAwait(false);
         }
     }
 
@@ -540,7 +553,7 @@ public class WorkerExecutor(
                 .ConfigureAwait(false);
 
             if (!task.IsLazy)
-                await ExecuteDisposeHandler(handler);
+                await ExecuteDisposeHandler(handler).ConfigureAwait(false);
         }
 
         RegisterError(exception, task, "Rate limit rejected task {0}: marked as Failed.", task.PersistenceId);
@@ -574,7 +587,8 @@ public class WorkerExecutor(
         return false;
     }
 
-    private async Task<TaskExecutionResult> ExecuteTask(TaskHandlerExecutor task, object handler, IServiceProvider serviceProvider, CancellationToken serviceToken, ITaskStorage? taskStorage)
+    private async Task<TaskExecutionResult> ExecuteTask(TaskHandlerExecutor task, object handler,
+                                                        CancellationToken serviceToken)
     {
         serviceToken.ThrowIfCancellationRequested();
 
@@ -591,12 +605,12 @@ public class WorkerExecutor(
         var timeout     = handlerOptions.Timeout ?? queueConfig?.DefaultTimeout ?? options.DefaultTimeout;
 
         // WS4 retry throttling: closure state shared with the retry action below
-        var attempt = 0;
+        var                  attempt       = 0;
         RateLimitGateResult? retryDeferral = null;
 
         // Use GetTimestamp/GetElapsedTime to avoid Stopwatch allocation
         var startTime = Stopwatch.GetTimestamp();
-        await DoExecute();
+        await DoExecute().ConfigureAwait(false);
         var elapsedTime = Stopwatch.GetElapsedTime(startTime);
         return new TaskExecutionResult(elapsedTime.TotalMilliseconds, retryDeferral);
 
@@ -615,7 +629,7 @@ public class WorkerExecutor(
                 // Use CreateHandlerCallback to avoid duplicate DI resolution (which would create
                 // a second handler instance that gets disposed separately by the async scope)
                 var (_, callback) = task.CreateHandlerCallback(handler);
-                handlerCallback = callback;
+                handlerCallback   = callback;
             }
 
             //Use WaitAsync for cancelling:
@@ -656,7 +670,7 @@ public class WorkerExecutor(
                     else
                     {
                         await handlerCallback.Invoke(task.Task, retryToken).WaitAsync(retryToken)
-                                  .ConfigureAwait(false);
+                                             .ConfigureAwait(false);
                     }
                 },
                 attemptLogger: logger,
@@ -664,7 +678,8 @@ public class WorkerExecutor(
                 onRetryCallback: async (attemptNumber, exception, delay) =>
                 {
                     // Invoke handler's OnRetry method using cached MethodInfo
-                    await InvokeOnRetryCallback(task, handler, handlerOptions.OnRetryMethod, attemptNumber, exception, delay)
+                    await InvokeOnRetryCallback(task, handler, handlerOptions.OnRetryMethod, attemptNumber, exception,
+                            delay)
                         .ConfigureAwait(false);
                 }
             ).ConfigureAwait(false);
@@ -694,7 +709,10 @@ public class WorkerExecutor(
         finally
         {
             //https://github.com/davidfowl/AspNetCoreDiagnosticScenarios/blob/master/AsyncGuidance.md#always-dispose-cancellationtokensources-used-for-timeouts
-            timeoutCts.Cancel();
+            // CancelAsync, not Cancel: the synchronous Cancel runs every registered callback inline on
+            // the thread completing the task (handler-registered continuations included), so a slow one
+            // would stall this finally. The await still guarantees they finish before the using disposes.
+            await timeoutCts.CancelAsync().ConfigureAwait(false);
         }
     }
 
@@ -704,7 +722,7 @@ public class WorkerExecutor(
         {
             try
             {
-                await asyncDisposable.DisposeAsync();
+                await asyncDisposable.DisposeAsync().ConfigureAwait(false);
                 logger.LogDebug("Disposed handler {HandlerType}", handler.GetType().Name);
             }
             catch (Exception e)
@@ -720,7 +738,7 @@ public class WorkerExecutor(
     {
         try
         {
-            await handlerScope.DisposeAsync();
+            await handlerScope.DisposeAsync().ConfigureAwait(false);
         }
         catch (Exception e)
         {
@@ -883,7 +901,8 @@ public class WorkerExecutor(
             if (taskStorage != null)
             {
                 if (serviceToken.IsCancellationRequested && !userCancelled)
-                    await taskStorage.SetCancelledByService(task.PersistenceId, oce, task.AuditLevel).ConfigureAwait(false);
+                    await taskStorage.SetCancelledByService(task.PersistenceId, oce, task.AuditLevel)
+                                     .ConfigureAwait(false);
                 else
                     await taskStorage.SetCancelledByUser(task.PersistenceId, task.AuditLevel).ConfigureAwait(false);
             }
@@ -891,13 +910,15 @@ public class WorkerExecutor(
             await ExecuteCallback(GetErrorCallback(task, handler), task, oce,
                 $"Task with id {task.PersistenceId} was cancelled").ConfigureAwait(false);
 
-            RegisterWarning(oce, task, executionLogs, "Task with id {0} was cancelled by service while stopping.", task.PersistenceId);
+            RegisterWarning(oce, task, executionLogs, "Task with id {0} was cancelled by service while stopping.",
+                task.PersistenceId);
         }
         else
         {
             // Logica per le altre eccezioni
             if (taskStorage != null)
-                await taskStorage.SetStatus(task.PersistenceId, QueuedTaskStatus.Failed, ex, task.AuditLevel, null, serviceToken)
+                await taskStorage.SetStatus(task.PersistenceId, QueuedTaskStatus.Failed, ex, task.AuditLevel, null,
+                                     serviceToken)
                                  .ConfigureAwait(false);
 
             // G11: the retry policy throws AggregateException("All retry attempts failed", ...) when
@@ -960,8 +981,8 @@ public class WorkerExecutor(
         // otherwise an in-memory counter so the series keeps running and still honors MaxRuns/RunUntil
         // without persistence (F18).
         var currentRun = taskStorage != null
-            ? current?.CurrentRunCount ?? 0
-            : _inMemoryRunCounts.GetValueOrDefault(task.PersistenceId);
+                             ? current?.CurrentRunCount ?? 0
+                             : _inMemoryRunCounts.GetValueOrDefault(task.PersistenceId);
 
         // Fix for schedule drift: Use the scheduled execution time as base for next calculation,
         // not the current time. This ensures recurring tasks maintain their intended schedule
@@ -1000,7 +1021,7 @@ public class WorkerExecutor(
             skipAheadTo = null;
 
         var runNumber = countsAsRun ? currentRun + 1 : currentRun;
-        var result    = task.RecurringTask.CalculateNextValidRun(
+        var result = task.RecurringTask.CalculateNextValidRun(
             scheduledTime, runNumber, referenceTime: countsAsRun ? null : skipAheadTo, isRecovery: !countsAsRun,
             computeSkippedCount: countsAsRun);
 
@@ -1029,10 +1050,11 @@ public class WorkerExecutor(
                 // advance (CU14/L29); otherwise (failure) the status was already set and we only advance.
                 if (markCompleted)
                     await taskStorage.CompleteRecurringRun(task.PersistenceId, executionTimeMs, result.NextRun,
-                                                           task.AuditLevel)
+                                         task.AuditLevel)
                                      .ConfigureAwait(false);
                 else
-                    await taskStorage.UpdateCurrentRun(task.PersistenceId, executionTimeMs, result.NextRun, task.AuditLevel)
+                    await taskStorage.UpdateCurrentRun(task.PersistenceId, executionTimeMs, result.NextRun,
+                                         task.AuditLevel)
                                      .ConfigureAwait(false);
             }
             else
@@ -1073,14 +1095,16 @@ public class WorkerExecutor(
 
     #region Logging and event pubblishing
 
-    private void RegisterInfo(TaskHandlerExecutor executor, IReadOnlyList<TaskExecutionLog>? executionLogs, string message, params object[] messageArgs) =>
+    private void RegisterInfo(TaskHandlerExecutor executor, IReadOnlyList<TaskExecutionLog>? executionLogs,
+                              string message, params object[] messageArgs) =>
         RegisterEvent(SeverityLevel.Information, executor, message, null, executionLogs, messageArgs);
 
     // internal (not private): the deterministic L30/F24 gates drive RegisterEvent through this overload.
     internal void RegisterInfo(TaskHandlerExecutor executor, string message, params object[] messageArgs) =>
         RegisterEvent(SeverityLevel.Information, executor, message, null, null, messageArgs);
 
-    private void RegisterWarning(Exception? exception, TaskHandlerExecutor executor, IReadOnlyList<TaskExecutionLog>? executionLogs, string message,
+    private void RegisterWarning(Exception? exception, TaskHandlerExecutor executor,
+                                 IReadOnlyList<TaskExecutionLog>? executionLogs, string message,
                                  params object[] messageArgs) =>
         RegisterEvent(SeverityLevel.Warning, executor, message, exception, executionLogs, messageArgs);
 
@@ -1088,7 +1112,8 @@ public class WorkerExecutor(
                                  params object[] messageArgs) =>
         RegisterEvent(SeverityLevel.Warning, executor, message, exception, null, messageArgs);
 
-    private void RegisterError(Exception exception, TaskHandlerExecutor executor, IReadOnlyList<TaskExecutionLog>? executionLogs, string message,
+    private void RegisterError(Exception exception, TaskHandlerExecutor executor,
+                               IReadOnlyList<TaskExecutionLog>? executionLogs, string message,
                                params object[] messageArgs) =>
         RegisterEvent(SeverityLevel.Error, executor, message, exception, executionLogs, messageArgs);
 
@@ -1097,13 +1122,14 @@ public class WorkerExecutor(
         RegisterEvent(SeverityLevel.Error, executor, message, exception, null, messageArgs);
 
     private void RegisterEvent(SeverityLevel severity, TaskHandlerExecutor executor, string message,
-                               Exception? exception = null, IReadOnlyList<TaskExecutionLog>? executionLogs = null, params object[] messageArgs)
+                               Exception? exception = null, IReadOnlyList<TaskExecutionLog>? executionLogs = null,
+                               params object[] messageArgs)
     {
         var logLevel = severity switch
         {
             SeverityLevel.Information => LogLevel.Information,
-            SeverityLevel.Warning     => LogLevel.Warning,
-            _                          => LogLevel.Error
+            SeverityLevel.Warning => LogLevel.Warning,
+            _ => LogLevel.Error
         };
 
         // L30: when nobody consumes the event — the level is filtered out AND there are no monitoring
@@ -1115,8 +1141,8 @@ public class WorkerExecutor(
         // Format message once for both logging and event publishing
         // This avoids "Message template should be compile time constant" warning
         var formattedMessage = messageArgs.Length > 0
-            ? string.Format(message, messageArgs)
-            : message;
+                                   ? string.Format(message, messageArgs)
+                                   : message;
 
         switch (severity)
         {
@@ -1199,7 +1225,8 @@ public class WorkerExecutor(
     }
 
     private EverTaskEventData CreateEventDataCached(TaskHandlerExecutor executor, SeverityLevel severity,
-                                                     string message, Exception? exception, IReadOnlyList<TaskExecutionLog>? executionLogs = null)
+                                                    string message, Exception? exception,
+                                                    IReadOnlyList<TaskExecutionLog>? executionLogs = null)
     {
         // Cache task JSON (weak reference - GC'd when task is collected). EverTaskJson uses private, isolated
         // System.Text.Json options (L33) so a hostile global JSON configuration cannot alter the monitoring

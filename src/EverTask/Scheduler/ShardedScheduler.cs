@@ -156,12 +156,12 @@ public class ShardedScheduler : IScheduler, IDisposable
                     if (delay == Timeout.InfiniteTimeSpan)
                     {
                         _logger.LogDebug("Shard {ShardId}: Queue empty, sleeping", _shardId);
-                        await _wakeUpSignal.WaitAsync(ct);
+                        await _wakeUpSignal.WaitAsync(ct).ConfigureAwait(false);
                         Interlocked.Exchange(ref _wakeUpPending, 0);
                     }
                     else
                     {
-                        var signaled = await _wakeUpSignal.WaitAsync(delay, ct);
+                        var signaled = await _wakeUpSignal.WaitAsync(delay, ct).ConfigureAwait(false);
                         if (signaled)
                         {
                             Interlocked.Exchange(ref _wakeUpPending, 0);

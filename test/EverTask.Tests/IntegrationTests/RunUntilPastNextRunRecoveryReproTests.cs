@@ -64,7 +64,7 @@ public class RunUntilPastNextRunRecoveryReproTests : IsolatedIntegrationTestBase
         await Host!.StartAsync();
 
         // Recovery must FINALIZE the exhausted series (clear NextRunUtc), not throw/poison: poll for it.
-        QueuedTask final = seeded;
+        var final = seeded;
         var deadline  = DateTimeOffset.UtcNow.AddSeconds(8);
         var finalized = false;
         while (DateTimeOffset.UtcNow < deadline)

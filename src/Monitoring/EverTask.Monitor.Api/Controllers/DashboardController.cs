@@ -37,7 +37,7 @@ public class DashboardController : ControllerBase
         [FromQuery] DateRange range = DateRange.Today,
         CancellationToken ct = default)
     {
-        var result = await _dashboardService.GetOverviewAsync(range, ct);
+        var result = await _dashboardService.GetOverviewAsync(range, ct).ConfigureAwait(false);
         return Ok(result);
     }
 
@@ -56,7 +56,7 @@ public class DashboardController : ControllerBase
         [FromQuery] int limit = 50,
         CancellationToken ct = default)
     {
-        var result = await _dashboardService.GetRecentActivityAsync(limit, ct);
+        var result = await _dashboardService.GetRecentActivityAsync(limit, ct).ConfigureAwait(false);
         return Ok(result);
     }
 }

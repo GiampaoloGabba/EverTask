@@ -50,7 +50,7 @@ public class EverTaskApiOptions
     /// OpenAPI/Swagger/Scalar setup the host application has.
     /// Enabled automatically by the EverTask.Monitor.Api.Scalar package.
     /// </summary>
-    public bool EnableOpenApiDocument { get; set; } = false;
+    public bool EnableOpenApiDocument { get; set; }
 
     /// <summary>
     /// Name of the OpenAPI document and the ApiExplorer group of the monitoring controllers

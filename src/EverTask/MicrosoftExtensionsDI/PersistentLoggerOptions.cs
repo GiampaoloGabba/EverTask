@@ -11,7 +11,7 @@ public class PersistentLoggerOptions
     /// Gets or sets whether task execution logs should be persisted to the database.
     /// Default: false (opt-in feature).
     /// </summary>
-    public bool Enabled { get; set; } = false;
+    public bool Enabled { get; set; }
 
     /// <summary>
     /// Gets or sets the minimum log level to persist to database.

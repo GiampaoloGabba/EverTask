@@ -10,7 +10,7 @@ public class MySqlDbContextFactoryAdapter(IDbContextFactory<MySqlTaskStoreContex
 {
     public async ValueTask<ITaskStoreDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default)
     {
-        var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
         return dbContext;
     }
 }

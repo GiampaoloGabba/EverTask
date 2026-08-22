@@ -21,7 +21,7 @@ public class SqliteTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     /// </summary>
     public override async Task<QueuedTask[]> RetrievePending(DateTimeOffset? lastCreatedAt, Guid? lastId, int take, CancellationToken ct = default)
     {
-        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         logger.LogInformation("Retrieving Pending Tasks (SQLite keyset: lastCreatedAt={LastCreatedAt}, lastId={LastId}, take={Take})",
             lastCreatedAt, lastId, take);
@@ -68,7 +68,7 @@ public class SqliteTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     /// </summary>
     public override async Task<bool> TrySetQueuedIfRecoverable(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default)
     {
-        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         var transitioned = await TrySetQueuedClientSideAsync(dbContext, taskId, DateTimeOffset.UtcNow, auditLevel, ct).ConfigureAwait(false);
         if (!transitioned)
@@ -86,7 +86,7 @@ public class SqliteTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     public override async Task<int> CleanupStatusAudits(DateTimeOffset successCutoff, DateTimeOffset errorCutoff,
                                                         CancellationToken ct = default)
     {
-        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         var ids = (await dbContext.StatusAudit
                 .Select(sa => new { sa.Id, sa.UpdatedAtUtc, HasException = sa.Exception != null && sa.Exception != "" })
@@ -104,7 +104,7 @@ public class SqliteTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     public override async Task<int> CleanupRunsAudits(DateTimeOffset successCutoff, DateTimeOffset errorCutoff,
                                                       CancellationToken ct = default)
     {
-        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         var ids = (await dbContext.RunsAudit
                 .Select(ra => new { ra.Id, ra.ExecutedAt, HasException = ra.Exception != null && ra.Exception != "" })
@@ -121,7 +121,7 @@ public class SqliteTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     /// <inheritdoc />
     public override async Task<int> CleanupExecutionLogsByAge(DateTimeOffset cutoff, CancellationToken ct = default)
     {
-        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         var ids = (await dbContext.TaskExecutionLogs
                 .Select(l => new { l.Id, l.TimestampUtc })
@@ -141,7 +141,7 @@ public class SqliteTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         if (maxPerTask <= 0)
             return 0;
 
-        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         var rows = await dbContext.TaskExecutionLogs
             .Select(l => new { l.Id, l.TaskId, l.TimestampUtc, l.SequenceNumber })
@@ -165,7 +165,7 @@ public class SqliteTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     public override async Task<int> CleanupCompletedTasks(DateTimeOffset cutoff, bool preserveTasksWithLogs,
                                                           CancellationToken ct = default)
     {
-        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         // The status/recurring/audit/log filters translate; the age gate runs in memory (DateTimeOffset).
         var candidates = await dbContext.QueuedTasks
@@ -198,7 +198,7 @@ public class SqliteTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         if (createdAtOrAfterUtc == null)
             return await base.CountByStatusAsync(null, ct).ConfigureAwait(false);
 
-        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         var rows = await dbContext.QueuedTasks
             .AsNoTracking()
@@ -218,7 +218,7 @@ public class SqliteTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         if (createdAtOrAfterUtc == null)
             return await base.CountByQueueAndStatusAsync(null, ct).ConfigureAwait(false);
 
-        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         var rows = await dbContext.QueuedTasks
             .AsNoTracking()

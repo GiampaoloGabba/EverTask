@@ -38,7 +38,7 @@ public class StatisticsController : ControllerBase
         [FromQuery] TimePeriod period = TimePeriod.Last7Days,
         CancellationToken ct = default)
     {
-        var result = await _statisticsService.GetSuccessRateTrendAsync(period, ct);
+        var result = await _statisticsService.GetSuccessRateTrendAsync(period, ct).ConfigureAwait(false);
         return Ok(result);
     }
 
@@ -57,7 +57,7 @@ public class StatisticsController : ControllerBase
         [FromQuery] DateRange range = DateRange.Week,
         CancellationToken ct = default)
     {
-        var result = await _statisticsService.GetTaskTypeDistributionAsync(range, ct);
+        var result = await _statisticsService.GetTaskTypeDistributionAsync(range, ct).ConfigureAwait(false);
         return Ok(result);
     }
 
@@ -76,7 +76,7 @@ public class StatisticsController : ControllerBase
         [FromQuery] DateRange range = DateRange.Today,
         CancellationToken ct = default)
     {
-        var result = await _statisticsService.GetExecutionTimesAsync(range, ct);
+        var result = await _statisticsService.GetExecutionTimesAsync(range, ct).ConfigureAwait(false);
         return Ok(result);
     }
 }

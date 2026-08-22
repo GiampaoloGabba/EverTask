@@ -117,7 +117,7 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
         catch
         {
             // Never leak the scope if executor construction fails before it is handed off.
-            await handlerScope.DisposeAsync();
+            await handlerScope.DisposeAsync().ConfigureAwait(false);
             throw;
         }
     }

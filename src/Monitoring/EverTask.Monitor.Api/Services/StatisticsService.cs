@@ -47,7 +47,7 @@ public class StatisticsService : IStatisticsService
     /// <inheritdoc />
     public async Task<SuccessRateTrendDto> GetSuccessRateTrendAsync(TimePeriod period, CancellationToken ct = default)
     {
-        var allTasks = await _storage.GetAll(ct);
+        var allTasks = await _storage.GetAll(ct).ConfigureAwait(false);
         var now = DateTimeOffset.UtcNow;
 
         // Convert TimePeriod to date range and interval
@@ -88,7 +88,7 @@ public class StatisticsService : IStatisticsService
     /// <inheritdoc />
     public async Task<List<QueueMetricsDto>> GetQueueMetricsAsync(CancellationToken ct = default)
     {
-        var allTasks = await _storage.GetAll(ct);
+        var allTasks = await _storage.GetAll(ct).ConfigureAwait(false);
 
         return allTasks
             .GroupBy(t => t.QueueName)
@@ -106,7 +106,7 @@ public class StatisticsService : IStatisticsService
                     .Where(t => t is { Status: QueuedTaskStatus.Completed, ExecutionTimeMs: > 0 })
                     .ToList();
 
-                var avgExecutionTimeMs = completedWithExecTime.Any()
+                var avgExecutionTimeMs = completedWithExecTime.Count > 0
                     ? completedWithExecTime.Average(t => t.ExecutionTimeMs)
                     : 0.0;
 
@@ -132,7 +132,7 @@ public class StatisticsService : IStatisticsService
     /// <inheritdoc />
     public async Task<Dictionary<string, int>> GetTaskTypeDistributionAsync(DateRange range, CancellationToken ct = default)
     {
-        var allTasks = await _storage.GetAll(ct);
+        var allTasks = await _storage.GetAll(ct).ConfigureAwait(false);
         var now = DateTimeOffset.UtcNow;
 
         // Convert DateRange to filter
@@ -154,7 +154,7 @@ public class StatisticsService : IStatisticsService
     /// <inheritdoc />
     public async Task<List<ExecutionTimeDto>> GetExecutionTimesAsync(DateRange range, CancellationToken ct = default)
     {
-        var allTasks = await _storage.GetAll(ct);
+        var allTasks = await _storage.GetAll(ct).ConfigureAwait(false);
         var now = DateTimeOffset.UtcNow;
 
         // Convert DateRange to filter and interval
@@ -182,7 +182,7 @@ public class StatisticsService : IStatisticsService
                 .Where(t => t.CreatedAtUtc >= current && t.CreatedAtUtc < bucketEnd)
                 .ToList();
 
-            var avgExecutionTimeMs = bucketTasks.Any()
+            var avgExecutionTimeMs = bucketTasks.Count > 0
                 ? bucketTasks.Average(t => t.ExecutionTimeMs)
                 : 0.0;
 
@@ -201,7 +201,7 @@ public class StatisticsService : IStatisticsService
         if (_queueManager == null)
         {
             // Fallback to old behavior if queue manager not available
-            var metrics = await GetQueueMetricsAsync(ct);
+            var metrics = await GetQueueMetricsAsync(ct).ConfigureAwait(false);
             return metrics.Select(m =>
             {
                 var queueName = m.QueueName ?? "default";
@@ -227,7 +227,7 @@ public class StatisticsService : IStatisticsService
         var allQueues = _queueManager.GetAllQueues().ToList();
 
         // Get task metrics from storage
-        var allTasks = await _storage.GetAll(ct);
+        var allTasks = await _storage.GetAll(ct).ConfigureAwait(false);
         var tasksByQueue = allTasks.GroupBy(t => t.QueueName ?? "default")
             .ToDictionary(g => g.Key, g => g.ToList());
 
@@ -253,7 +253,7 @@ public class StatisticsService : IStatisticsService
                 .Where(t => t is { Status: QueuedTaskStatus.Completed, ExecutionTimeMs: > 0 })
                 .ToList();
 
-            var avgExecutionTimeMs = completedWithExecTime.Any()
+            var avgExecutionTimeMs = completedWithExecTime.Count > 0
                 ? completedWithExecTime.Average(t => t.ExecutionTimeMs)
                 : 0.0;
 

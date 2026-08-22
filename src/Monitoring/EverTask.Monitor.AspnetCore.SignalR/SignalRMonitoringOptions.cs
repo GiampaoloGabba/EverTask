@@ -21,5 +21,5 @@ public class SignalRMonitoringOptions
     /// Be aware that this can significantly increase SignalR message size and network bandwidth usage.
     /// </para>
     /// </remarks>
-    public bool IncludeExecutionLogs { get; set; } = false;
+    public bool IncludeExecutionLogs { get; set; }
 }

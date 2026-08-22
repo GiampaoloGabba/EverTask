@@ -9,7 +9,7 @@ public class SqliteDbContextFactoryAdapter(IDbContextFactory<SqliteTaskStoreCont
 {
     public async ValueTask<ITaskStoreDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default)
     {
-        var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
         return dbContext;
     }
 }

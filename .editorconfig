@@ -460,3 +460,70 @@ indent_size = 2
 [{*.http,*.rest}]
 indent_style = space
 indent_size = 0
+
+# ---------------------------------------------------------------------------
+# Roslyn analyzer ruleset
+# Rules enabled here are enforced by the build (TreatWarningsAsErrors is on), so
+# a rule only becomes `warning` once its existing occurrences are all fixed.
+# ---------------------------------------------------------------------------
+
+[*.cs]
+# CA2007: a library must not capture the caller's synchronization context - a
+# consumer awaiting our tasks from a sync context would otherwise risk a deadlock.
+# Kept at `suggestion`, NOT `warning`: every awaited call has been fixed, but the rule
+# also flags the implicit disposal await of `await using`, which can only be satisfied
+# by splitting the declaration in two (or, for the AsyncServiceScope struct, by boxing
+# it into a ConfiguredAsyncDisposable - one allocation per task on the hot path).
+# Promote to `warning` only if those disposal sites are ever addressed.
+dotnet_diagnostic.CA2007.severity = suggestion
+
+# --- Enforced: currently at zero occurrences, kept there by the build -------
+# Any() on a type with Count/Length: allocates an enumerator for nothing.
+dotnet_diagnostic.CA1860.severity = warning
+# Collection expressions over Array.Empty<T>() / new[] { ... }.
+dotnet_diagnostic.IDE0300.severity = warning
+dotnet_diagnostic.IDE0301.severity = warning
+
+# --- Visible, not enforced: real findings with an open backlog --------------
+# Logging allocates and boxes before the level check. Tracked as a whole in issue #32,
+# NOT as ~400 per-call-site suggestions: these two fire on every single logging call in
+# the solution, which is noise, not visibility. Re-enable once #32 lands.
+dotnet_diagnostic.CA1848.severity = none
+dotnet_diagnostic.CA1873.severity = none
+# ValueTask consumed incorrectly on two public seams (issue #33). NOT suppressed:
+# suppressing it would bury an open issue.
+dotnet_diagnostic.CA2012.severity = suggestion
+# Log message templates must be constant, and placeholders PascalCase.
+dotnet_diagnostic.CA2254.severity = suggestion
+dotnet_diagnostic.CA1727.severity = suggestion
+# Culture-sensitive string/format calls in a library.
+dotnet_diagnostic.CA1305.severity = suggestion
+dotnet_diagnostic.CA1307.severity = suggestion
+dotnet_diagnostic.CA1311.severity = suggestion
+# Sync-blocking call inside an async method.
+dotnet_diagnostic.CA1849.severity = suggestion
+
+# --- Off: wrong for this codebase, by design --------------------------------
+# Nullable reference types already enforce the argument contract.
+dotnet_diagnostic.CA1062.severity = none
+# The storage/worker swallow contracts catch broadly on purpose (documented per site).
+dotnet_diagnostic.CA1031.severity = none
+# "Make types internal": this is a library, its public types ARE the product.
+dotnet_diagnostic.CA1515.severity = none
+# Collection-shaped public API: already shipped, changing it would be breaking.
+dotnet_diagnostic.CA1002.severity = none
+dotnet_diagnostic.CA1819.severity = none
+dotnet_diagnostic.CA2227.severity = none
+
+# Test, sample and benchmark code is the consumer, not the library: it runs on its
+# own context and there is nothing to deadlock.
+[{test,samples,benchmarks}/**.cs]
+dotnet_diagnostic.CA2007.severity = none
+# Test method names are sentences by convention (Should_x_when_y).
+dotnet_diagnostic.CA1707.severity = none
+# Test types are public for the runner, not as an API surface.
+dotnet_diagnostic.CA1515.severity = none
+
+# EF migrations are generated artifacts, kept frozen once applied.
+[**/Migrations/*.cs]
+dotnet_diagnostic.CA2007.severity = none

@@ -38,7 +38,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     public virtual async Task<QueuedTask[]> Get(Expression<Func<QueuedTask, bool>> where,
                                                 CancellationToken ct = default)
     {
-        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         return await dbContext.QueuedTasks
                               .AsNoTracking()
@@ -49,7 +49,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
     public virtual async Task<QueuedTask[]> GetAll(CancellationToken ct = default)
     {
-        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         return await dbContext.QueuedTasks
                               .AsNoTracking()
@@ -59,7 +59,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
     public async Task Persist(QueuedTask taskEntity, CancellationToken ct = default)
     {
-        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         dbContext.QueuedTasks.Add(taskEntity);
 
@@ -71,7 +71,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     public virtual async Task<QueuedTask[]> RetrievePending(DateTimeOffset? lastCreatedAt, Guid? lastId, int take,
                                                             CancellationToken ct = default)
     {
-        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         logger.LogInformation(
             "Retrieving Pending Tasks (keyset: lastCreatedAt={LastCreatedAt}, lastId={LastId}, take={Take})",
@@ -115,7 +115,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     /// <inheritdoc />
     public virtual async Task<bool> TrySetQueuedIfRecoverable(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default)
     {
-        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         var now = UtcNowNormalized;
 
@@ -218,7 +218,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     {
         logger.LogInformation("Set Task {taskId} with Status {status}", taskId, status);
 
-        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         var createAudit = AuditPolicy.ShouldCreateStatusAudit(auditLevel, status, exception);
         var ex          = exception.ToDetailedString();
@@ -345,7 +345,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     public virtual async Task<int> GetCurrentRunCount(Guid taskId)
     {
         logger.LogInformation("Get the current run counter for Task {taskId}", taskId);
-        await using var dbContext = await contextFactory.CreateDbContextAsync();
+        await using var dbContext = await contextFactory.CreateDbContextAsync().ConfigureAwait(false);
 
         var task = await dbContext.QueuedTasks
                                   .Where(x => x.Id == taskId)
@@ -360,7 +360,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     {
         // Client-side load + SaveChanges: works uniformly across all EF providers (InMemory cannot
         // ExecuteUpdate). This is the rare recovery-failure path, not a hot path.
-        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         var task = await dbContext.QueuedTasks.FirstOrDefaultAsync(x => x.Id == taskId, ct).ConfigureAwait(false);
         if (task == null)
@@ -374,7 +374,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     /// <inheritdoc />
     public virtual async Task ClearRecoveryFailure(Guid taskId, CancellationToken ct = default)
     {
-        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         var task = await dbContext.QueuedTasks.FirstOrDefaultAsync(x => x.Id == taskId, ct).ConfigureAwait(false);
         if (task is { RecoveryDispatchFailureCount: > 0 })
@@ -389,7 +389,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     {
         logger.LogInformation("Update the current run counter for Task {taskId}", taskId);
 
-        await using var dbContext = await contextFactory.CreateDbContextAsync();
+        await using var dbContext = await contextFactory.CreateDbContextAsync().ConfigureAwait(false);
 
         try
         {
@@ -472,7 +472,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     {
         logger.LogInformation("Complete recurring run for Task {taskId}", taskId);
 
-        await using var dbContext = await contextFactory.CreateDbContextAsync();
+        await using var dbContext = await contextFactory.CreateDbContextAsync().ConfigureAwait(false);
 
         try
         {
@@ -544,7 +544,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     {
         logger.LogInformation("Finalize recurring series (terminal skip) for Task {taskId}", taskId);
 
-        await using var dbContext = await contextFactory.CreateDbContextAsync();
+        await using var dbContext = await contextFactory.CreateDbContextAsync().ConfigureAwait(false);
 
         try
         {
@@ -605,7 +605,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     {
         logger.LogInformation("Poison recurring Task {taskId} terminally", taskId);
 
-        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         try
         {
@@ -654,7 +654,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
     public virtual async Task<QueuedTask?> GetByTaskKey(string taskKey, CancellationToken ct = default)
     {
-        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         return await dbContext.QueuedTasks
                               .AsNoTracking()
@@ -667,7 +667,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     {
         logger.LogInformation("Updating task {taskId} with key {taskKey}", task.Id, task.TaskKey);
 
-        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         try
         {
@@ -712,7 +712,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     {
         logger.LogInformation("Removing task {taskId}", taskId);
 
-        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         try
         {
@@ -741,10 +741,10 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         if (logs.Count == 0)
             return;
 
-        await using var dbContext = await contextFactory.CreateDbContextAsync(cancellationToken);
+        await using var dbContext = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
 
         // Bulk insert all logs in a single operation
-        await dbContext.TaskExecutionLogs.AddRangeAsync(logs, cancellationToken);
+        await dbContext.TaskExecutionLogs.AddRangeAsync(logs, cancellationToken).ConfigureAwait(false);
         await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -752,7 +752,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     public async Task<IReadOnlyList<TaskExecutionLog>> GetExecutionLogsAsync(
         Guid taskId, CancellationToken cancellationToken)
     {
-        await using var dbContext = await contextFactory.CreateDbContextAsync(cancellationToken);
+        await using var dbContext = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
 
         var query = GetExecutionLogsQuery(dbContext, taskId);
         return await query.ToListAsync(cancellationToken).ConfigureAwait(false);
@@ -762,7 +762,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     public async Task<IReadOnlyList<TaskExecutionLog>> GetExecutionLogsAsync(
         Guid taskId, int skip, int take, CancellationToken cancellationToken)
     {
-        await using var dbContext = await contextFactory.CreateDbContextAsync(cancellationToken);
+        await using var dbContext = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
 
         var query = GetExecutionLogsQuery(dbContext, taskId);
         return await query
@@ -793,7 +793,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     public virtual async Task<int> CleanupStatusAudits(DateTimeOffset successCutoff, DateTimeOffset errorCutoff,
                                                        CancellationToken ct = default)
     {
-        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         return await BatchDeleteAsync(dbContext.StatusAudit,
             sa => (string.IsNullOrEmpty(sa.Exception) && sa.UpdatedAtUtc < successCutoff)
@@ -807,7 +807,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     public virtual async Task<int> CleanupRunsAudits(DateTimeOffset successCutoff, DateTimeOffset errorCutoff,
                                                      CancellationToken ct = default)
     {
-        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         return await BatchDeleteAsync(dbContext.RunsAudit,
             ra => (string.IsNullOrEmpty(ra.Exception) && ra.ExecutedAt < successCutoff)
@@ -821,7 +821,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     /// </summary>
     public virtual async Task<int> CleanupExecutionLogsByAge(DateTimeOffset cutoff, CancellationToken ct = default)
     {
-        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         return await BatchDeleteAsync(dbContext.TaskExecutionLogs, l => l.TimestampUtc < cutoff, ct)
             .ConfigureAwait(false);
@@ -846,7 +846,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         if (maxPerTask <= 0)
             return 0;
 
-        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         var overCapTasks = await dbContext.TaskExecutionLogs
             .GroupBy(l => l.TaskId)
@@ -883,16 +883,18 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     /// surviving audit trail (deleting cascades to anything they own, execution logs included). The
     /// status/recurring/audit filters and the age comparison all translate server-side.
     /// </summary>
+    /// <param name="cutoff">Age threshold: only tasks last executed (or created) strictly before it are purged.</param>
     /// <param name="preserveTasksWithLogs">
     /// When true, a task that still has any <c>TaskExecutionLog</c> row is NOT purged. The log-age/count
     /// passes run earlier in the same cycle, so any surviving log is one a configured log-retention window
     /// chose to keep — purging the task would cascade-delete it. The caller sets this only when a log
     /// retention is actually active; with no log retention the historic cascade-on-purge behavior stands.
     /// </param>
+    /// <param name="ct">Cancellation token.</param>
     public virtual async Task<int> CleanupCompletedTasks(DateTimeOffset cutoff, bool preserveTasksWithLogs,
                                                          CancellationToken ct = default)
     {
-        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         return await BatchDeleteAsync(dbContext.QueuedTasks,
             qt => qt.Status == QueuedTaskStatus.Completed
@@ -970,11 +972,11 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         // no-op for SQL Server/SQLite and for already-UTC inputs (DateTimeOffset comparison is instant-based).
         createdAtOrAfterUtc = createdAtOrAfterUtc?.ToUniversalTime();
 
-        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         // Set-based GROUP BY: never materializes the backlog. The filter is applied
         // conditionally (a "@p IS NULL OR …" predicate would defeat an index seek).
-        IQueryable<QueuedTask> query = dbContext.QueuedTasks.AsNoTracking();
+        var query = dbContext.QueuedTasks.AsNoTracking();
         if (createdAtOrAfterUtc != null)
             query = query.Where(t => t.CreatedAtUtc >= createdAtOrAfterUtc);
 
@@ -995,9 +997,9 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         // no-op for the other providers.
         createdAtOrAfterUtc = createdAtOrAfterUtc?.ToUniversalTime();
 
-        await using var dbContext = await contextFactory.CreateDbContextAsync(ct);
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
-        IQueryable<QueuedTask> query = dbContext.QueuedTasks.AsNoTracking();
+        var query = dbContext.QueuedTasks.AsNoTracking();
         if (createdAtOrAfterUtc != null)
             query = query.Where(t => t.CreatedAtUtc >= createdAtOrAfterUtc);
 

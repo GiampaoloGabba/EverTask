@@ -415,7 +415,7 @@ public class Dispatcher(
 
         // The executor is already lazy when useLazyExecutor is true (built by the wrapper
         // without a handler instance), eager otherwise
-        TaskHandlerExecutor executorToSchedule = executor;
+        var executorToSchedule = executor;
 
         if (executorToSchedule.ExecutionTime > DateTimeOffset.UtcNow || recurring != null)
         {

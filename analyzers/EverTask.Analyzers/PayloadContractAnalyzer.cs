@@ -166,7 +166,7 @@ public sealed class PayloadContractAnalyzer : DiagnosticAnalyzer
 
         foreach (var member in type.GetMembers())
         {
-            ITypeSymbol? memberType = member switch
+            var memberType = member switch
             {
                 IPropertySymbol p when symbols.IsSerializedProperty(p) => p.Type,
                 IFieldSymbol f when symbols.HasAttribute(f, symbols.JsonIncludeAttribute) => f.Type,

@@ -48,15 +48,6 @@ public record TaskHandlerExecutor(
     /// </remarks>
     public bool IsLazy => Handler == null;
 
-    /// <summary>
-    /// Resolves the handler instance from the service provider if in lazy mode,
-    /// or returns the existing handler instance if in eager mode.
-    /// </summary>
-    /// <param name="serviceProvider">Service provider for DI resolution</param>
-    /// <returns>Handler instance</returns>
-    /// <exception cref="InvalidOperationException">
-    /// Thrown if handler type cannot be loaded or is not registered in DI
-    /// </exception>
     // Performance optimization: cache Type.GetType lookups for lazy resolution.
     // The immediate path is lazy by default, so this lookup is on the hot path.
     private static readonly ConcurrentDictionary<string, Type> HandlerTypeLookupCache = new();
@@ -72,6 +63,15 @@ public record TaskHandlerExecutor(
     // interface-binding fallback below
     private static readonly ConcurrentDictionary<Type, Type> HandlerInterfaceTypeCache = new();
 
+    /// <summary>
+    /// Resolves the handler instance from the service provider if in lazy mode,
+    /// or returns the existing handler instance if in eager mode.
+    /// </summary>
+    /// <param name="serviceProvider">Service provider for DI resolution</param>
+    /// <returns>Handler instance</returns>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown if handler type cannot be loaded or is not registered in DI
+    /// </exception>
     public object GetOrResolveHandler(IServiceProvider serviceProvider)
     {
         // Eager mode: return existing handler instance

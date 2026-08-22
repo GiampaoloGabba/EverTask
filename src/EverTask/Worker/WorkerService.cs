@@ -482,6 +482,6 @@ public class WorkerService(
     public override async Task StopAsync(CancellationToken stoppingToken)
     {
         logger.LogInformation("EverTask BackgroundService is stopping");
-        await base.StopAsync(stoppingToken);
+        await base.StopAsync(stoppingToken).ConfigureAwait(false);
     }
 }

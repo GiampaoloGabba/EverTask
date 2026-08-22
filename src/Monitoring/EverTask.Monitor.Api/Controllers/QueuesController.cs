@@ -37,7 +37,7 @@ public class QueuesController : ControllerBase
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     public async Task<ActionResult<List<QueueMetricsDto>>> GetQueues(CancellationToken ct)
     {
-        var result = await _statisticsService.GetQueueMetricsAsync(ct);
+        var result = await _statisticsService.GetQueueMetricsAsync(ct).ConfigureAwait(false);
         return Ok(result);
     }
 
@@ -53,7 +53,7 @@ public class QueuesController : ControllerBase
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     public async Task<ActionResult<List<QueueConfigurationDto>>> GetQueueConfigurations(CancellationToken ct)
     {
-        var result = await _statisticsService.GetQueueConfigurationsAsync(ct);
+        var result = await _statisticsService.GetQueueConfigurationsAsync(ct).ConfigureAwait(false);
         return Ok(result);
     }
 
@@ -75,7 +75,7 @@ public class QueuesController : ControllerBase
         CancellationToken ct)
     {
         var filter = new TaskFilter { QueueName = name };
-        var result = await _taskQueryService.GetTasksAsync(filter, pagination, ct);
+        var result = await _taskQueryService.GetTasksAsync(filter, pagination, ct).ConfigureAwait(false);
         return Ok(result);
     }
 }

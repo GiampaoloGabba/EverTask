@@ -17,7 +17,7 @@ public class EverTaskServiceConfiguration
 
     internal IRetryPolicy DefaultRetryPolicy { get; set; } = new LinearRetryPolicy(3, TimeSpan.FromMilliseconds(500));
 
-    internal TimeSpan? DefaultTimeout { get; set; } = null;
+    internal TimeSpan? DefaultTimeout { get; set; }
 
     /// <summary>
     /// Configuration for individual queues. The "default" queue is always present.
@@ -289,7 +289,9 @@ public class EverTaskServiceConfiguration
 
     /// <summary>
     /// Sets the default audit level for all task handlers.
-    /// Individual handlers can override this using the <see cref="AuditLevelAttribute"/> attribute.
+    /// A single dispatch can override it through the <c>auditLevel</c> parameter of
+    /// <c>ITaskDispatcher.Dispatch(...)</c>; the persisted value then travels with the task and is
+    /// restored on recovery.
     /// </summary>
     /// <param name="auditLevel">
     /// The default audit level to apply.

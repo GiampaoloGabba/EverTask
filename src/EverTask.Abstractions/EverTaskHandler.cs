@@ -9,7 +9,7 @@ public abstract class EverTaskHandler<TTask> : IEverTaskHandler<TTask> where TTa
     /// <summary>
     /// Logger for capturing logs during task execution.
     /// Logs are stored in the database if log capture is enabled in configuration.
-    /// Use this instead of injecting <see cref="ILogger"/> for task-scoped logging.
+    /// Use this instead of injecting <see cref="Microsoft.Extensions.Logging.ILogger"/> for task-scoped logging.
     /// </summary>
     protected ITaskLogCapture Logger { get; private set; } = null!;
 
@@ -119,7 +119,7 @@ public abstract class EverTaskHandler<TTask> : IEverTaskHandler<TTask> where TTa
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
 
-        await DisposeAsyncCore();
+        await DisposeAsyncCore().ConfigureAwait(false);
         GC.SuppressFinalize(this);
     }
 

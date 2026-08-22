@@ -40,7 +40,7 @@ public static class ServiceCollectionExtensions
         var options = new EverTaskServiceConfiguration();
         configure?.Invoke(options);
 
-        if (!options.AssembliesToRegister.Any())
+        if (options.AssembliesToRegister.Count == 0)
         {
             throw new ArgumentException("No assemblies found to scan. Supply at least one assembly to scan for handlers.");
         }
@@ -111,7 +111,7 @@ public static class ServiceCollectionExtensions
     private static void RegisterQueueManager(IServiceCollection services, EverTaskServiceConfiguration options)
     {
         // Create default queue configuration from legacy settings if no queues configured
-        if (!options.Queues.Any())
+        if (options.Queues.Count == 0)
         {
             options.Queues[QueueNames.Default] = new QueueConfiguration
             {

@@ -39,7 +39,7 @@ public class TasksController : ControllerBase
         [FromQuery] PaginationParams pagination,
         CancellationToken ct)
     {
-        var result = await _taskQueryService.GetTasksAsync(filter, pagination, ct);
+        var result = await _taskQueryService.GetTasksAsync(filter, pagination, ct).ConfigureAwait(false);
         return Ok(result);
     }
 
@@ -58,7 +58,7 @@ public class TasksController : ControllerBase
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     public async Task<ActionResult<TaskDetailDto>> GetTaskDetail(Guid id, CancellationToken ct)
     {
-        var result = await _taskQueryService.GetTaskDetailAsync(id, ct);
+        var result = await _taskQueryService.GetTaskDetailAsync(id, ct).ConfigureAwait(false);
         if (result == null)
             return NotFound();
         return Ok(result);
@@ -77,7 +77,7 @@ public class TasksController : ControllerBase
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     public async Task<ActionResult<List<StatusAuditDto>>> GetStatusAudit(Guid id, CancellationToken ct)
     {
-        var result = await _taskQueryService.GetStatusAuditAsync(id, ct);
+        var result = await _taskQueryService.GetStatusAuditAsync(id, ct).ConfigureAwait(false);
         return Ok(result);
     }
 
@@ -94,7 +94,7 @@ public class TasksController : ControllerBase
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     public async Task<ActionResult<List<RunsAuditDto>>> GetRunsAudit(Guid id, CancellationToken ct)
     {
-        var result = await _taskQueryService.GetRunsAuditAsync(id, ct);
+        var result = await _taskQueryService.GetRunsAuditAsync(id, ct).ConfigureAwait(false);
         return Ok(result);
     }
 
@@ -119,7 +119,7 @@ public class TasksController : ControllerBase
         [FromQuery] string? level = null,
         CancellationToken ct = default)
     {
-        var result = await _taskQueryService.GetExecutionLogsAsync(id, skip, take, level, ct);
+        var result = await _taskQueryService.GetExecutionLogsAsync(id, skip, take, level, ct).ConfigureAwait(false);
         return Ok(result);
     }
 
@@ -135,7 +135,7 @@ public class TasksController : ControllerBase
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     public async Task<ActionResult<TaskCountsDto>> GetTaskCounts(CancellationToken ct)
     {
-        var result = await _taskQueryService.GetTaskCountsAsync(ct);
+        var result = await _taskQueryService.GetTaskCountsAsync(ct).ConfigureAwait(false);
         return Ok(result);
     }
 }

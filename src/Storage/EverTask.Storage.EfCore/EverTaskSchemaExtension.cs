@@ -7,7 +7,7 @@ namespace EverTask.Storage.EfCore;
 /// Carries the EverTask schema name as part of the (immutable, shared) <see cref="DbContextOptions"/> so a
 /// pool-compatible <see cref="TaskStoreEfDbContext{T}"/> can read it WITHOUT a constructor dependency.
 /// <para>
-/// <see cref="M:Microsoft.Extensions.DependencyInjection.EntityFrameworkServiceCollectionExtensions.AddPooledDbContextFactory"/>
+/// <c>EntityFrameworkServiceCollectionExtensions.AddPooledDbContextFactory</c>
 /// requires the context to expose a SINGLE <c>DbContextOptions&lt;T&gt;</c> constructor, which rules out the
 /// previous <c>IOptions&lt;ITaskStoreOptions&gt;</c> ctor parameter. The schema therefore travels inside the
 /// options instead — options are part of EF's immutable, shared configuration, so this is pool-safe.

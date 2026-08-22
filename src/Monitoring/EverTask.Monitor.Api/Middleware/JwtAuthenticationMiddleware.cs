@@ -42,7 +42,7 @@ public class JwtAuthenticationMiddleware
         // Skip if not a monitoring path
         if (!isMonitoringPath)
         {
-            await _next(context);
+            await _next(context).ConfigureAwait(false);
             return;
         }
 
@@ -54,7 +54,7 @@ public class JwtAuthenticationMiddleware
             if (!IsIpAllowed(clientIp))
             {
                 context.Response.StatusCode = 403;
-                await context.Response.WriteAsync("Access denied");
+                await context.Response.WriteAsync("Access denied").ConfigureAwait(false);
                 return;
             }
         }
@@ -65,21 +65,21 @@ public class JwtAuthenticationMiddleware
         if (!requiresJwt)
         {
             // UI path - no JWT required (only IP protection)
-            await _next(context);
+            await _next(context).ConfigureAwait(false);
             return;
         }
 
         // Skip JWT auth if disabled
         if (!_options.EnableAuthentication)
         {
-            await _next(context);
+            await _next(context).ConfigureAwait(false);
             return;
         }
 
         // Allow anonymous access to config endpoint
         if (path.Equals($"{_options.ApiBasePath}/config", StringComparison.OrdinalIgnoreCase))
         {
-            await _next(context);
+            await _next(context).ConfigureAwait(false);
             return;
         }
 
@@ -88,7 +88,7 @@ public class JwtAuthenticationMiddleware
             path.Equals($"{_options.ApiBasePath}/auth/validate", StringComparison.OrdinalIgnoreCase) ||
             path.Equals($"{_options.ApiBasePath}/auth/magic", StringComparison.OrdinalIgnoreCase))
         {
-            await _next(context);
+            await _next(context).ConfigureAwait(false);
             return;
         }
 
@@ -110,7 +110,7 @@ public class JwtAuthenticationMiddleware
         if (string.IsNullOrEmpty(token))
         {
             // No Bearer token provided
-            await ChallengeAsync(context);
+            await ChallengeAsync(context).ConfigureAwait(false);
             return;
         }
 
@@ -120,12 +120,12 @@ public class JwtAuthenticationMiddleware
         if (!validation.IsValid)
         {
             // Invalid JWT token
-            await ChallengeAsync(context);
+            await ChallengeAsync(context).ConfigureAwait(false);
             return;
         }
 
         // JWT token is valid, proceed
-        await _next(context);
+        await _next(context).ConfigureAwait(false);
     }
 
     private static Task ChallengeAsync(HttpContext context)
