@@ -10,7 +10,7 @@ namespace EverTask.Worker;
 
 public interface IEverTaskWorkerExecutor
 {
-    public event Func<EverTaskEventData, Task>? TaskEventOccurredAsync;
+    event Func<EverTaskEventData, Task>? TaskEventOccurredAsync;
     internal ValueTask DoWork(TaskHandlerExecutor task, CancellationToken serviceToken);
 }
 
@@ -213,7 +213,7 @@ public class WorkerExecutor(
 
         // Create log capture instance (always logs to ILogger, optionally persists)
         // Will be injected with proper handler type after handler resolution
-        ITaskLogCaptureInternal? logCapture = null;
+        TaskLogCapture? logCapture = null;
 
         // Resolve handler (lazy or eager mode)
         object? handler = null!; // Will be assigned in both if and else branches
@@ -380,7 +380,7 @@ public class WorkerExecutor(
             await ExecuteCallback(GetCompletedCallback(task, handler), task, "Completed").ConfigureAwait(false);
 
             // Get logs for completion event (if capture is enabled)
-            var capturedLogs = logCapture?.GetPersistedLogs();
+            var capturedLogs = logCapture.GetPersistedLogs();
             RegisterEvent(LogLevel.Debug, SeverityLevel.Information, task, null, capturedLogs,
                 (TaskId: task.PersistenceId, ElapsedMs: executionTime),
                 static (l, a, _) => l.TaskCompleted(a.TaskId, a.ElapsedMs),
@@ -391,7 +391,7 @@ public class WorkerExecutor(
         {
             // Get logs for error event (if capture is enabled)
             var capturedLogs = logCapture?.GetPersistedLogs();
-            await HandleExceptionAsync(ex, task, handler, capturedLogs, serviceToken, taskStorage)
+            await HandleExceptionAsync(ex, task, handler, capturedLogs, taskStorage, serviceToken)
                 .ConfigureAwait(false);
         }
         finally
@@ -605,10 +605,9 @@ public class WorkerExecutor(
     {
         var queueName = task.QueueName ?? (task.RecurringTask != null ? QueueNames.Recurring : QueueNames.Default);
 
-        if (options.Queues.TryGetValue(queueName, out var queueConfig))
-            return queueConfig;
-
-        return options.Queues.TryGetValue(QueueNames.Default, out var defaultConfig) ? defaultConfig : null;
+        return options.Queues.TryGetValue(queueName, out var queueConfig)
+                   ? queueConfig
+                   : options.Queues.GetValueOrDefault(QueueNames.Default);
     }
 
     private bool IsTaskBlacklisted(TaskHandlerExecutor task)
@@ -934,8 +933,8 @@ public class WorkerExecutor(
 
     private async Task HandleExceptionAsync(Exception ex, TaskHandlerExecutor task, object handler,
                                             IReadOnlyList<TaskExecutionLog>? executionLogs,
-                                            CancellationToken serviceToken,
-                                            ITaskStorage? taskStorage)
+                                            ITaskStorage? taskStorage,
+                                            CancellationToken serviceToken)
     {
         if (ex is OperationCanceledException oce)
         {
@@ -1324,7 +1323,7 @@ public class WorkerExecutor(
     /// Creates a log capture instance for the task execution.
     /// Always forwards to ILogger, optionally persists to database based on configuration.
     /// </summary>
-    private ITaskLogCaptureInternal CreateLogCapture(Type handlerType, Guid taskId, IServiceProvider serviceProvider)
+    private TaskLogCapture CreateLogCapture(Type handlerType, Guid taskId, IServiceProvider serviceProvider)
     {
         // Create ILogger<THandler> for the specific handler type
         var handlerLogger = loggerFactory.CreateLogger(handlerType);

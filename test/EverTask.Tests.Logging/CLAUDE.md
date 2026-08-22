@@ -1,65 +1,28 @@
 # EverTask.Tests.Logging
 
-## Purpose
+Refer to the root CLAUDE.md for project-wide rules. Tests for the logging integrations (Serilog today); xUnit +
+Shouldly, multi-target net8.0/net9.0/net10.0, so every assertion must hold on Serilog.Extensions.Logging
+8.0.0 / 9.0.0 / 10.0.0.
 
-Integration tests for EverTask logging integrations. Currently Serilog; future providers mirror the layout.
+## Critical rules
 
-```
-test/EverTask.Tests.Logging/
-└── Serilog/
-    ├── ServiceRegistrationTests.cs   # DI registration and resolution
-    └── SerilogLoggerTests.cs         # Adapter behavior + the DelegateSink helper
-```
+- Capture events into a list (`SerilogLoggerTests.CreateLogger` + `DelegateSink`) and assert AFTER the log
+  call. NEVER assert inside the sink delegate: it only runs when an event is emitted, so a test passes
+  vacuously when the adapter logs nothing — that is how the property loss fixed in #32 went unnoticed.
+- Assert on `MessageTemplate.Text` and `Properties[...]`, not only on `RenderMessage()`: the rendered text
+  looks right even when the structure is lost.
 
-xUnit + Shouldly (NOT MSTest). Multi-targets net8.0/net9.0/net10.0, so every assertion must hold on all
-three Serilog / `Serilog.Extensions.Logging` versions (8.0.0 / 9.0.0 / 10.0.0).
+## Gotchas
 
-```bash
-dotnet test test/EverTask.Tests.Logging/EverTask.Tests.Logging.csproj -c Release
-```
+- `LogEvent.Properties` is an `IReadOnlyDictionary`: Shouldly's `ShouldNotContainKey` does not bind, use
+  `Properties.ContainsKey("X").ShouldBeFalse()`.
+- `Properties["EventId"]` is a `StructureValue` with `Id` / `Name` sub-properties, not a scalar.
+- `TestLog` (source-generated `[LoggerMessage]` class used to cover the generator's state struct) needs the
+  DIRECT `Microsoft.Extensions.Logging.Abstractions` PackageReference in this csproj: analyzer assets do not
+  flow through the project reference.
 
-## DelegateSink: capture, then assert AFTER the call
-
-```csharp
-var events = new List<LogEvent>();
-var serilog = new LoggerConfiguration()
-              .MinimumLevel.Is(minimumLevel)
-              .WriteTo.Sink(new DelegateSink(events.Add))
-              .CreateLogger();
-
-var logger = new EverTaskSerilogLogger<MyClass>(serilog);
-logger.LogInformation("Task {TaskId} done", id);
-
-var logEvent = events.ShouldHaveSingleItem();
-logEvent.MessageTemplate.Text.ShouldBe("Task {TaskId} done");
-```
-
-**Never assert inside the sink delegate.** The assertions then only run if an event is emitted, so the test
-passes vacuously when the adapter logs nothing — exactly how the structural-property loss went unnoticed.
-`SerilogLoggerTests.CreateLogger` is the helper; reuse it.
-
-## What to assert on a `LogEvent`
-
-| Concern | Assertion |
-|---------|-----------|
-| Level | `logEvent.Level.ShouldBe(LogEventLevel.Error)` |
-| Template (**not** the rendered text) | `logEvent.MessageTemplate.Text.ShouldBe("Task {TaskId} started")` |
-| Bound property | `logEvent.Properties["TaskId"].ShouldBeOfType<ScalarValue>().Value.ShouldBe(id)` |
-| Absent property | `logEvent.Properties.ContainsKey("X").ShouldBeFalse()` — `Properties` is an `IReadOnlyDictionary`, so Shouldly's `ShouldNotContainKey` does not bind |
-| Rendered output | `logEvent.RenderMessage().ShouldBe("Task 42 started")` |
-| Exception | `logEvent.Exception.ShouldBeSameAs(expected)` |
-| `EventId` | `Properties["EventId"]` is a `StructureValue` with `Id` / `Name` sub-properties |
-| Source context | `Properties[Constants.SourceContextPropertyName]` == `typeof(T).FullName` |
-| `IsEnabled` | `logger.IsEnabled(LogLevel.None).ShouldBeFalse()` |
-
-## `[LoggerMessage]` coverage
-
-`TestLog` (in `SerilogLoggerTests.cs`) is a source-generated logging class used to prove the adapter handles
-the generator's state struct, not just `FormattedLogValues`. The generator needs a **direct**
-`Microsoft.Extensions.Logging.Abstractions` PackageReference in this csproj — analyzer assets are private by
-default and do not flow in through the project reference.
-
-## Adding a new logger integration
+## Adding a logger integration
 
 Create `test/EverTask.Tests.Logging/<Provider>/` with `ServiceRegistrationTests.cs` (DI resolves
-`IEverTaskLogger<T>` to the provider's type) and `<Provider>LoggerTests.cs` covering the same matrix above.
+`IEverTaskLogger<T>` to the provider type) and `<Provider>LoggerTests.cs` covering the same matrix as the
+Serilog one.

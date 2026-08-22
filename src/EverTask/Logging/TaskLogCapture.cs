@@ -7,9 +7,9 @@ namespace EverTask.Logging;
 /// Proxy implementation that forwards all logs to ILogger and optionally persists to database.
 /// Thread-safe for async/await handlers.
 /// </summary>
-internal sealed class TaskLogCapture : ITaskLogCaptureInternal
+internal sealed class TaskLogCapture : ITaskLogCapture
 {
-    private static readonly Func<string, Exception?, string> s_messageFormatter = static (state, _) => state ?? string.Empty;
+    private static readonly Func<string, Exception?, string> SMessageFormatter = static (state, _) => state ?? string.Empty;
 
     private readonly ILogger _logger;
     private readonly Guid _taskId;
@@ -90,6 +90,10 @@ internal sealed class TaskLogCapture : ITaskLogCaptureInternal
     public void LogCritical(Exception? exception, string message, params object?[]? args)
         => LogWithPersistence(LogLevel.Critical, message, exception, args);
 
+    /// <summary>
+    /// Persisted logs in sequence order (empty when persistence is disabled). Read by WorkerExecutor after
+    /// the run to save them and to attach them to the monitoring event.
+    /// </summary>
     public IReadOnlyList<TaskExecutionLog> GetPersistedLogs()
     {
         if (!_persistLogs || _logs == null || _lock == null)
@@ -137,12 +141,12 @@ internal sealed class TaskLogCapture : ITaskLogCaptureInternal
             }
             else
             {
-                _logger.Log(level, new EventId(0), message, exception, s_messageFormatter);
+                _logger.Log(level, new EventId(0), message, exception, SMessageFormatter);
             }
         }
         catch
         {
-            try { _logger.Log(level, new EventId(0), message, exception, s_messageFormatter); }
+            try { _logger.Log(level, new EventId(0), message, exception, SMessageFormatter); }
             catch { /* give up forwarding to ILogger; still persist the raw template below */ }
         }
 

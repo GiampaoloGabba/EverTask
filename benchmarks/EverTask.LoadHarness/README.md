@@ -50,8 +50,8 @@ Common knobs (defaults in `Infra/RunConfig.cs`):
 ```
 
 Both apply to the engine scenarios (`HostFactory`) and the storage-only ones (`StorageMatrix`), and both are
-echoed in the run header, the result block and the JSON report — an A/B output says which logging it ran with.
-A typo in either value aborts the run instead of silently falling back to the default.
+echoed in the run header, the result block and the JSON report, so an A/B output says which logging it ran
+with. A typo in either value aborts the run instead of silently falling back to the default.
 
 Examples:
 
@@ -73,12 +73,12 @@ cover the range:
 
 | Cell | Knobs | What it isolates |
 |------|-------|------------------|
-| level off | `--log Warning` | today's default — what a *disabled* call site still costs (`--sink none` is implied) |
+| level off | `--log Warning` | today's default: what a disabled call site still costs (`--sink none` is implied) |
 | rendering sink | `--log Information --sink render` | level on, message rendered: a console/file sink |
 | structured sink | `--log Debug --sink enumerate` | a Serilog/Seq sink at the noisiest level |
 
-Two scenarios: **A4W** (engine logging — dispatcher/worker/executor, no DB) and **A4S `--storage postgres`**
-(storage logging — the per-write `SetStatus` line; **needs Docker**).
+Two scenarios: A4W (engine logging: dispatcher, worker, executor, no DB) and A4S `--storage postgres`
+(storage logging, the per-write `SetStatus` line; needs Docker).
 
 ```bash
 # one cell = one command; run all six per checkout
@@ -92,13 +92,13 @@ dotnet run -c Release --project benchmarks/EverTask.LoadHarness -- A4S --storage
 
 How to run and read it:
 
-- **Alternate the checkouts** — base, patched, base, patched — three runs of each cell per checkout, on an
-  **idle machine**. A whole base block followed by a whole patched block bakes thermal and background drift
-  into the delta.
-- Compare the **median tasks/s** and the **median bytes/task** of each cell's three runs, and **report the CV**
-  the harness prints: above 5% the cell isn't steady-state and its delta isn't citable.
-- `BytesPerTask` is comparable **only within the same `--log`/`--sink` pair** — the sink's own rendering and
-  state boxing are part of the number by design (they are what a real sink costs). Never compare a
+- Alternate the checkouts (base, patched, base, patched), three runs of each cell per checkout, on an idle
+  machine. A whole base block followed by a whole patched block bakes thermal and background drift into
+  the delta.
+- Compare the median tasks/s and the median bytes/task of each cell's three runs, and report the CV the
+  harness prints: above 5% the cell isn't steady-state and its delta isn't citable.
+- `BytesPerTask` is comparable only within the same `--log`/`--sink` pair. The sink's own rendering and
+  state boxing are part of the number by design (they are what a real sink costs), so never compare a
   `--sink render` run against a `--sink none` one.
 - Everything else must match between checkouts, GC mode included (`DOTNET_gcServer`), and the two checkouts
   must be built with the same SDK.
