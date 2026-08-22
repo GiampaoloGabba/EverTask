@@ -1,5 +1,7 @@
+using System.Globalization;
 using EverTask.Handler;
 using EverTask.Logger;
+using EverTask.Monitoring;
 using EverTask.Scheduler;
 using EverTask.Tests.TestHelpers;
 using Microsoft.Extensions.Logging;
@@ -9,28 +11,49 @@ namespace EverTask.Tests;
 
 /// <summary>
 /// P-B hot-path monitoring gates:
-/// - L30: RegisterEvent must skip string.Format + object[] boxing when the level is filtered AND
-///   there are no monitoring subscribers (nobody consumes the message).
+/// - L30: RegisterEvent must do no work at all — no structured log, no rendered event sentence — when
+///   the level is filtered AND there are no monitoring subscribers (nobody consumes the message).
+///   Since the log now carries a compile-time template, the flat sentence is rendered ONLY for
+///   subscribers: an enabled level alone must not trigger it.
 /// - F24: PublishEvent fan-out must be bounded — a slow/blocked subscriber under load must not spawn
 ///   an unbounded number of fire-and-forget callbacks.
-/// Both are [UNIT-necessario]: the seam is WorkerExecutor.RegisterInfo (internal), driven directly so
-/// the format/fan-out invariants are observed deterministically without timing.
+/// Both are [UNIT-necessario]: the seam is WorkerExecutor.RegisterEvent (internal), driven directly so
+/// the render/fan-out invariants are observed deterministically without timing.
 /// </summary>
 public class WorkerExecutorMonitoringTests
 {
     private sealed record MonitoringProbeTask : IEverTask;
 
-    // Custom arg whose ToString() bumps a counter, so "was the message formatted?" is observable.
+    // Custom arg whose ToString() bumps a counter, so "was the event sentence rendered?" is observable;
+    // the log delegate bumps a second one, so "did anything reach the ILogger?" is observable too.
     private sealed class FormatProbe
     {
         public static int ToStringCount;
-        public static void Reset() => ToStringCount = 0;
+        public static int LogCount;
+
+        public static void Reset()
+        {
+            ToStringCount = 0;
+            LogCount      = 0;
+        }
+
         public override string ToString()
         {
             Interlocked.Increment(ref ToStringCount);
             return "probe";
         }
     }
+
+    // Stand-ins for the generated [LoggerMessage] method and the invariant renderer of a real call site.
+    private static void LogProbe(ILogger logger, FormatProbe probe, Exception? exception) =>
+        Interlocked.Increment(ref FormatProbe.LogCount);
+
+    private static string RenderProbe(FormatProbe probe) => $"value = {probe}";
+
+    private static void LogCounter(ILogger logger, int value, Exception? exception) { }
+
+    private static string RenderCounter(int value) =>
+        string.Create(CultureInfo.InvariantCulture, $"evt {value}");
 
     private static WorkerExecutor CreateExecutor(IEverTaskLogger<WorkerExecutor> logger) =>
         new(new Mock<IWorkerBlacklist>().Object,
@@ -50,10 +73,14 @@ public class WorkerExecutorMonitoringTests
             null,
             AuditLevel.Full);
 
+    private static void RegisterProbe(WorkerExecutor executor, FormatProbe probe) =>
+        executor.RegisterEvent(LogLevel.Information, SeverityLevel.Information, SampleExecutor(), null, null,
+            probe, LogProbe, RenderProbe);
+
     // ---- L30 ----
 
     [Fact]
-    public void Should_not_format_event_message_when_level_filtered_and_no_subscribers()
+    public void Should_not_render_or_log_event_when_level_filtered_and_no_subscribers()
     {
         var logger = new Mock<IEverTaskLogger<WorkerExecutor>>();
         logger.Setup(l => l.IsEnabled(It.IsAny<LogLevel>())).Returns(false);
@@ -61,14 +88,16 @@ public class WorkerExecutorMonitoringTests
         var executor = CreateExecutor(logger.Object); // no TaskEventOccurredAsync subscribers
 
         FormatProbe.Reset();
-        executor.RegisterInfo(SampleExecutor(), "value = {0}", new FormatProbe());
+        RegisterProbe(executor, new FormatProbe());
 
         FormatProbe.ToStringCount.ShouldBe(0,
-            "with the level filtered and zero subscribers the message must not be formatted (L30)");
+            "with the level filtered and zero subscribers the event sentence must not be rendered (L30)");
+        FormatProbe.LogCount.ShouldBe(0,
+            "with the level filtered and zero subscribers nothing must reach the ILogger either (L30)");
     }
 
     [Fact]
-    public void Should_format_event_message_when_level_enabled()
+    public void Should_log_without_rendering_when_level_enabled_and_no_subscribers()
     {
         var logger = new Mock<IEverTaskLogger<WorkerExecutor>>();
         logger.Setup(l => l.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
@@ -76,10 +105,42 @@ public class WorkerExecutorMonitoringTests
         var executor = CreateExecutor(logger.Object);
 
         FormatProbe.Reset();
-        executor.RegisterInfo(SampleExecutor(), "value = {0}", new FormatProbe());
+        RegisterProbe(executor, new FormatProbe());
+
+        FormatProbe.LogCount.ShouldBe(1, "the structured log must be written exactly once");
+        FormatProbe.ToStringCount.ShouldBe(0,
+            "the flat sentence exists only for EverTaskEventData.Message: with no subscriber the " +
+            "structured log needs no rendering");
+    }
+
+    [Fact]
+    public async Task Should_render_event_once_for_subscriber_when_level_filtered()
+    {
+        var logger = new Mock<IEverTaskLogger<WorkerExecutor>>();
+        logger.Setup(l => l.IsEnabled(It.IsAny<LogLevel>())).Returns(false);
+
+        var executor  = CreateExecutor(logger.Object);
+        var published = new List<EverTaskEventData>();
+        var delivered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        executor.TaskEventOccurredAsync += data =>
+        {
+            lock (published) published.Add(data);
+            delivered.TrySetResult();
+            return Task.CompletedTask;
+        };
+
+        FormatProbe.Reset();
+        RegisterProbe(executor, new FormatProbe());
 
         FormatProbe.ToStringCount.ShouldBe(1,
-            "non-regression: when the level is enabled the message is formatted exactly once");
+            "a filtered level does not suppress the monitoring event: it is rendered exactly once for the subscriber");
+        FormatProbe.LogCount.ShouldBe(0, "the ILogger must stay untouched while the level is filtered");
+
+        await delivered.Task.WaitAsync(TimeSpan.FromMilliseconds(TestEnvironment.GetTimeout(5000, 30000)));
+        lock (published)
+        {
+            published.ShouldHaveSingleItem().Message.ShouldBe("value = probe");
+        }
     }
 
     // ---- F24 ----
@@ -105,7 +166,8 @@ public class WorkerExecutorMonitoringTests
         var fires = cap + 5;
         var totalInvocations = fires * subscribers;
         for (var i = 0; i < fires; i++)
-            executor.RegisterInfo(SampleExecutor(), "evt {0}", i);
+            executor.RegisterEvent(LogLevel.Information, SeverityLevel.Information, SampleExecutor(), null, null,
+                i, LogCounter, RenderCounter);
 
         try
         {
@@ -152,7 +214,8 @@ public class WorkerExecutorMonitoringTests
         {
             while (executor.MonitoringInFlightCount >= cap)
                 await Task.Delay(1);
-            executor.RegisterInfo(SampleExecutor(), "evt {0}", i);
+            executor.RegisterEvent(LogLevel.Information, SeverityLevel.Information, SampleExecutor(), null, null,
+                i, LogCounter, RenderCounter);
         }
 
         await allDelivered.Task.WaitAsync(TimeSpan.FromMilliseconds(TestEnvironment.GetTimeout(5000, 30000)));

@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using EverTask.Configuration;
 using EverTask.Logging;
@@ -189,9 +190,7 @@ public class WorkerExecutor(
                 return;
             }
 
-            logger.LogWarning(
-                "Task {TaskId} is already executing in this process, skipping duplicate delivery",
-                task.PersistenceId);
+            logger.DuplicateDeliverySkipped(task.PersistenceId);
             return;
         }
 
@@ -252,12 +251,11 @@ public class WorkerExecutor(
                 {
                     handler = task.GetOrResolveHandler(scope.ServiceProvider);
 
-                    logger.LogDebug("Resolved handler {handlerType} for lazy task {taskId}",
-                        handler.GetType().Name, task.PersistenceId);
+                    logger.LazyHandlerResolved(handler.GetType(), task.PersistenceId);
                 }
                 catch (Exception ex)
                 {
-                    logger.LogError(ex, "Failed to resolve handler for task {taskId}", task.PersistenceId);
+                    logger.HandlerResolutionFailed(ex, task.PersistenceId);
 
                     if (taskStorage != null)
                     {
@@ -300,7 +298,11 @@ public class WorkerExecutor(
                 }
             }
 
-            RegisterInfo(task, "Starting task with id {0}.", task.PersistenceId);
+            // Per-execution chatter for the LOG (Debug), but a first-class Information event for the
+            // dashboard: the two levels are decoupled on purpose (see RegisterEvent).
+            RegisterEvent(LogLevel.Debug, SeverityLevel.Information, task, null, null, task.PersistenceId,
+                static (l, id, _) => l.TaskStarting(id),
+                static id => string.Create(CultureInfo.InvariantCulture, $"Starting task with id {id}"));
 
             if (taskStorage != null)
                 await taskStorage.SetInProgress(task.PersistenceId, task.AuditLevel, serviceToken)
@@ -331,9 +333,7 @@ public class WorkerExecutor(
                     // the occurrence is SKIPPED with a warning — no Failed status, no OnError —
                     // and the series advances via the finally's QueueNextOccourrence. The status
                     // returns to Queued like any other parked occurrence (it was InProgress).
-                    RegisterWarning(CreateRejectionException(task, rejection), task,
-                        "Rate limit skipped occurrence of recurring task {0} (key {1}): the series stays alive.",
-                        task.PersistenceId, task.RateLimitKey!);
+                    RegisterRateLimitSkippedOccurrence(task, rejection);
 
                     if (taskStorage != null)
                         await taskStorage.SetQueued(task.PersistenceId, task.AuditLevel, serviceToken)
@@ -357,8 +357,10 @@ public class WorkerExecutor(
             if (workerBlacklist.IsBlacklisted(task.PersistenceId))
             {
                 workerBlacklist.Remove(task.PersistenceId);
-                RegisterInfo(task, "Task with id {0} was cancelled during execution; the completion is suppressed.",
-                    task.PersistenceId);
+                RegisterEvent(LogLevel.Information, SeverityLevel.Information, task, null, null, task.PersistenceId,
+                    static (l, id, _) => l.TaskCancelledDuringExecution(id),
+                    static id => string.Create(CultureInfo.InvariantCulture,
+                        $"Task with id {id} was cancelled during execution; the completion is suppressed"));
                 return;
             }
 
@@ -375,8 +377,11 @@ public class WorkerExecutor(
 
             // Get logs for completion event (if capture is enabled)
             var capturedLogs = logCapture?.GetPersistedLogs();
-            RegisterInfo(task, capturedLogs, "Task with id {0} was completed in {1} ms.", task.PersistenceId,
-                executionTime);
+            RegisterEvent(LogLevel.Debug, SeverityLevel.Information, task, null, capturedLogs,
+                (TaskId: task.PersistenceId, ElapsedMs: executionTime),
+                static (l, a, _) => l.TaskCompleted(a.TaskId, a.ElapsedMs),
+                static a => string.Create(CultureInfo.InvariantCulture,
+                    $"Task with id {a.TaskId} was completed in {a.ElapsedMs} ms"));
         }
         catch (Exception ex)
         {
@@ -430,8 +435,7 @@ public class WorkerExecutor(
                 catch (Exception logSaveEx)
                 {
                     // Log the error but don't fail the task
-                    logger.LogError(logSaveEx, "Failed to persist execution logs for task {TaskId}",
-                        task.PersistenceId);
+                    logger.ExecutionLogsPersistFailed(logSaveEx, task.PersistenceId);
                 }
             }
 
@@ -455,10 +459,15 @@ public class WorkerExecutor(
         if (!gateResult.EmitDeferralEvent)
             return;
 
-        RegisterInfo(task,
-            "Rate limit deferred task {0}: key={1} slotUtc={2:O} policy={3} deferredCount={4}",
-            task.PersistenceId, task.RateLimitKey!, gateResult.SlotUtc, task.Task.GetType(),
-            gateResult.AggregatedDeferrals);
+        // The rendered Message is a documented machine-parseable contract (docs/monitoring-events.md):
+        // the "Rate limit deferred task <id>: key=… slotUtc=<O> policy=… deferredCount=…" shape and its
+        // invariant formatting must not drift.
+        RegisterEvent(LogLevel.Information, SeverityLevel.Information, task, null, null,
+            (TaskId: task.PersistenceId, Key: task.RateLimitKey!, gateResult.SlotUtc,
+                TaskType: task.Task.GetType(), DeferredCount: gateResult.AggregatedDeferrals),
+            static (l, a, _) => l.RateLimitDeferred(a.TaskId, a.Key, a.SlotUtc, a.TaskType, a.DeferredCount),
+            static a => string.Create(CultureInfo.InvariantCulture,
+                $"Rate limit deferred task {a.TaskId}: key={a.Key} slotUtc={a.SlotUtc:O} policy={a.TaskType} deferredCount={a.DeferredCount}"));
     }
 
     /// <summary>
@@ -468,10 +477,33 @@ public class WorkerExecutor(
     /// </summary>
     private void RegisterFailOpenEvent(TaskHandlerExecutor task, RateLimitGateResult gateResult)
     {
-        RegisterWarning(null, task,
-            "Rate limiter tracked-keys cap reached: new keys fail OPEN and execute unthrottled. " +
-            "Task {0} (policy={1}) totalFailOpenCount={2}",
-            task.PersistenceId, task.Task.GetType(), gateResult.TotalFailOpenCount);
+        RegisterEvent(LogLevel.Warning, SeverityLevel.Warning, task, null, null,
+            (TaskId: task.PersistenceId, TaskType: task.Task.GetType(), gateResult.TotalFailOpenCount),
+            static (l, a, _) => l.RateLimiterFailOpen(a.TaskId, a.TaskType, a.TotalFailOpenCount),
+            static a => string.Create(CultureInfo.InvariantCulture,
+                $"Rate limiter tracked-keys cap reached: new keys fail OPEN and execute unthrottled. Task {a.TaskId} (policy={a.TaskType}) totalFailOpenCount={a.TotalFailOpenCount}"));
+    }
+
+    /// <summary>
+    /// Warns that the rate limiter skipped one occurrence of a recurring series (the series stays
+    /// alive and the schedule advances).
+    /// </summary>
+    /// <remarks>
+    /// The typed rejection exception is built INSIDE the L30 gate: on this path it is neither thrown
+    /// nor persisted, it only enriches the log and the monitoring event — so an unconsumed warning
+    /// allocates neither the exception nor its reason string.
+    /// </remarks>
+    private void RegisterRateLimitSkippedOccurrence(TaskHandlerExecutor task, RateLimitGateResult rejection)
+    {
+        if (!TryEnterEvent(LogLevel.Warning, out var logEnabled, out var publish))
+            return;
+
+        EmitEvent(SeverityLevel.Warning, task, CreateRejectionException(task, rejection), null,
+            (TaskId: task.PersistenceId, Key: task.RateLimitKey!),
+            static (l, a, e) => l.RateLimitSkippedOccurrence(e, a.TaskId, a.Key),
+            static a => string.Create(CultureInfo.InvariantCulture,
+                $"Rate limit skipped occurrence of recurring task {a.TaskId} (key {a.Key}): the series stays alive"),
+            logEnabled, publish);
     }
 
     /// <summary>
@@ -509,16 +541,12 @@ public class WorkerExecutor(
     private async ValueTask HandleRateLimitRejectionAsync(TaskHandlerExecutor task, RateLimitGateResult gateResult,
                                                           CancellationToken serviceToken)
     {
-        var exception = CreateRejectionException(task, gateResult);
-
         await using var scope = serviceScopeFactory.CreateAsyncScope();
         var taskStorage = scope.ServiceProvider.GetService<ITaskStorage>();
 
         if (task.RecurringTask != null)
         {
-            RegisterWarning(exception, task,
-                "Rate limit skipped occurrence of recurring task {0} (key {1}): the series stays alive.",
-                task.PersistenceId, task.RateLimitKey!);
+            RegisterRateLimitSkippedOccurrence(task, gateResult);
 
             // Skipped occurrence: advance the schedule without consuming the MaxRuns budget, skipping
             // ahead to the limiter's next available slot instead of grinding occurrence by occurrence.
@@ -526,6 +554,10 @@ public class WorkerExecutor(
                 .ConfigureAwait(false);
             return;
         }
+
+        // One-shot rejection: the typed exception is persisted AND delivered to OnError, so it is built
+        // unconditionally here (unlike the recurring skip above, where it only feeds the log/event).
+        var exception = CreateRejectionException(task, gateResult);
 
         if (taskStorage != null)
         {
@@ -542,9 +574,7 @@ public class WorkerExecutor(
         }
         catch (Exception resolveEx)
         {
-            logger.LogWarning(resolveEx,
-                "Unable to resolve handler for rejected task {TaskId}: OnError will not be invoked",
-                task.PersistenceId);
+            logger.RejectedTaskHandlerUnresolved(resolveEx, task.PersistenceId);
         }
 
         if (handler != null)
@@ -556,7 +586,10 @@ public class WorkerExecutor(
                 await ExecuteDisposeHandler(handler).ConfigureAwait(false);
         }
 
-        RegisterError(exception, task, "Rate limit rejected task {0}: marked as Failed.", task.PersistenceId);
+        RegisterEvent(LogLevel.Error, SeverityLevel.Error, task, exception, null, task.PersistenceId,
+            static (l, id, e) => l.RateLimitRejected(e, id),
+            static id => string.Create(CultureInfo.InvariantCulture,
+                $"Rate limit rejected task {id}: marked as Failed"));
     }
 
     /// <summary>
@@ -578,8 +611,10 @@ public class WorkerExecutor(
     {
         if (workerBlacklist.IsBlacklisted(task.PersistenceId))
         {
-            RegisterInfo(task, "Task with id {0} is signaled to be cancelled and will not be executed.",
-                task.PersistenceId);
+            RegisterEvent(LogLevel.Information, SeverityLevel.Information, task, null, null, task.PersistenceId,
+                static (l, id, _) => l.TaskCancellationSignaled(id),
+                static id => string.Create(CultureInfo.InvariantCulture,
+                    $"Task with id {id} is signaled to be cancelled and will not be executed"));
             workerBlacklist.Remove(task.PersistenceId);
             return true;
         }
@@ -723,11 +758,11 @@ public class WorkerExecutor(
             try
             {
                 await asyncDisposable.DisposeAsync().ConfigureAwait(false);
-                logger.LogDebug("Disposed handler {HandlerType}", handler.GetType().Name);
+                logger.HandlerDisposed(handler.GetType());
             }
             catch (Exception e)
             {
-                logger.LogError(e, "Error disposing handler {HandlerType}", handler.GetType().Name);
+                logger.HandlerDisposeFailed(e, handler.GetType());
             }
         }
     }
@@ -742,7 +777,7 @@ public class WorkerExecutor(
         }
         catch (Exception e)
         {
-            logger.LogError(e, "Error disposing eager handler scope");
+            logger.HandlerScopeDisposeFailed(e);
         }
     }
 
@@ -809,11 +844,20 @@ public class WorkerExecutor(
         }
         catch (Exception e)
         {
-            RegisterError(e, task,
-                "Error occurred executing while executing the callback override {0} task with id {1}.", callbackName,
-                task.PersistenceId);
+            RegisterCallbackFailure(task, callbackName, e);
         }
     }
+
+    /// <summary>
+    /// Reports a lifecycle callback override that threw. Shared by both <c>ExecuteCallback</c>
+    /// overloads so the OnError report reads exactly like the OnStarted/OnCompleted ones.
+    /// </summary>
+    private void RegisterCallbackFailure(TaskHandlerExecutor task, string callbackName, Exception exception) =>
+        RegisterEvent(LogLevel.Error, SeverityLevel.Error, task, exception, null,
+            (CallbackName: callbackName, TaskId: task.PersistenceId),
+            static (l, a, e) => l.CallbackOverrideFailed(e, a.CallbackName, a.TaskId),
+            static a => string.Create(CultureInfo.InvariantCulture,
+                $"Error occurred executing the callback override {a.CallbackName} for task with id {a.TaskId}"));
 
     /// <summary>
     /// Invokes the OnRetry callback on the handler.
@@ -845,9 +889,7 @@ public class WorkerExecutor(
         catch (Exception ex)
         {
             // OnRetry exceptions are logged but don't prevent retry
-            logger.LogError(ex,
-                "Error occurred while executing OnRetry callback for task {TaskId} attempt {Attempt}",
-                task.PersistenceId, attemptNumber);
+            logger.OnRetryCallbackFailed(ex, task.PersistenceId, attemptNumber);
         }
     }
 
@@ -858,16 +900,12 @@ public class WorkerExecutor(
         TaskHandlerExecutor task,
         int attemptNumber,
         Exception exception,
-        TimeSpan delay)
-    {
-        var message = $"Task {task.PersistenceId} retry attempt {attemptNumber} after {delay.TotalMilliseconds}ms";
-
-        RegisterEvent(
-            SeverityLevel.Warning,
-            task,
-            message,
-            exception);
-    }
+        TimeSpan delay) =>
+        RegisterEvent(LogLevel.Warning, SeverityLevel.Warning, task, exception, null,
+            (TaskId: task.PersistenceId, Attempt: attemptNumber, DelayMs: delay.TotalMilliseconds),
+            static (l, a, e) => l.RetryAttempt(e, a.TaskId, a.Attempt, a.DelayMs),
+            static a => string.Create(CultureInfo.InvariantCulture,
+                $"Task {a.TaskId} retry attempt {a.Attempt} after {a.DelayMs}ms"));
 
     private async ValueTask ExecuteCallback(Func<Guid, Exception?, string, ValueTask>? handler,
                                             TaskHandlerExecutor task,
@@ -881,9 +919,7 @@ public class WorkerExecutor(
         }
         catch (Exception e)
         {
-            RegisterError(e, task,
-                "Error occurred executing the callback override OnError for task with id {0}.",
-                task.PersistenceId);
+            RegisterCallbackFailure(task, "OnError", e);
         }
     }
 
@@ -897,10 +933,11 @@ public class WorkerExecutor(
             // A user cancel (blacklisted id) must classify as terminal Cancelled even when the service
             // token is ALSO cancelled (shutdown racing the user cancel): otherwise it would be
             // ServiceStopped (recoverable) and re-execute at the next restart (F17).
-            var userCancelled = workerBlacklist.IsBlacklisted(task.PersistenceId);
+            var userCancelled      = workerBlacklist.IsBlacklisted(task.PersistenceId);
+            var cancelledByService = serviceToken.IsCancellationRequested && !userCancelled;
             if (taskStorage != null)
             {
-                if (serviceToken.IsCancellationRequested && !userCancelled)
+                if (cancelledByService)
                     await taskStorage.SetCancelledByService(task.PersistenceId, oce, task.AuditLevel)
                                      .ConfigureAwait(false);
                 else
@@ -910,8 +947,17 @@ public class WorkerExecutor(
             await ExecuteCallback(GetErrorCallback(task, handler), task, oce,
                 $"Task with id {task.PersistenceId} was cancelled").ConfigureAwait(false);
 
-            RegisterWarning(oce, task, executionLogs, "Task with id {0} was cancelled by service while stopping.",
-                task.PersistenceId);
+            // The report must match the persisted classification above: a user cancel is not a shutdown.
+            if (cancelledByService)
+                RegisterEvent(LogLevel.Warning, SeverityLevel.Warning, task, oce, executionLogs, task.PersistenceId,
+                    static (l, id, e) => l.TaskCancelledByService(e, id),
+                    static id => string.Create(CultureInfo.InvariantCulture,
+                        $"Task with id {id} was cancelled by service while stopping"));
+            else
+                RegisterEvent(LogLevel.Warning, SeverityLevel.Warning, task, oce, executionLogs, task.PersistenceId,
+                    static (l, id, e) => l.TaskCancelledByUser(e, id),
+                    static id => string.Create(CultureInfo.InvariantCulture,
+                        $"Task with id {id} was cancelled by the user"));
         }
         else
         {
@@ -929,7 +975,10 @@ public class WorkerExecutor(
             await ExecuteCallback(GetErrorCallback(task, handler), task, UnwrapForCallback(ex),
                 $"Error occurred executing the task with id {task.PersistenceId}").ConfigureAwait(false);
 
-            RegisterError(ex, task, executionLogs, "Error occurred executing task with id {0}.", task.PersistenceId);
+            RegisterEvent(LogLevel.Error, SeverityLevel.Error, task, ex, executionLogs, task.PersistenceId,
+                static (l, id, e) => l.TaskExecutionFailed(e, id),
+                static id => string.Create(CultureInfo.InvariantCulture,
+                    $"Error occurred executing task with id {id}"));
         }
     }
 
@@ -955,9 +1004,7 @@ public class WorkerExecutor(
         if (workerBlacklist.IsBlacklisted(task.PersistenceId))
         {
             _inMemoryRunCounts.TryRemove(task.PersistenceId, out _);
-            logger.LogInformation(
-                "Recurring task {TaskId} was cancelled: the series is stopped, no next occurrence scheduled.",
-                task.PersistenceId);
+            logger.RecurringSeriesCancelled(task.PersistenceId);
             return;
         }
 
@@ -970,9 +1017,7 @@ public class WorkerExecutor(
             current = (await taskStorage.Get(t => t.Id == task.PersistenceId).ConfigureAwait(false)).FirstOrDefault();
             if (current?.Status == QueuedTaskStatus.Cancelled)
             {
-                logger.LogInformation(
-                    "Recurring task {TaskId} was cancelled: the series is stopped, no next occurrence scheduled.",
-                    task.PersistenceId);
+                logger.RecurringSeriesCancelled(task.PersistenceId);
                 return;
             }
         }
@@ -1027,11 +1072,7 @@ public class WorkerExecutor(
 
         // Log skipped occurrences if any
         if (result.SkippedCount > 0)
-        {
-            logger.LogInformation(
-                "Task {TaskId} skipped {SkippedCount} missed occurrence(s) to maintain schedule",
-                task.PersistenceId, result.SkippedCount);
-        }
+            logger.MissedOccurrencesSkipped(task.PersistenceId, result.SkippedCount);
 
         // Advance the run counter by exactly ONE real execution. Occurrences skipped during a downtime
         // realign the schedule and are logged above, but they do NOT consume the MaxRuns budget: the
@@ -1095,76 +1136,72 @@ public class WorkerExecutor(
 
     #region Logging and event pubblishing
 
-    private void RegisterInfo(TaskHandlerExecutor executor, IReadOnlyList<TaskExecutionLog>? executionLogs,
-                              string message, params object[] messageArgs) =>
-        RegisterEvent(SeverityLevel.Information, executor, message, null, executionLogs, messageArgs);
+    // EverTaskEventData.Severity values. severity.ToString() allocated one string per published event;
+    // the enum has exactly three members, so three constants cover it. The wire values must not change.
+    private const string SeverityInformation = nameof(SeverityLevel.Information);
+    private const string SeverityWarning     = nameof(SeverityLevel.Warning);
+    private const string SeverityError       = nameof(SeverityLevel.Error);
 
-    // internal (not private): the deterministic L30/F24 gates drive RegisterEvent through this overload.
-    internal void RegisterInfo(TaskHandlerExecutor executor, string message, params object[] messageArgs) =>
-        RegisterEvent(SeverityLevel.Information, executor, message, null, null, messageArgs);
-
-    private void RegisterWarning(Exception? exception, TaskHandlerExecutor executor,
-                                 IReadOnlyList<TaskExecutionLog>? executionLogs, string message,
-                                 params object[] messageArgs) =>
-        RegisterEvent(SeverityLevel.Warning, executor, message, exception, executionLogs, messageArgs);
-
-    private void RegisterWarning(Exception? exception, TaskHandlerExecutor executor, string message,
-                                 params object[] messageArgs) =>
-        RegisterEvent(SeverityLevel.Warning, executor, message, exception, null, messageArgs);
-
-    private void RegisterError(Exception exception, TaskHandlerExecutor executor,
-                               IReadOnlyList<TaskExecutionLog>? executionLogs, string message,
-                               params object[] messageArgs) =>
-        RegisterEvent(SeverityLevel.Error, executor, message, exception, executionLogs, messageArgs);
-
-    private void RegisterError(Exception exception, TaskHandlerExecutor executor, string message,
-                               params object[] messageArgs) =>
-        RegisterEvent(SeverityLevel.Error, executor, message, exception, null, messageArgs);
-
-    private void RegisterEvent(SeverityLevel severity, TaskHandlerExecutor executor, string message,
-                               Exception? exception = null, IReadOnlyList<TaskExecutionLog>? executionLogs = null,
-                               params object[] messageArgs)
+    /// <summary>
+    /// L30, the single gate: nothing consumes an event when its log level is filtered out AND no
+    /// monitoring subscriber is attached. The caller then produces nothing at all — no rendered
+    /// sentence, no exception, no boxing.
+    /// </summary>
+    private bool TryEnterEvent(LogLevel logLevel, out bool logEnabled, out bool publish)
     {
-        var logLevel = severity switch
-        {
-            SeverityLevel.Information => LogLevel.Information,
-            SeverityLevel.Warning => LogLevel.Warning,
-            _ => LogLevel.Error
-        };
+        logEnabled = logger.IsEnabled(logLevel);
+        publish    = TaskEventOccurredAsync != null;
+        return logEnabled || publish;
+    }
 
-        // L30: when nobody consumes the event — the level is filtered out AND there are no monitoring
-        // subscribers — skip the string.Format + object[] boxing entirely. Otherwise that cost was paid
-        // per task even for a discarded Info event.
-        if (!logger.IsEnabled(logLevel) && TaskEventOccurredAsync == null)
+    /// <summary>
+    /// Logs one event and publishes its monitoring counterpart.
+    /// </summary>
+    /// <remarks>
+    /// The ILogger receives a compile-time template with named properties (<paramref name="log"/> calls a
+    /// generated <c>[LoggerMessage]</c> method); <paramref name="render"/> produces the flat sentence
+    /// that <c>EverTaskEventData.Message</c> needs, and runs ONLY when a subscriber is attached.
+    /// <paramref name="args"/> is a value tuple and both delegates are <c>static</c>, so a call site
+    /// allocates nothing and boxes nothing. <paramref name="logLevel"/> is decoupled from
+    /// <paramref name="severity"/>: per-task chatter can log at Debug while the dashboard still gets an
+    /// Information event.
+    /// internal (not private): the deterministic L30/F24 gate tests drive this seam directly.
+    /// </remarks>
+    internal void RegisterEvent<TArgs>(LogLevel logLevel, SeverityLevel severity, TaskHandlerExecutor executor,
+                                       Exception? exception, IReadOnlyList<TaskExecutionLog>? executionLogs,
+                                       TArgs args, Action<ILogger, TArgs, Exception?> log,
+                                       Func<TArgs, string> render)
+    {
+        if (!TryEnterEvent(logLevel, out var logEnabled, out var publish))
             return;
 
-        // Format message once for both logging and event publishing
-        // This avoids "Message template should be compile time constant" warning
-        var formattedMessage = messageArgs.Length > 0
-                                   ? string.Format(message, messageArgs)
-                                   : message;
+        EmitEvent(severity, executor, exception, executionLogs, args, log, render, logEnabled, publish);
+    }
 
-        switch (severity)
-        {
-            case SeverityLevel.Information:
-                logger.LogInformation(formattedMessage);
-                break;
-            case SeverityLevel.Warning:
-                logger.LogWarning(exception, formattedMessage);
-                break;
-            case SeverityLevel.Error:
-            default:
-                logger.LogError(exception, formattedMessage);
-                break;
-        }
+    // The emit half of RegisterEvent, split out so a call site that must build its exception behind the
+    // gate (RegisterRateLimitSkippedOccurrence) can reuse the gate's own verdict instead of re-testing it.
+    private void EmitEvent<TArgs>(SeverityLevel severity, TaskHandlerExecutor executor, Exception? exception,
+                                  IReadOnlyList<TaskExecutionLog>? executionLogs, TArgs args,
+                                  Action<ILogger, TArgs, Exception?> log, Func<TArgs, string> render,
+                                  bool logEnabled, bool publish)
+    {
+        // The generated methods reached from here declare SkipEnabledCheck: TryEnterEvent already
+        // tested IsEnabled for exactly this message's level.
+        if (logEnabled)
+            log(logger, args, exception);
+
+        if (!publish)
+            return;
+
+        var message = render(args);
 
         try
         {
-            PublishEvent(executor, severity, formattedMessage, exception, executionLogs);
+            PublishEvent(executor, severity, message, exception, executionLogs);
         }
         catch (Exception e)
         {
-            logger.LogError(e, "Unable to publish event {Message}", formattedMessage);
+            logger.EventPublishFailed(e, message);
         }
     }
 
@@ -1214,7 +1251,7 @@ public class WorkerExecutor(
                 }
                 catch (Exception ex)
                 {
-                    logger.LogError(ex, "Event handler failed for task {TaskId}", data.TaskId);
+                    logger.MonitoringSubscriberFailed(ex, data.TaskId);
                 }
                 finally
                 {
@@ -1252,10 +1289,17 @@ public class WorkerExecutor(
             handlerType = "Unknown";
         }
 
+        var severityName = severity switch
+        {
+            SeverityLevel.Information => SeverityInformation,
+            SeverityLevel.Warning => SeverityWarning,
+            _ => SeverityError
+        };
+
         return new EverTaskEventData(
             executor.PersistenceId,
             DateTimeOffset.UtcNow,
-            severity.ToString(),
+            severityName,
             taskType,
             handlerType,
             taskJson,
