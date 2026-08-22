@@ -17,23 +17,30 @@ public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(5, TimeSpan.F
 everything **except** `OperationCanceledException` and `TimeoutException` (hardcoded fail-fast).
 A `null` handler `RetryPolicy` means "defer to queue/global", **not** "no retries".
 
-### `LinearRetryPolicy` constructors
+### Built-in policy constructors
 
 ```csharp
 new LinearRetryPolicy(int retryCount, TimeSpan retryDelay)   // uniform delay; both > 0
 new LinearRetryPolicy(TimeSpan[] retryDelays)                // per-attempt delays (≥1 element, all > 0)
+new ExponentialRetryPolicy(int retryCount, TimeSpan initialDelay,
+    double backoffFactor = 2.0, TimeSpan? maxDelay = null, bool useJitter = false)
 ```
 
 ```csharp
-// "Exponential-ish" via explicit per-attempt delays:
-public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(new[]
-    { TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4), TimeSpan.FromSeconds(8) });
+// Exponential backoff: 1s, 2s, 4s, 8s (delay(n) = initialDelay × backoffFactor^(n-1))
+public override IRetryPolicy? RetryPolicy => new ExponentialRetryPolicy(4, TimeSpan.FromSeconds(1));
+
+// Capped + jittered: 1s, 3s, 9s, 10s, 10s, ±20% per-attempt jitter (never above maxDelay)
+public override IRetryPolicy? RetryPolicy => new ExponentialRetryPolicy(5, TimeSpan.FromSeconds(1),
+    backoffFactor: 3.0, maxDelay: TimeSpan.FromSeconds(10), useJitter: true);
 ```
 
-For true exponential/jitter, implement `IRetryPolicy` (e.g. wrapping Polly); its `Execute(...)`
-runs the action.
+`ExponentialRetryPolicy` validation: `backoffFactor` >= 1.0 (1.0 = constant, like linear) and
+`maxDelay` (when set) >= `initialDelay`. Without a `maxDelay` the growth clamps at the `Task.Delay`
+ceiling (~49.7 days), jitter included. For anything else (circuit breakers, decorrelated jitter, ...),
+implement `IRetryPolicy` (e.g. wrapping Polly); its `Execute(...)` runs the action.
 
-## Exception filtering (fluent on `LinearRetryPolicy`)
+## Exception filtering (fluent, shared by both built-in policies)
 
 ```csharp
 // Whitelist: retry ONLY these (and derived):
@@ -143,7 +150,7 @@ For cross-cutting observation across all tasks, subscribe to
 ## Wizard decision points
 
 1. Retry at all? Default is yes (3×). For run-once, a custom `IRetryPolicy` that executes once.
-2. How many / what backoff? `LinearRetryPolicy(n, delay)` or per-attempt array.
+2. How many / what backoff? `LinearRetryPolicy(n, delay)` (or per-attempt array) for fixed delays; `ExponentialRetryPolicy(n, initialDelay, ...)` for growing delays (cap with `maxDelay`, spread with `useJitter`).
 3. Which exceptions? none-filter (default) / whitelist / blacklist / predicate (can't mix W+B).
 4. Per-execution timeout? Set on handler/queue/global; add a safety buffer.
 5. Visibility into retries/failures? Override `OnRetry` / `OnError`.

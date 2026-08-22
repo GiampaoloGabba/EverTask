@@ -12,7 +12,7 @@ Resilience features that recover from transient failures automatically and fail 
 ## Key Features
 
 ### Retry Policies
-Automatically retry failed tasks with configurable policies. Choose from built-in linear retry, implement custom exponential backoff, or integrate with Polly for advanced resilience patterns.
+Automatically retry failed tasks. Two policies ship with EverTask, linear and exponential backoff; if you need something else (a circuit breaker, for instance) you can write your own `IRetryPolicy` or wrap Polly.
 
 **Learn more**: [Retry Policies](retry-policies.md)
 

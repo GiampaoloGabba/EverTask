@@ -28,7 +28,7 @@ Resilient task handling comes down to a few things: retrying transient errors, f
 Introduction to resilience features with quick examples and feature overview.
 
 ### [Retry Policies](resilience/retry-policies.md)
-Configure automatic retry behavior for failed tasks. Learn about LinearRetryPolicy, custom policies, and Polly integration.
+Configure automatic retry behavior for failed tasks. Learn about LinearRetryPolicy, ExponentialRetryPolicy (exponential backoff), custom policies, and Polly integration.
 
 ### [Exception Filtering](resilience/exception-filtering.md)
 Control which exceptions trigger retries and which fail immediately. Use whitelist, blacklist, or predicate-based filtering to save resources and improve error visibility.
@@ -59,6 +59,9 @@ builder.Services.AddEverTask(opt =>
 {
     // 3 retries (up to 4 executions) with 500ms delay between attempts
     opt.SetDefaultRetryPolicy(new LinearRetryPolicy(3, TimeSpan.FromMilliseconds(500)));
+
+    // Or exponential backoff: 500ms, 1s, 2s, 4s, 8s
+    // opt.SetDefaultRetryPolicy(new ExponentialRetryPolicy(5, TimeSpan.FromMilliseconds(500)));
 });
 ```
 
@@ -100,15 +103,10 @@ public class RobustDatabaseHandler : EverTaskHandler<DatabaseTask>
     private readonly ILogger<RobustDatabaseHandler> _logger;
     private readonly IMetrics _metrics;
 
-    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(
-        new[]
-        {
-            TimeSpan.FromSeconds(1),
-            TimeSpan.FromSeconds(2),
-            TimeSpan.FromSeconds(5),
-            TimeSpan.FromSeconds(10)
-        })
-        .HandleTransientDatabaseErrors();
+    // 1s, 2s, 4s, 8s: exponential backoff, only for database errors
+    public override IRetryPolicy? RetryPolicy =>
+        new ExponentialRetryPolicy(4, TimeSpan.FromSeconds(1))
+            .HandleTransientDatabaseErrors();
 
     public override ValueTask OnRetry(Guid taskId, int attemptNumber, Exception exception, TimeSpan delay)
     {

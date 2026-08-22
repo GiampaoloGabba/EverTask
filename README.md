@@ -192,6 +192,9 @@ RetryPolicy => new LinearRetryPolicy(3, TimeSpan.FromSeconds(1)).Handle<DbExcept
 
 // Predicate: Custom logic (e.g., HTTP 5xx only)
 RetryPolicy => new LinearRetryPolicy(3, TimeSpan.FromSeconds(1)).HandleWhen(ex => ex is HttpRequestException httpEx && httpEx.StatusCode >= 500);
+
+// Exponential backoff (1s, 2s, 4s, 8s...) with cap and jitter, same filtering API
+RetryPolicy => new ExponentialRetryPolicy(5, TimeSpan.FromSeconds(1), maxDelay: TimeSpan.FromSeconds(30), useJitter: true).HandleTransientNetworkErrors();
 ```
 
 ### Keyed Rate Limiting

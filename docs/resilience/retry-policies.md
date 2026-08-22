@@ -53,6 +53,51 @@ builder.Services.AddEverTask(opt =>
 });
 ```
 
+## ExponentialRetryPolicy
+
+`ExponentialRetryPolicy` is the built-in exponential backoff policy: the delay grows after every attempt (`initialDelay × backoffFactor^(n-1)`), so a struggling downstream service gets a longer break each time instead of the same hammering at fixed intervals. [Exception filtering](exception-filtering.md) and [retry callbacks](retry-callbacks.md) work the same way as on `LinearRetryPolicy`.
+
+```csharp
+// 500ms, 1s, 2s, 4s, 8s (default backoffFactor: 2.0)
+builder.Services.AddEverTask(opt =>
+{
+    opt.SetDefaultRetryPolicy(new ExponentialRetryPolicy(5, TimeSpan.FromMilliseconds(500)));
+});
+```
+
+### Backoff Factor, Max Delay and Jitter
+
+```csharp
+// 1s, 3s, 9s, 10s, 10s: growth capped at maxDelay
+var policy = new ExponentialRetryPolicy(
+    retryCount: 5,
+    initialDelay: TimeSpan.FromSeconds(1),
+    backoffFactor: 3.0,
+    maxDelay: TimeSpan.FromSeconds(10));
+
+// Add ±20% jitter so many tasks failing together don't retry in lockstep.
+// Jitter is computed per attempt and never exceeds maxDelay.
+var jittered = new ExponentialRetryPolicy(5, TimeSpan.FromSeconds(1),
+    maxDelay: TimeSpan.FromSeconds(30), useJitter: true);
+```
+
+Validation rules: `retryCount` and `initialDelay` must be greater than zero, `backoffFactor` must be >= 1.0 (a factor of 1.0 behaves like a linear policy), and `maxDelay`, when provided, must be >= `initialDelay`.
+
+Without a `maxDelay` the growth is still bounded: a single delay never exceeds the longest wait `Task.Delay` accepts (about 49.7 days), so a high retry count with a large factor clamps at that ceiling instead of failing at execution time. Jitter respects the same ceiling. In practice you will want a much lower `maxDelay` anyway.
+
+### With Exception Filtering
+
+Filtering works exactly like on `LinearRetryPolicy` (whitelist, blacklist, predicate, presets):
+
+```csharp
+public class ApiCallHandler : EverTaskHandler<ApiCallTask>
+{
+    public override IRetryPolicy? RetryPolicy =>
+        new ExponentialRetryPolicy(5, TimeSpan.FromSeconds(1), maxDelay: TimeSpan.FromSeconds(30))
+            .HandleTransientNetworkErrors();
+}
+```
+
 ## Per-Handler Retry Policy
 
 A handler's retry policy is resolved through a chain: the handler override takes precedence, then the declared queue's default, then the global default (v3.7+). Override the policy on a handler when you need different retry behavior for specific task types:
@@ -75,14 +120,13 @@ public class CriticalTaskHandler : EverTaskHandler<CriticalTask>
 ```csharp
 public class CustomRetryHandler : EverTaskHandler<CustomRetryTask>
 {
-    // Exponential backoff-like delays
+    // Arbitrary per-attempt delays (for a standard doubling pattern,
+    // prefer ExponentialRetryPolicy above)
     public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(new TimeSpan[]
     {
         TimeSpan.FromSeconds(1),
-        TimeSpan.FromSeconds(2),
-        TimeSpan.FromSeconds(4),
-        TimeSpan.FromSeconds(8),
-        TimeSpan.FromSeconds(16)
+        TimeSpan.FromSeconds(5),
+        TimeSpan.FromMinutes(1)
     });
 
     public override async Task Handle(CustomRetryTask task, CancellationToken cancellationToken)
@@ -94,59 +138,28 @@ public class CustomRetryHandler : EverTaskHandler<CustomRetryTask>
 
 ## Custom Retry Policies
 
-Need full control over retry behavior? Implement `IRetryPolicy` yourself:
+If neither built-in policy fits, implement `IRetryPolicy` yourself. One case where you need that: the built-in policies cannot disable retries, but a single-attempt policy can:
 
 ```csharp
 using Microsoft.Extensions.Logging;
 
-public class ExponentialBackoffPolicy : IRetryPolicy
+public class NoRetryPolicy : IRetryPolicy
 {
-    private readonly int _maxRetries;
-    private readonly TimeSpan _baseDelay;
-
-    public ExponentialBackoffPolicy(int maxRetries = 5, TimeSpan? baseDelay = null)
-    {
-        _maxRetries = maxRetries;
-        _baseDelay = baseDelay ?? TimeSpan.FromSeconds(1);
-    }
-
-    public async Task Execute(
+    public Task Execute(
         Func<CancellationToken, Task> action,
         ILogger attemptLogger,
         CancellationToken token = default,
         Func<int, Exception, TimeSpan, ValueTask>? onRetryCallback = null)
     {
-        // maxRetries retries means up to maxRetries + 1 total executions
-        for (int attempt = 0; attempt <= _maxRetries; attempt++)
-        {
-            token.ThrowIfCancellationRequested();
-
-            try
-            {
-                await action(token);
-                return; // Success
-            }
-            catch (Exception ex) when (attempt < _maxRetries)
-            {
-                // Calculate exponential delay: base * 2^attempt
-                var delay = TimeSpan.FromMilliseconds(
-                    _baseDelay.TotalMilliseconds * Math.Pow(2, attempt));
-
-                await Task.Delay(delay, token);
-
-                // Notify the worker so OnRetry callbacks fire (attempt is 1-based)
-                if (onRetryCallback != null)
-                    await onRetryCallback(attempt + 1, ex, delay);
-                // Loop continues to retry
-            }
-        }
+        // Single attempt: any failure propagates immediately, no retries
+        return action(token);
     }
 }
 
 // Use in handler
 public class MyHandler : EverTaskHandler<MyTask>
 {
-    public override IRetryPolicy? RetryPolicy => new ExponentialBackoffPolicy(maxRetries: 5);
+    public override IRetryPolicy? RetryPolicy => new NoRetryPolicy();
 }
 ```
 

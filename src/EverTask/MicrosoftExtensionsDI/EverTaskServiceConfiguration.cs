@@ -149,9 +149,9 @@ public class EverTaskServiceConfiguration
     /// Individual handlers can override this via the <see cref="IEverTaskHandler{T}.RetryPolicy"/> property.
     /// </summary>
     /// <param name="policy">
-    /// Retry policy instance (<see cref="LinearRetryPolicy"/> — the only built-in policy — or a
-    /// custom <see cref="IRetryPolicy"/> implementation, e.g. an exponential backoff or a
-    /// trivial run-once policy to disable retries).
+    /// Retry policy instance (built-in <see cref="LinearRetryPolicy"/> or
+    /// <see cref="ExponentialRetryPolicy"/>, or a custom <see cref="IRetryPolicy"/>
+    /// implementation, e.g. a trivial run-once policy to disable retries).
     /// </param>
     /// <returns>The configuration instance for method chaining.</returns>
     /// <remarks>

@@ -374,4 +374,53 @@ public class LinearRetryPolicyTests
     }
 
     #endregion
+
+    #region Group 9: Compatibility of the pre-RetryPolicyBase surface (3 tests)
+
+    // The three extension methods shipped up to 3.11.0 as non-generic `(this LinearRetryPolicy)` overloads.
+    // An assembly compiled against them binds to that exact signature: if only the generic overloads
+    // existed, loading it against the new package would throw MissingMethodException at runtime.
+    [Theory]
+    [InlineData(nameof(RetryPolicyExtensions.HandleTransientDatabaseErrors))]
+    [InlineData(nameof(RetryPolicyExtensions.HandleTransientNetworkErrors))]
+    [InlineData(nameof(RetryPolicyExtensions.HandleAllTransientErrors))]
+    public void Should_keep_the_non_generic_LinearRetryPolicy_overload_when_extension_is_called_from_a_3_11_assembly(string name)
+    {
+        var legacy = typeof(RetryPolicyExtensions).GetMethod(name, new[] { typeof(LinearRetryPolicy) });
+
+        legacy.ShouldNotBeNull();
+        legacy.IsGenericMethodDefinition.ShouldBeFalse();
+        legacy.ReturnType.ShouldBe(typeof(LinearRetryPolicy));
+    }
+
+    // A subclass cannot satisfy `TPolicy : RetryPolicyBase<TPolicy>` (it derives from
+    // RetryPolicyBase<LinearRetryPolicy>), so without the non-generic overloads this would not compile.
+    private sealed class CustomLinearPolicy() : LinearRetryPolicy(2, TimeSpan.FromMilliseconds(1));
+
+    [Fact]
+    public void Should_bind_the_extensions_on_a_LinearRetryPolicy_subclass_when_the_generic_constraint_cannot_hold()
+    {
+        var policy = new CustomLinearPolicy().HandleAllTransientErrors();
+
+        policy.ShouldBeOfType<CustomLinearPolicy>();
+        policy.ShouldRetry(new SocketException()).ShouldBeTrue();
+        policy.ShouldRetry(new ArgumentException()).ShouldBeFalse();
+    }
+
+    // The moved members (Handle/DoNotHandle/HandleWhen/ShouldRetry/Execute) are resolved up the hierarchy
+    // by the CLR, so they stay binary-compatible; this pins that the old call shape still resolves.
+    [Fact]
+    public void Should_resolve_the_moved_members_through_LinearRetryPolicy_when_looked_up_by_the_old_call_shape()
+    {
+        var policy = new LinearRetryPolicy(1, TimeSpan.FromMilliseconds(1));
+
+        foreach (var name in new[] { "Handle", "DoNotHandle", "HandleWhen", "ShouldRetry", "Execute" })
+        {
+            typeof(LinearRetryPolicy).GetMethods().Any(m => m.Name == name).ShouldBeTrue(name);
+        }
+
+        policy.Handle<SocketException>().ShouldBeSameAs(policy);
+    }
+
+    #endregion
 }

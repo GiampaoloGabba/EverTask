@@ -78,7 +78,7 @@ With those four steps in place, EverTask persists the task, executes it in the b
   - [Best Practices](recurring-tasks/best-practices.md) - Patterns and pitfalls
 - **[Resilience](resilience.md)** - Handle failures with retry policies and timeouts
   - [Overview](resilience/overview.md) - Failure handling at a glance
-  - [Retry Policies](resilience/retry-policies.md) - Linear retry, custom policies, Polly
+  - [Retry Policies](resilience/retry-policies.md) - Linear and exponential retry, custom policies, Polly
   - [Exception Filtering](resilience/exception-filtering.md) - Whitelist, blacklist, and predicate filtering
   - [Retry Callbacks](resilience/retry-callbacks.md) - React to each retry attempt
   - [Timeout Management](resilience/timeout-management.md) - Per-handler, per-queue, and global timeouts

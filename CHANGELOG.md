@@ -110,6 +110,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`ExponentialRetryPolicy`**: built-in exponential backoff next to `LinearRetryPolicy`:
+  `new ExponentialRetryPolicy(retryCount, initialDelay, backoffFactor = 2.0, maxDelay = null,
+  useJitter = false)`. The delay before retry `n` is `initialDelay × backoffFactor^(n-1)`, capped at
+  `maxDelay` when set and always clamped at the largest delay `Task.Delay` accepts (about 49.7 days);
+  `useJitter` spreads each delay by ±20% at execution time (still capped) so concurrent tasks do not
+  retry in lockstep. Same fluent filtering (`Handle`, `DoNotHandle`, `HandleWhen`, the
+  `HandleTransient*` extensions) and the same `OnRetry` contract as the linear policy.
+- **`RetryPolicyBase<TPolicy>`**: the execution loop, the exception filtering and the `OnRetry`
+  callback handling now live in a self-referencing generic base shared by both built-in policies.
+  `LinearRetryPolicy` keeps its public surface and behavior (`Handle`, `DoNotHandle`, `HandleWhen`,
+  `ShouldRetry` and `Execute` now resolve on the base, which the CLR binds up the hierarchy), and the
+  `HandleTransient*` extensions gained generic overloads that keep the concrete policy type for
+  chaining; the original `(this LinearRetryPolicy)` overloads stay, so assemblies compiled against
+  3.11.0 and subclasses of `LinearRetryPolicy` keep binding. Source- and binary-compatible.
 - **`EverTask.Monitor.Api.Scalar`**: optional package serving a [Scalar](https://scalar.com) API
   reference at `/evertask-monitoring/scalar`. `.AddMonitoringApiScalar()` (chained after
   `AddMonitoringApi()`) enables the OpenAPI document automatically; net9.0+ (no-op with a startup

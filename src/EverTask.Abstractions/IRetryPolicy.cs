@@ -23,6 +23,7 @@ namespace EverTask.Abstractions;
 /// <strong>Built-in Implementations:</strong>
 /// <list type="bullet">
 /// <item><description><see cref="EverTask.Resilience.LinearRetryPolicy"/>: Fixed delay between retries with optional exception filtering</description></item>
+/// <item><description><see cref="EverTask.Resilience.ExponentialRetryPolicy"/>: Exponentially growing delay (with optional cap and jitter) with optional exception filtering</description></item>
 /// </list>
 /// </para>
 /// <para>

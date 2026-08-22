@@ -199,15 +199,10 @@ public class RobustDatabaseHandler : EverTaskHandler<DatabaseTask>
     private readonly ILogger<RobustDatabaseHandler> _logger;
     private readonly IMetrics _metrics;
 
-    public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(
-        new[]
-        {
-            TimeSpan.FromSeconds(1),
-            TimeSpan.FromSeconds(2),
-            TimeSpan.FromSeconds(5),
-            TimeSpan.FromSeconds(10)
-        })
-        .HandleTransientDatabaseErrors();
+    // 1s, 2s, 4s, 8s: exponential backoff, only for database errors
+    public override IRetryPolicy? RetryPolicy =>
+        new ExponentialRetryPolicy(4, TimeSpan.FromSeconds(1))
+            .HandleTransientDatabaseErrors();
 
     public override ValueTask OnRetry(Guid taskId, int attemptNumber, Exception exception, TimeSpan delay)
     {

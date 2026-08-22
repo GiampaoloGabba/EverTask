@@ -2,11 +2,11 @@ using Microsoft.Extensions.Logging;
 
 namespace EverTask.Resilience;
 
-// EventId range 1900-1999 (LinearRetryPolicy). Ranges are allocated per component in the #32 plan;
+// EventId range 1900-1999 (RetryPolicyBase: the Execute loop shared by LinearRetryPolicy and ExponentialRetryPolicy). Ranges are allocated per component in the #32 plan;
 // a reflection test asserts solution-wide uniqueness.
 // SkipEnabledCheck on the two {ExceptionType} methods: the call sites evaluate ex.GetType().Name, so they
 // are already wrapped in an explicit IsEnabled guard (the generator's own guard runs after the arguments).
-internal static partial class LinearRetryPolicyLog
+internal static partial class RetryPolicyBaseLog
 {
     [LoggerMessage(EventId = 1900, Level = LogLevel.Warning, SkipEnabledCheck = true,
         Message = "Exception {ExceptionType} is not retryable, failing immediately")]

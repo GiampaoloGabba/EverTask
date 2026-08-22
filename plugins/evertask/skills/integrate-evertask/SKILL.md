@@ -153,7 +153,9 @@ For each capability selected in Phase 1, read the matching reference and apply:
   interval calls; all schedules are UTC.
 - **Retry/timeout** (`04-resilience.md`): override `RetryPolicy` / `Timeout` on the handler,
   or set queue/global defaults. Default is `LinearRetryPolicy(3, 500ms)` retrying everything
-  except `OperationCanceledException`/`TimeoutException`.
+  except `OperationCanceledException`/`TimeoutException`. For exponential backoff use
+  `ExponentialRetryPolicy(n, initialDelay, backoffFactor, maxDelay, useJitter)` (same fluent
+  exception filtering as linear).
 - **Rate limiting** (`06-rate-limiting-queues.md`): override `RateLimitPolicy` on the handler;
   carry the key via `IRateLimitedTask` or `GetRateLimitKey`. Note rate limiting is
   **per-instance**: divide external budgets across instances in multi-instance deployments.
