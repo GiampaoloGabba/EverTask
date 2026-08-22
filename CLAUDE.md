@@ -127,3 +127,17 @@ See local CLAUDE.md files for implementation details.
 | **Logging Tests** | `test/EverTask.Tests.Logging/CLAUDE.md` | Logging integration tests |
 
 **Adding New Modules**: Create local CLAUDE.md only for module-specific prerequisites or critical gotchas. Link to external docs for extended explanations. Follow 40-100 line guideline.
+
+## Rider MCP
+
+Rider open on the solution exposes an MCP server for semantic C# work — prefer it over
+grep/read/edit for symbol tasks; if it doesn't respond, use native tools.
+- Callers/callees of a symbol → `analyze_calls`; find a declaration → `search_symbol`;
+  understand a symbol without opening the file → `get_symbol_info`.
+- Rename / change signature / safe-delete / move type / extract → `rename_refactoring` & co
+  (`preview:true` on wide-blast-radius changes).
+- Runtime bug not obvious from source/logs → the `debugging-code` skill (Rider debugger), not print-debugging.
+
+Read-only tools are allowlisted (no prompt); mutating refactorings prompt. `get_class_hierarchy`
+is Unreal-only. An end-of-turn Stop hook runs one batched Rider analysis on the turn's edited code
+files and blocks the turn until clean (analysis only — no reformat, no git).
