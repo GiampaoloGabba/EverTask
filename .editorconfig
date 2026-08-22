@@ -398,6 +398,15 @@ dotnet_naming_style.upper_camel_case_style.capitalization = pascal_case
 
 dotnet_style_namespace_match_folder = true:suggestion
 
+# CA1822 "mark members as static": limit to non-public members. Public members are API shape
+# (e.g. options objects with computed route-path properties) and stay instance by design.
+dotnet_code_quality.CA1822.api_surface = private, internal
+
+# ReSharper inspection severities
+# Options objects and route-path properties are instance members by design (public API shape):
+# the "member can be made static" hint is noise here
+resharper_member_can_be_made_static_global_highlighting = none
+
 # ReSharper properties
 resharper_align_linq_query = true
 resharper_align_multiline_calls_chain = true
