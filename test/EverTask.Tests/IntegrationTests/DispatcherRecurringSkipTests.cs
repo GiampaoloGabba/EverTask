@@ -89,10 +89,11 @@ public class DispatcherRecurringSkipTests : IsolatedIntegrationTestBase
         var counter = StateManager.GetCounter(nameof(TestTaskRecurringSeconds));
         counter.ShouldBeGreaterThanOrEqualTo(1);
 
-        var tasks = await Storage.GetAll();
-        var task  = tasks.FirstOrDefault(t => t.Id == taskId);
+        // The handler counter only proves the handler returned: WorkerExecutor persists
+        // CurrentRunCount afterwards, in the finally that advances the series. Wait for that write
+        // instead of reading the row straight after the counter.
+        var task = await WaitForRecurringRunsAsync(taskId, expectedRuns: 1, timeoutMs: 5000);
 
-        task.ShouldNotBeNull();
         task.CurrentRunCount?.ShouldBeGreaterThanOrEqualTo(1);
     }
 
@@ -121,10 +122,9 @@ public class DispatcherRecurringSkipTests : IsolatedIntegrationTestBase
         var elapsedTime = executionTime - startTime;
         elapsedTime.TotalSeconds.ShouldBeGreaterThanOrEqualTo(initialDelay.TotalSeconds - 0.5); // 0.5s tolerance
 
-        var tasks = await Storage.GetAll();
-        var task  = tasks.FirstOrDefault(t => t.Id == taskId);
+        // Same race as the RunNow test: CurrentRunCount lands after the handler returns.
+        var task = await WaitForRecurringRunsAsync(taskId, expectedRuns: 1, timeoutMs: 5000);
 
-        task.ShouldNotBeNull();
         task.CurrentRunCount?.ShouldBeGreaterThanOrEqualTo(1);
     }
 
@@ -187,16 +187,11 @@ public class DispatcherRecurringSkipTests : IsolatedIntegrationTestBase
                          new TestTaskRecurringSeconds(),
                          recurring => recurring.Schedule().Every(10).Seconds());
 
-        // Wait for first execution
-        await TaskWaitHelper.WaitForConditionAsync(
-            () => StateManager.GetCounter(nameof(TestTaskRecurringSeconds)) >= 1,
-            timeoutMs: 12000);
+        // Wait for the first execution AND its post-execution write: the runs audit and the new
+        // NextRunUtc are persisted after the handler returns, so the handler counter alone would
+        // race them.
+        var taskAfterFirstRun = await WaitForRecurringRunsAsync(taskId, expectedRuns: 1, timeoutMs: 12000);
 
-        // Get task after first run
-        var tasksAfterFirstRun = await Storage.GetAll();
-        var taskAfterFirstRun  = tasksAfterFirstRun.FirstOrDefault(t => t.Id == taskId);
-
-        taskAfterFirstRun.ShouldNotBeNull();
         var firstNextRun = taskAfterFirstRun.NextRunUtc;
         firstNextRun.ShouldNotBeNull();
 
