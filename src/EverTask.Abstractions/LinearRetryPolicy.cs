@@ -271,9 +271,11 @@ public class LinearRetryPolicy : IRetryPolicy
                 // Check if exception should be retried
                 if (!ShouldRetry(ex))
                 {
-                    attemptLogger.LogWarning(ex,
-                        "Exception {ExceptionType} is not retryable, failing immediately",
-                        ex.GetType().Name);
+                    if (attemptLogger.IsEnabled(LogLevel.Warning))
+                    {
+                        attemptLogger.ExceptionNotRetryable(ex, ex.GetType().Name);
+                    }
+
                     throw; // Fail-fast for non-retryable exceptions
                 }
 
@@ -285,9 +287,11 @@ public class LinearRetryPolicy : IRetryPolicy
                     var delay = _retryDelays[i];
                     var retryAttemptNumber = i + 1; // 1-based for user callback
 
-                    attemptLogger.LogWarning(ex,
-                        "Retry attempt {Attempt} of {MaxRetries} after {DelayMs}ms for {ExceptionType}",
-                        retryAttemptNumber, _retryDelays.Length, delay.TotalMilliseconds, ex.GetType().Name);
+                    if (attemptLogger.IsEnabled(LogLevel.Warning))
+                    {
+                        attemptLogger.RetryAttempt(ex, retryAttemptNumber, _retryDelays.Length,
+                                                   delay.TotalMilliseconds, ex.GetType().Name);
+                    }
 
                     // Wait for retry delay
                     try
@@ -317,9 +321,7 @@ public class LinearRetryPolicy : IRetryPolicy
                         catch (Exception callbackEx)
                         {
                             // OnRetry callback exceptions are logged but don't prevent retry
-                            attemptLogger.LogError(callbackEx,
-                                "OnRetry callback failed for attempt {Attempt}, continuing with retry",
-                                retryAttemptNumber);
+                            attemptLogger.OnRetryCallbackFailed(callbackEx, retryAttemptNumber);
                         }
                     }
                 }

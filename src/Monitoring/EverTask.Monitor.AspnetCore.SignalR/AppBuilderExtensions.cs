@@ -25,7 +25,10 @@ public static class AppBuilderExtensions
         {
             // Log warning if monitor not found - this is a configuration issue
             var logger = app.ServiceProvider.GetService<ILogger<SignalRTaskMonitor>>();
-            logger?.LogWarning("SignalRTaskMonitor not found in services. SignalR monitoring will not work. Did you call AddSignalRMonitoring()?");
+            if (logger != null)
+            {
+                logger.MonitorNotRegistered();
+            }
         }
 
         return app;
@@ -47,7 +50,10 @@ public static class AppBuilderExtensions
         {
             // Log warning if monitor not found - this is a configuration issue
             var logger = app.ServiceProvider.GetService<ILogger<SignalRTaskMonitor>>();
-            logger?.LogWarning("SignalRTaskMonitor not found in services. SignalR monitoring will not work. Did you call AddSignalRMonitoring()?");
+            if (logger != null)
+            {
+                logger.MonitorNotRegistered();
+            }
         }
 
         return app;

@@ -2,7 +2,6 @@
 using EverTask.Monitoring;
 using EverTask.Worker;
 using Microsoft.AspNetCore.SignalR;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace EverTask.Monitor.AspnetCore.SignalR;
@@ -15,13 +14,13 @@ public class SignalRTaskMonitor(IEverTaskWorkerExecutor executor, IHubContext<Ta
 
     public void SubScribe()
     {
-        logger.LogInformation("EverTask SignalR MonitorHub created and subscribed");
+        logger.MonitorHubSubscribed();
         executor.TaskEventOccurredAsync += OnTaskEventOccurredAsync;
     }
 
     private async Task OnTaskEventOccurredAsync(EverTaskEventData eventData)
     {
-        logger.LogInformation("EverTask SignalR MonitorHub, message received: {@eventData}", eventData);
+        logger.MonitorHubEventReceived(eventData.TaskId, eventData.Severity);
 
         // Filter execution logs based on configuration
         var filteredEventData = _options.IncludeExecutionLogs
@@ -33,7 +32,7 @@ public class SignalRTaskMonitor(IEverTaskWorkerExecutor executor, IHubContext<Ta
 
     public void Unsubscribe()
     {
-        logger.LogInformation("EverTask SignalR MonitorHub unsubscribed");
+        logger.MonitorHubUnsubscribed();
         executor.TaskEventOccurredAsync -= OnTaskEventOccurredAsync;
     }
 

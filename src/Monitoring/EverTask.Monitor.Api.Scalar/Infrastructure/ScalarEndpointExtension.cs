@@ -31,9 +31,7 @@ internal sealed class ScalarEndpointExtension : IMonitoringApiEndpointExtension
         var logger = endpoints.ServiceProvider
                               .GetRequiredService<ILoggerFactory>()
                               .CreateLogger("EverTask.Monitor.Api.Scalar");
-        logger.LogWarning(
-            "EverTask.Monitor.Api.Scalar is a no-op on net8.0: the built-in ASP.NET Core OpenAPI generator " +
-            "requires net9.0 or later, so neither the OpenAPI document nor the Scalar UI are served");
+        logger.ScalarUnavailableOnNet8();
 #endif
     }
 }

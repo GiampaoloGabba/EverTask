@@ -29,11 +29,7 @@ public class JwtTokenService : IJwtTokenService
         if (string.IsNullOrWhiteSpace(_options.JwtSecret))
         {
             _secret = GenerateRandomSecret();
-            _logger.LogWarning(
-                "JWT secret not configured. Generated random secret. " +
-                "This is NOT recommended for production or multi-instance deployments. " +
-                "Configure JwtSecret in EverTaskApiOptions."
-            );
+            _logger.JwtSecretNotConfigured();
         }
         else
         {
@@ -42,10 +38,7 @@ public class JwtTokenService : IJwtTokenService
             // Validate minimum secret length (256 bits / 32 bytes)
             if (Encoding.UTF8.GetByteCount(_secret) < 32)
             {
-                _logger.LogWarning(
-                    "JWT secret is shorter than recommended minimum (32 bytes / 256 bits). " +
-                    "Consider using a stronger secret for production environments."
-                );
+                _logger.JwtSecretTooShort();
             }
         }
 
@@ -76,7 +69,7 @@ public class JwtTokenService : IJwtTokenService
 
         var tokenString = new JwtSecurityTokenHandler().WriteToken(token);
 
-        _logger.LogInformation("Generated JWT token for user '{Username}' (expires: {ExpiresAt})", username, expiresAt);
+        _logger.JwtTokenGenerated(username, expiresAt);
 
         return new LoginResponse(tokenString, expiresAt, username);
     }
@@ -114,23 +107,23 @@ public class JwtTokenService : IJwtTokenService
                 ? new DateTimeOffset(jwtToken.ValidTo, TimeSpan.Zero)
                 : (DateTimeOffset?)null;
 
-            _logger.LogDebug("JWT token validated successfully for user '{Username}'", username);
+            _logger.JwtTokenValidated(username);
 
             return new TokenValidationResponse(true, username, expiresAt);
         }
         catch (SecurityTokenExpiredException ex)
         {
-            _logger.LogDebug("JWT token expired: {Message}", ex.Message);
+            _logger.JwtTokenExpired(ex.Message);
             return new TokenValidationResponse(false, null, null);
         }
         catch (SecurityTokenException ex)
         {
-            _logger.LogDebug("JWT token validation failed: {Message}", ex.Message);
+            _logger.JwtTokenValidationFailed(ex.Message);
             return new TokenValidationResponse(false, null, null);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Unexpected error during JWT token validation");
+            _logger.JwtTokenValidationError(ex);
             return new TokenValidationResponse(false, null, null);
         }
     }

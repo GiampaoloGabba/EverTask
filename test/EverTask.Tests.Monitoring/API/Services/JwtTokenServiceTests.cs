@@ -11,6 +11,8 @@ public class JwtTokenServiceTests
     public JwtTokenServiceTests()
     {
         _loggerMock = new Mock<ILogger<JwtTokenService>>();
+        // [LoggerMessage]-generated methods guard on IsEnabled, which a loose mock answers false.
+        _loggerMock.Setup(l => l.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
     }
 
     [Fact]
