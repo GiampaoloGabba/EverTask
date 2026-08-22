@@ -22,7 +22,7 @@ public static class DateTimeOffsetExtensions
 
     public static DateTimeOffset GetNextRequestedTime(this DateTimeOffset nextDay, DateTimeOffset current, TimeOnly[] onTimes, bool addDays = true)
     {
-        if (!onTimes.Any()) return nextDay;
+        if (onTimes.Length == 0) return nextDay;
 
         // onTimes is guaranteed to be sorted by the OnTimes property setter in DayInterval/MonthInterval
         // This eliminates repeated sorting on every call

@@ -22,7 +22,7 @@ public class HourInterval : IInterval
     public int Interval { get; init; }
     public int? OnMinute { get; set; }
     public int? OnSecond { get; set; }
-    public int[] OnHours { get; set; } = Array.Empty<int>();
+    public int[] OnHours { get; set; } = [];
 
     public void Validate()
     {
@@ -51,7 +51,7 @@ public class HourInterval : IInterval
     {
         var next = current.AddHours(Interval);
 
-        if (OnHours.Any())
+        if (OnHours.Length != 0)
             next = next.NextValidHour(OnHours);
 
         if (OnMinute != null)

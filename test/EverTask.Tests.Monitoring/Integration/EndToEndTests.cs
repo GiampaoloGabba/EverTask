@@ -132,7 +132,7 @@ public class EndToEndTests : MonitoringTestBase
         while (true)
         {
             var tasks = await Storage.Get(t => t.Id == taskId);
-            if (tasks.Any() && tasks.First().Status == expectedStatus)
+            if (tasks.Length != 0 && tasks.First().Status == expectedStatus)
                 return;
 
             if ((DateTime.UtcNow - startTime).TotalMilliseconds > timeoutMs)

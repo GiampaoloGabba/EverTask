@@ -43,7 +43,7 @@ public class MonthInterval : IInterval
             throw new ArgumentException("Invalid Month Interval, the interval cannot be negative.",
                 nameof(MonthInterval));
 
-        if (Interval == 0 && !OnMonths.Any())
+        if (Interval == 0 && OnMonths.Length == 0)
             throw new ArgumentException("Invalid Month Interval, you must specify at least one month.",
                 nameof(MonthInterval));
 
@@ -77,7 +77,7 @@ public class MonthInterval : IInterval
         {
             nextMonth = nextMonth.FindFirstOccurrenceOfDayOfWeekInMonth(OnFirst.Value);
         }
-        else if (OnDays.Any())
+        else if (OnDays.Length != 0)
         {
             nextMonth = nextMonth.NextValidDay(OnDays);
         }
@@ -90,7 +90,7 @@ public class MonthInterval : IInterval
         }
         // If no day specification (OnFirst, OnDays, OnDay), keep the day from AddMonths()
 
-        if (OnMonths.Any())
+        if (OnMonths.Length != 0)
             nextMonth = nextMonth.NextValidMonth(OnMonths);
 
         return nextMonth.GetNextRequestedTime(current, OnTimes, false);

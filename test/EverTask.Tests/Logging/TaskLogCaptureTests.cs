@@ -662,7 +662,7 @@ public class TaskLogCaptureTests
             maxPersistedLogs: 100);
 
         // Act
-        capture.LogInformation("Simple message", Array.Empty<object>());
+        capture.LogInformation("Simple message", []);
 
         // Assert
         var logs = capture.GetPersistedLogs();

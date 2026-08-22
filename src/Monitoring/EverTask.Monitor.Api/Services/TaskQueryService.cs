@@ -192,9 +192,9 @@ public class TaskQueryService : ITaskQueryService
 
         // Apply level filter if specified. Materialized once: the count and the page below both
         // enumerate it, and re-running the predicate per enumeration is pure waste.
-        IReadOnlyList<TaskExecutionLog> filteredLogs = string.IsNullOrWhiteSpace(levelFilter)
-            ? allLogs
-            : allLogs.Where(l => l.Level.Equals(levelFilter, StringComparison.OrdinalIgnoreCase)).ToList();
+        var filteredLogs = string.IsNullOrWhiteSpace(levelFilter)
+                               ? allLogs
+                               : allLogs.Where(l => l.Level.Equals(levelFilter, StringComparison.OrdinalIgnoreCase)).ToList();
 
         var totalCount = filteredLogs.Count;
 

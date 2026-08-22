@@ -17,7 +17,7 @@ internal static class HandlerRegistrar
         foreach (var type in assembliesToScan.SelectMany(a => a.DefinedTypes))
         {
             var interfaceTypes = type.FindInterfacesThatClose(requestInterface).ToArray();
-            if (!interfaceTypes.Any()) continue;
+            if (interfaceTypes.Length == 0) continue;
 
             if (type.IsOpenGeneric())
             {

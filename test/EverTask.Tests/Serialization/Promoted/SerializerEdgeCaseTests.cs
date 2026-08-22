@@ -64,7 +64,7 @@ public class SerializerEdgeCaseTests
         var original = new ComplexTask(
             OrderId: Guid.Empty, Count: 0, BigNumber: 0, Amount: 0m, Ratio: 0, Enabled: false,
             When: default, Ttl: TimeSpan.Zero, Priority: PocPriority.Low, Note: null,
-            Ids: new List<int>(), Tags: Array.Empty<string>(),
+            Ids: new List<int>(), Tags: [],
             Metadata: new Dictionary<string, string>(), Nested: new NestedDto("", 0));
 
         var r = Rt(original);

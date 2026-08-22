@@ -33,7 +33,7 @@ public class DayInterval : IInterval
     }
     // public set (coherent with MonthInterval.OnDays/OnMonths): an internal setter is silently dropped by
     // STJ on read, losing the OnDays schedule constraint on recovery (F1/B2).
-    public DayOfWeek[] OnDays   { get; set; } = Array.Empty<DayOfWeek>();
+    public DayOfWeek[] OnDays   { get; set; } = [];
 
     public void Validate()
     {
@@ -41,7 +41,7 @@ public class DayInterval : IInterval
             throw new ArgumentException("Invalid Day Interval, the interval cannot be negative.",
                 nameof(DayInterval));
 
-        if (Interval == 0 && !OnDays.Any())
+        if (Interval == 0 && OnDays.Length == 0)
             throw new ArgumentException("Invalid Day Interval, you must specify at least one day.",
                 nameof(DayInterval));
 
@@ -60,7 +60,7 @@ public class DayInterval : IInterval
 
         // OnDays (top-level OnDays(...) builds DayInterval(0, days)): fire on EVERY listed day of week,
         // every week (CU7) — not once on the first matching day.
-        if (OnDays.Any())
+        if (OnDays.Length != 0)
             return current.NextDayOfWeekSlot(OnDays, OnTimes, weekStride: 1);
 
         // No specific days: every Interval days, at the configured time(s).

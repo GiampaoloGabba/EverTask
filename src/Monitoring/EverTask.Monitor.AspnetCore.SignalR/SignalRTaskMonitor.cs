@@ -1,4 +1,4 @@
-using EverTask.Logger;
+﻿using EverTask.Logger;
 using EverTask.Monitoring;
 using EverTask.Worker;
 using Microsoft.AspNetCore.SignalR;

@@ -52,7 +52,7 @@ public class MonthIntervalTests
     [Fact]
     public void Month_Validate_ThrowsArgumentException()
     {
-        var interval = new MonthInterval(0, Array.Empty<int>());
+        var interval = new MonthInterval(0, []);
 
         var exception = Record.Exception(() => interval.Validate());
 

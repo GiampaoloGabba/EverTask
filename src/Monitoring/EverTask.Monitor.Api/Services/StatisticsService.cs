@@ -163,7 +163,7 @@ public class StatisticsService : IStatisticsService
             DateRange.Today => (now.Date, 1),              // Hourly buckets
             DateRange.Week => (now.AddDays(-7), 24),       // Daily buckets
             DateRange.Month => (now.AddMonths(-1), 24),    // Daily buckets
-            DateRange.All => (allTasks.Any() ? allTasks.Min(t => t.CreatedAtUtc) : now.AddMonths(-1), 24 * 7), // Weekly buckets
+            DateRange.All => (allTasks.Length != 0 ? allTasks.Min(t => t.CreatedAtUtc) : now.AddMonths(-1), 24 * 7), // Weekly buckets
             _ => (now.Date, 1)
         };
 

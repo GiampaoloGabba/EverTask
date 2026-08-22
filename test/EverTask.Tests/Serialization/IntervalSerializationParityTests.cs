@@ -83,7 +83,7 @@ public class IntervalSerializationParityTests
     [InlineData(3, false)]  // pure cadence, no OnDays
     public void DayInterval_cross_product_interval_and_onDays(int interval, bool withDays)
     {
-        var days = withDays ? new[] { DayOfWeek.Monday, DayOfWeek.Wednesday } : Array.Empty<DayOfWeek>();
+        var days = withDays ? [DayOfWeek.Monday, DayOfWeek.Wednesday] : Array.Empty<DayOfWeek>();
         var original = withDays ? new DayInterval(interval, days) : new DayInterval(interval);
 
         var restored = EverTaskJson.Deserialize<DayInterval>(LegacyJson(original))!;

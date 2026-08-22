@@ -40,7 +40,7 @@ public class WeekInterval : IInterval
             throw new ArgumentException("Invalid Week Interval, the interval cannot be negative.",
                 nameof(WeekInterval));
 
-        if (Interval == 0 && !OnDays.Any())
+        if (Interval == 0 && OnDays.Length == 0)
             throw new ArgumentException("Invalid Week Interval, you must specify at least one day.",
                 nameof(WeekInterval));
 
@@ -58,7 +58,7 @@ public class WeekInterval : IInterval
 
         // OnDays: fire on EVERY listed day of the week, advancing by Interval weeks only when the
         // current week's slots are exhausted (CU7) — not once per week on the first matching day.
-        if (OnDays.Any())
+        if (OnDays.Length != 0)
             return current.NextDayOfWeekSlot(OnDays, OnTimes, weekStride: Interval);
 
         // No specific days: once every Interval weeks, on the same day-of-week, at the configured time.

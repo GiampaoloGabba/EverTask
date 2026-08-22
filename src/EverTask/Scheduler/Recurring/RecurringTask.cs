@@ -444,7 +444,7 @@ public class RecurringTask
         {
             if (HourInterval.Interval > 0)
                 parts.Add($"every {HourInterval.Interval} hour(s)");
-            if (HourInterval.OnHours.Any())
+            if (HourInterval.OnHours.Length != 0)
                 parts.Add($"at hour(s) {string.Join(" - ", HourInterval.OnHours)}");
             if (HourInterval.OnMinute != null)
                 parts.Add($"at minute {HourInterval.OnMinute}");
@@ -456,9 +456,9 @@ public class RecurringTask
         {
             if (DayInterval.Interval > 0)
                 parts.Add($"every {DayInterval.Interval} day(s)");
-            if (DayInterval.OnTimes.Any())
+            if (DayInterval.OnTimes.Length != 0)
                 parts.Add($"at {string.Join(" - ", DayInterval.OnTimes)}");
-            if (DayInterval.OnDays.Any())
+            if (DayInterval.OnDays.Length != 0)
                 parts.Add($"on {string.Join(" - ", DayInterval.OnDays)}");
         }
 
@@ -466,7 +466,7 @@ public class RecurringTask
         {
             if (WeekInterval.Interval > 0)
                 parts.Add($"every {WeekInterval.Interval} week(s)");
-            if (WeekInterval.OnDays.Any())
+            if (WeekInterval.OnDays.Length != 0)
                 parts.Add($"on {string.Join(" - ", WeekInterval.OnDays)}");
         }
 
@@ -478,11 +478,11 @@ public class RecurringTask
                 parts.Add($"on day {MonthInterval.OnDay}");
             if (MonthInterval.OnFirst != null)
                 parts.Add($"on first {MonthInterval.OnFirst}");
-            if (MonthInterval.OnDays.Any())
+            if (MonthInterval.OnDays.Length != 0)
                 parts.Add($"on {string.Join(" - ", MonthInterval.OnDays)}");
-            if (MonthInterval.OnTimes.Any())
+            if (MonthInterval.OnTimes.Length != 0)
                 parts.Add($"at {string.Join(" - ", MonthInterval.OnTimes)}");
-            if (MonthInterval.OnMonths.Any())
+            if (MonthInterval.OnMonths.Length != 0)
                 parts.Add($"in {string.Join(" - ", MonthInterval.OnMonths)}");
         }
 
