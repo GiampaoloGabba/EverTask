@@ -17,7 +17,7 @@ aux_links:
     - "//www.nuget.org/packages/EverTask"
 
 # Footer content
-footer_content: "Copyright &copy; 2025 Giampaolo Gabba. Distributed under the APACHE 2.0 License."
+footer_content: "Copyright &copy; 2026 Giampaolo Gabba. Distributed under the MIT License."
 
 # Color scheme
 color_scheme: light

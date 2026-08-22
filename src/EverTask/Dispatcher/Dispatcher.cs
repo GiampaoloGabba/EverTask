@@ -6,10 +6,6 @@ using EverTask.Scheduler.Recurring.Builder;
 
 namespace EverTask.Dispatcher;
 
-// This code was adapted from MediatR by Jimmy Bogard.
-// Specific inspiration was taken from the Mediator.cs file.
-// Source: https://github.com/jbogard/MediatR/blob/master/src/MediatR/Mediator.cs
-
 /// <inheritdoc />
 public class Dispatcher(
     IServiceProvider serviceProvider,

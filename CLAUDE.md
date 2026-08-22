@@ -63,15 +63,13 @@ them before touching the dispatcher, the worker or a recovery filter.
 
 - **Central Package Management**: versions go in `Directory.Packages.props`, never in a `.csproj`
 - **Version**: `Directory.Build.props`, lockstep across all packages (current 3.11.0)
-- **MediatR attribution**: `Dispatcher.cs`, `TaskHandlerExecutor.cs`, `TaskHandlerWrapper.cs`,
-  `HandlerRegistrar.cs` are adapted from MediatR (Apache 2.0) — keep the attribution comments
 
 ## Module-Specific Guidance
 
 | Module | Local CLAUDE.md |
 |--------|-----------------|
 | Core (dispatcher, worker, queue/recovery invariants) | `src/EverTask/CLAUDE.md` |
-| Abstractions (payload contract, retry, analyzers ET0001–ET0009) | `src/EverTask.Abstractions/CLAUDE.md` |
+| Abstractions (payload contract, retry, analyzers ET0001–ET0012) | `src/EverTask.Abstractions/CLAUDE.md` |
 | Rate limiting (hard invariants) | `src/EverTask/RateLimiting/CLAUDE.md` |
 | Recurring (cron, builder, skip-forward) | `src/EverTask/Scheduler/Recurring/CLAUDE.md` |
 | EF Core base + the four providers | `src/Storage/EverTask.Storage.{EfCore,SqlServer,Postgres,MySql,Sqlite}/CLAUDE.md` |

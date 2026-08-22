@@ -54,6 +54,10 @@ through their serialized members (closure walk, visited-set + depth bound), mirr
 | ET0007 | Warning | ≥2 public constructors, none parameterless or `[JsonConstructor]` → STJ throws on recovery (records & single-ctor are OK) | — |
 | ET0008 | Warning | net8.0 compilation sets `EnableOpenApiDocument = true` or calls `AddMonitoringApiScalar()` — both no-ops there (the built-in OpenAPI generator is net9+); separate `MonitoringOpenApiAnalyzer`, category `EverTask.Monitoring` | — |
 | ET0009 | Warning | Compile-time-constant retry delay, timeout or audit cleanup interval above the maximum timer duration (`uint.MaxValue - 1` ms, ~49.7 days); separate `TimerDelayLimitAnalyzer`, category `EverTask.Resilience` | — |
+| ET0011 | Warning | Concrete open-generic type implementing `IEverTaskHandler<>` — the assembly scan skips it, so it is never registered (compile-time mirror of the G1 startup warning); `HandlerRegistrationAnalyzer`, category `EverTask.Registration` | — |
+| ET0012 | Warning | ≥2 concrete handlers for the same closed `IEverTaskHandler<TTask>` in one compilation — only the first discovered is registered (mirror of G2; compilation-end, so the IDE shows it with full-solution analysis; cross-assembly duplicates stay a startup warning) | — |
+
+ET0010 is RESERVED for the durable-occurrences branch (issue #34) — never reuse it here.
 
 Each rule is suppressible/promotable per-member via `dotnet_diagnostic.ETxxxx.severity` in `.editorconfig`.
 

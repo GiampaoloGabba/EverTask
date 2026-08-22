@@ -1,0 +1,170 @@
+{
+ "target": "EverTask-mit feature/mit-license (uncommitted vs master 03067c4)",
+ "profile": {
+  "tier": "Completo",
+  "finders": "fable x3",
+  "codex": "Full xhigh x3 (sol)",
+  "skeptics": "opus high x2",
+  "jury": "codex xhigh"
+ },
+ "findings": [
+  {
+   "id": "D",
+   "title": "G2 warning uses simple Type.Name (ambiguous on name collisions; cites assembly order without printing assemblies)",
+   "severity": "P3",
+   "sources": [
+    "codex-edge",
+    "fable-edge"
+   ],
+   "skeptics": {
+    "materiality": "refuted (inherited verbatim; G1 already FullName; no consumer contract; FullName worse for generics)",
+    "counterexample": "confirmed as P3 polish (undecidable only on name collision; kernel: cites assembly order, prints no assembly)"
+   },
+   "jury": "FOLLOW-UP",
+   "disposition": "follow-up issue post-merge (friendly formatter + assembly simple name)"
+  },
+  {
+   "id": "A",
+   "title": "HandlerBucket.AddDuplicate O(D^2) duplicate guard",
+   "severity": "perf-nit",
+   "sources": [
+    "codex-perf",
+    "fable-perf"
+   ],
+   "disposition": "accepted non-defect; break-even ~D>1000 dups for ONE task; HashSet-over-threshold if ever real"
+  },
+  {
+   "id": "E",
+   "title": "RTLE test did not prove all-or-nothing registration",
+   "severity": "test-quality",
+   "sources": [
+    "codex-edge",
+    "fable-edge"
+   ],
+   "disposition": "FIXED: scans [good,broken], asserts empty services"
+  },
+  {
+   "id": "F",
+   "title": "double-scan test blind to Duplicates.Contains guard",
+   "severity": "test-quality",
+   "sources": [
+    "codex-edge",
+    "fable-edge"
+   ],
+   "disposition": "FIXED: single Triplicate warning with losers listed once"
+  },
+  {
+   "id": "I",
+   "title": "lazy-executor test never touched GetOrResolveHandler",
+   "severity": "test-quality",
+   "sources": [
+    "fable-edge"
+   ],
+   "disposition": "FIXED: lazy TaskHandlerExecutor with loser AQN resolved via real path"
+  },
+  {
+   "id": "J",
+   "title": "isHandler flag had no negative open-generic non-handler fixture",
+   "severity": "test-quality",
+   "sources": [
+    "fable-edge"
+   ],
+   "disposition": "FIXED: OpenGenericNotAHandler<T> + silence asserts"
+  },
+  {
+   "id": "K",
+   "title": "parity contract under-declared the AmbiguousMatchException crash fix",
+   "severity": "P2-docs",
+   "sources": [
+    "fable-parity",
+    "codex-parity"
+   ],
+   "disposition": "FIXED (docs): CHANGELOG qualified; declared in design-decisions.md"
+  },
+  {
+   "id": "M",
+   "title": "worktree base stale (master~1, missing flaky-fix commit 03067c4)",
+   "severity": "P2-ops",
+   "sources": [
+    "fable-perf"
+   ],
+   "disposition": "FIXED: ff-merged to 03067c4"
+  },
+  {
+   "id": "L",
+   "title": "internal-only: double-scan no longer emits nonsense self-duplicate G2",
+   "severity": "nit",
+   "sources": [
+    "fable-parity",
+    "codex-parity"
+   ],
+   "disposition": "declared deviation (unreachable from public API)"
+  },
+  {
+   "id": "B",
+   "title": "isOpen probes paid per concrete type",
+   "severity": "nit",
+   "sources": [
+    "codex-perf",
+    "fable-perf"
+   ],
+   "disposition": "dropped: 2 flag reads/type, below noise"
+  },
+  {
+   "id": "C",
+   "title": "concrete self-binding re-attempted per contract",
+   "severity": "nit",
+   "sources": [
+    "codex-perf"
+   ],
+   "disposition": "dropped: parity with old, TryAdd no-op"
+  },
+  {
+   "id": "G",
+   "title": "pathological fixtures pollute shared test assembly scans",
+   "severity": "test-quality",
+   "sources": [
+    "codex-edge"
+   ],
+   "disposition": "dropped/declared: existing project practice; grep shows no test affected"
+  },
+  {
+   "id": "H",
+   "title": "RegisterTasksFromAssembly(null!) -> late NRE",
+   "severity": "nit",
+   "sources": [
+    "codex-edge"
+   ],
+   "disposition": "follow-up: pre-existing config-boundary validation"
+  },
+  {
+   "id": "N",
+   "title": "Run-access emitted assemblies not collectible",
+   "severity": "nit",
+   "sources": [
+    "codex-perf",
+    "fable-perf"
+   ],
+   "disposition": "accepted: fixed O(5) per testhost"
+  }
+ ],
+ "parity_ok": "descriptors/order/lifetime/TryAdd identical; contravariance end-state identical; inheritance covered by GetInterfaces flattening; G1/G2 triggers+order identical; consumers unbroken; CouldCloseTo dead; license chores complete, no dangling refs",
+ "benchmark": {
+  "old_us_op": 1064.25,
+  "new_us_op": 74.09,
+  "old_bytes_op": 699630,
+  "new_bytes_op": 80494,
+  "descriptors_both": 193,
+  "note": "old impl CRASHES (AmbiguousMatchException) scanning the new fixture assembly - latent bug proven live"
+ },
+ "coverage": {
+  "failed_lenses": [],
+  "not_covered": [
+   "GetInterfaces-throwing TypeInfo",
+   "unbaked TypeBuilder",
+   "generic/nested name collisions in warning text (follow-up D)",
+   "null assembly elements (pre-existing H)"
+  ],
+  "legal": "technical review, not a legal clean-room/provenance opinion"
+ }
+}
