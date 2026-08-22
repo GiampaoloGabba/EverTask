@@ -10,6 +10,9 @@
     <PackageReference Include="Microsoft.Extensions.Hosting" />
 
     <PackageReference Include="Moq" />
+    <!-- Legacy-producer tests write Newtonsoft rows on purpose; explicit because Testcontainers
+         4.14 no longer brings Newtonsoft.Json transitively -->
+    <PackageReference Include="Newtonsoft.Json" />
     
     <PackageReference Include="xunit" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />

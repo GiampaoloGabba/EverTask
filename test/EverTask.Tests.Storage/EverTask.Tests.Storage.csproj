@@ -12,6 +12,9 @@
     <PackageReference Include="Microsoft.Extensions.Logging" />
     
     <PackageReference Include="Moq" />
+    <!-- Legacy-producer tests write Newtonsoft rows on purpose; explicit because Testcontainers
+         4.14 no longer brings Newtonsoft.Json transitively -->
+    <PackageReference Include="Newtonsoft.Json" />
     <PackageReference Include="Respawn" />
     <!-- Direct SSH.NET reference: overrides Testcontainers' vulnerable transitive (GHSA-q939-rpr3-3284) -->
     <PackageReference Include="SSH.NET" />
