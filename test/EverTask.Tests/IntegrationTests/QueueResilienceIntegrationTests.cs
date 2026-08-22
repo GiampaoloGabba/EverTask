@@ -772,7 +772,14 @@ public class QueueResilienceIntegrationTests : IsolatedIntegrationTestBase
         var scheduler = Host!.Services.GetRequiredService<IScheduler>();
         scheduler.Schedule(StaleRecurringExecutor(terminalId, recurring), DateTimeOffset.UtcNow.AddMilliseconds(-50));
 
+        // Anchor the margin on the slot actually being CONSUMED - the scheduler drops the id from its
+        // queue when it dispatches it - so the wait below starts where the resurrection would start,
+        // not where the slot was merely registered.
+        await TaskWaitHelper.WaitForConditionAsync(() => !scheduler.IsScheduled(terminalId), timeoutMs: 10000);
+
         // Margin: a resurrection (the pre-fix bug) would dispatch + execute within a scheduler tick.
+        // This one stays a delay on purpose - the assertion below is a NON-event (nothing must be
+        // re-queued or executed), and a poll cannot wait for something that must never happen.
         await Task.Delay(1500);
 
         _state.ExecutedIndexes.ShouldNotContain(-1);
@@ -825,6 +832,10 @@ public class QueueResilienceIntegrationTests : IsolatedIntegrationTestBase
         var scheduler = Host.Services.GetRequiredService<IScheduler>();
         scheduler.Schedule(StaleRecurringExecutor(id, recurring), DateTimeOffset.UtcNow.AddMilliseconds(-50));
 
+        // Same as the test above: anchor on the slot being consumed (the series is already exhausted,
+        // so this stale registration is the only thing the scheduler holds for the id), then keep an
+        // explicit margin - the assertion is a NON-event and has nothing positive left to poll for.
+        await TaskWaitHelper.WaitForConditionAsync(() => !scheduler.IsScheduled(id), timeoutMs: 10000);
         await Task.Delay(1500); // margin for the (buggy) resurrection to land
 
         _state.ExecutedIndexes.Count(i => i == -1).ShouldBe(1);

@@ -21,13 +21,23 @@ public static class TestEnvironment
     public static bool IsCoverage => IsCI; // Assume coverage runs in CI
 
     /// <summary>
-    /// Returns an adaptive timeout based on the environment.
-    /// Uses local timeout for development machines, CI timeout for CI/coverage scenarios.
+    /// Returns the deadline for a polling wait: the MORE GENEROUS of the two values, whatever the
+    /// environment.
+    /// <para>
+    /// These are deadlines, not asserted bounds - every call site polls an observable and returns as
+    /// soon as it holds, so a generous value costs a green run nothing and only lengthens a run that
+    /// was going to fail anyway. Picking the tighter value off <see cref="IsCI"/> had it backwards:
+    /// none of the CI markers is set for the local run of the three target frameworks in parallel,
+    /// which is the heaviest load these tests ever see, so it got the shortest deadlines of all.
+    /// </para>
+    /// <para>
+    /// Both parameters are kept so the call sites still read as the local/CI pair they were written as.
+    /// </para>
     /// </summary>
-    /// <param name="localMs">Timeout in milliseconds for local development (tighter constraint)</param>
-    /// <param name="ciMs">Timeout in milliseconds for CI/coverage (more forgiving)</param>
-    /// <returns>Appropriate timeout for current environment</returns>
-    public static int GetTimeout(int localMs, int ciMs) => IsCI ? ciMs : localMs;
+    /// <param name="localMs">Timeout in milliseconds sized for a local run</param>
+    /// <param name="ciMs">Timeout in milliseconds sized for CI/coverage</param>
+    /// <returns>The longer of the two timeouts</returns>
+    public static int GetTimeout(int localMs, int ciMs) => Math.Max(localMs, ciMs);
 
     /// <summary>
     /// Returns an adaptive iteration count based on the environment.

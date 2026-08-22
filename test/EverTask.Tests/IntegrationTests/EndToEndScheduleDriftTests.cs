@@ -20,10 +20,12 @@ public class EndToEndScheduleDriftTests : IsolatedIntegrationTestBase
             channelCapacity: 10,
             maxDegreeOfParallelism: 5);
 
-        // Act: Dispatch recurring task every 1 second
+        // Act: Dispatch recurring task every 1 second, capped at the 3 runs the assertions read. The
+        // cap is what closes the series: without it a 1s cadence keeps firing through the assertions
+        // and into the host teardown, whose stop timeout it can outlive.
         var taskId = await Dispatcher.Dispatch(
             new TestTaskRecurringSeconds(),
-            recurring => recurring.Schedule().Every(1).Seconds());
+            recurring => recurring.Schedule().Every(1).Seconds().MaxRuns(3));
 
         // Wait for 3 executions
         await WaitForRecurringRunsAsync(taskId, expectedRuns: 3, timeoutMs: 10000);
@@ -54,10 +56,13 @@ public class EndToEndScheduleDriftTests : IsolatedIntegrationTestBase
             channelCapacity: 10,
             maxDegreeOfParallelism: 5);
 
-        // Act: Dispatch recurring task with retry policy (every 2 seconds), failing twice then succeeding
+        // Act: Dispatch recurring task with retry policy (every 2 seconds), failing twice then
+        // succeeding. Capped at the 2 runs the interval assertion reads: the two failures are retries
+        // INSIDE the first run, so the run counter still reaches 2. Without the cap the series - the
+        // only one here whose handler throws - stayed alive through the assertions and into teardown.
         var taskId = await Dispatcher.Dispatch(
             new TestTaskRecurringWithFailure(FailUntilCount: 2),
-            recurring => recurring.Schedule().Every(2).Seconds());
+            recurring => recurring.Schedule().Every(2).Seconds().MaxRuns(2));
 
         // Wait for 2 successful executions (each might have retries)
         await WaitForRecurringRunsAsync(taskId, expectedRuns: 2, timeoutMs: 15000);
@@ -94,10 +99,11 @@ public class EndToEndScheduleDriftTests : IsolatedIntegrationTestBase
             channelCapacity: 10,
             maxDegreeOfParallelism: 5);
 
-        // Act: Dispatch recurring task with custom timeout (every 2 seconds)
+        // Act: Dispatch recurring task with custom timeout (every 2 seconds), capped at the 2 runs the
+        // grid assertion reads
         var taskId = await Dispatcher.Dispatch(
             new TestTaskRecurringSeconds(),
-            recurring => recurring.Schedule().Every(2).Seconds());
+            recurring => recurring.Schedule().Every(2).Seconds().MaxRuns(2));
 
         // Wait for 2 executions
         var task = await WaitForRecurringRunsAsync(taskId, expectedRuns: 2, timeoutMs: 10000);
@@ -126,18 +132,19 @@ public class EndToEndScheduleDriftTests : IsolatedIntegrationTestBase
             channelCapacity: 10,
             maxDegreeOfParallelism: 5);
 
-        // Act: Dispatch 3 different recurring tasks with different intervals
+        // Act: Dispatch 3 different recurring tasks with different intervals, each capped at the 2 runs
+        // its grid assertion reads
         var task1Id = await Dispatcher.Dispatch(
             new TestTaskRecurringSeconds(),
-            recurring => recurring.Schedule().Every(1).Seconds());
+            recurring => recurring.Schedule().Every(1).Seconds().MaxRuns(2));
 
         var task2Id = await Dispatcher.Dispatch(
             new TestTaskRecurringMinutes(),
-            recurring => recurring.Schedule().Every(2).Seconds());
+            recurring => recurring.Schedule().Every(2).Seconds().MaxRuns(2));
 
         var task3Id = await Dispatcher.Dispatch(
             new TestTaskDelayedRecurring(delayMs: 50),
-            recurring => recurring.Schedule().Every(3).Seconds());
+            recurring => recurring.Schedule().Every(3).Seconds().MaxRuns(2));
 
         // Wait for all tasks to complete at least 2 runs
         // Adaptive: Local 8s/12s, CI 20s/30s (coverage overhead)
@@ -189,14 +196,14 @@ public class EndToEndScheduleDriftTests : IsolatedIntegrationTestBase
                 .AddMemoryStorage(),
             configureEverTask: cfg => cfg.SetMaxDegreeOfParallelism(10));
 
-        // Act: Dispatch recurring tasks with unique task keys
+        // Act: Dispatch recurring tasks with unique task keys, each capped at the 2 runs asserted below
         var task1Id = await Dispatcher.Dispatch(
             new TestTaskRecurringQueueShard1(),
-            recurring => recurring.Schedule().Every(1).Seconds());
+            recurring => recurring.Schedule().Every(1).Seconds().MaxRuns(2));
 
         var task2Id = await Dispatcher.Dispatch(
             new TestTaskRecurringQueueShard2(),
-            recurring => recurring.Schedule().Every(1).Seconds());
+            recurring => recurring.Schedule().Every(1).Seconds().MaxRuns(2));
 
         // Wait for both tasks to complete runs
         // Adaptive: Local 8s, CI 20s (coverage overhead)
@@ -315,8 +322,10 @@ public class EndToEndScheduleDriftTests : IsolatedIntegrationTestBase
         // Wait for 10 executions
         var task = await WaitForRecurringRunsAsync(taskId, expectedRuns: 10, timeoutMs: 15000);
 
-        // Get all completed runs
-        var completedRuns = task.RunsAudits
+        // Get all completed runs. This series is deliberately NOT capped - the drift assertion below
+        // reads the NextRunUtc of a LIVE series - so the audits keep growing while these lines run and
+        // have to be snapshotted before they are enumerated.
+        var completedRuns = task.SnapshotRunsAudits()
             .Where(a => a.Status == QueuedTaskStatus.Completed)
             .OrderBy(a => a.ExecutedAt)
             .Take(10)

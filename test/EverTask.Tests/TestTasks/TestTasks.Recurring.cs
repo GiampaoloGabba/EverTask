@@ -4,17 +4,9 @@ namespace EverTask.Tests;
 
 // Test tasks for recurring execution scenarios with various interval types
 
-public class TestTaskRecurringSeconds() : IEverTask
-{
-    // Legacy static property for backward compatibility
-    public static int Counter { get; set; } = 0;
-}
+public class TestTaskRecurringSeconds : IEverTask;
 
-public class TestTaskRecurringMinutes() : IEverTask
-{
-    // Legacy static property for backward compatibility
-    public static int Counter { get; set; } = 0;
-}
+public class TestTaskRecurringMinutes : IEverTask;
 
 /// <summary>
 /// Recurring task whose handler throws on its first <paramref name="FailUntilCount"/> invocations
@@ -39,8 +31,6 @@ public class TestTaskRecurringSecondsHandler : EverTaskHandler<TestTaskRecurring
     {
         await Task.Delay(100, cancellationToken);
 
-        // Update both static (legacy) and state manager (new approach)
-        TestTaskRecurringSeconds.Counter++;
         _stateManager?.IncrementCounter(nameof(TestTaskRecurringSeconds));
     }
 }
@@ -58,8 +48,6 @@ public class TestTaskRecurringMinutesHandler : EverTaskHandler<TestTaskRecurring
     {
         await Task.Delay(100, cancellationToken);
 
-        // Update both static (legacy) and state manager (new approach)
-        TestTaskRecurringMinutes.Counter++;
         _stateManager?.IncrementCounter(nameof(TestTaskRecurringMinutes));
     }
 }
@@ -106,15 +94,9 @@ public class TestTaskDelayedRecurringHandler : EverTaskHandler<TestTaskDelayedRe
 
 
 // Test tasks for queue sharding - each task has its handler with specific QueueName
-public class TestTaskRecurringQueueShard1() : IEverTask
-{
-    public static int Counter { get; set; } = 0;
-}
+public class TestTaskRecurringQueueShard1 : IEverTask;
 
-public class TestTaskRecurringQueueShard2() : IEverTask
-{
-    public static int Counter { get; set; } = 0;
-}
+public class TestTaskRecurringQueueShard2 : IEverTask;
 
 public class TestTaskRecurringQueueShard1Handler : EverTaskHandler<TestTaskRecurringQueueShard1>
 {
@@ -132,7 +114,6 @@ public class TestTaskRecurringQueueShard1Handler : EverTaskHandler<TestTaskRecur
                                           cancellationToken)
     {
         await Task.Delay(100, cancellationToken);
-        TestTaskRecurringQueueShard1.Counter++;
         _stateManager?.IncrementCounter(nameof(TestTaskRecurringQueueShard1));
     }
 }
@@ -153,7 +134,6 @@ public class TestTaskRecurringQueueShard2Handler : EverTaskHandler<TestTaskRecur
                                           cancellationToken)
     {
         await Task.Delay(100, cancellationToken);
-        TestTaskRecurringQueueShard2.Counter++;
         _stateManager?.IncrementCounter(nameof(TestTaskRecurringQueueShard2));
     }
 }

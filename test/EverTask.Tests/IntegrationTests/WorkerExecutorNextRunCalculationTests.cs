@@ -39,7 +39,9 @@ public class WorkerExecutorNextRunCalculationTests : IsolatedIntegrationTestBase
         task.CurrentRunCount?.ShouldBeGreaterThanOrEqualTo(1);
         task.NextRunUtc.ShouldNotBeNull();
 
-        var firstRun = task.RunsAudits
+        // The series has no MaxRuns - the NextRunUtc asserted below only exists while it is alive - so
+        // its audits keep growing under the storage lock while this runs: snapshot before enumerating.
+        var firstRun = task.SnapshotRunsAudits()
             .Where(a => a.Status == QueuedTaskStatus.Completed)
             .OrderBy(a => a.ExecutedAt)
             .First();
@@ -70,10 +72,12 @@ public class WorkerExecutorNextRunCalculationTests : IsolatedIntegrationTestBase
         // Arrange: Create a task that delays execution to simulate late execution
         await CreateIsolatedHostAsync();
 
-        // Dispatch recurring task every 3 seconds that takes 1 second to execute
+        // Dispatch recurring task every 3 seconds that takes 1 second to execute, capped at the 2 runs
+        // the drift assertion reads: nothing here needs the series alive, and the cap keeps it from
+        // firing into host teardown (and from appending to the run audits while they are enumerated).
         var taskId = await Dispatcher.Dispatch(
             new TestTaskDelayedRecurring(delayMs: 1000),
-            recurring => recurring.Schedule().Every(3).Seconds());
+            recurring => recurring.Schedule().Every(3).Seconds().MaxRuns(2));
 
         // Wait for 2 executions to verify consistent scheduling
         await TaskWaitHelper.WaitForRecurringRunsAsync(Storage, taskId, expectedRuns: 2, timeoutMs: 10000);
@@ -92,7 +96,7 @@ public class WorkerExecutorNextRunCalculationTests : IsolatedIntegrationTestBase
             .OrderBy(a => a.ExecutedAt)
             .ToList();
 
-        completedRuns.Count.ShouldBeGreaterThanOrEqualTo(2);
+        completedRuns.Count.ShouldBe(2);
 
         // Assert: Time between runs should be approximately 3 seconds (interval)
         // NOT 3 seconds + task execution time (which would indicate drift)
@@ -215,8 +219,10 @@ public class WorkerExecutorNextRunCalculationTests : IsolatedIntegrationTestBase
         task.CurrentRunCount.HasValue.ShouldBeTrue();
         task.CurrentRunCount?.ShouldBeGreaterThanOrEqualTo(3);
 
-        // Get all completed runs
-        var completedRuns = task.RunsAudits
+        // Get all completed runs. The series is deliberately NOT capped - the assertion below reads the
+        // NextRunUtc of a LIVE series - so the audits keep growing while these lines run and have to be
+        // snapshotted before they are enumerated.
+        var completedRuns = task.SnapshotRunsAudits()
             .Where(a => a.Status == QueuedTaskStatus.Completed)
             .OrderBy(a => a.ExecutedAt)
             .Take(3)

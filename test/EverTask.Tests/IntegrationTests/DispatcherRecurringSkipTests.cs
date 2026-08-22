@@ -195,8 +195,10 @@ public class DispatcherRecurringSkipTests : IsolatedIntegrationTestBase
         var firstNextRun = taskAfterFirstRun.NextRunUtc;
         firstNextRun.ShouldNotBeNull();
 
-        // Get the last execution time from audits
-        var lastExecution = taskAfterFirstRun.RunsAudits
+        // Get the last execution time from audits. The series has no MaxRuns - the NextRunUtc asserted
+        // above only exists while it is alive - so its audits keep growing under the storage lock while
+        // this runs and must be snapshotted before they are enumerated.
+        var lastExecution = taskAfterFirstRun.SnapshotRunsAudits()
                                              .Where(a => a.Status == QueuedTaskStatus.Completed)
                                              .OrderByDescending(a => a.ExecutedAt)
                                              .FirstOrDefault();

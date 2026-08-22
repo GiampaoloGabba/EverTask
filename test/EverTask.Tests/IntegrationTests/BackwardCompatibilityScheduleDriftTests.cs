@@ -130,10 +130,14 @@ public class BackwardCompatibilityScheduleDriftTests : IsolatedIntegrationTestBa
             channelCapacity: 10,
             maxDegreeOfParallelism: 5);
 
-        // ✅ Create recurring task from the start
+        // ✅ Create recurring task from the start, capped at the 2 runs the grid assertion reads: the
+        // cap ends the series before the assertions instead of leaving it firing into host teardown,
+        // and it is what makes the run audits below safe to enumerate off the live storage instance.
+        // (The two tests above cannot be capped the same way - they overwrite the persisted schedule
+        // with legacy JSON, which carries no MaxRuns.)
         var taskId = await Dispatcher.Dispatch(
             new TestTaskRecurringSeconds(),
-            recurring => recurring.Schedule().Every(2).Seconds());
+            recurring => recurring.Schedule().Every(2).Seconds().MaxRuns(2));
 
         // Simulate old behavior: NextRunUtc was calculated from UtcNow (not ExecutionTime)
         var tasks = await Storage.Get(t => t.Id == taskId);
