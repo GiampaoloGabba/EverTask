@@ -555,3 +555,46 @@ fabric.properties
 
 # EverTask load harness generated reports
 benchmarks/results/
+/review/todo/b6-ievertaskserializer-pluggable.md
+/review/todo/maxruns-skip-counting-configurability.md
+/review/todo/scheduler-priority-queue-indexed-heap.md
+/review/_codex-verdicts.json
+/review/_fix-verification.md
+/review/_opus-findings.json
+/review/_recovered-findings.json
+/review/_review-state.md
+/review/_suspect-verdicts.json
+/review/_usp-completerecurringrun-findings.json
+/review/dbcontext-pooling-adversarial-review.md
+/review/dbcontext-pooling-adversarial-review-data.json
+/review/dbcontext-pooling-refactor.md
+/review/evertask-fix-plan.md
+/review/evertask-option-b-ratelimit-adversarial-review.md
+/review/evertask-perf-plan.md
+/review/evertask-pipeline-deep-review.md
+/review/execlog-retention-deep-review.md
+/review/execlog-retention-fix-plan.md
+/review/execlog-retention-review-data.json
+/review/execution-log-retention.md
+/review/f7-f8-maxruns-accounting-debt.md
+/review/mysql-provider-decisions.md
+/review/mysql-provider-plan.md
+/review/newtonsoft-removal-feasibility.md
+/review/newtonsoft-removal-poc-results.md
+/review/newtonsoft-stj-golive-fix-plan.md
+/review/newtonsoft-stj-golive-review.data.json
+/review/newtonsoft-stj-golive-review.md
+/review/newtonsoft-stj-migration-deep-review.data.json
+/review/newtonsoft-stj-migration-deep-review.md
+/review/newtonsoft-stj-migration-fix-plan.md
+/review/postgres-provider-decisions.md
+/review/postgres-provider-plan.md
+/review/postgres-provider-review.json
+/review/recurring-calendar-skip-forward.md
+/review/recurring-skipforward-deep-review.md
+/review/recurring-skipforward-deep-review.raw.json
+/review/usp-completerecurringrun-plan-review.md
+/review/usp-completerecurringrun-tdd-plan.md
+
+# issue23 orchestrator working files (reports are posted to GitHub)
+review/orchestrator/
