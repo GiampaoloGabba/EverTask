@@ -23,6 +23,10 @@ public class TimerSchedulerTests
         _mockWorkerQueueManager = new Mock<IWorkerQueueManager>();
         _mockLogger             = new Mock<IEverTaskLogger<PeriodicTimerScheduler>>();
 
+        // Source-generated log methods check IsEnabled before calling Log: a loose mock returns false,
+        // so without this setup no Log call would ever reach the mock and the Verify below would fail.
+        _mockLogger.Setup(l => l.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+
         // Setup the queue manager to return the default queue
         _mockWorkerQueueManager.Setup(x => x.GetQueue("default")).Returns(_mockWorkerQueue.Object);
 
@@ -86,6 +90,26 @@ public class TimerSchedulerTests
         nextrun = nextrun!.Value.AddTicks(-nextrun.Value.Ticks);
 
         Assert.Equal(nextOccourrence, nextrun);
+    }
+
+    [Fact]
+    public void Should_log_at_debug_with_the_task_id_when_a_recurring_task_is_rescheduled()
+    {
+        var nextOccourrence     = DateTimeOffset.UtcNow.AddMinutes(10);
+        var recurringTask       = new RecurringTask { MinuteInterval = new MinuteInterval(10) };
+        var taskHandlerExecutor = CreateTaskHandlerExecutor(null, recurringTask);
+
+        _timerScheduler.Schedule(taskHandlerExecutor, nextOccourrence);
+
+        _mockLogger.Verify(
+            x => x.Log(
+                LogLevel.Debug,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((v, t) =>
+                    v.ToString()!.Contains($"Scheduling task {taskHandlerExecutor.PersistenceId}")),
+                It.IsAny<Exception>(),
+                It.Is<Func<It.IsAnyType, Exception, string>>((v, t) => true)!),
+            Times.Once);
     }
 
     [Fact]

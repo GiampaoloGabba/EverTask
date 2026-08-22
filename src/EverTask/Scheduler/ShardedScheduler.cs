@@ -79,14 +79,11 @@ public class ShardedScheduler : IScheduler, IDisposable
             // The task stays in its recoverable status and is re-dispatched at the next startup.
             if (_disposed)
             {
-                _logger.LogWarning(
-                    "Shard {ShardId}: scheduler is disposed, ignoring schedule request for task {TaskId}: " +
-                    "the task stays in a recoverable status for the next startup", _shardId, item.PersistenceId);
+                _logger.ShardSchedulerDisposed(_shardId, item.PersistenceId);
                 return;
             }
 
-            _logger.LogDebug("Shard {ShardId}: Scheduling task {TaskId} for {ScheduledTime}",
-                _shardId, item.PersistenceId, scheduledTime);
+            _logger.ShardSchedulingTask(_shardId, item.PersistenceId, scheduledTime);
 
             // Latest-wins registration per PersistenceId: a previously parked entry for the same
             // task becomes stale and is discarded at dequeue time (single execution per occurrence).
@@ -155,7 +152,7 @@ public class ShardedScheduler : IScheduler, IDisposable
 
                     if (delay == Timeout.InfiniteTimeSpan)
                     {
-                        _logger.LogDebug("Shard {ShardId}: Queue empty, sleeping", _shardId);
+                        _logger.ShardQueueEmpty(_shardId);
                         await _wakeUpSignal.WaitAsync(ct).ConfigureAwait(false);
                         Interlocked.Exchange(ref _wakeUpPending, 0);
                     }
@@ -182,7 +179,7 @@ public class ShardedScheduler : IScheduler, IDisposable
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Shard {ShardId}: Error processing scheduled tasks", _shardId);
+                    _logger.ShardErrorProcessingScheduledTasks(ex, _shardId);
                 }
             }
         }
@@ -232,9 +229,7 @@ public class ShardedScheduler : IScheduler, IDisposable
                     // QueueFull: target queue saturated. DuplicateInProcess: slot fired while the
                     // previous delivery of the same task was still unwinding. Retry later without
                     // stalling this shard.
-                    _logger.LogWarning(
-                        "Shard {ShardId}: task {TaskId} not enqueued ({Result}), retrying dispatch in {RetryDelay}",
-                        _shardId, item.PersistenceId, result, _owner.FullQueueRetryDelay);
+                    _logger.ShardTaskNotEnqueued(_shardId, item.PersistenceId, result, _owner.FullQueueRetryDelay);
                     _queue.Enqueue(item, DateTimeOffset.UtcNow + _owner.FullQueueRetryDelay);
                 }
                 else
@@ -255,8 +250,7 @@ public class ShardedScheduler : IScheduler, IDisposable
                 var queueName = item.QueueName ??
                                    (item.RecurringTask != null ? QueueNames.Recurring : QueueNames.Default);
 
-                _logger.LogDebug("Shard {ShardId}: Dispatching task {TaskId} to queue '{QueueName}'",
-                    _shardId, item.PersistenceId, queueName);
+                _logger.ShardDispatchingTask(_shardId, item.PersistenceId, queueName);
 
                 // Non-blocking: a full queue must not stall this shard's loop
                 return await _queueManager.TryEnqueueImmediate(queueName, item, _shutdownToken).ConfigureAwait(false);
@@ -265,16 +259,14 @@ public class ShardedScheduler : IScheduler, IDisposable
             {
                 // Shard shutdown while dispatching: leave the task in its recoverable status,
                 // startup recovery will re-dispatch it. Marking it Failed would lose it permanently.
-                _logger.LogInformation("Shard {ShardId}: dispatch of task {TaskId} cancelled by shutdown",
-                    _shardId, item.PersistenceId);
+                _logger.ShardDispatchCancelled(_shardId, item.PersistenceId);
                 return EnqueueResult.Discarded;
             }
             catch (Exception ex)
             {
                 // Transient failure (typically storage): park and retry with backoff instead of
                 // marking Failed, which would make a one-shot task permanently unrecoverable.
-                _logger.LogError(ex, "Shard {ShardId}: unable to dispatch task {TaskId}, retrying in {RetryDelay}",
-                    _shardId, item.PersistenceId, _owner.FullQueueRetryDelay);
+                _logger.ShardUnableToDispatchTask(ex, _shardId, item.PersistenceId, _owner.FullQueueRetryDelay);
                 return EnqueueResult.QueueFull;
             }
         }
@@ -327,7 +319,7 @@ public class ShardedScheduler : IScheduler, IDisposable
         _logger     = logger;
         _shardCount = shardCount > 0 ? shardCount : Math.Max(4, Environment.ProcessorCount);
 
-        _logger.LogInformation("Initializing ShardedScheduler with {ShardCount} shards", _shardCount);
+        _logger.InitializingShardedScheduler(_shardCount);
 
         _shards = Enumerable.Range(0, _shardCount)
                             .Select(i => new Shard(i, this, queueManager, logger))

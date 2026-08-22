@@ -75,7 +75,7 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
         DateTimeOffset scheduledTime;
         if (item.RecurringTask != null && nextRecurringRun != null)
         {
-            _logger.LogInformation("Next run {NextRecurringRun}", nextRecurringRun.Value);
+            _logger.SchedulingTask(item.PersistenceId, nextRecurringRun.Value);
             scheduledTime = nextRecurringRun.Value;
         }
         else
@@ -88,9 +88,7 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
         // The task stays in its recoverable status and is re-dispatched at the next startup.
         if (_disposed)
         {
-            _logger.LogWarning(
-                "Scheduler is disposed, ignoring schedule request for task {TaskId}: " +
-                "the task stays in a recoverable status for the next startup", item.PersistenceId);
+            _logger.SchedulerDisposed(item.PersistenceId);
             return;
         }
 
@@ -155,7 +153,7 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
                 if (delay == Timeout.InfiniteTimeSpan)
                 {
                     // Coda vuota: dormi fino a quando Schedule() chiama Release()
-                    _logger.LogDebug("Queue empty, sleeping until next task scheduled");
+                    _logger.QueueEmpty();
                     await _wakeUpSignal.WaitAsync(cancellationToken).ConfigureAwait(false);
 
                     // Resetta il flag di wake-up dopo aver consumato il segnale
@@ -191,7 +189,7 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error processing scheduled tasks");
+                _logger.ErrorProcessingScheduledTasks(ex);
             }
         }
     }
@@ -257,9 +255,7 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
                 // previous delivery of the same task was still unwinding (its registration not
                 // yet released). Either way: park the task and retry later WITHOUT blocking the
                 // loop, so tasks targeting other queues keep flowing (no head-of-line blocking).
-                _logger.LogWarning(
-                    "Task {TaskId} not enqueued ({Result}), retrying dispatch in {RetryDelay}",
-                    item.PersistenceId, result, FullQueueRetryDelay);
+                _logger.TaskNotEnqueued(item.PersistenceId, result, FullQueueRetryDelay);
                 _queue.Enqueue(item, DateTimeOffset.UtcNow + FullQueueRetryDelay);
             }
             else
@@ -278,8 +274,7 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
             var queueName = item.QueueName ??
                 (item.RecurringTask != null ? QueueNames.Recurring : QueueNames.Default);
 
-            _logger.LogDebug("Dispatching scheduled task {TaskId} to queue '{QueueName}'",
-                item.PersistenceId, queueName);
+            _logger.DispatchingTask(item.PersistenceId, queueName);
 
             // Non-blocking: a full queue must not stall the scheduler loop
             return await _queueManager.TryEnqueueImmediate(queueName, item, _shutdownToken).ConfigureAwait(false);
@@ -288,15 +283,14 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
         {
             // Scheduler shutdown while dispatching: leave the task in its recoverable status,
             // startup recovery will re-dispatch it. Marking it Failed would lose it permanently.
-            _logger.LogInformation("Dispatch of task {TaskId} cancelled by scheduler shutdown", item.PersistenceId);
+            _logger.DispatchCancelled(item.PersistenceId);
             return EnqueueResult.Discarded;
         }
         catch (Exception ex)
         {
             // Transient failure (typically storage): park and retry with backoff instead of
             // marking Failed, which would make a one-shot task permanently unrecoverable.
-            _logger.LogError(ex, "Unable to dispatch task {TaskId} to queue, retrying in {RetryDelay}",
-                item.PersistenceId, FullQueueRetryDelay);
+            _logger.UnableToDispatchTask(ex, item.PersistenceId, FullQueueRetryDelay);
             return EnqueueResult.QueueFull;
         }
     }

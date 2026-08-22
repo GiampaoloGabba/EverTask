@@ -19,6 +19,10 @@ public class ShardedSchedulerTests : IDisposable
         _mockWorkerQueueManager = new Mock<IWorkerQueueManager>();
         _mockLogger = new Mock<IEverTaskLogger<ShardedScheduler>>();
 
+        // Source-generated log methods check IsEnabled before calling Log: a loose mock returns false,
+        // so without this setup no Log call would ever reach the mock and every Verify below would fail.
+        _mockLogger.Setup(l => l.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+
         // Setup the queue manager to return the default queue
         _mockWorkerQueueManager.Setup(x => x.GetQueue("default")).Returns(_mockWorkerQueue.Object);
 
@@ -328,6 +332,7 @@ public class ShardedSchedulerTests : IDisposable
         // Arrange
         var queueManagerMock = new Mock<IWorkerQueueManager>();
         var loggerMock = new Mock<IEverTaskLogger<ShardedScheduler>>();
+        loggerMock.Setup(l => l.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
 
         // Create a flag to track which shard failed
         var failedShardId = -1;
