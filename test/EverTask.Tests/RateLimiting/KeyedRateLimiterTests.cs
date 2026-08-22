@@ -460,7 +460,7 @@ public class KeyedRateLimiterTests
         {
             var key = $"key-{i}";
             workers[i] = new Thread(() =>
-                limiter.TryAcquireAsync(policy, typeof(TaskA), key, Guid.NewGuid()).GetAwaiter().GetResult());
+                limiter.TryAcquireAsync(policy, typeof(TaskA), key, Guid.NewGuid()).AsTask().GetAwaiter().GetResult());
         }
         foreach (var w in workers) w.Start();
         foreach (var w in workers) w.Join();

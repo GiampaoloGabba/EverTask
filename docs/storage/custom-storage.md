@@ -135,22 +135,20 @@ through the options (e.g. `optionsBuilder.UseEverTaskSchema(schemaName)`) rather
 ```csharp
 public interface ITaskStoreDbContextFactory
 {
-    Task<ITaskStoreDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default);
+    ValueTask<ITaskStoreDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default);
+
+    // Synchronous path for the places that have no async hook, such as the scoped
+    // ITaskStoreDbContext DI registration. The default waits on CreateDbContextAsync() as a Task.
+    ITaskStoreDbContext CreateDbContext() => CreateDbContextAsync().AsTask().GetAwaiter().GetResult();
 }
 
-public class MyCustomDbContextFactory : ITaskStoreDbContextFactory
+public class MyCustomDbContextFactory(IDbContextFactory<MyCustomDbContext> factory) : ITaskStoreDbContextFactory
 {
-    private readonly IDbContextFactory<MyCustomDbContext> _factory;
+    public async ValueTask<ITaskStoreDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default)
+        => await factory.CreateDbContextAsync(cancellationToken);
 
-    public MyCustomDbContextFactory(IDbContextFactory<MyCustomDbContext> factory)
-    {
-        _factory = factory;
-    }
-
-    public async Task<ITaskStoreDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default)
-    {
-        return await _factory.CreateDbContextAsync(cancellationToken);
-    }
+    // IDbContextFactory has a synchronous CreateDbContext, so override and skip the wait entirely
+    public ITaskStoreDbContext CreateDbContext() => factory.CreateDbContext();
 }
 
 // Registration

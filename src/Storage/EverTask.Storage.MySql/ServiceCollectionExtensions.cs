@@ -52,11 +52,11 @@ public static class ServiceCollectionExtensions
 
         builder.Services.TryAddSingleton<ITaskStoreDbContextFactory, MySqlDbContextFactoryAdapter>();
 
+        // Register ITaskStoreDbContext for backward compatibility (uses factory internally). The
+        // synchronous path: DI resolution has no async hook, and blocking on the ValueTask returned by
+        // CreateDbContextAsync is only defined once it has completed (issue #33).
         builder.Services.AddScoped<ITaskStoreDbContext>(provider =>
-        {
-            var factory = provider.GetRequiredService<ITaskStoreDbContextFactory>();
-            return factory.CreateDbContextAsync().GetAwaiter().GetResult();
-        });
+            provider.GetRequiredService<ITaskStoreDbContextFactory>().CreateDbContext());
 
         if (storeOptions.AutoApplyMigrations)
         {

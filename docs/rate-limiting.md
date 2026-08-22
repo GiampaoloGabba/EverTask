@@ -190,7 +190,7 @@ Rate limiting is **per-instance** in this release: N instances sharing one datab
 services.AddSingleton<IKeyedRateLimiter, MyRedisGcraLimiter>();
 ```
 
-`IKeyedRateLimiter` documents the contract invariants a distributed implementation must emulate (idempotent reservation redemption, non-decreasing slots, never blocking, wall-clock UTC slots, fail-open on infrastructure errors).
+`IKeyedRateLimiter` documents the contract invariants a distributed implementation must emulate (idempotent reservation redemption, non-decreasing slots, never blocking, wall-clock UTC slots, fail-open on infrastructure errors). `ReleaseAsync` is best-effort. The gate never waits for it before deciding: it awaits the returned `ValueTask` in the background, so a source-backed `ValueTask` is consumed exactly once, and logs a warning if the release fails. A reservation that was never released lapses via TTL.
 
 ## Interactions & Edge Behavior
 

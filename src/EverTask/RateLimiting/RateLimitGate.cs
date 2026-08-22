@@ -93,7 +93,7 @@ internal sealed class RateLimitGate(
         // is immediately available. The freed reservation is released best-effort.
         if (policy.OverflowBehavior == RateLimitOverflowBehavior.Discard)
         {
-            _ = limiter.ReleaseAsync(taskType, key, task.PersistenceId, CancellationToken.None);
+            _ = ReleaseBestEffortAsync(taskType, key, task.PersistenceId);
             return Reject(RateLimitRejectionKind.Discarded, decision.RetryAt);
         }
 
@@ -203,7 +203,31 @@ internal sealed class RateLimitGate(
             parkingLot.Remove(task.PersistenceId);
 
             if (!string.IsNullOrEmpty(key))
-                _ = limiter.ReleaseAsync(taskType, key, task.PersistenceId, CancellationToken.None);
+                _ = ReleaseBestEffortAsync(taskType, key, task.PersistenceId);
+        }
+    }
+
+    /// <summary>
+    /// Best-effort reservation release. The outcome never feeds back into the gate decision (an
+    /// orphan reservation lapses via TTL), but the limiter's <see cref="ValueTask"/> must still be
+    /// consumed exactly once — a distributed <see cref="IKeyedRateLimiter"/> may return one backed by a
+    /// reusable <see cref="System.Threading.Tasks.Sources.IValueTaskSource"/>, which a discard would leave
+    /// unconsumed — and a failure is observed and logged rather than lost. With the in-box limiter the
+    /// release completes synchronously, so the wrapper adds no allocation. Callers discard the returned
+    /// <see cref="Task"/>: it never faults.
+    /// </summary>
+    private async Task ReleaseBestEffortAsync(Type taskType, string key, Guid reservationId)
+    {
+        try
+        {
+            await limiter.ReleaseAsync(taskType, key, reservationId, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Rate limit: best-effort release of the reservation of task {TaskId} (key {Key}) failed, " +
+                "the reservation lapses via TTL",
+                reservationId, key);
         }
     }
 
@@ -310,7 +334,7 @@ internal sealed class RateLimitGate(
                     "{SlotUtc:O} falls past RunUntil {RunUntil:O}",
                     task.PersistenceId, key, slot, runUntil.Value);
 
-                _ = limiter.ReleaseAsync(taskType, key, task.PersistenceId, CancellationToken.None);
+                _ = ReleaseBestEffortAsync(taskType, key, task.PersistenceId);
 
                 return Reject(RateLimitRejectionKind.OccurrencePastRunUntil, slot);
             }

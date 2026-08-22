@@ -443,6 +443,7 @@ resharper_built_in_type_reference_style_for_member_access_highlighting = hint
 resharper_built_in_type_reference_style_highlighting = hint
 resharper_comment_typo_highlighting = none
 resharper_identifier_typo_highlighting = none
+resharper_invert_if_highlighting = none
 resharper_localizable_element_highlighting = none
 resharper_redundant_base_qualifier_highlighting = warning
 resharper_suggest_var_or_type_built_in_types_highlighting = hint
@@ -483,6 +484,9 @@ dotnet_diagnostic.CA1860.severity = warning
 # Collection expressions over Array.Empty<T>() / new[] { ... }.
 dotnet_diagnostic.IDE0300.severity = warning
 dotnet_diagnostic.IDE0301.severity = warning
+# ValueTask consumed exactly once, never blocked on before completion. The two public seams
+# that violated it (issue #33) are fixed; the build keeps it that way.
+dotnet_diagnostic.CA2012.severity = warning
 
 # --- Visible, not enforced: real findings with an open backlog --------------
 # Logging allocates and boxes before the level check. Tracked as a whole in issue #32,
@@ -490,9 +494,6 @@ dotnet_diagnostic.IDE0301.severity = warning
 # the solution, which is noise, not visibility. Re-enable once #32 lands.
 dotnet_diagnostic.CA1848.severity = none
 dotnet_diagnostic.CA1873.severity = none
-# ValueTask consumed incorrectly on two public seams (issue #33). NOT suppressed:
-# suppressing it would bury an open issue.
-dotnet_diagnostic.CA2012.severity = suggestion
 # Log message templates must be constant, and placeholders PascalCase. Same work as the two
 # rules above (issue #32), so same treatment: off until that work starts, then turned back on
 # FIRST so the analyzer drives it.

@@ -12,4 +12,6 @@ public class SqliteDbContextFactoryAdapter(IDbContextFactory<SqliteTaskStoreCont
         var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
         return dbContext;
     }
+
+    public ITaskStoreDbContext CreateDbContext() => dbContextFactory.CreateDbContext();
 }

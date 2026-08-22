@@ -5,7 +5,9 @@ using EverTask.Resilience;
 using EverTask.Scheduler;
 using EverTask.Scheduler.Recurring;
 using EverTask.Scheduler.Recurring.Intervals;
+using System.Threading.Tasks.Sources;
 using EverTask.Storage;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using UUIDNext;
 
@@ -27,6 +29,7 @@ public class RateLimitGateTests
 
     private readonly Mock<IKeyedRateLimiter> _limiter   = new();
     private readonly Mock<IScheduler> _scheduler        = new();
+    private readonly Mock<IEverTaskLogger<RateLimitGate>> _logger = new();
     private readonly GateInvalidationRegistry _registry = new();
     private readonly EverTaskServiceConfiguration _configuration = new();
     private readonly RateLimitParkingLot _parkingLot;
@@ -40,7 +43,7 @@ public class RateLimitGateTests
 
     private RateLimitGate CreateGate(IKeyedRateLimiter? realLimiter = null) =>
         new(realLimiter ?? _limiter.Object, _scheduler.Object, _registry, _parkingLot, _configuration,
-            new Mock<IEverTaskLogger<RateLimitGate>>().Object);
+            _logger.Object);
 
     private static RateLimitPolicy Policy(TimeSpan? maxInSlotWait = null) =>
         new(1, TimeSpan.FromSeconds(10))
@@ -254,6 +257,110 @@ public class RateLimitGateTests
         _scheduler.Verify(s => s.Schedule(It.IsAny<TaskHandlerExecutor>(), It.IsAny<DateTimeOffset?>()), Times.Never);
         _limiter.Verify(l => l.ReleaseAsync(It.IsAny<Type>(), "k", executor.PersistenceId, It.IsAny<CancellationToken>()),
             Times.Once, "the unused reservation is released best-effort");
+    }
+
+    // ---------------------------------------------------------------- best-effort release contract (issue #33)
+
+    private static RateLimitPolicy DiscardPolicy() =>
+        new(1, TimeSpan.FromSeconds(10))
+        {
+            Burst            = 1,
+            OverflowBehavior = RateLimitOverflowBehavior.Discard
+        };
+
+    private void SetupRelease(Func<ValueTask> release) =>
+        _limiter.Setup(l => l.ReleaseAsync(It.IsAny<Type>(), It.IsAny<string>(), It.IsAny<Guid>(),
+                It.IsAny<CancellationToken>()))
+                .Returns(release);
+
+    private Task WarningLogged()
+    {
+        var logged = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _logger.Setup(l => l.Log(LogLevel.Warning, It.IsAny<EventId>(), It.IsAny<It.IsAnyType>(),
+                    It.IsAny<Exception?>(), It.IsAny<Func<It.IsAnyType, Exception?, string>>()))
+               .Callback(() => logged.TrySetResult());
+        return logged.Task;
+    }
+
+    [Fact]
+    public async Task Should_observe_and_log_when_best_effort_release_faults_after_suspension()
+    {
+        // A distributed limiter failing AFTER its first suspension point: a discarded ValueTask
+        // would swallow the exception unobserved. The gate must log it and keep its decision.
+        SetupDeferral(DateTimeOffset.UtcNow.AddSeconds(2));
+        SetupRelease(() => new ValueTask(FaultAfterYield()));
+        var warning = WarningLogged();
+
+        var gate   = CreateGate();
+        var result = await gate.TryPassAsync(CreateExecutor(DiscardPolicy(), "k"), CancellationToken.None);
+
+        result.RejectionKind.ShouldBe(RateLimitRejectionKind.Discarded, "a failing release never changes the decision");
+        await warning.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    private static async Task FaultAfterYield()
+    {
+        await Task.Yield();
+        throw new InvalidOperationException("network down");
+    }
+
+    [Fact]
+    public async Task Should_not_propagate_when_best_effort_release_throws_synchronously()
+    {
+        SetupDeferral(DateTimeOffset.UtcNow.AddSeconds(2));
+        SetupRelease(() => throw new InvalidOperationException("network down"));
+        var warning = WarningLogged();
+
+        var gate   = CreateGate();
+        var result = await gate.TryPassAsync(CreateExecutor(DiscardPolicy(), "k"), CancellationToken.None);
+
+        result.RejectionKind.ShouldBe(RateLimitRejectionKind.Discarded, "a failing release never changes the decision");
+        await warning.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task Should_consume_source_backed_release_value_task_exactly_once_after_completion()
+    {
+        // An IValueTaskSource-backed ValueTask (what a pooled/reusable distributed limiter returns):
+        // a discard never consumes it, which breaks a source that resets itself in GetResult. The
+        // gate must await it — GetResult exactly once, and only once the release has completed.
+        SetupDeferral(DateTimeOffset.UtcNow.AddSeconds(2));
+        var source = new TrackingValueTaskSource();
+        SetupRelease(() => new ValueTask(source, source.Token));
+
+        var gate = CreateGate();
+        await gate.TryPassAsync(CreateExecutor(DiscardPolicy(), "k"), CancellationToken.None);
+
+        source.GetResultCalls.ShouldBe(0, "the release is still pending: its result must not be read yet");
+        source.Complete();
+        await source.Consumed.WaitAsync(TimeSpan.FromSeconds(5));
+        source.GetResultCalls.ShouldBe(1, "the ValueTask must be consumed exactly once");
+    }
+
+    private sealed class TrackingValueTaskSource : IValueTaskSource
+    {
+        private ManualResetValueTaskSourceCore<bool> _core = new() { RunContinuationsAsynchronously = true };
+        private readonly TaskCompletionSource _consumed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _getResultCalls;
+
+        public short Token => _core.Version;
+        public int GetResultCalls => Volatile.Read(ref _getResultCalls);
+        public Task Consumed => _consumed.Task;
+
+        public void Complete() => _core.SetResult(true);
+
+        public void GetResult(short token)
+        {
+            Interlocked.Increment(ref _getResultCalls);
+            _core.GetResult(token);
+            _consumed.TrySetResult();
+        }
+
+        public ValueTaskSourceStatus GetStatus(short token) => _core.GetStatus(token);
+
+        public void OnCompleted(Action<object?> continuation, object? state, short token,
+                                ValueTaskSourceOnCompletedFlags flags) =>
+            _core.OnCompleted(continuation, state, token, flags);
     }
 
     [Fact]
@@ -681,7 +788,7 @@ public class RateLimitGateTests
         await using var provider = services.BuildServiceProvider();
 
         var scopeFactory = new Mock<IServiceScopeFactory>();
-        scopeFactory.Setup(f => f.CreateScope()).Returns(() => provider.CreateScope());
+        scopeFactory.Setup(f => f.CreateScope()).Returns(provider.CreateScope);
 
         var gate           = new Mock<IRateLimitGate>(MockBehavior.Strict);
         var workerExecutor = CreateWorkerExecutor(scopeFactory, gate);
@@ -847,7 +954,7 @@ public class RateLimitGateTests
         await using var provider = services.BuildServiceProvider();
 
         var scopeFactory = new Mock<IServiceScopeFactory>();
-        scopeFactory.Setup(f => f.CreateScope()).Returns(() => provider.CreateScope());
+        scopeFactory.Setup(f => f.CreateScope()).Returns(provider.CreateScope);
 
         // The rejection's reserved slot is far in the future (2 h): the next occurrence must SKIP AHEAD
         // to it rather than being rescheduled one cadence (30 s) later, which would just re-reject.
@@ -905,7 +1012,7 @@ public class RateLimitGateTests
         await using var provider = services.BuildServiceProvider();
 
         var scopeFactory = new Mock<IServiceScopeFactory>();
-        scopeFactory.Setup(f => f.CreateScope()).Returns(() => provider.CreateScope());
+        scopeFactory.Setup(f => f.CreateScope()).Returns(provider.CreateScope);
 
         // The rejection's reserved slot (2 h out) is past RunUntil (1 min out): skipping ahead to it lands
         // beyond RunUntil, so CalculateNextValidRun returns null and the series ENDS on the skip path.
@@ -963,11 +1070,11 @@ public class RateLimitGateTests
         await using var provider = services.BuildServiceProvider();
 
         var scopeFactory = new Mock<IServiceScopeFactory>();
-        scopeFactory.Setup(f => f.CreateScope()).Returns(() => provider.CreateScope());
+        scopeFactory.Setup(f => f.CreateScope()).Returns(provider.CreateScope);
 
         var gate = new Mock<IRateLimitGate>();
         gate.Setup(g => g.TryPassAsync(It.IsAny<TaskHandlerExecutor>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new RateLimitGateResult(RateLimitGateOutcome.Rejected, default(DateTimeOffset),
+            .ReturnsAsync(new RateLimitGateResult(RateLimitGateOutcome.Rejected,
                 RejectionKind: RateLimitRejectionKind.HorizonExceeded));
 
         var recurring = new RecurringTask { SecondInterval = new SecondInterval(30) }; // no RunUntil -> continuing skip
@@ -992,7 +1099,7 @@ public class RateLimitGateTests
 
     public sealed class AlwaysFailingRecurringHandler : EverTaskHandler<GateTaskD>
     {
-        public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(3, TimeSpan.FromMilliseconds(20));
+        public override IRetryPolicy RetryPolicy => new LinearRetryPolicy(3, TimeSpan.FromMilliseconds(20));
 
         public override Task Handle(GateTaskD backgroundTask, CancellationToken cancellationToken) =>
             throw new InvalidOperationException("transient failure forcing a retry");
@@ -1014,7 +1121,7 @@ public class RateLimitGateTests
 
         var scopeFactory = new Mock<IServiceScopeFactory>();
         scopeFactory.Setup(f => f.CreateScope())
-                    .Returns(() => provider.CreateScope());
+                    .Returns(provider.CreateScope);
         return scopeFactory;
     }
 

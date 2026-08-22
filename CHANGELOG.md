@@ -37,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resolved by `MapEverTaskApi()`.
 - **Analyzer rule ET0008** (`EverTask.Monitoring` category): warns when a net8.0 compilation sets
   `EnableOpenApiDocument = true` or calls `AddMonitoringApiScalar()`, both no-ops there.
+- **`ITaskStoreDbContextFactory.CreateDbContext()`** (#33): synchronous creation path with a default
+  interface implementation (existing implementors keep compiling; it waits on `CreateDbContextAsync()`
+  as a `Task`). The in-box SqlServer/Postgres/MySql/Sqlite adapters override it with the pooled
+  factory's synchronous `CreateDbContext`, so no wait happens at all.
 
 ### Fixed (Monitor.Api host isolation, #21)
 
@@ -57,6 +61,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the policy was registered and never applied anywhere.
 - Removed dead code (`JwtAuthenticationMiddleware.IsReadOnlyRequest`,
   `ServiceCollectionExtensions.GenerateRandomSecret`).
+
+### Fixed (`ValueTask` contract on two public extension points, #33)
+
+- **The scoped `ITaskStoreDbContext` registration no longer blocks on a `ValueTask`.** Every provider's
+  `AddXStorage` resolved it with `CreateDbContextAsync().GetAwaiter().GetResult()`, which is only defined
+  on an already-completed `ValueTask` (harmless with the in-box pooled adapters, a hang or an
+  `InvalidOperationException` with a genuinely asynchronous third-party `ITaskStoreDbContextFactory`).
+  It now calls the new synchronous `CreateDbContext()`.
+- **`RateLimitGate` consumes the `ValueTask` of `IKeyedRateLimiter.ReleaseAsync` exactly once.** The
+  best-effort release on the Discard, past-`RunUntil` and invalidation paths discarded it: a distributed
+  limiter failing after its first suspension went unobserved, and an `IValueTaskSource`-backed
+  `ValueTask` was never consumed. The gate now awaits it off the decision path and logs a warning on
+  failure; the decision and the fail-open contract are unchanged, and the in-box limiter (synchronous
+  release) allocates nothing.
+- `CA2012` is now enforced by the build (`warning` in `.editorconfig`).
 
 ### Security
 

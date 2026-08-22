@@ -13,4 +13,6 @@ public class PostgresDbContextFactoryAdapter(IDbContextFactory<PostgresTaskStore
         var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
         return dbContext;
     }
+
+    public ITaskStoreDbContext CreateDbContext() => dbContextFactory.CreateDbContext();
 }

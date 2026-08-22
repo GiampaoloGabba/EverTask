@@ -63,8 +63,11 @@ LINQ + **SqlServer stored-proc pattern** for Phase-2.
 
 Mirror `EverTask.Storage.Postgres/` (or `.Sqlite/` if many axes diverge). Files:
 `*.csproj`, `GlobalUsings.cs`, `XTaskStoreOptions.cs` (set `SchemaName` per the matrix), `XTaskStoreContext.cs`,
-`DbContextFactoryAdapter.cs`, `ServiceCollectionExtensions.cs` (`AddXStorage`, `UseX(...)`, GUID generator,
-`MigrationsHistoryTable(name, schema)` if schemas exist), `XTaskStorage.cs` (empty if zero overrides; else
+`DbContextFactoryAdapter.cs` (BOTH members: `CreateDbContextAsync` + the sync `CreateDbContext()` forwarding to
+`IDbContextFactory.CreateDbContext()`), `ServiceCollectionExtensions.cs` (`AddXStorage`, `UseX(...)`, GUID generator,
+`MigrationsHistoryTable(name, schema)` if schemas exist; the scoped `ITaskStoreDbContext` registration calls
+`factory.CreateDbContext()` — NEVER `CreateDbContextAsync().GetAwaiter().GetResult()`, CA2012 is a build error, #33),
+`XTaskStorage.cs` (empty if zero overrides; else
 override ONLY the methods the matrix flagged), `TaskStoreEfDbContextFactory.cs` (`#if DEBUG`), `CLAUDE.md`,
 and (if runtime schema needed) a copied `DbSchemaAwareMigrationAssembly.cs` + hand-edited `Initial`.
 
@@ -81,6 +84,8 @@ index, hand-edit for schema if Option B, then **the GATE** — do NOT call Phase
    keyset and the delete run **server-side** (no client-eval). If a construct throws / client-evals → add the
    minimal override (SQLite pattern) and re-run. Document every override + why.
 4. Cross-provider tests added in the base suite still pass on the existing providers (no regressions).
+5. Add the provider to `Providers()` in `test/EverTask.Tests.Storage/EfCore/DbContextFactorySyncCreationTests.cs`
+   (no Docker: `AutoApplyMigrations = false` + an explicit server version if the provider would otherwise connect).
 
 ## STEP 2 — Phase 2 (optional, perf): hot-write optimization
 
