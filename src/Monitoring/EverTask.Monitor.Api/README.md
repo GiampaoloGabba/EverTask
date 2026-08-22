@@ -113,49 +113,31 @@ builder.Services.AddEverTaskApi(options =>
 - API: `/evertask-monitoring/api/*`
 - SignalR Hub: `/evertask-monitoring/hub`
 
-## Swagger Integration
+## OpenAPI Document and Scalar UI
 
-If your application already uses Swagger/OpenAPI, you should configure **separate Swagger documents** to avoid mixing your application's endpoints with EverTask monitoring endpoints.
+The monitoring API can serve its own OpenAPI document (net9.0+, built-in ASP.NET Core generator),
+fully isolated from your application's OpenAPI/Swagger/Scalar setup:
 
 ```csharp
-builder.Services.AddSwaggerGen(c =>
+.AddMonitoringApi(options =>
 {
-    c.EnableAnnotations();
-
-    // Create separate Swagger documents
-    c.SwaggerDoc("v1", new() { Title = "My Application API", Version = "v1" });
-    c.SwaggerDoc("monitoring", new() { Title = "EverTask Monitoring API", Version = "v1" });
-
-    // Filter controllers by namespace
-    c.DocInclusionPredicate((docName, apiDesc) =>
-    {
-        if (apiDesc.ActionDescriptor is not Microsoft.AspNetCore.Mvc.Controllers.ControllerActionDescriptor controllerActionDescriptor)
-            return false;
-
-        var controllerNamespace = controllerActionDescriptor.ControllerTypeInfo.Namespace ?? string.Empty;
-
-        return docName switch
-        {
-            "v1" => !controllerNamespace.StartsWith("EverTask.Monitor.Api"),
-            "monitoring" => controllerNamespace.StartsWith("EverTask.Monitor.Api"),
-            _ => false
-        };
-    });
+    options.EnableOpenApiDocument = true; // /evertask-monitoring/openapi/evertask-monitoring.json
 });
-
-// Configure SwaggerUI with both documents
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI(c =>
-    {
-        c.SwaggerEndpoint("/swagger/v1/swagger.json", "My Application API");
-        c.SwaggerEndpoint("/swagger/evertask-monitoring/swagger.json", "EverTask Monitoring API");
-    });
-}
 ```
 
-Now you'll see a **dropdown in Swagger UI** to switch between your application API and EverTask Monitoring API.
+For an interactive API reference, install `EverTask.Monitor.Api.Scalar` and chain one call
+(this also enables the document automatically):
+
+```csharp
+.AddMonitoringApi(options => { /* ... */ })
+.AddMonitoringApiScalar(); // /evertask-monitoring/scalar
+```
+
+The monitoring controllers carry their own ApiExplorer group (`evertask-monitoring`), so they
+never show up in your application's OpenAPI or Swagger documents, and your endpoints never show
+up in the monitoring document. See the
+[monitoring documentation](https://github.com/GiampaoloGabba/EverTask/blob/master/docs/monitoring-dashboard.md#openapi-document-and-scalar-ui)
+for the optional recipe to surface the monitoring API inside your own Swagger UI.
 
 ## ⚠️ Security Considerations
 

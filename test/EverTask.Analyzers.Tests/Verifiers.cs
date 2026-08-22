@@ -1,11 +1,7 @@
-using System.Collections.Immutable;
-using System.Threading.Tasks;
-using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CodeFixes;
 using Microsoft.CodeAnalysis.CSharp.Testing;
 using Microsoft.CodeAnalysis.Diagnostics;
 using Microsoft.CodeAnalysis.Testing;
-using Microsoft.CodeAnalysis.Text;
 
 namespace EverTask.Analyzers.Tests;
 
@@ -22,16 +18,18 @@ internal static class TestEnvironment
 
     public static readonly ReferenceAssemblies References =
         ReferenceAssemblies.Net.Net80.AddPackages(
-            ImmutableArray.Create(new PackageIdentity("Newtonsoft.Json", "13.0.4")));
+            [new PackageIdentity("Newtonsoft.Json", "13.0.4")]);
 }
 
 internal static class CSharpAnalyzerVerifier<TAnalyzer>
     where TAnalyzer : DiagnosticAnalyzer, new()
 {
-    public static Task VerifyAsync(string source, string? editorConfig = null)
+    public static Task VerifyAsync(string source, string? editorConfig = null, string? extraSource = null)
     {
         var test = new Test { TestCode = source };
         test.TestState.Sources.Add(("IEverTask.cs", TestEnvironment.IEverTaskStub));
+        if (extraSource is not null)
+            test.TestState.Sources.Add(("Stubs.cs", extraSource));
         if (editorConfig is not null)
             test.TestState.AnalyzerConfigFiles.Add(("/.editorconfig", editorConfig));
         return test.RunAsync();

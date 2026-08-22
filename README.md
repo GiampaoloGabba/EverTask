@@ -11,6 +11,7 @@
 [![NuGet](https://img.shields.io/nuget/vpre/EverTask.Logging.Serilog.svg?label=EverTask.Logging.Serilog)](https://www.nuget.org/packages/EverTask.Logging.Serilog)
 [![NuGet](https://img.shields.io/nuget/vpre/EverTask.Monitor.AspnetCore.SignalR.svg?label=EverTask.Monitor.AspnetCore.SignalR)](https://www.nuget.org/packages/EverTask.Monitor.AspnetCore.SignalR)
 [![NuGet](https://img.shields.io/nuget/vpre/EverTask.Monitor.Api.svg?label=EverTask.Monitor.Api)](https://www.nuget.org/packages/EverTask.Monitor.Api)
+[![NuGet](https://img.shields.io/nuget/vpre/EverTask.Monitor.Api.Scalar.svg?label=EverTask.Monitor.Api.Scalar)](https://www.nuget.org/packages/EverTask.Monitor.Api.Scalar)
 
 ## Overview
 
@@ -318,6 +319,7 @@ Every rule is configurable via `.editorconfig` (e.g. `dotnet_diagnostic.ET0001.s
   - [EverTask.Logging.Serilog](https://www.nuget.org/packages/EverTask.Logging.Serilog) - Serilog integration
   - [EverTask.Monitor.AspnetCore.SignalR](https://www.nuget.org/packages/EverTask.Monitor.AspnetCore.SignalR) - Real-time monitoring
   - [EverTask.Monitor.Api](https://www.nuget.org/packages/EverTask.Monitor.Api) - Monitoring API and Dashboard
+  - [EverTask.Monitor.Api.Scalar](https://www.nuget.org/packages/EverTask.Monitor.Api.Scalar) - Scalar API reference for the Monitoring API
 
 - 📝 **Resources**
   - [Changelog](CHANGELOG.md) - Version history and release notes

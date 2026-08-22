@@ -5,11 +5,7 @@ using EverTask.Monitor.Api.Options;
 using EverTask.Monitor.Api.Services;
 using EverTask.Monitoring;
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Options;
-using Microsoft.OpenApi.Models;
-using Swashbuckle.AspNetCore.SwaggerGen;
 
 namespace EverTask.Monitor.Api.Extensions;
 
@@ -82,8 +78,9 @@ public static class ServiceCollectionExtensions
         // Add controllers with this assembly and route prefix convention
         services.AddControllers(mvcOptions =>
             {
-                // Add route prefix convention to prepend BasePath to all controller routes
-                mvcOptions.Conventions.Add(new Conventions.RoutePrefixConvention(options.BasePath));
+                // Prefix + ApiExplorer group for the monitoring controllers only (host controllers untouched)
+                mvcOptions.Conventions.Add(
+                    new Conventions.RoutePrefixConvention(options.BasePath, options.OpenApiDocumentName));
             })
             .AddApplicationPart(typeof(ServiceCollectionExtensions).Assembly)
             .AddJsonOptions(jsonOptions =>
@@ -116,11 +113,16 @@ public static class ServiceCollectionExtensions
             });
         }
 
-        // Add Swagger if enabled
-        if (options.EnableSwagger)
+#if NET9_0_OR_GREATER
+        // Register the isolated OpenAPI document (built-in ASP.NET Core generator). Registration is
+        // unconditional so the EverTask.Monitor.Api.Scalar package can enable the document after this
+        // call; the endpoint is only mapped when EnableOpenApiDocument is true (see MapEverTaskApi).
+        services.AddOpenApi(options.OpenApiDocumentName, openApiOptions =>
         {
-            services.ConfigureOptions<MonitoringSwaggerConfiguration>();
-        }
+            // Strictly this document's group: ungrouped host endpoints stay in the host's documents
+            openApiOptions.ShouldInclude = description => description.GroupName == options.OpenApiDocumentName;
+        });
+#endif
 
         // Register startup filter to automatically configure middleware pipeline
         services.AddSingleton<IStartupFilter>(sp =>
@@ -182,8 +184,9 @@ public static class ServiceCollectionExtensions
         // Add controllers with this assembly and route prefix convention
         services.AddControllers(mvcOptions =>
             {
-                // Add route prefix convention to prepend BasePath to all controller routes
-                mvcOptions.Conventions.Add(new Conventions.RoutePrefixConvention(options.BasePath));
+                // Prefix + ApiExplorer group for the monitoring controllers only (host controllers untouched)
+                mvcOptions.Conventions.Add(
+                    new Conventions.RoutePrefixConvention(options.BasePath, options.OpenApiDocumentName));
             })
             .AddApplicationPart(typeof(ServiceCollectionExtensions).Assembly)
             .AddJsonOptions(jsonOptions =>
@@ -216,97 +219,21 @@ public static class ServiceCollectionExtensions
             });
         }
 
-        // Add Swagger if enabled
-        if (options.EnableSwagger)
+#if NET9_0_OR_GREATER
+        // Register the isolated OpenAPI document (built-in ASP.NET Core generator). Registration is
+        // unconditional so the EverTask.Monitor.Api.Scalar package can enable the document after this
+        // call; the endpoint is only mapped when EnableOpenApiDocument is true (see MapEverTaskApi).
+        services.AddOpenApi(options.OpenApiDocumentName, openApiOptions =>
         {
-            services.ConfigureOptions<MonitoringSwaggerConfiguration>();
-        }
+            // Strictly this document's group: ungrouped host endpoints stay in the host's documents
+            openApiOptions.ShouldInclude = description => description.GroupName == options.OpenApiDocumentName;
+        });
+#endif
 
         // Register startup filter to automatically configure middleware pipeline
         services.AddSingleton<IStartupFilter>(sp =>
             new EverTaskApiStartupFilter(sp.GetRequiredService<EverTaskApiOptions>()));
 
         return services;
-    }
-
-    private static string GenerateRandomSecret()
-    {
-        // Generate 32 bytes (256 bits) random secret
-        var bytes = new byte[32];
-        using var rng = System.Security.Cryptography.RandomNumberGenerator.Create();
-        rng.GetBytes(bytes);
-        return Convert.ToBase64String(bytes);
-    }
-
-    /// <summary>
-    /// Configures Swagger to create a separate document for EverTask Monitoring API
-    /// and filters out EverTask controllers from other Swagger documents.
-    /// </summary>
-    private class MonitoringSwaggerConfiguration : IConfigureOptions<SwaggerGenOptions>
-    {
-        public void Configure(SwaggerGenOptions options)
-        {
-            // Create separate Swagger document for monitoring API
-            options.SwaggerDoc("evertask-monitoring", new OpenApiInfo
-            {
-                Title = "EverTask Monitoring API",
-                Version = "v1",
-                Description = "Background task monitoring and analytics endpoints"
-            });
-
-            // Add JWT Bearer authentication
-            options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
-            {
-                Description = "JWT Authorization header using the Bearer scheme. Enter your token in the text input below.",
-                Name = "Authorization",
-                In = ParameterLocation.Header,
-                Type = SecuritySchemeType.Http,
-                Scheme = "bearer",
-                BearerFormat = "JWT"
-            });
-
-            // Apply security requirement globally to all endpoints
-            options.AddSecurityRequirement(new OpenApiSecurityRequirement
-            {
-                {
-                    new OpenApiSecurityScheme
-                    {
-                        Reference = new OpenApiReference
-                        {
-                            Type = ReferenceType.SecurityScheme,
-                            Id = "Bearer"
-                        }
-                    },
-                    Array.Empty<string>()
-                }
-            });
-
-            // Include XML comments for documentation
-            var xmlFile = $"{typeof(ServiceCollectionExtensions).Assembly.GetName().Name}.xml";
-            var xmlPath = System.IO.Path.Combine(AppContext.BaseDirectory, xmlFile);
-            if (System.IO.File.Exists(xmlPath))
-            {
-                options.IncludeXmlComments(xmlPath);
-            }
-
-            // Filter controllers in a cooperative way
-            // - EverTask controllers → ONLY in "evertask-monitoring" document
-            // - Other controllers → EXCLUDED from "evertask-monitoring" document
-            options.DocInclusionPredicate((docName, apiDesc) =>
-            {
-                if (apiDesc.ActionDescriptor is not ControllerActionDescriptor controllerActionDescriptor)
-                    return false;
-
-                var controllerNamespace = controllerActionDescriptor.ControllerTypeInfo.Namespace ?? string.Empty;
-                bool isEverTaskController = controllerNamespace.StartsWith("EverTask.Monitor.Api");
-
-                // EverTask controllers → ONLY in "evertask-monitoring"
-                if (isEverTaskController)
-                    return docName == "evertask-monitoring";
-
-                // Other controllers → EXCLUDE from "evertask-monitoring"
-                return docName != "evertask-monitoring";
-            });
-        }
     }
 }

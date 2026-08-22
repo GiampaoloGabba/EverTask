@@ -3,10 +3,10 @@ using Microsoft.CodeAnalysis;
 namespace EverTask.Analyzers;
 
 /// <summary>
-/// The EverTask payload-contract diagnostics (ET0001-ET0006). They mirror, at compile time, the
+/// The EverTask diagnostics: the payload-contract rules (ET0001-ET0007), which mirror at compile time the
 /// System.Text.Json round-trip contract enforced at runtime by <c>EverTask.Serialization.EverTaskJson</c>
-/// (see <c>src/EverTask.Abstractions/CLAUDE.md</c> §Serialization Guidelines). Keep this list in lockstep
-/// with <c>AnalyzerReleases.Unshipped.md</c> (RS2002).
+/// (see <c>src/EverTask.Abstractions/CLAUDE.md</c> §Serialization Guidelines), plus the monitoring rule
+/// ET0008. Keep this list in lockstep with <c>AnalyzerReleases.Unshipped.md</c> (RS2002).
 /// </summary>
 internal static class DiagnosticDescriptors
 {
@@ -75,6 +75,16 @@ internal static class DiagnosticDescriptors
         isEnabledByDefault: false,
         description: "Types such as delegates, Stream, Type, IntPtr, CancellationToken, EF Core DbContext or ValueTuple do not survive a JSON round-trip (ValueTuple exposes its elements as fields, which System.Text.Json drops). Persist a stable identifier or a named type and resolve the instance in the handler.",
         helpLinkUri: HelpLink);
+
+    public static readonly DiagnosticDescriptor MonitoringOpenApiOnNet8 = new(
+        id: "ET0008",
+        title: "Monitoring OpenAPI document is a no-op on net8.0",
+        messageFormat: "'{0}' has no effect on net8.0: the built-in ASP.NET Core OpenAPI generator requires net9.0 or later, so no monitoring OpenAPI document (or Scalar UI) is served",
+        category: "EverTask.Monitoring",
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "EverTask.Monitor.Api generates its OpenAPI document with the built-in ASP.NET Core generator (Microsoft.AspNetCore.OpenApi), which only exists on net9.0+. On a net8.0 target, enabling EnableOpenApiDocument or adding the Scalar UI serves nothing.",
+        helpLinkUri: "https://github.com/GiampaoloGabba/EverTask/blob/master/docs/monitoring-dashboard.md");
 
     public static readonly DiagnosticDescriptor UnresolvableConstructor = new(
         id: "ET0007",

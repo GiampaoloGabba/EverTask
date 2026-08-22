@@ -23,11 +23,33 @@ public class EverTaskApiOptions
     public bool EnableUI { get; set; } = true;
 
     /// <summary>
-    /// Enable Swagger/OpenAPI documentation for monitoring API (default: false)
-    /// Creates a separate Swagger document at /swagger/evertask-monitoring/swagger.json
-    /// The document is automatically filtered to include only EverTask monitoring endpoints
+    /// No longer used. The Swashbuckle integration was removed in 3.12; setting this has no effect.
+    /// Use <see cref="EnableOpenApiDocument"/> (net9.0+) and optionally the EverTask.Monitor.Api.Scalar
+    /// package for an interactive API reference.
     /// </summary>
+    [Obsolete("The Swashbuckle integration was removed in 3.12 and this setting is a no-op. Use EnableOpenApiDocument (net9.0+) and optionally the EverTask.Monitor.Api.Scalar package.")]
     public bool EnableSwagger { get; set; } = false;
+
+    /// <summary>
+    /// Serve an OpenAPI document for the monitoring API (default: false)
+    /// The document is generated with the built-in ASP.NET Core OpenAPI support (net9.0+; no-op on net8.0)
+    /// and served at /evertask-monitoring/openapi/evertask-monitoring.json — fully isolated from any
+    /// OpenAPI/Swagger/Scalar setup the host application has.
+    /// Enabled automatically by the EverTask.Monitor.Api.Scalar package.
+    /// </summary>
+    public bool EnableOpenApiDocument { get; set; } = false;
+
+    /// <summary>
+    /// Name of the OpenAPI document and the ApiExplorer group of the monitoring controllers
+    /// (fixed: "evertask-monitoring"). Because the controllers carry this group name, the host's own
+    /// OpenAPI/Swagger documents exclude them by default.
+    /// </summary>
+    public string OpenApiDocumentName => "evertask-monitoring";
+
+    /// <summary>
+    /// Route of the monitoring OpenAPI document (derived: "/evertask-monitoring/openapi/evertask-monitoring.json")
+    /// </summary>
+    public string OpenApiDocumentPath => $"{BasePath}/openapi/{OpenApiDocumentName}.json";
 
     /// <summary>
     /// API base path (derived from BasePath)

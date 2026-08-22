@@ -68,6 +68,7 @@ their serialized members (closure walk, visited-set + depth bound). Mirrors `Eve
 | ET0005 | Info | `object` / `dynamic` / `Dictionary<string,object>` property | — |
 | ET0006 | **Disabled** | Non-round-trippable type (delegate, `Stream`, `Type`, `IntPtr`, `CancellationToken`, `DbContext`, `ValueTuple`) — heuristic | — |
 | ET0007 | Warning | ≥2 public constructors, none parameterless or `[JsonConstructor]` → STJ throws on recovery (records & single-ctor are OK) | — |
+| ET0008 | Warning | net8.0 compilation sets `EnableOpenApiDocument = true` or calls `AddMonitoringApiScalar()` — both no-ops there (built-in OpenAPI generator is net9+); separate analyzer (`MonitoringOpenApiAnalyzer`), category `EverTask.Monitoring` | — |
 
 **Implementation notes (for maintainers)**: diagnostics are reported from a per-symbol action (local, so the
 code fixes apply); the closure is precomputed once in `CompilationStartAction`. The two analyzer DLLs target

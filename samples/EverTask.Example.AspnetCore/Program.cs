@@ -2,7 +2,8 @@ using EverTask.Abstractions;
 using EverTask.Example.AspnetCore;
 using EverTask.Logging.Serilog;
 using EverTask.Monitor.Api.Extensions;
-using EverTask.Monitor.AspnetCore.SignalR;
+using EverTask.Monitor.Api.Scalar.Extensions;
+using Microsoft.OpenApi;
 using Serilog;
 using Serilog.Settings.Configuration;
 
@@ -16,7 +17,7 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
     c.EnableAnnotations();
-    c.SwaggerDoc("v1", new() { Title = "My Application API", Version = "v1" });
+    c.SwaggerDoc("v1", new OpenApiInfo { Title = "My Application API", Version = "v1" });
 });
 
 builder.Services.AddSignalR();
@@ -65,24 +66,27 @@ builder.Services.AddEverTask(opt =>
        .AddMonitoringApi(options =>
        {
            options.EnableUI             = true;
-           options.EnableSwagger        = true;
            options.Username             = "admin";
            options.Password             = "admin";
            options.EnableAuthentication = true;
            options.MagicLinkToken       = "test";
            options.EventDebounceMs      = 500;
-       });
+       })
+       // Scalar API reference at /evertask-monitoring/scalar (auto-enables the monitoring
+       // OpenAPI document at /evertask-monitoring/openapi/evertask-monitoring.json)
+       .AddMonitoringApiScalar();
 
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
+    // The host's own Swagger UI: only the application's API (the monitoring endpoints carry
+    // their own ApiExplorer group, so they never leak into the host's documents)
     app.UseSwagger();
     app.UseSwaggerUI(c =>
     {
         c.SwaggerEndpoint("/swagger/v1/swagger.json", "My Application API");
-        c.SwaggerEndpoint("/swagger/evertask-monitoring/swagger.json", "EverTask Monitoring API");
     });
 }
 
@@ -99,6 +103,7 @@ app.MapEverTaskApi();
 await DispatchSampleTasksAsync(app.Services);
 
 app.Run();
+return;
 
 static async Task DispatchSampleTasksAsync(IServiceProvider services)
 {
@@ -138,10 +143,10 @@ static async Task DispatchSampleTasksAsync(IServiceProvider services)
         await dispatcher.Dispatch(new DemoLoggingTask("Scheduled Analytics", LogCount: 20, ShouldFail: false),
             options => options.RunDelayed(TimeSpan.FromSeconds(10)));
 
-        await dispatcher.Dispatch(new QuickTask("Delayed Notification", 500),
+        await dispatcher.Dispatch(new QuickTask("Delayed Notification"),
             options => options.RunDelayed(TimeSpan.FromSeconds(15)));
 
-        await dispatcher.Dispatch(new HighPriorityTask("Delayed Payment Retry", "ORD-12348", 500),
+        await dispatcher.Dispatch(new HighPriorityTask("Delayed Payment Retry", "ORD-12348"),
             options => options.RunDelayed(TimeSpan.FromSeconds(5)));
 
         // 6. Tasks that will fail - demonstrate error logging
@@ -196,7 +201,8 @@ static async Task DispatchSampleTasksAsync(IServiceProvider services)
         // head-of-line blocking), and no worker is blocked while a tenant waits for budget.
         // The dashboard shows the parked tasks as ThrottledTasks (see /api/rate-limits).
         logger.LogInformation("=== Keyed rate limiting demo: 3 tenants burst 4 calls each (3/10s per tenant) ===");
-        foreach (var tenant in new[] { "tenant-blue", "tenant-green", "tenant-red" })
+        string[] tenants = ["tenant-blue", "tenant-green", "tenant-red"];
+        foreach (var tenant in tenants)
         {
             for (var call = 1; call <= 4; call++)
             {

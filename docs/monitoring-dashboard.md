@@ -19,7 +19,7 @@ A monitoring dashboard with a REST API and an embedded React UI for real-time ta
 - [Configuration](#configuration)
 - [Authentication](#authentication)
 - [Advanced Scenarios](#advanced-scenarios)
-- [Swagger Integration](#swagger-integration)
+- [OpenAPI Document and Scalar UI](#openapi-document-and-scalar-ui)
 - [Real-Time Monitoring](#real-time-monitoring)
 - [Security Best Practices](#security-best-practices)
 - [Integration Examples](#integration-examples)
@@ -154,7 +154,8 @@ All configuration is done through the `EverTaskApiOptions` class passed to `AddM
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `EnableUI` | bool | `true` | Enable embedded dashboard UI |
-| `EnableSwagger` | bool | `false` | Enable Swagger/OpenAPI documentation |
+| `EnableOpenApiDocument` | bool | `false` | Serve the monitoring OpenAPI document (net9.0+; auto-enabled by the Scalar package) |
+| `EnableSwagger` | bool | `false` | Obsolete no-op since 3.12.0 (use `EnableOpenApiDocument`) |
 | `Username` | string | `"admin"` | JWT authentication username |
 | `Password` | string | `"admin"` | JWT authentication password |
 | `JwtSecret` | string? | auto-generated | Secret key for signing JWT tokens (min 256 bits recommended) |
@@ -407,35 +408,53 @@ builder.Services.AddSingleton<ITaskStorage, MyCustomStorage>();
 
 The standalone registration does not configure SignalR monitoring. `AddSignalRMonitoring` is only available on `EverTaskServiceBuilder` (the chain returned by `AddEverTask`), so a standalone API has no live event feed: dashboard data refreshes on poll rather than on push. To get live updates, register the API through `AddEverTask(...).AddMonitoringApi(...)`, which wires up the SignalR monitor for you.
 
-## Swagger Integration
+## OpenAPI Document and Scalar UI
 
-EverTask Monitoring API provides automatic Swagger/OpenAPI documentation generation with complete separation from your application's API documentation.
+The monitoring API can serve its own OpenAPI document, generated with the built-in ASP.NET Core
+generator (`Microsoft.AspNetCore.OpenApi`) and served under the monitoring base path. Nothing is
+shared with your application's OpenAPI, Swagger, or Scalar setup: the monitoring controllers carry
+their own ApiExplorer group (`evertask-monitoring`), so they never appear in your documents, and
+your endpoints never appear in the monitoring document.
 
-### Enable Swagger Documentation
+Requires net9.0 or later: the built-in generator does not exist on net8.0, where enabling the
+document is a no-op (the bundled analyzer reports `ET0008` if you try).
 
-Enable Swagger for the monitoring API in your configuration:
+### Enable the document
 
 ```csharp
 .AddMonitoringApi(options =>
 {
-    options.EnableUI = true;
-    options.EnableSwagger = true;  // Enable separate Swagger document
-    // ... other options
+    options.EnableOpenApiDocument = true;
 });
 ```
 
-### Configure SwaggerUI
+The document is served at `/evertask-monitoring/openapi/evertask-monitoring.json`.
 
-Add both endpoints to your SwaggerUI configuration:
+### Scalar UI (optional package)
+
+Install `EverTask.Monitor.Api.Scalar` and chain one call after `AddMonitoringApi()`:
 
 ```csharp
-// Configure your application's Swagger document
+.AddMonitoringApi(options => { /* ... */ })
+.AddMonitoringApiScalar();
+```
+
+This serves an interactive [Scalar](https://scalar.com) API reference at
+`/evertask-monitoring/scalar` and enables the OpenAPI document automatically. Your application
+can run its own Scalar (or Swagger UI) at its usual paths without any conflict.
+
+### Showing the monitoring API inside your own Swagger/OpenAPI UI
+
+Not needed for the setup above, but if you prefer one UI for everything, declare a document that
+matches the monitoring group name. With the host's own Swashbuckle:
+
+```csharp
 builder.Services.AddSwaggerGen(c =>
 {
     c.SwaggerDoc("v1", new() { Title = "My Application API", Version = "v1" });
+    c.SwaggerDoc("evertask-monitoring", new() { Title = "EverTask Monitoring API", Version = "v1" });
 });
 
-// In the pipeline
 app.UseSwaggerUI(c =>
 {
     c.SwaggerEndpoint("/swagger/v1/swagger.json", "My Application API");
@@ -443,15 +462,22 @@ app.UseSwaggerUI(c =>
 });
 ```
 
-### How It Works
+Swashbuckle's default inclusion rule matches endpoints to documents by group name, so the
+monitoring endpoints land in the `evertask-monitoring` document and stay out of `v1` with no
+custom predicates.
 
-When `EnableSwagger = true`:
-- EverTask creates a separate Swagger document at `/swagger/evertask-monitoring/swagger.json`
-- The document includes **only** EverTask monitoring endpoints (`/evertask-monitoring/api/*`)
-- Your application's Swagger document (`v1`) **excludes** EverTask endpoints automatically
-- No namespace filtering or custom predicates required in your application
+### Migrating from 3.11.x
 
-Result: A dropdown appears in Swagger UI to switch between your application API and EverTask Monitoring API, with complete separation of endpoints.
+Up to 3.11.0 the package depended on Swashbuckle and hooked into the host's `SwaggerGen`
+configuration via `EnableSwagger`. That dependency crashed .NET 10 hosts using the built-in
+OpenAPI stack at startup (`ReflectionTypeLoadException` inside `MapControllers()`) and is gone in
+3.12.0. `EnableSwagger` is now an obsolete no-op: replace it with `EnableOpenApiDocument = true`
+(or the Scalar package), and remove the `/swagger/evertask-monitoring/swagger.json` endpoint from
+your `UseSwaggerUI` call unless you opt into the recipe above.
+
+Also since 3.12.0 the monitoring route prefix applies only to the package's own controllers.
+Earlier versions accidentally prepended `/evertask-monitoring` to every controller in the host
+application; if you relied on those prefixed routes, they are now back at their natural paths.
 
 ## Real-Time Monitoring
 

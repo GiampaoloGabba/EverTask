@@ -81,10 +81,17 @@ Full embedded React dashboard + REST API; auto-registers SignalR. **ASP.NET Core
     options.CorsAllowedOrigins   = new[] { "https://myapp.com" };   // empty = allow all
     options.AllowedIpAddresses   = new[] { "10.0.0.0/8" };          // empty = allow all; CIDR ok
     options.MagicLinkToken       = null;     // set a 32+ char token to enable /auth/magic
-    options.EnableSwagger        = false;    // default
+    options.EnableOpenApiDocument = false;   // default; true serves the OpenAPI doc at
+                                             // /evertask-monitoring/openapi/evertask-monitoring.json (net9+)
     options.EventDebounceMs      = 1000;     // dashboard cache-invalidation debounce
 });
 ```
+
+Optional Scalar API reference (`EverTask.Monitor.Api.Scalar` package, net9+): chain
+`.AddMonitoringApiScalar()` after `AddMonitoringApi()` to serve an interactive API reference at
+`/evertask-monitoring/scalar` (auto-enables the OpenAPI document). Everything stays under the
+monitoring base path: the host's own OpenAPI/Swagger/Scalar setup is never touched.
+(`EnableSwagger` is an obsolete no-op since 3.12.0.)
 
 **Required after `Build()`:** `app.MapEverTaskApi();` (maps hub + controllers + SPA). It also accepts
 an optional `Action<HttpConnectionDispatcherOptions>` to tune the SignalR hub connection.

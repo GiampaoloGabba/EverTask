@@ -35,6 +35,7 @@
   </Folder>
   <Folder Name="/src/Monitoring/">
     <Project Path="src/Monitoring/EverTask.Monitor.Api/EverTask.Monitor.Api.csproj" />
+    <Project Path="src/Monitoring/EverTask.Monitor.Api.Scalar/EverTask.Monitor.Api.Scalar.csproj" />
     <Project Path="src/Monitoring/EverTask.Monitor.AspnetCore.SignalR/EverTask.Monitor.AspnetCore.SignalR.csproj" />
   </Folder>
   <Folder Name="/src/Storage/">

@@ -4,11 +4,17 @@ REST API + embedded React dashboard for EverTask monitoring. Read-only endpoints
 
 ## Quick Facts
 
-- **Package**: `EverTask.Monitor.Api` (multi-target: net6.0, net7.0, net8.0, net9.0)
+- **Package**: `EverTask.Monitor.Api` (multi-target: net8.0, net9.0, net10.0 from `Directory.Build.props`)
 - **Type**: Class library (embedded resources: `wwwroot/`)
 - **Auth**: JWT only (no Basic Auth)
 - **UI**: Optional React SPA (see `UI/CLAUDE.md`)
-- **Entry points**: `.AddEverTaskApi()`, `.MapEverTaskApi()`
+- **Entry points**: `.AddMonitoringApi()`, `.MapEverTaskApi()`
+- **OpenAPI**: built-in ASP.NET Core generator (net9+ only, NO Swashbuckle), isolated document
+  `/evertask-monitoring/openapi/evertask-monitoring.json`; controllers carry ApiExplorer group
+  `evertask-monitoring` via `RoutePrefixConvention` (which touches ONLY this assembly's controllers)
+- **Scalar**: sibling package `EverTask.Monitor.Api.Scalar` plugs in via `IMonitoringApiEndpointExtension`
+  (resolved in `MapEverTaskApi`); `AddMonitoringApiScalar()` must follow `AddMonitoringApi()` and
+  force-enables `EnableOpenApiDocument`
 
 ## Build
 
@@ -23,6 +29,8 @@ cd UI && npm run build  # → ../wwwroot/
 ## Critical Configuration
 
 **EverTaskApiOptions.cs**:
+- `EnableOpenApiDocument` (bool, default: false) - OpenAPI doc, net9+ only (net8 no-op, analyzer ET0008 warns)
+- `EnableSwagger` - OBSOLETE no-op since 3.12 (Swashbuckle removed, issue #20)
 - `EnableAuthentication` (bool, default: true) - JWT auth on/off
 - `EnableUI` (bool, default: true) - Serve embedded React dashboard
 - `Username/Password` (string, default: "admin"/"admin") - JWT login credentials

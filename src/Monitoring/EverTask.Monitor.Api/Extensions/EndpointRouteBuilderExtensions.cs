@@ -1,4 +1,5 @@
 using EverTask.Monitor.AspnetCore.SignalR;
+using EverTask.Monitor.Api.Infrastructure;
 using EverTask.Monitor.Api.Middleware;
 using EverTask.Monitor.Api.Options;
 using Microsoft.AspNetCore.Builder;
@@ -67,6 +68,22 @@ public static class EndpointRouteBuilderExtensions
         // Map API controllers
         endpoints.MapControllers();
 
+#if NET9_0_OR_GREATER
+        // Serve the isolated OpenAPI document under the monitoring base path (net9+ only:
+        // the built-in generator does not exist on net8). The host's own OpenAPI/Swagger
+        // setup is never touched.
+        if (options.EnableOpenApiDocument)
+        {
+            endpoints.MapOpenApi($"{options.BasePath}/openapi/{{documentName}}.json");
+        }
+#endif
+
+        // Companion packages (e.g. EverTask.Monitor.Api.Scalar) map their endpoints here
+        foreach (var extension in endpoints.ServiceProvider.GetServices<IMonitoringApiEndpointExtension>())
+        {
+            extension.MapEndpoints(endpoints, options);
+        }
+
         // Conditionally serve UI
         if (options.EnableUI)
         {
@@ -110,7 +127,7 @@ public static class EndpointRouteBuilderExtensions
 
                 await using var stream = fileInfo.CreateReadStream();
                 await stream.CopyToAsync(context.Response.Body);
-            });
+            }).ExcludeFromDescription();
 
             // Map favicon and other root files (only files with extensions, not subroutes like /tasks)
             endpoints.MapGet($"{options.UIBasePath}/{{file}}.{{ext}}", async (string file, string ext, HttpContext context) =>
@@ -140,7 +157,7 @@ public static class EndpointRouteBuilderExtensions
                 context.Response.ContentType = contentType;
                 await using var stream = fileInfo.CreateReadStream();
                 await stream.CopyToAsync(context.Response.Body);
-            });
+            }).ExcludeFromDescription();
 
             // Map index.html for root UI path
             endpoints.MapGet(options.UIBasePath.TrimEnd('/'), async context =>
@@ -156,7 +173,7 @@ public static class EndpointRouteBuilderExtensions
 
                 await using var stream = fileInfo.CreateReadStream();
                 await stream.CopyToAsync(context.Response.Body);
-            });
+            }).ExcludeFromDescription();
 
             // SPA fallback routing (serve index.html for all UI subroutes)
             // This must be registered AFTER MapControllers to ensure API routes have priority

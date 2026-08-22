@@ -1,33 +1,36 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ApplicationModels;
-using Microsoft.AspNetCore.Mvc.Routing;
 
 namespace EverTask.Monitor.Api.Conventions;
 
 /// <summary>
-/// Application model convention that adds a route prefix to all controllers.
+/// Application model convention that scopes the EverTask monitoring controllers:
+/// adds the monitoring route prefix and assigns the ApiExplorer group name, so the
+/// controllers stay isolated from the host application's routes and OpenAPI documents.
+/// Controllers from other assemblies are left untouched.
 /// </summary>
-public class RoutePrefixConvention : IApplicationModelConvention
+public class RoutePrefixConvention(string prefix, string apiExplorerGroupName) : IApplicationModelConvention
 {
-    private readonly string _prefix;
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="RoutePrefixConvention"/> class.
-    /// </summary>
-    /// <param name="prefix">The route prefix to add to all controllers.</param>
-    public RoutePrefixConvention(string prefix)
-    {
-        _prefix = prefix.Trim('/');
-    }
+    private readonly string _prefix = prefix.Trim('/');
 
     /// <summary>
     /// Applies the convention to the application model.
     /// </summary>
     public void Apply(ApplicationModel application)
     {
+        var monitoringAssembly = typeof(RoutePrefixConvention).Assembly;
+
         foreach (var controller in application.Controllers)
         {
-            // Add prefix to all controller routes
+            // Only touch this package's controllers: host controllers keep their natural
+            // routes and stay in the host's own OpenAPI documents
+            if (controller.ControllerType.Assembly != monitoringAssembly)
+                continue;
+
+            // The group name keeps these controllers out of the host's OpenAPI/Swagger
+            // documents (default inclusion filters match on group name) and inside ours
+            controller.ApiExplorer.GroupName = apiExplorerGroupName;
+
             foreach (var selector in controller.Selectors)
             {
                 if (selector.AttributeRouteModel != null)

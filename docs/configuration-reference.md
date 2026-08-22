@@ -1106,7 +1106,8 @@ not auto-register SignalR monitoring and requires you to register `ITaskStorage`
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `EnableUI` | `bool` | `true` | Enable embedded React dashboard |
-| `EnableSwagger` | `bool` | `false` | Enable Swagger/OpenAPI documentation |
+| `EnableOpenApiDocument` | `bool` | `false` | Serve the monitoring OpenAPI document (net9.0+; auto-enabled by the Scalar package) |
+| `EnableSwagger` | `bool` | `false` | Obsolete no-op since 3.12.0 (use `EnableOpenApiDocument`) |
 | `Username` | `string` | `"admin"` | JWT Authentication username |
 | `Password` | `string` | `"admin"` | JWT Authentication password (CHANGE IN PRODUCTION!) |
 | `EnableAuthentication` | `bool` | `true` | Enable JWT Authentication |
@@ -1143,42 +1144,33 @@ options.EnableUI = false;
 - Third-party monitoring system integration
 - Headless server environments
 
-#### EnableSwagger
+#### EnableOpenApiDocument
 
-Controls whether Swagger/OpenAPI documentation is generated for the monitoring API.
-
-When enabled, EverTask creates a **separate Swagger document** that includes only monitoring endpoints and automatically excludes them from your application's Swagger document.
+Serves an OpenAPI document for the monitoring API, generated with the built-in ASP.NET Core
+generator (`Microsoft.AspNetCore.OpenApi`). Requires net9.0 or later: on net8.0 the setting is a
+no-op and the bundled analyzer reports `ET0008`.
 
 **Examples:**
 ```csharp
-// Enable Swagger for monitoring API
-options.EnableSwagger = true;
-
-// Configure SwaggerUI in your application
-builder.Services.AddSwaggerGen(c =>
-{
-    c.SwaggerDoc("v1", new() { Title = "My Application API", Version = "v1" });
-});
-
-app.UseSwaggerUI(c =>
-{
-    c.SwaggerEndpoint("/swagger/v1/swagger.json", "My Application API");
-    c.SwaggerEndpoint("/swagger/evertask-monitoring/swagger.json", "EverTask Monitoring API");
-});
+options.EnableOpenApiDocument = true;
 ```
 
 **How It Works:**
-- Swagger document name: `evertask-monitoring`
-- Swagger JSON endpoint: `/swagger/evertask-monitoring/swagger.json`
-- Includes only EverTask monitoring controllers (`/evertask-monitoring/api/*`)
-- Your application's Swagger document automatically excludes EverTask endpoints
-- No manual filtering or namespace predicates required
+- Document name: `evertask-monitoring`
+- Document endpoint: `/evertask-monitoring/openapi/evertask-monitoring.json`
+- Includes only EverTask monitoring controllers (they carry the `evertask-monitoring` ApiExplorer group)
+- Fully isolated from the host's OpenAPI/Swagger/Scalar setup, with nothing to configure on the host side
+- The `EverTask.Monitor.Api.Scalar` package enables this automatically and adds an interactive
+  API reference at `/evertask-monitoring/scalar` (`.AddMonitoringApiScalar()` after `AddMonitoringApi()`)
 
-**Use Cases:**
-- API documentation and exploration
-- Integration with API clients and code generators
-- Testing monitoring endpoints with Swagger UI
-- API versioning and contract validation
+See [monitoring-dashboard.md](monitoring-dashboard.md#openapi-document-and-scalar-ui) for the
+Scalar setup and the optional recipe to surface the document inside the host's own Swagger UI.
+
+#### EnableSwagger (obsolete)
+
+No-op since 3.12.0: the Swashbuckle integration was removed (it broke .NET 10 hosts using the
+built-in OpenAPI stack, issue #20). Use `EnableOpenApiDocument` and optionally the
+`EverTask.Monitor.Api.Scalar` package instead.
 
 #### Username / Password
 

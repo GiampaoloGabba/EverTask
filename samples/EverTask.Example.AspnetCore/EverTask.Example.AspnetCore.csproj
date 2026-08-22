@@ -9,14 +9,17 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="8.0.3" />
-    <PackageReference Include="Swashbuckle.AspNetCore" Version="8.1.4" />
-    <PackageReference Include="Swashbuckle.AspNetCore.Annotations" Version="8.1.4" />
+    <!-- The host's OWN Swagger stack: kept on purpose to prove the monitoring API stays isolated
+         from (and never conflicts with) whatever OpenAPI tooling the host application uses -->
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="10.2.3" />
+    <PackageReference Include="Swashbuckle.AspNetCore.Annotations" Version="10.2.3" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\EverTask\EverTask.csproj"/>
     <ProjectReference Include="..\..\src\Logging\EverTask.Logging.Serilog\EverTask.Logging.Serilog.csproj" />
     <ProjectReference Include="..\..\src\Monitoring\EverTask.Monitor.Api\EverTask.Monitor.Api.csproj" />
+    <ProjectReference Include="..\..\src\Monitoring\EverTask.Monitor.Api.Scalar\EverTask.Monitor.Api.Scalar.csproj" />
     <ProjectReference Include="..\..\src\Monitoring\EverTask.Monitor.AspnetCore.SignalR\EverTask.Monitor.AspnetCore.SignalR.csproj" />
   </ItemGroup>
 

@@ -32,10 +32,10 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
     <PackageReference Include="Microsoft.Extensions.FileProviders.Embedded" />
-    <PackageReference Include="Swashbuckle.AspNetCore">
-      <!-- Exclude build assets to prevent OpenAPI document generation (class library has no entry point) -->
-      <ExcludeAssets>build</ExcludeAssets>
-    </PackageReference>
+    <!-- Built-in OpenAPI document generation (AddOpenApi/MapOpenApi) is a net9+ feature -->
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Condition="'$(TargetFramework)' != 'net8.0'" />
+    <!-- Direct Microsoft.OpenApi reference: overrides the vulnerable 2.0.0 transitive (GHSA-v5pm-xwqc-g5wc) -->
+    <PackageReference Include="Microsoft.OpenApi" Condition="'$(TargetFramework)' == 'net10.0'" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" />
   </ItemGroup>
 

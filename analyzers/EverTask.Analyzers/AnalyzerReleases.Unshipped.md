@@ -12,3 +12,4 @@ ET0004  | EverTask.Serialization | Warning  | Abstract/interface payload propert
 ET0005  | EverTask.Serialization | Info     | object / Dictionary&lt;string,object&gt; property deserializes to JsonElement
 ET0006  | EverTask.Serialization | Disabled | Property of a type that is unlikely to round-trip
 ET0007  | EverTask.Serialization | Warning  | Type has multiple public constructors but none usable by System.Text.Json
+ET0008  | EverTask.Monitoring    | Warning  | Monitoring OpenAPI document (EnableOpenApiDocument / Scalar UI) is a no-op on net8.0

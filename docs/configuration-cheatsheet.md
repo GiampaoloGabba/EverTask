@@ -152,7 +152,8 @@ Defaults differ between the auto-created `default`/`recurring` queues (inherit t
 | EverTaskApiOptions | Default | Notes |
 |--------------------|---------|-------|
 | `EnableUI` | `true` | Embedded React dashboard |
-| `EnableSwagger` | `false` | Separate Swagger document `evertask-monitoring` |
+| `EnableOpenApiDocument` | `false` | OpenAPI doc at `/evertask-monitoring/openapi/evertask-monitoring.json` (net9+; auto-enabled by `EverTask.Monitor.Api.Scalar`) |
+| `EnableSwagger` | `false` | Obsolete no-op since 3.12.0 (use `EnableOpenApiDocument`) |
 | `Username` / `Password` | `"admin"` / `"admin"` | CHANGE IN PRODUCTION |
 | `EnableAuthentication` | `true` | JWT on API + hub |
 | `JwtSecret` | `null` (random 256-bit per instance) | Set explicitly (≥ 32 bytes) for multi-instance deployments |
