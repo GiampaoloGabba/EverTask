@@ -18,7 +18,9 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          # 10+: the UI's pnpm-workspace.yaml is a settings file for pnpm 10; pnpm 9 reads it as a
+          # workspace manifest and fails with "packages field missing or empty"
+          version: 10
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
