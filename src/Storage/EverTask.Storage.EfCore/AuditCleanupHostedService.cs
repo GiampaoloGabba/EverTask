@@ -1,5 +1,5 @@
+using EverTask.Abstractions;
 using EverTask.Logger;
-using EverTask.Resilience;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 

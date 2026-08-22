@@ -1,5 +1,4 @@
 using EverTask.Monitor.Api.Extensions;
-using EverTask.Resilience;
 using EverTask.Tests.Monitoring.TestData;
 
 namespace EverTask.Tests.Monitoring.TestHelpers;

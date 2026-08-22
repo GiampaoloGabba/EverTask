@@ -6,7 +6,6 @@ global using EverTask.Dispatcher;
 global using EverTask.Handler;
 global using EverTask.Logger;
 global using EverTask.Monitoring;
-global using EverTask.Resilience;
 global using EverTask.Scheduler;
 global using EverTask.Scheduler.Recurring;
 global using EverTask.Scheduler.Recurring.Intervals;

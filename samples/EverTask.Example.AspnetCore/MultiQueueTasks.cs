@@ -1,5 +1,4 @@
 using EverTask.Abstractions;
-using EverTask.Resilience;
 
 namespace EverTask.Example.AspnetCore;
 

@@ -6,6 +6,11 @@ Contracts-only package (`IEverTask`, `ITaskDispatcher`, `IEverTaskHandler<T>`, `
 `IRetryPolicy`, `IRateLimitedTask`): application code references it without pulling in the runtime, the same
 way MediatR.Contracts relates to MediatR.
 
+**Every public type lives in the flat `EverTask.Abstractions` namespace** (3.12+; `EverTask.Resilience` is
+gone). The feature folders (`Handler/`, `Resilience/`, `RateLimiting/`, `Recurring/`, `Guids/`) are
+organizational only — the `.csproj.DotSettings` marks them as non-namespace-providers, so never "fix" a
+file's namespace to match its folder.
+
 ## Payload contract (System.Text.Json since v3.10)
 
 Payloads are (de)serialized by `src/EverTask/Serialization/EverTaskJson.cs` — process-isolated static options
@@ -48,6 +53,7 @@ through their serialized members (closure walk, visited-set + depth bound), mirr
 | ET0006 | **Disabled** | Non-round-trippable type (delegate, `Stream`, `Type`, `IntPtr`, `CancellationToken`, `DbContext`, `ValueTuple`) — heuristic | — |
 | ET0007 | Warning | ≥2 public constructors, none parameterless or `[JsonConstructor]` → STJ throws on recovery (records & single-ctor are OK) | — |
 | ET0008 | Warning | net8.0 compilation sets `EnableOpenApiDocument = true` or calls `AddMonitoringApiScalar()` — both no-ops there (the built-in OpenAPI generator is net9+); separate `MonitoringOpenApiAnalyzer`, category `EverTask.Monitoring` | — |
+| ET0009 | Warning | Compile-time-constant retry delay, timeout or audit cleanup interval above the maximum timer duration (`uint.MaxValue - 1` ms, ~49.7 days); separate `TimerDelayLimitAnalyzer`, category `EverTask.Resilience` | — |
 
 Each rule is suppressible/promotable per-member via `dotnet_diagnostic.ETxxxx.severity` in `.editorconfig`.
 

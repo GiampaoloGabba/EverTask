@@ -1,5 +1,4 @@
-// ReSharper disable once CheckNamespace
-namespace EverTask.Resilience;
+namespace EverTask.Abstractions;
 
 /// <summary>
 /// Exponential backoff retry policy with growing delays between retry attempts and optional exception filtering.

@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Logging;
 
-namespace EverTask.Resilience;
+namespace EverTask.Abstractions;
 
 // EventId range 1900-1999 (RetryPolicyBase: the Execute loop shared by LinearRetryPolicy and ExponentialRetryPolicy). Ranges are allocated per component in the #32 plan;
 // a reflection test asserts solution-wide uniqueness.

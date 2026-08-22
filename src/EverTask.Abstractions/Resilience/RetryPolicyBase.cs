@@ -1,8 +1,6 @@
-using EverTask.Abstractions;
 using Microsoft.Extensions.Logging;
 
-// ReSharper disable once CheckNamespace
-namespace EverTask.Resilience;
+namespace EverTask.Abstractions;
 
 /// <summary>
 /// Base class for delay-based retry policies with exception filtering and retry callbacks.

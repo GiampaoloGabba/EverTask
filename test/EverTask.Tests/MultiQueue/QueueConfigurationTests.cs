@@ -1,6 +1,5 @@
 using System.Threading.Channels;
 using EverTask.Configuration;
-using EverTask.Resilience;
 
 namespace EverTask.Tests.MultiQueue;
 

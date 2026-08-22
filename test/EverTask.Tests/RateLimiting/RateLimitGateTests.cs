@@ -1,7 +1,6 @@
 using EverTask.Handler;
 using EverTask.Logger;
 using EverTask.RateLimiting;
-using EverTask.Resilience;
 using EverTask.Scheduler;
 using EverTask.Scheduler.Recurring;
 using EverTask.Scheduler.Recurring.Intervals;

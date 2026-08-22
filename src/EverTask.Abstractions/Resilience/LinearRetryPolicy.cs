@@ -1,5 +1,4 @@
-// ReSharper disable once CheckNamespace
-namespace EverTask.Resilience;
+namespace EverTask.Abstractions;
 
 /// <summary>
 /// Linear retry policy with fixed delays between retry attempts and optional exception filtering.

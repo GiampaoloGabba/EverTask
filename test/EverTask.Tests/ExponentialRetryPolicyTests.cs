@@ -6,7 +6,6 @@ using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using EverTask.Abstractions;
-using EverTask.Resilience;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Xunit;

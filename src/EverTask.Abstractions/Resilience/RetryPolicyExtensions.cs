@@ -1,7 +1,6 @@
 using System.Data.Common;
 using System.Net;
 using System.Net.Sockets;
-using EverTask.Resilience;
 
 namespace EverTask.Abstractions;
 
@@ -35,8 +34,7 @@ public static class RetryPolicyExtensions
     public static TPolicy HandleTransientDatabaseErrors<TPolicy>(this TPolicy policy)
         where TPolicy : RetryPolicyBase<TPolicy>
     {
-        if (policy == null)
-            throw new ArgumentNullException(nameof(policy));
+        ArgumentNullException.ThrowIfNull(policy);
 
         return policy.Handle(
             typeof(DbException),
@@ -46,7 +44,7 @@ public static class RetryPolicyExtensions
 
     /// <inheritdoc cref="HandleTransientDatabaseErrors{TPolicy}"/>
     public static LinearRetryPolicy HandleTransientDatabaseErrors(this LinearRetryPolicy policy) =>
-        HandleTransientDatabaseErrors<LinearRetryPolicy>(policy);
+        policy.HandleTransientDatabaseErrors<LinearRetryPolicy>();
 
     /// <summary>
     /// Configures retry policy to handle common transient network exceptions.
@@ -64,8 +62,7 @@ public static class RetryPolicyExtensions
     public static TPolicy HandleTransientNetworkErrors<TPolicy>(this TPolicy policy)
         where TPolicy : RetryPolicyBase<TPolicy>
     {
-        if (policy == null)
-            throw new ArgumentNullException(nameof(policy));
+        ArgumentNullException.ThrowIfNull(policy);
 
         return policy.Handle(
             typeof(HttpRequestException),
@@ -77,7 +74,7 @@ public static class RetryPolicyExtensions
 
     /// <inheritdoc cref="HandleTransientNetworkErrors{TPolicy}"/>
     public static LinearRetryPolicy HandleTransientNetworkErrors(this LinearRetryPolicy policy) =>
-        HandleTransientNetworkErrors<LinearRetryPolicy>(policy);
+        policy.HandleTransientNetworkErrors<LinearRetryPolicy>();
 
     /// <summary>
     /// Configures retry policy to handle all common transient errors (Database + Network).
@@ -95,8 +92,7 @@ public static class RetryPolicyExtensions
     public static TPolicy HandleAllTransientErrors<TPolicy>(this TPolicy policy)
         where TPolicy : RetryPolicyBase<TPolicy>
     {
-        if (policy == null)
-            throw new ArgumentNullException(nameof(policy));
+        ArgumentNullException.ThrowIfNull(policy);
 
         return policy
             .HandleTransientDatabaseErrors()
@@ -105,5 +101,5 @@ public static class RetryPolicyExtensions
 
     /// <inheritdoc cref="HandleAllTransientErrors{TPolicy}"/>
     public static LinearRetryPolicy HandleAllTransientErrors(this LinearRetryPolicy policy) =>
-        HandleAllTransientErrors<LinearRetryPolicy>(policy);
+        policy.HandleAllTransientErrors<LinearRetryPolicy>();
 }

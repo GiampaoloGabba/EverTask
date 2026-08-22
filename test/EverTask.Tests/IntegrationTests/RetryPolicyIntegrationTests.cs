@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using EverTask.Monitoring;
-using EverTask.Resilience;
 using EverTask.Storage;
 using EverTask.Tests.TestHelpers;
 

@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using EverTask.Resilience;
 
 namespace EverTask.Tests;
 

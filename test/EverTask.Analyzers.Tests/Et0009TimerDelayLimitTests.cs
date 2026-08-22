@@ -15,7 +15,7 @@ public class Et0009TimerDelayLimitTests
     // Minimal mirrors of the real EverTask surface, matching full metadata names.
     private const string Stubs = """
         using System;
-        namespace EverTask.Resilience
+        namespace EverTask.Abstractions
         {
             public class LinearRetryPolicy
             {
@@ -71,7 +71,7 @@ public class Et0009TimerDelayLimitTests
     [Fact]
     public Task Reports_linear_policy_scalar_delay_over_the_limit() => VerifyAsync("""
         using System;
-        using EverTask.Resilience;
+        using EverTask.Abstractions;
         class C
         {
             object P = new LinearRetryPolicy(3, {|ET0009:TimeSpan.FromDays(60)|});
@@ -81,7 +81,7 @@ public class Et0009TimerDelayLimitTests
     [Fact]
     public Task Reports_linear_policy_array_element_over_the_limit() => VerifyAsync("""
         using System;
-        using EverTask.Resilience;
+        using EverTask.Abstractions;
         class C
         {
             object P = new LinearRetryPolicy(new[] { TimeSpan.FromSeconds(1), {|ET0009:TimeSpan.FromDays(50)|} });
@@ -91,7 +91,7 @@ public class Et0009TimerDelayLimitTests
     [Fact]
     public Task Reports_exponential_policy_max_delay_over_the_limit() => VerifyAsync("""
         using System;
-        using EverTask.Resilience;
+        using EverTask.Abstractions;
         class C
         {
             object P = new ExponentialRetryPolicy(3, TimeSpan.FromSeconds(1), maxDelay: {|ET0009:TimeSpan.FromDays(365)|});
@@ -152,7 +152,6 @@ public class Et0009TimerDelayLimitTests
     public Task Does_not_report_valid_or_runtime_values() => VerifyAsync("""
         using System;
         using EverTask.Abstractions;
-        using EverTask.Resilience;
         using Microsoft.Extensions.DependencyInjection;
         class MyHandler : EverTaskHandler<string>
         {

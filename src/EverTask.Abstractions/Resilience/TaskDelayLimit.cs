@@ -3,8 +3,7 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("EverTask")]
 [assembly: InternalsVisibleTo("EverTask.Storage.EfCore")]
 
-// ReSharper disable once CheckNamespace
-namespace EverTask.Resilience;
+namespace EverTask.Abstractions;
 
 // Task.Delay (and every .NET timer, CancellationTokenSource.CancelAfter included) rejects delays above
 // uint.MaxValue - 1 milliseconds (~49.7 days) with an ArgumentOutOfRangeException. The retry policies

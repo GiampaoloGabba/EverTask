@@ -1,4 +1,3 @@
-using EverTask.Resilience;
 using EverTask.Storage;
 using EverTask.Tests.TestHelpers;
 

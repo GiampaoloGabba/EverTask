@@ -1,5 +1,4 @@
 using System.Net.Sockets;
-using EverTask.Resilience;
 using Microsoft.Extensions.Logging;
 
 namespace EverTask.Tests;

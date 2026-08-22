@@ -1,4 +1,4 @@
-namespace EverTask;
+namespace EverTask.Abstractions;
 
 /// <summary>
 /// Provides database-optimized GUID generation.

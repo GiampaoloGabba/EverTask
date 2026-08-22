@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using EverTask.Resilience;
 using IRetryPolicy = EverTask.Abstractions.IRetryPolicy;
 
 namespace EverTask.Tests.Monitoring.SignalR;

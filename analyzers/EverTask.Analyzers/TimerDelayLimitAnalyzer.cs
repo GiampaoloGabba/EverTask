@@ -20,8 +20,8 @@ public sealed class TimerDelayLimitAnalyzer : DiagnosticAnalyzer
 {
     private const double MaxTimerMilliseconds = 4_294_967_294d; // uint.MaxValue - 1
 
-    private const string LinearPolicyTypeName      = "EverTask.Resilience.LinearRetryPolicy";
-    private const string ExponentialPolicyTypeName = "EverTask.Resilience.ExponentialRetryPolicy";
+    private const string LinearPolicyTypeName      = "EverTask.Abstractions.LinearRetryPolicy";
+    private const string ExponentialPolicyTypeName = "EverTask.Abstractions.ExponentialRetryPolicy";
     private const string ServiceConfigTypeName     = "Microsoft.Extensions.DependencyInjection.EverTaskServiceConfiguration";
     private const string QueueConfigTypeName       = "EverTask.Configuration.QueueConfiguration";
     private const string HandlerOptionsTypeName    = "EverTask.Abstractions.IEverTaskHandlerOptions";

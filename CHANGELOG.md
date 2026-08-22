@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (breaking — retry policies moved to the `EverTask.Abstractions` namespace)
+
+- **`LinearRetryPolicy` now lives in `EverTask.Abstractions`** (together with the new
+  `ExponentialRetryPolicy` and `RetryPolicyBase<TPolicy>`), next to `IRetryPolicy` and the
+  `HandleTransient*` extensions, instead of the two-file `EverTask.Resilience` namespace the
+  interface never shared. Migration: remove any `using EverTask.Resilience;` — most files already
+  import `EverTask.Abstractions` for the handler base and need nothing else. Assemblies compiled
+  against 3.11.0 need a recompile.
+
 ### Changed (breaking — Monitor.Api OpenAPI integration rebuilt, #20)
 
 - **`EverTask.Monitor.Api` no longer depends on Swashbuckle.** The hard dependency crashed .NET 10
@@ -123,7 +132,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ShouldRetry` and `Execute` now resolve on the base, which the CLR binds up the hierarchy), and the
   `HandleTransient*` extensions gained generic overloads that keep the concrete policy type for
   chaining; the original `(this LinearRetryPolicy)` overloads stay, so assemblies compiled against
-  3.11.0 and subclasses of `LinearRetryPolicy` keep binding. Source- and binary-compatible.
+  3.11.0 and subclasses of `LinearRetryPolicy` keep binding. Aside from the namespace move noted
+  under the breaking changes, source- and binary-compatible.
 - **Analyzer rule ET0009** (`EverTask.Resilience` category): warns when a constant retry delay, timeout
   or cleanup interval exceeds what .NET timers support (about 49.7 days). At runtime the built-in
   policies now reject explicit over-limit delays at construction, while the worker timeout and the

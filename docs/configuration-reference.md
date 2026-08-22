@@ -1840,7 +1840,7 @@ The scheduling discriminator (`TimeSpan` delay, `DateTimeOffset` time, or `Actio
 
 ## Recurring Task Builder
 
-The `Action<IRecurringTaskBuilder>` overload of `Dispatch` configures a recurring schedule via a fluent builder (`src/EverTask.Abstractions/IRecurringTaskBuilder.cs`). All times are **UTC**. Full feature docs: [Recurring Tasks](recurring-tasks.md).
+The `Action<IRecurringTaskBuilder>` overload of `Dispatch` configures a recurring schedule via a fluent builder (`src/EverTask.Abstractions/Recurring/IRecurringTaskBuilder.cs`). All times are **UTC**. Full feature docs: [Recurring Tasks](recurring-tasks.md).
 
 **Entry / first run:**
 - `Schedule()`: pure recurring, no initial one-off run.

@@ -71,7 +71,7 @@ them before touching the dispatcher, the worker or a recovery filter.
 | Module | Local CLAUDE.md |
 |--------|-----------------|
 | Core (dispatcher, worker, queue/recovery invariants) | `src/EverTask/CLAUDE.md` |
-| Abstractions (payload contract, retry, analyzers ET0001–ET0008) | `src/EverTask.Abstractions/CLAUDE.md` |
+| Abstractions (payload contract, retry, analyzers ET0001–ET0009) | `src/EverTask.Abstractions/CLAUDE.md` |
 | Rate limiting (hard invariants) | `src/EverTask/RateLimiting/CLAUDE.md` |
 | Recurring (cron, builder, skip-forward) | `src/EverTask/Scheduler/Recurring/CLAUDE.md` |
 | EF Core base + the four providers | `src/Storage/EverTask.Storage.{EfCore,SqlServer,Postgres,MySql,Sqlite}/CLAUDE.md` |
