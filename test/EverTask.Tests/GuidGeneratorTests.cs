@@ -85,7 +85,7 @@ public class GuidGeneratorTests
 
         // Act - Generate multiple GUIDs with small delay
         var guids = new List<Guid>();
-        for (int i = 0; i < 100; i++)
+        for (var i = 0; i < 100; i++)
         {
             guids.Add(generator.NewDatabaseFriendly());
         }
@@ -140,7 +140,7 @@ public class GuidGeneratorTests
         const int iterations = 10000;
 
         // Act
-        for (int i = 0; i < iterations; i++)
+        for (var i = 0; i < iterations; i++)
         {
             var guid = generator.NewDatabaseFriendly();
             guidSet.Add(guid);

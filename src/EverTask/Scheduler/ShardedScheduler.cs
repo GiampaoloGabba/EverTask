@@ -252,7 +252,7 @@ public class ShardedScheduler : IScheduler, IDisposable
         {
             try
             {
-                string queueName = item.QueueName ??
+                var queueName = item.QueueName ??
                                    (item.RecurringTask != null ? QueueNames.Recurring : QueueNames.Default);
 
                 _logger.LogDebug("Shard {ShardId}: Dispatching task {TaskId} to queue '{QueueName}'",
@@ -371,7 +371,7 @@ public class ShardedScheduler : IScheduler, IDisposable
     {
         // Hash-based sharding per distribuzione uniforme
         // Use unsigned hash to prevent negative modulo when GetHashCode() returns int.MinValue
-        int shardIndex = (int)((uint)persistenceId.GetHashCode() % (uint)_shardCount);
+        var shardIndex = (int)((uint)persistenceId.GetHashCode() % (uint)_shardCount);
         return _shards[shardIndex];
     }
 

@@ -37,20 +37,20 @@ public sealed class A4StorageOnly : IScenario
     public async Task<IterationOutcome> RunIterationAsync(RunConfig cfg, LatencyRecorder latency, CancellationToken ct)
     {
         var storage = _handle!.Storage;
-        int lanes = Math.Max(1, cfg.Parallelism);
-        long perLane = cfg.Count / lanes;
-        long total = perLane * lanes;
+        var lanes = Math.Max(1, cfg.Parallelism);
+        var perLane = cfg.Count / lanes;
+        var total = perLane * lanes;
 
         var sw = Stopwatch.StartNew();
         var tasks = new Task[lanes];
-        for (int l = 0; l < lanes; l++)
+        for (var l = 0; l < lanes; l++)
         {
             tasks[l] = Task.Run(async () =>
             {
                 for (long i = 0; i < perLane; i++)
                 {
                     var id = Guid.NewGuid();
-                    long t0 = Stopwatch.GetTimestamp();
+                    var t0 = Stopwatch.GetTimestamp();
                     await storage.Persist(BuildTask(id), ct).ConfigureAwait(false);
                     await storage.SetInProgress(id, AuditLevel.None, ct).ConfigureAwait(false);
                     await storage.SetCompleted(id, 0.0, AuditLevel.None).ConfigureAwait(false);

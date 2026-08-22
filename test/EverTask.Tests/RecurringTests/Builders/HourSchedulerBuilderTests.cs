@@ -19,7 +19,7 @@ public class HourSchedulerBuilderTests
     public void HourSchedulerBuilder_AtMinute_SetsOnMinuteForHourInterval()
     {
         _task.HourInterval = new HourInterval(1);
-        int minute = 30;
+        var minute = 30;
 
         _builder.AtMinute(minute);
 
@@ -30,7 +30,7 @@ public class HourSchedulerBuilderTests
     public void HourSchedulerBuilder_AtMinute_ThrowsExceptionForNullHourInterval()
     {
         _task.HourInterval = null;
-        int minute = 30;
+        var minute = 30;
 
         var exception = Assert.Throws<ArgumentNullException>(() => _builder.AtMinute(minute));
         Assert.Equal("task.HourInterval", exception.ParamName);

@@ -345,7 +345,7 @@ public class EverTaskServiceConfiguration
     private static int GetDefaultChannelCapacity()
     {
         // Scale con CPU cores
-        int cores = Environment.ProcessorCount;
+        var cores = Environment.ProcessorCount;
         return Math.Max(1000, cores * 200); // Min 1000, ~1600 su 8-core
     }
 
@@ -357,7 +357,7 @@ public class EverTaskServiceConfiguration
     private static int GetDefaultParallelism()
     {
         // Conservative: cores * 2 (buono per I/O-bound tasks)
-        int cores = Environment.ProcessorCount;
+        var cores = Environment.ProcessorCount;
         return Math.Max(4, cores * 2); // Min 4, ~16 su 8-core
     }
 }

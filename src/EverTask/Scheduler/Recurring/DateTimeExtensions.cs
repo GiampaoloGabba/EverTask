@@ -30,7 +30,7 @@ public static class DateTimeOffsetExtensions
 
         // If nextDay is on a different day than current, we can use >= comparison
         // Otherwise, use > to ensure we get a time after the current time
-        bool isDifferentDay = nextDay.Date != current.Date;
+        var isDifferentDay = nextDay.Date != current.Date;
 
         // The default for TimeOnly is midnight, so we need to check the array index to know if there is a date specified by a user
         var nextTimeIndex = Array.FindIndex(onTimes, t => isDifferentDay ? t >= currentTimeOnly : t > currentTimeOnly);
@@ -113,7 +113,7 @@ public static class DateTimeOffsetExtensions
             throw new ArgumentException("validDays cannot be empty", nameof(validDays));
 
         const int maxIterations = 7; // Only 7 days in a week
-        for (int i = 0; i < maxIterations; i++)
+        for (var i = 0; i < maxIterations; i++)
         {
             if (validDays.Contains(dateTime.DayOfWeek))
                 return dateTime;
@@ -137,7 +137,7 @@ public static class DateTimeOffsetExtensions
         var daysInMonth = DateTime.DaysInMonth(startYear, startMonth);
 
         // Try to find a valid day in the current month
-        for (int i = 0; i < daysInMonth; i++)
+        for (var i = 0; i < daysInMonth; i++)
         {
             if (validDays.Contains(dateTime.Day))
                 return dateTime;
@@ -164,7 +164,7 @@ public static class DateTimeOffsetExtensions
             throw new ArgumentException("validHour must contain values between 0 and 23", nameof(validHour));
 
         const int maxIterations = 24;
-        for (int i = 0; i < maxIterations; i++)
+        for (var i = 0; i < maxIterations; i++)
         {
             if (validHour.Contains(dateTime.Hour))
                 return dateTime;
@@ -183,7 +183,7 @@ public static class DateTimeOffsetExtensions
             throw new ArgumentException("validMonths must contain values between 1 and 12", nameof(validMonths));
 
         const int maxIterations = 12;
-        for (int i = 0; i < maxIterations; i++)
+        for (var i = 0; i < maxIterations; i++)
         {
             if (validMonths.Contains(dateTime.Month))
                 return dateTime;
@@ -199,7 +199,7 @@ public static class DateTimeOffsetExtensions
         var firstOfMonth = dateTime.Adjust(day: 1);
 
         const int maxIterations = 7; // First occurrence must be within first 7 days
-        for (int i = 0; i < maxIterations; i++)
+        for (var i = 0; i < maxIterations; i++)
         {
             if (firstOfMonth.DayOfWeek == dayOfWeek)
                 return firstOfMonth;

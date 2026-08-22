@@ -24,7 +24,7 @@ public sealed record EnvInfo(
 {
     public static EnvInfo Capture()
     {
-        string affinity = "n/a";
+        var affinity = "n/a";
         if (OperatingSystem.IsWindows() || OperatingSystem.IsLinux())
         {
             try { affinity = Process.GetCurrentProcess().ProcessorAffinity.ToString("X"); }

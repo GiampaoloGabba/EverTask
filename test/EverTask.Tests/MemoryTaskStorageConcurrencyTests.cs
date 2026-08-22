@@ -300,7 +300,7 @@ public class MemoryTaskStorageConcurrencyTests
         // Act - Concurrently update run counters
         await Parallel.ForEachAsync(tasks, async (task, ct) =>
         {
-            for (int run = 0; run < runsPerTask; run++)
+            for (var run = 0; run < runsPerTask; run++)
             {
                 var nextRun = DateTimeOffset.UtcNow.AddMinutes(run + 1);
                 await _storage.UpdateCurrentRun(task.Id, 100.0, nextRun, AuditLevel.Full);

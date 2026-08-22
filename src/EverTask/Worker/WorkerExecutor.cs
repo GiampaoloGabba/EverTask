@@ -220,7 +220,7 @@ public class WorkerExecutor(
         object? handler = null!; // Will be assigned in both if and else branches
 
         // Track execution time (initialized to 0, updated if task completes successfully)
-        double executionTime = 0.0;
+        var executionTime = 0.0;
 
         // Set when a RETRY attempt was deferred by the rate limiter: the gate re-parked the
         // task, so the completion path AND the finally's post-execution logic must be skipped

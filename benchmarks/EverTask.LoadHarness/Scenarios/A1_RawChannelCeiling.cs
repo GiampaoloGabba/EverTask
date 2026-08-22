@@ -19,7 +19,7 @@ public sealed class A1RawChannelCeiling : IScenario
 
     public async Task<IterationOutcome> RunIterationAsync(RunConfig cfg, LatencyRecorder latency, CancellationToken ct)
     {
-        int producerCount = Math.Max(1, cfg.Producers);
+        var producerCount = Math.Max(1, cfg.Producers);
         var channel = Channel.CreateBounded<Item>(new BoundedChannelOptions(cfg.Capacity)
         {
             FullMode = BoundedChannelFullMode.Wait,
@@ -28,13 +28,13 @@ public sealed class A1RawChannelCeiling : IScenario
             AllowSynchronousContinuations = false
         });
 
-        long perProducer = cfg.Count / producerCount;
-        long count = perProducer * producerCount; // drop the remainder so producers are identical
+        var perProducer = cfg.Count / producerCount;
+        var count = perProducer * producerCount; // drop the remainder so producers are identical
         var sw = Stopwatch.StartNew();
 
         // Consumers: each competes for items off the shared reader; latency = dequeue − dispatch.
         var consumers = new Task[cfg.Parallelism];
-        for (int c = 0; c < cfg.Parallelism; c++)
+        for (var c = 0; c < cfg.Parallelism; c++)
         {
             consumers[c] = Task.Run(async () =>
             {
@@ -46,7 +46,7 @@ public sealed class A1RawChannelCeiling : IScenario
         // Multiple producers, full-speed; Wait back-pressure caps in-flight at Capacity.
         // Multi-writer mirrors EverTask's channel (dispatcher + scheduler + recovery all write).
         var producers = new Task[producerCount];
-        for (int p = 0; p < producerCount; p++)
+        for (var p = 0; p < producerCount; p++)
         {
             producers[p] = Task.Run(async () =>
             {

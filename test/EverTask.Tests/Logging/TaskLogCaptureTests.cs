@@ -260,7 +260,7 @@ public class TaskLogCaptureTests
         uniqueSequenceNumbers.ShouldBe(100);
 
         // All message numbers should be present (0-99)
-        for (int i = 0; i < 100; i++)
+        for (var i = 0; i < 100; i++)
         {
             logs.ShouldContain(l => l.Message.Contains($"Message {i}"));
         }
@@ -360,7 +360,7 @@ public class TaskLogCaptureTests
             maxPersistedLogs: null);
 
         // Act - log more than default capacity
-        for (int i = 0; i < 200; i++)
+        for (var i = 0; i < 200; i++)
         {
             capture.LogInformation($"Log {i}");
         }

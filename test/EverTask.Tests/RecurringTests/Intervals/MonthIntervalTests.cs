@@ -7,7 +7,7 @@ public class MonthIntervalTests
     [Fact]
     public void Month_Constructor()
     {
-        int expectedInterval = 6;
+        var expectedInterval = 6;
         var interval         = new MonthInterval(expectedInterval);
 
         Assert.Equal(expectedInterval, interval.Interval);
@@ -16,7 +16,7 @@ public class MonthIntervalTests
     [Fact]
     public void Month_Constructor_OnMonths()
     {
-        int expectedInterval = 3;
+        var expectedInterval = 3;
         var onMonths         = new [] { 1, 3, 5 };
         var interval         = new MonthInterval(expectedInterval, onMonths);
 

@@ -712,7 +712,7 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         orderedAudits.Count.ShouldBeGreaterThanOrEqualTo(2, "Should have at least InProgress and Completed");
 
         // Verify progressive timestamps
-        for (int i = 1; i < orderedAudits.Count; i++)
+        for (var i = 1; i < orderedAudits.Count; i++)
         {
             orderedAudits[i-1].UpdatedAtUtc.ShouldBeLessThan(orderedAudits[i].UpdatedAtUtc,
                 $"{orderedAudits[i-1].NewStatus} should happen before {orderedAudits[i].NewStatus}");

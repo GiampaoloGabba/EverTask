@@ -29,7 +29,7 @@ public sealed class PaddedCounters
     public long Sum()
     {
         long total = 0;
-        for (int i = 0; i < _slots.Length; i++)
+        for (var i = 0; i < _slots.Length; i++)
             total += _slots[i].Value;
         return total;
     }

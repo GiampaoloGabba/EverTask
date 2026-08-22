@@ -45,8 +45,8 @@ public static class StorageProvisioner
 
     private static Provisioned ProvisionSqlite()
     {
-        string dbPath = Path.Combine(Path.GetTempPath(), $"evertask-bench-{Guid.NewGuid():N}.db");
-        string cs = $"Data Source={dbPath};Cache=Shared";
+        var dbPath = Path.Combine(Path.GetTempPath(), $"evertask-bench-{Guid.NewGuid():N}.db");
+        var cs = $"Data Source={dbPath};Cache=Shared";
 
         // Keep-alive connection holds the WAL/SHM live for the run; closed and removed on cleanup.
         var keepAlive = new SqliteConnection(cs);

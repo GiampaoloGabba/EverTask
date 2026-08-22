@@ -52,7 +52,7 @@ public class TestTaskManyLogsHandler : EverTaskHandler<TestTaskManyLogs>
 {
     public override async Task Handle(TestTaskManyLogs task, CancellationToken ct)
     {
-        for (int i = 0; i < task.count; i++)
+        for (var i = 0; i < task.count; i++)
         {
             Logger.LogInformation($"Log message {i + 1} of {task.count}");
         }

@@ -19,7 +19,7 @@ public class MonthlySchedulerBuilderTests
     public void MonthlySchedulerBuilder_OnDay_SetsOnDayForMonthInterval()
     {
         _task.MonthInterval = new MonthInterval(1);
-        int day = 15;
+        var day = 15;
 
         _builder.OnDay(day);
 

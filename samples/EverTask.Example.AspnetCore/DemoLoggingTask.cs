@@ -24,7 +24,7 @@ public class DemoLoggingTaskHandler : EverTaskHandler<DemoLoggingTask>
         Logger.LogInformation("INFORMATION: Task '{TaskName}' is processing...", task.TaskName);
 
         // Simulate work with multiple log levels
-        for (int i = 1; i <= task.LogCount; i++)
+        for (var i = 1; i <= task.LogCount; i++)
         {
             await Task.Delay(100, cancellationToken); // Simulate some work
 

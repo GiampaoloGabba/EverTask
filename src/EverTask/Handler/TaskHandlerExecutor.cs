@@ -254,7 +254,7 @@ public static class TaskHandlerExecutorExtensions
                 $"Cannot serialize executor: both Handler and HandlerTypeName are null for task {executor.PersistenceId}");
         }
 
-        bool            isRecurring      = false;
+        var            isRecurring      = false;
         string?         scheduleTask     = null;
         DateTimeOffset? nextRun          = null;
         string?         scheduleTaskInfo = null;

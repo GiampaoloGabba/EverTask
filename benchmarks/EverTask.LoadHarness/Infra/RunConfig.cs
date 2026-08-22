@@ -50,7 +50,7 @@ public sealed record RunConfig
     public static RunConfig Parse(IReadOnlyList<string> args, int startIndex)
     {
         var cfg = new RunConfig();
-        for (int i = startIndex; i < args.Count - 1; i += 2)
+        for (var i = startIndex; i < args.Count - 1; i += 2)
         {
             var key = args[i];
             var val = args[i + 1];
@@ -79,8 +79,8 @@ public sealed record RunConfig
     {
         var spec = Payload.Trim();
         if (spec is "" or "none" or "tiny" or "0") return null;
-        char suffix = char.ToLowerInvariant(spec[^1]);
-        int chars = suffix == 'k' ? int.Parse(spec[..^1]) * 1024 : int.Parse(spec);
+        var suffix = char.ToLowerInvariant(spec[^1]);
+        var chars = suffix == 'k' ? int.Parse(spec[..^1]) * 1024 : int.Parse(spec);
         return chars <= 0 ? null : new string('x', chars);
     }
 
@@ -89,10 +89,10 @@ public sealed record RunConfig
     {
         raw = raw.Replace("_", "").Trim();
         if (raw.Length == 0) return 0;
-        char suffix = char.ToLowerInvariant(raw[^1]);
+        var suffix = char.ToLowerInvariant(raw[^1]);
         if (suffix is 'k' or 'm')
         {
-            long b = long.Parse(raw[..^1]);
+            var b = long.Parse(raw[..^1]);
             return suffix == 'k' ? b * 1_000 : b * 1_000_000;
         }
         return long.Parse(raw);

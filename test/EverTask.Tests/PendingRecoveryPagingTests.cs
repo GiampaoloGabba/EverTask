@@ -15,7 +15,7 @@ public class PendingRecoveryPagingTests
 
         // Create 10 pending tasks
         var start = DateTimeOffset.UtcNow;
-        for (int i = 0; i < 10; i++)
+        for (var i = 0; i < 10; i++)
         {
             await storage.Persist(new QueuedTask
             {
@@ -49,7 +49,7 @@ public class PendingRecoveryPagingTests
         // Create 25 pending tasks
         var taskIds = new List<Guid>();
         var start = DateTimeOffset.UtcNow;
-        for (int i = 0; i < 25; i++)
+        for (var i = 0; i < 25; i++)
         {
             var taskId = TestGuidGenerator.New();
             taskIds.Add(taskId);
@@ -91,7 +91,7 @@ public class PendingRecoveryPagingTests
         // Create 1000 pending tasks (simulating large backlog)
         const int totalTasks = 1000;
         var start = DateTimeOffset.UtcNow;
-        for (int i = 0; i < totalTasks; i++)
+        for (var i = 0; i < totalTasks; i++)
         {
             await storage.Persist(new QueuedTask
             {
@@ -136,7 +136,7 @@ public class PendingRecoveryPagingTests
         var pendingTaskIds = new List<Guid>();
 
         var start = DateTimeOffset.UtcNow;
-        for (int i = 0; i < 10; i++)
+        for (var i = 0; i < 10; i++)
         {
             var pendingId = TestGuidGenerator.New();
             pendingTaskIds.Add(pendingId);
@@ -267,7 +267,7 @@ public class PendingRecoveryPagingTests
 
         // Create 100 pending tasks
         var start = DateTimeOffset.UtcNow;
-        for (int i = 0; i < 100; i++)
+        for (var i = 0; i < 100; i++)
         {
             await storage.Persist(new QueuedTask
             {
@@ -287,7 +287,7 @@ public class PendingRecoveryPagingTests
             {
                 DateTimeOffset? lastCreatedAt = null;
                 Guid? lastId = null;
-                for (int i = 0; i < 10; i++)
+                for (var i = 0; i < 10; i++)
                 {
                     var page = await storage.RetrievePending(lastCreatedAt, lastId, 10, ct);
                     if (page.Length == 0)
@@ -312,7 +312,7 @@ public class PendingRecoveryPagingTests
         // Create 30 tasks with GUID v7 (time-ordered)
         var orderedIds = new List<Guid>();
         var start = DateTimeOffset.UtcNow;
-        for (int i = 0; i < 30; i++)
+        for (var i = 0; i < 30; i++)
         {
             var taskId = TestGuidGenerator.New();
             orderedIds.Add(taskId);

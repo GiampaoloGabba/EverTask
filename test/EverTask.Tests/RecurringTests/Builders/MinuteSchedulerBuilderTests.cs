@@ -19,7 +19,7 @@ public class MinuteSchedulerBuilderTests
     public void MinuteSchedulerBuilder_AtSecond_SetsOnSecondForMinuteInterval()
     {
         _task.MinuteInterval = new MinuteInterval(1);
-        int second = 15;
+        var second = 15;
 
         _builder.AtSecond(second);
 
@@ -30,7 +30,7 @@ public class MinuteSchedulerBuilderTests
     public void MinuteSchedulerBuilder_AtSecond_SetsOnSecondForHourInterval()
     {
         _task.HourInterval = new HourInterval(1);
-        int second = 45;
+        var second = 45;
 
         _builder.AtSecond(second);
 

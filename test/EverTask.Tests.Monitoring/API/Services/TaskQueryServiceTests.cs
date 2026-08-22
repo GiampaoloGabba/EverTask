@@ -92,7 +92,7 @@ public class TaskQueryServiceTests
     private List<QueuedTask> CreateSampleTasks(int count)
     {
         var tasks = new List<QueuedTask>();
-        for (int i = 0; i < count; i++)
+        for (var i = 0; i < count; i++)
         {
             tasks.Add(new QueuedTask
             {

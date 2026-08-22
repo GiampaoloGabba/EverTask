@@ -742,7 +742,7 @@ public abstract class EfCoreTaskStorageTestsBase
         await _storage.Persist(queued);
 
         var logs = new List<TaskExecutionLog>();
-        for (int i = 0; i < 10; i++)
+        for (var i = 0; i < 10; i++)
         {
             logs.Add(new TaskExecutionLog
             {
@@ -826,7 +826,7 @@ public abstract class EfCoreTaskStorageTestsBase
         // Arrange - Create 20 tasks with GUID v7 (time-ordered)
         var createdIds = new List<Guid>();
         var start      = DateTimeOffset.UtcNow;
-        for (int i = 0; i < 20; i++)
+        for (var i = 0; i < 20; i++)
         {
             var taskId = GetGuidForProvider();
             createdIds.Add(taskId);
@@ -877,7 +877,7 @@ public abstract class EfCoreTaskStorageTestsBase
         // Arrange - Create 10 tasks with GUID v7
         var taskIds = new List<Guid>();
         var start   = DateTimeOffset.UtcNow;
-        for (int i = 0; i < 10; i++)
+        for (var i = 0; i < 10; i++)
         {
             var taskId = GetGuidForProvider();
             taskIds.Add(taskId);
@@ -903,7 +903,7 @@ public abstract class EfCoreTaskStorageTestsBase
 
         dbOrdered.Length.ShouldBe(linqOrdered.Length, "Should have same number of tasks");
 
-        for (int i = 0; i < dbOrdered.Length; i++)
+        for (var i = 0; i < dbOrdered.Length; i++)
         {
             dbOrdered[i].Id.ShouldBe(linqOrdered[i].Id,
                 $"DB ordering differs from LINQ at index {i}. " +
@@ -922,7 +922,7 @@ public abstract class EfCoreTaskStorageTestsBase
         // Arrange - Create 100 tasks
         var createdIds = new List<Guid>();
         var start      = DateTimeOffset.UtcNow;
-        for (int i = 0; i < 100; i++)
+        for (var i = 0; i < 100; i++)
         {
             var taskId = GetGuidForProvider();
             createdIds.Add(taskId);
@@ -945,7 +945,7 @@ public abstract class EfCoreTaskStorageTestsBase
         DateTimeOffset? lastCreatedAt = null;
         Guid?           lastId        = null;
 
-        for (int pageNum = 0; pageNum < 10; pageNum++)
+        for (var pageNum = 0; pageNum < 10; pageNum++)
         {
             var page = await _storage.RetrievePending(lastCreatedAt, lastId, 10);
             page.Length.ShouldBe(10, $"Page {pageNum + 1} should have 10 tasks");
@@ -987,7 +987,7 @@ public abstract class EfCoreTaskStorageTestsBase
         var createdTasks = new List<QueuedTask>();
         var start        = DateTimeOffset.UtcNow;
 
-        for (int i = 0; i < 50; i++)
+        for (var i = 0; i < 50; i++)
         {
             var task = new QueuedTask
             {
@@ -1038,7 +1038,7 @@ public abstract class EfCoreTaskStorageTestsBase
         extraIds.ShouldBeEmpty($"Should not retrieve non-existent tasks. Extra: {string.Join(", ", extraIds)}");
 
         // Assert 5: CRITICAL - Monotonic ordering by CreatedAtUtc
-        for (int i = 1; i < allPages.Count; i++)
+        for (var i = 1; i < allPages.Count; i++)
         {
             var prev = allPages[i - 1];
             var curr = allPages[i];
@@ -1058,7 +1058,7 @@ public abstract class EfCoreTaskStorageTestsBase
                             .ToList();
         var actualOrder = allPages.Select(t => t.Id).ToList();
 
-        for (int i = 0; i < expectedOrder.Count; i++)
+        for (var i = 0; i < expectedOrder.Count; i++)
         {
             actualOrder[i].ShouldBe(expectedOrder[i],
                 $"Position {i}: expected {expectedOrder[i]} (created {createdTasks.First(t => t.Id == expectedOrder[i]).Type}), " +

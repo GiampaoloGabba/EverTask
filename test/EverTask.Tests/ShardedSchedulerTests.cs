@@ -119,19 +119,19 @@ public class ShardedSchedulerTests : IDisposable
         _shardedScheduler = new ShardedScheduler(_mockWorkerQueueManager.Object, _mockLogger.Object, null, shardCount: shardCount);
 
         var shardDistribution = new Dictionary<int, int>();
-        for (int i = 0; i < shardCount; i++)
+        for (var i = 0; i < shardCount; i++)
         {
             shardDistribution[i] = 0;
         }
 
         // Act - Schedule 1000 tasks with random Guids
-        for (int i = 0; i < taskCount; i++)
+        for (var i = 0; i < taskCount; i++)
         {
             var taskId = TestGuidGenerator.New();
             var executor = CreateTaskHandlerExecutor(DateTimeOffset.UtcNow.AddHours(1), taskId: taskId);
 
             // Calculate which shard this task would go to (same logic as ShardedScheduler)
-            int shardIndex = Math.Abs(taskId.GetHashCode()) % shardCount;
+            var shardIndex = Math.Abs(taskId.GetHashCode()) % shardCount;
             shardDistribution[shardIndex]++;
 
             _shardedScheduler.Schedule(executor);
@@ -268,7 +268,7 @@ public class ShardedSchedulerTests : IDisposable
         var tasks = new List<TaskHandlerExecutor>();
 
         // Create tasks that will be distributed across different shards
-        for (int i = 0; i < 20; i++)
+        for (var i = 0; i < 20; i++)
         {
             var taskId = TestGuidGenerator.New();
             var executor = CreateTaskHandlerExecutor(DateTimeOffset.UtcNow.AddSeconds(1), taskId: taskId);
@@ -338,7 +338,7 @@ public class ShardedSchedulerTests : IDisposable
             .Returns<string?, TaskHandlerExecutor, CancellationToken>((queueName, executor, ct) =>
             {
                 // Calculate which shard this would go to
-                int shardIndex = Math.Abs(executor.PersistenceId.GetHashCode()) % 4;
+                var shardIndex = Math.Abs(executor.PersistenceId.GetHashCode()) % 4;
 
                 // Simulate failure in shard 2 only
                 if (shardIndex == 2)
@@ -356,7 +356,7 @@ public class ShardedSchedulerTests : IDisposable
 
         // Act - Schedule 100 tasks (they'll be distributed across all 4 shards)
         var tasks = new List<TaskHandlerExecutor>();
-        for (int i = 0; i < 100; i++)
+        for (var i = 0; i < 100; i++)
         {
             var taskId = TestGuidGenerator.New();
             var executor = CreateTaskHandlerExecutor(DateTimeOffset.UtcNow.AddSeconds(1), taskId: taskId);
@@ -438,7 +438,7 @@ public class ShardedSchedulerTests : IDisposable
         // The fix using (uint) cast should handle all cases without IndexOutOfRangeException
         var exception = Record.Exception(() =>
         {
-            for (int i = 0; i < 10000; i++)
+            for (var i = 0; i < 10000; i++)
             {
                 var taskExecutor = CreateTaskHandlerExecutor(executionTime, TestGuidGenerator.New());
                 _shardedScheduler.Schedule(taskExecutor);
@@ -463,7 +463,7 @@ public class ShardedSchedulerTests : IDisposable
         // Act & Assert - Test with many GUIDs to ensure shard index is always in valid range [0, shardCount)
         var exception = Record.Exception(() =>
         {
-            for (int i = 0; i < 5000; i++)
+            for (var i = 0; i < 5000; i++)
             {
                 var taskExecutor = CreateTaskHandlerExecutor(executionTime, TestGuidGenerator.New());
                 _shardedScheduler.Schedule(taskExecutor);

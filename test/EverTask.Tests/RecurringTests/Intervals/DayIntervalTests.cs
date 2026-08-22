@@ -7,7 +7,7 @@ public class DayIntervalTests
     [Fact]
     public void Day_Constructor()
     {
-        int expectedInterval = 10;
+        var expectedInterval = 10;
         var interval         = new DayInterval(expectedInterval);
 
         Assert.Equal(expectedInterval, interval.Interval);
@@ -16,7 +16,7 @@ public class DayIntervalTests
     [Fact]
     public void Day_Constructor_OnDays()
     {
-        int expectedInterval = 5;
+        var expectedInterval = 5;
         var onDays           = new [] { DayOfWeek.Monday, DayOfWeek.Wednesday };
         var interval         = new DayInterval(expectedInterval, onDays);
 

@@ -74,7 +74,7 @@ public class QueueParallelismTests
         var processedTasks = new ConcurrentBag<string>();
 
         // Add tasks to both queues
-        for (int i = 0; i < 5; i++)
+        for (var i = 0; i < 5; i++)
         {
             var task1 = CreateTestExecutor($"q1-task{i}", "queue1");
             var task2 = CreateTestExecutor($"q2-task{i}", "queue2");

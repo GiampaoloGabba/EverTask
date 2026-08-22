@@ -35,20 +35,20 @@ public sealed class LDispatchProd : IScenario
         var handlerDummy = new LatencyRecorder(); // keep execution-side latency out of the dispatch number
         _host!.Context.Current = new RunContext.Run(gate, handlerDummy);
 
-        int producerCount = Math.Max(1, cfg.Producers);
-        long perProducer = cfg.Count / producerCount;
-        long total = perProducer * producerCount;
+        var producerCount = Math.Max(1, cfg.Producers);
+        var perProducer = cfg.Count / producerCount;
+        var total = perProducer * producerCount;
         var dispatcher = _host.Dispatcher;
 
         var sw = Stopwatch.StartNew();
         var producers = new Task[producerCount];
-        for (int p = 0; p < producerCount; p++)
+        for (var p = 0; p < producerCount; p++)
         {
             producers[p] = Task.Run(async () =>
             {
                 for (long i = 0; i < perProducer; i++)
                 {
-                    long t0 = Stopwatch.GetTimestamp();
+                    var t0 = Stopwatch.GetTimestamp();
                     await dispatcher.Dispatch(new CountingTask(t0), cancellationToken: ct).ConfigureAwait(false);
                     latency.Record(Stopwatch.GetTimestamp() - t0); // caller-side dispatch latency
                 }

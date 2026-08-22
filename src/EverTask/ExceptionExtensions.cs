@@ -17,7 +17,7 @@ public static class ExceptionExtensions
 
     private static void AppendExceptionDetails(StringBuilder stringBuilder, Exception exception, int level)
     {
-        string indent = new string(' ', level * 4);
+        var indent = new string(' ', level * 4);
 
         stringBuilder.AppendLine($"{indent}Exception Type: {exception.GetType().FullName}");
         stringBuilder.AppendLine($"{indent}Message: {exception.Message}");

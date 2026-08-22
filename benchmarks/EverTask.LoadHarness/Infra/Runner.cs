@@ -33,7 +33,7 @@ public static class Runner
                                                LatencyRecorder latency, CancellationToken ct)
     {
         // Warmup: run and discard. Latency from these iterations is thrown away (reset below).
-        for (int i = 0; i < cfg.Warmup; i++)
+        for (var i = 0; i < cfg.Warmup; i++)
         {
             await scenario.RunIterationAsync(cfg, latency, ct);
             Console.Write($"  warmup {i + 1}/{cfg.Warmup}\r");
@@ -47,9 +47,9 @@ public static class Runner
 
         var throughputs = new double[cfg.Measured];
         long totalTasks = 0;
-        long allocBefore = GC.GetTotalAllocatedBytes(precise: true);
+        var allocBefore = GC.GetTotalAllocatedBytes(precise: true);
 
-        for (int i = 0; i < cfg.Measured; i++)
+        for (var i = 0; i < cfg.Measured; i++)
         {
             var outcome = await scenario.RunIterationAsync(cfg, latency, ct);
             throughputs[i] = outcome.ThroughputPerSecond;
@@ -57,11 +57,11 @@ public static class Runner
             Console.Write($"  measured {i + 1}/{cfg.Measured}: {outcome.ThroughputPerSecond:N0} tasks/s\r");
         }
 
-        long allocAfter = GC.GetTotalAllocatedBytes(precise: true);
+        var allocAfter = GC.GetTotalAllocatedBytes(precise: true);
         Console.WriteLine(new string(' ', 48) + "\r  measured done");
 
         var stats = ThroughputStats.From(throughputs);
-        double bytesPerTask = totalTasks > 0 ? (double)(allocAfter - allocBefore) / totalTasks : 0;
+        var bytesPerTask = totalTasks > 0 ? (double)(allocAfter - allocBefore) / totalTasks : 0;
         var snap = latency.Snapshot();
 
         PrintSummary(stats, snap, bytesPerTask);
@@ -96,8 +96,8 @@ public static class Runner
     private static void WriteJson(RunReport report, string outputDir)
     {
         Directory.CreateDirectory(outputDir);
-        string stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
-        string path = Path.Combine(outputDir, $"{report.Scenario}-{stamp}.json");
+        var stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
+        var path = Path.Combine(outputDir, $"{report.Scenario}-{stamp}.json");
         var json = JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true });
         File.WriteAllText(path, json);
         Console.WriteLine($"  → {path}");
@@ -109,9 +109,9 @@ public readonly record struct ThroughputStats(double MeanPerSecond, double StdDe
     public static ThroughputStats From(IReadOnlyList<double> samples)
     {
         if (samples.Count == 0) return new ThroughputStats(0, 0, 0);
-        double mean = samples.Average();
-        double variance = samples.Sum(s => (s - mean) * (s - mean)) / samples.Count;
-        double stdev = Math.Sqrt(variance);
+        var mean = samples.Average();
+        var variance = samples.Sum(s => (s - mean) * (s - mean)) / samples.Count;
+        var stdev = Math.Sqrt(variance);
         return new ThroughputStats(mean, stdev, mean > 0 ? stdev / mean : 0);
     }
 }

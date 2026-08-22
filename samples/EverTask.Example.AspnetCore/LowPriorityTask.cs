@@ -24,7 +24,7 @@ public class LowPriorityTaskHandler : EverTaskHandler<LowPriorityTask>
         Logger.LogDebug("Processing on low-priority queue with parallelism=2 (resource-limited)");
 
         // Simulate CPU-intensive background work
-        for (int i = 1; i <= task.ItemCount; i++)
+        for (var i = 1; i <= task.ItemCount; i++)
         {
             await Task.Delay(task.ProcessingTimePerItemMs, cancellationToken);
 

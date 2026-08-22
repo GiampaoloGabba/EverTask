@@ -72,7 +72,7 @@ public class MultiQueueRoutingTests
         );
 
         // Act
-        string targetQueue = executor.QueueName ?? "default";
+        var targetQueue = executor.QueueName ?? "default";
         await mockQueueManager.Object.TryEnqueue(targetQueue, executor);
 
         // Assert
@@ -108,7 +108,7 @@ public class MultiQueueRoutingTests
         );
 
         // Act - simulate routing logic
-        string targetQueue = executor.QueueName ?? (executor.RecurringTask != null ? "recurring" : "default");
+        var targetQueue = executor.QueueName ?? (executor.RecurringTask != null ? "recurring" : "default");
         await mockQueueManager.Object.TryEnqueue(targetQueue, executor);
 
         // Assert

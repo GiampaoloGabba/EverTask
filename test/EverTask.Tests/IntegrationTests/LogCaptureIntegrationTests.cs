@@ -118,9 +118,9 @@ public class LogCaptureIntegrationTests : IsolatedIntegrationTestBase
         logs[5].Level.ShouldBe("Error");
 
         // Verify all attempts have the same log pattern
-        for (int i = 0; i < 4; i++)
+        for (var i = 0; i < 4; i++)
         {
-            int offset = i * 3;
+            var offset = i * 3;
             logs[offset].Message.ShouldBe("Starting task with data: test data");
             logs[offset].Level.ShouldBe("Information");
             logs[offset + 1].Message.ShouldBe("About to throw exception");
@@ -326,7 +326,7 @@ public class LogCaptureIntegrationTests : IsolatedIntegrationTestBase
 
         // Act - dispatch many tasks
         var taskIds = new List<Guid>();
-        for (int i = 0; i < 10; i++)
+        for (var i = 0; i < 10; i++)
         {
             var taskId = await Dispatcher.Dispatch(new TestTaskManyLogs(40));
             taskIds.Add(taskId);

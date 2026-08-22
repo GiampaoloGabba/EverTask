@@ -36,11 +36,11 @@ public class DashboardServiceTests
     {
         // Arrange - 7 completed, 3 failed = 70% success rate
         var tasks = new List<QueuedTask>();
-        for (int i = 0; i < 7; i++)
+        for (var i = 0; i < 7; i++)
         {
             tasks.Add(CreateTask(QueuedTaskStatus.Completed));
         }
-        for (int i = 0; i < 3; i++)
+        for (var i = 0; i < 3; i++)
         {
             tasks.Add(CreateTask(QueuedTaskStatus.Failed));
         }
@@ -94,7 +94,7 @@ public class DashboardServiceTests
     {
         var tasks = new List<QueuedTask>();
         var now = DateTimeOffset.UtcNow;
-        for (int i = 0; i < 15; i++)
+        for (var i = 0; i < 15; i++)
         {
             tasks.Add(new QueuedTask
             {

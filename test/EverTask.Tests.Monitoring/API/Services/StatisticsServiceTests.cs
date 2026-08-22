@@ -85,7 +85,7 @@ public class StatisticsServiceTests
     {
         var tasks = new List<QueuedTask>();
         var now = DateTimeOffset.UtcNow;
-        for (int i = 0; i < 14; i++)
+        for (var i = 0; i < 14; i++)
         {
             // Mix of completed and failed tasks
             tasks.Add(CreateTaskAtTime(now.AddDays(-i), i % 3 == 0 ? QueuedTaskStatus.Failed : QueuedTaskStatus.Completed));
@@ -108,7 +108,7 @@ public class StatisticsServiceTests
     {
         var tasks = new List<QueuedTask>();
         var now = DateTimeOffset.UtcNow;
-        for (int i = 0; i < 5; i++)
+        for (var i = 0; i < 5; i++)
         {
             tasks.Add(new QueuedTask
             {

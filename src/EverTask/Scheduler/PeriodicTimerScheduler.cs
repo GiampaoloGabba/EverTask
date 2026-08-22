@@ -275,7 +275,7 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
     {
         try
         {
-            string queueName = item.QueueName ??
+            var queueName = item.QueueName ??
                 (item.RecurringTask != null ? QueueNames.Recurring : QueueNames.Default);
 
             _logger.LogDebug("Dispatching scheduled task {TaskId} to queue '{QueueName}'",

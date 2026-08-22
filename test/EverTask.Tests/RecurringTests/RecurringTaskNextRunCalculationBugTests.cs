@@ -56,7 +56,7 @@ public class RecurringTaskNextRunCalculationBugTests
         if (currentRun > 0)
         {
             var firstRunTime = executionTimeFromStorage; // BUG: This is NOT the first run time!
-            for (int i = 0; i < currentRun; i++)
+            for (var i = 0; i < currentRun; i++)
             {
                 var nextRun = recurringTask.CalculateNextRun(firstRunTime, i + 1);
                 if (nextRun.HasValue)
@@ -194,7 +194,7 @@ public class RecurringTaskNextRunCalculationBugTests
 
         // Buggy calculation (simulating the old bug in WorkerExecutor)
         var scheduledTime = currentScheduledTime;
-        for (int i = 0; i < currentRun; i++)
+        for (var i = 0; i < currentRun; i++)
         {
             var next = recurringTask.CalculateNextRun(scheduledTime, i + 1);
             if (next.HasValue) scheduledTime = next.Value;

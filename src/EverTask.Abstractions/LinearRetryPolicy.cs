@@ -257,7 +257,7 @@ public class LinearRetryPolicy : IRetryPolicy
 
         var exceptions = new List<Exception>();
 
-        for (int i = 0; i <= _retryDelays.Length; i++)
+        for (var i = 0; i <= _retryDelays.Length; i++)
         {
             token.ThrowIfCancellationRequested();
 

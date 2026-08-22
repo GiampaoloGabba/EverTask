@@ -98,8 +98,8 @@ public class RecurringTask
             }
 
             // If runtime is in the recent past, use it only if it's before next interval
-            bool runtimeIsBeforeNext = runtime < next;
-            bool notTooFarInPast = runtime.Value > current.AddSeconds(-20);
+            var runtimeIsBeforeNext = runtime < next;
+            var notTooFarInPast = runtime.Value > current.AddSeconds(-20);
 
             if (runtimeIsBeforeNext && notTooFarInPast)
             {

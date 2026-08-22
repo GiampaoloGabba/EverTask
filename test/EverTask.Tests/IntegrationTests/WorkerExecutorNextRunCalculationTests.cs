@@ -207,7 +207,7 @@ public class WorkerExecutorNextRunCalculationTests : IsolatedIntegrationTestBase
         completedRuns.Count.ShouldBe(3);
 
         // Assert: All intervals should be approximately 2 seconds
-        for (int i = 1; i < completedRuns.Count; i++)
+        for (var i = 1; i < completedRuns.Count; i++)
         {
             var interval = (completedRuns[i].ExecutedAt - completedRuns[i - 1].ExecutedAt).TotalSeconds;
 

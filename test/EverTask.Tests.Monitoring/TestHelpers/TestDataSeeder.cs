@@ -24,7 +24,7 @@ public class TestDataSeeder
         var tasks = new List<QueuedTask>();
 
         // Completed tasks from today
-        for (int i = 0; i < 10; i++)
+        for (var i = 0; i < 10; i++)
         {
             tasks.Add(CreateTask(
                 status: QueuedTaskStatus.Completed,
@@ -35,7 +35,7 @@ public class TestDataSeeder
         }
 
         // Failed tasks from today
-        for (int i = 0; i < 3; i++)
+        for (var i = 0; i < 3; i++)
         {
             tasks.Add(CreateTask(
                 status: QueuedTaskStatus.Failed,
@@ -47,7 +47,7 @@ public class TestDataSeeder
         }
 
         // In-progress tasks
-        for (int i = 0; i < 2; i++)
+        for (var i = 0; i < 2; i++)
         {
             tasks.Add(CreateTask(
                 status: QueuedTaskStatus.InProgress,
@@ -57,7 +57,7 @@ public class TestDataSeeder
         }
 
         // Queued tasks
-        for (int i = 0; i < 5; i++)
+        for (var i = 0; i < 5; i++)
         {
             tasks.Add(CreateTask(
                 status: QueuedTaskStatus.Queued,
@@ -67,7 +67,7 @@ public class TestDataSeeder
         }
 
         // Completed tasks from last week
-        for (int i = 0; i < 20; i++)
+        for (var i = 0; i < 20; i++)
         {
             tasks.Add(CreateTask(
                 status: QueuedTaskStatus.Completed,
@@ -78,7 +78,7 @@ public class TestDataSeeder
         }
 
         // Failed tasks from last week
-        for (int i = 0; i < 5; i++)
+        for (var i = 0; i < 5; i++)
         {
             tasks.Add(CreateTask(
                 status: QueuedTaskStatus.Failed,
@@ -248,7 +248,7 @@ public class TestDataSeeder
 
         // Create execution logs
         var logs = new List<TaskExecutionLog>();
-        for (int i = 0; i < logCount; i++)
+        for (var i = 0; i < logCount; i++)
         {
             var log = new TaskExecutionLog
             {

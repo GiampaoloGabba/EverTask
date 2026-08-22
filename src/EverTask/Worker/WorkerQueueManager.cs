@@ -194,7 +194,7 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
     private (IWorkerQueue Queue, QueueConfiguration Config, string Name) ResolveQueue(string? queueName, TaskHandlerExecutor task)
     {
         // Determine target queue name inline to avoid redundant ContainsKey check
-        string targetQueueName = !string.IsNullOrEmpty(queueName)
+        var targetQueueName = !string.IsNullOrEmpty(queueName)
                                      ? queueName
                                      : (task.RecurringTask != null && _queues.ContainsKey(QueueNames.Recurring)
                                             ? QueueNames.Recurring

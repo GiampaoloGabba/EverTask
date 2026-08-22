@@ -113,7 +113,7 @@ public class WorkerService(
             consumerCount, queueName);
 
         // Spawn N long-lived consumers that compete for items from the channel
-        for (int i = 0; i < consumerCount; i++)
+        for (var i = 0; i < consumerCount; i++)
         {
             var consumerId = i; // Capture for logging
             yield return Task.Run(async () =>
@@ -205,7 +205,7 @@ public class WorkerService(
         const int pageSize = 100;
         DateTimeOffset? lastCreatedAt = null;
         Guid? lastId = null;
-        int totalProcessed = 0;
+        var totalProcessed = 0;
 
         // L18 outcome accounting: a persistent re-dispatch failure must NOT be masked by a success
         // summary log. Tracked across pages, written to the summary at the end.

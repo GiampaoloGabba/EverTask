@@ -622,7 +622,7 @@ public class AuditLevelIntegrationTests : IsolatedIntegrationTestBase, IAsyncLif
         // Act - Dispatch 20 tasks: 5 per each audit level
         var taskIds = new List<Guid>();
 
-        for (int i = 0; i < 5; i++)
+        for (var i = 0; i < 5; i++)
         {
             taskIds.Add(await Dispatcher.Dispatch(new TestTaskRequest($"Full-{i}"), auditLevel: AuditLevel.Full));
             taskIds.Add(await Dispatcher.Dispatch(new TestTaskRequest($"Minimal-{i}"), auditLevel: AuditLevel.Minimal));

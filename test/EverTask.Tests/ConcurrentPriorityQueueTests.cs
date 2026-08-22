@@ -9,11 +9,11 @@ public class ConcurrentPriorityQueueTests
     {
         var queue         = new ConcurrentPriorityQueue<int, int>();
         var tasks         = new List<Task>();
-        int numberOfItems = 1000;
+        var numberOfItems = 1000;
 
-        for (int i = 0; i < numberOfItems; i++)
+        for (var i = 0; i < numberOfItems; i++)
         {
-            int localI = i;
+            var localI = i;
             tasks.Add(Task.Run(() => queue.Enqueue(localI, localI)));
         }
 
@@ -28,10 +28,10 @@ public class ConcurrentPriorityQueueTests
     {
         var queue         = new ConcurrentPriorityQueue<int, int>();
         var tasks         = new List<Task>();
-        int numberOfItems = 1000;
+        var numberOfItems = 1000;
 
         // Enqueue range of items in tasks
-        for (int i = 0; i < numberOfItems; i += 10)
+        for (var i = 0; i < numberOfItems; i += 10)
         {
             var range = Enumerable.Range(i, 10).Select(j => (j, j));
             tasks.Add(Task.Run(() => queue.EnqueueRange(range)));
@@ -48,16 +48,16 @@ public class ConcurrentPriorityQueueTests
     {
         var queue         = new ConcurrentPriorityQueue<int, int>();
         var tasks         = new List<Task>();
-        int numberOfItems = 1000;
+        var numberOfItems = 1000;
 
         // Enqueue items
-        for (int i = 0; i < numberOfItems; i++)
+        for (var i = 0; i < numberOfItems; i++)
         {
             queue.Enqueue(i, i);
         }
 
         // Dequeue items in tasks
-        for (int i = 0; i < numberOfItems; i++)
+        for (var i = 0; i < numberOfItems; i++)
         {
             tasks.Add(Task.Run(() => queue.Dequeue()));
         }
@@ -73,16 +73,16 @@ public class ConcurrentPriorityQueueTests
     {
         var queue         = new ConcurrentPriorityQueue<int, int>();
         var tasks         = new List<Task>();
-        int numberOfItems = 1000;
+        var numberOfItems = 1000;
 
         // Enqueue items
-        for (int i = 0; i < numberOfItems; i++)
+        for (var i = 0; i < numberOfItems; i++)
         {
             queue.Enqueue(i, i);
         }
 
         // TryDequeue items in tasks
-        for (int i = 0; i < numberOfItems; i++)
+        for (var i = 0; i < numberOfItems; i++)
         {
             tasks.Add(Task.Run(() =>
             {
@@ -101,16 +101,16 @@ public class ConcurrentPriorityQueueTests
     {
         var queue         = new ConcurrentPriorityQueue<int, int>();
         var tasks         = new List<Task>();
-        int numberOfItems = 1000;
+        var numberOfItems = 1000;
 
         // Enqueue items
-        for (int i = 0; i < numberOfItems; i++)
+        for (var i = 0; i < numberOfItems; i++)
         {
             queue.Enqueue(i, i);
         }
 
         // Peek items in tasks
-        for (int i = 0; i < numberOfItems; i++)
+        for (var i = 0; i < numberOfItems; i++)
         {
             tasks.Add(Task.Run(() => queue.Peek()));
         }
@@ -126,16 +126,16 @@ public class ConcurrentPriorityQueueTests
     {
         var queue         = new ConcurrentPriorityQueue<int, int>();
         var tasks         = new List<Task>();
-        int numberOfItems = 1000;
+        var numberOfItems = 1000;
 
         // Enqueue items
-        for (int i = 0; i < numberOfItems; i++)
+        for (var i = 0; i < numberOfItems; i++)
         {
             queue.Enqueue(i, i);
         }
 
         // TryPeek items in tasks
-        for (int i = 0; i < numberOfItems; i++)
+        for (var i = 0; i < numberOfItems; i++)
         {
             tasks.Add(Task.Run(() =>
             {

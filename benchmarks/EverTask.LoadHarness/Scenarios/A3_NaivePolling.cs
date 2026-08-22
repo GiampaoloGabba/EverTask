@@ -40,10 +40,10 @@ public sealed class A3NaivePolling : IScenario
     public async Task<IterationOutcome> RunIterationAsync(RunConfig cfg, LatencyRecorder latency, CancellationToken ct)
     {
         var storage = _handle!.Storage;
-        long count = cfg.Count;
-        long intervalTicks = (long)(cfg.PollIntervalMs * (Stopwatch.Frequency / 1000.0));
-        long spreadTicks = intervalTicks * 3;             // arrivals spread over ~3 intervals
-        long spacing = count > 0 ? Math.Max(1, spreadTicks / count) : 1;
+        var count = cfg.Count;
+        var intervalTicks = (long)(cfg.PollIntervalMs * (Stopwatch.Frequency / 1000.0));
+        var spreadTicks = intervalTicks * 3;             // arrivals spread over ~3 intervals
+        var spacing = count > 0 ? Math.Max(1, spreadTicks / count) : 1;
         const int pageSize = 1000;
 
         var dispatchTicks = new ConcurrentDictionary<Guid, long>();
@@ -51,14 +51,14 @@ public sealed class A3NaivePolling : IScenario
         var producerDone = false;
 
         var sw = Stopwatch.StartNew();
-        long start = Stopwatch.GetTimestamp();
+        var start = Stopwatch.GetTimestamp();
 
         // Producer: persist Queued tasks at scheduled arrival times (open-loop arrivals).
         var producer = Task.Run(async () =>
         {
             for (long i = 0; i < count; i++)
             {
-                long planned = start + i * spacing;
+                var planned = start + i * spacing;
                 while (Stopwatch.GetTimestamp() < planned) Thread.SpinWait(20);
 
                 var id = Guid.NewGuid();
@@ -77,10 +77,10 @@ public sealed class A3NaivePolling : IScenario
                 var page = await storage.RetrievePending(null, null, pageSize, ct).ConfigureAwait(false);
                 if (page.Length == 0) break;
 
-                long now = Stopwatch.GetTimestamp();
+                var now = Stopwatch.GetTimestamp();
                 foreach (var row in page)
                 {
-                    if (dispatchTicks.TryGetValue(row.Id, out long dt))
+                    if (dispatchTicks.TryGetValue(row.Id, out var dt))
                         latency.Record(now - dt);
                     await storage.SetCompleted(row.Id, 0.0, AuditLevel.None).ConfigureAwait(false);
                     drained++;

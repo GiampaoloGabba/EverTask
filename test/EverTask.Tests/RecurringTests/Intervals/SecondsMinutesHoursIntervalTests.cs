@@ -9,7 +9,7 @@ public class SecondsMinutesHoursIntervalTests
     public void Seconds_Constructor()
     {
         // Arrange
-        int expectedInterval = 10;
+        var expectedInterval = 10;
 
         // Act
         var interval = new SecondInterval(expectedInterval);
@@ -38,7 +38,7 @@ public class SecondsMinutesHoursIntervalTests
     [Fact]
     public void Minute_Constructor()
     {
-        int expectedInterval = 15;
+        var expectedInterval = 15;
         var interval         = new MinuteInterval(expectedInterval);
 
         Assert.Equal(expectedInterval, interval.Interval);
@@ -61,7 +61,7 @@ public class SecondsMinutesHoursIntervalTests
     [Fact]
     public void Hour_Constructor()
     {
-        int expectedInterval = 2;
+        var expectedInterval = 2;
         var interval         = new HourInterval(expectedInterval);
 
         Assert.Equal(expectedInterval, interval.Interval);
@@ -70,7 +70,7 @@ public class SecondsMinutesHoursIntervalTests
     [Fact]
     public void Hour_Constructor_SetsIntervalAndOnHours()
     {
-        int expectedInterval = 2;
+        var expectedInterval = 2;
         var expectedOnHours  = new[] { 10, 12, 14 };
         var interval         = new HourInterval(expectedInterval, expectedOnHours);
 

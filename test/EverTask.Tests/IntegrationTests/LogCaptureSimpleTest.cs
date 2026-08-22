@@ -77,7 +77,7 @@ public class LogCaptureSimpleTest : IsolatedIntegrationTestBase
         logs[3].Message.ShouldBe("About to fail");
 
         // Verify all attempts have correct messages
-        for (int i = 0; i < 4; i++)
+        for (var i = 0; i < 4; i++)
         {
             logs[i * 2].Message.ShouldBe("Task starting");
             logs[i * 2 + 1].Message.ShouldBe("About to fail");

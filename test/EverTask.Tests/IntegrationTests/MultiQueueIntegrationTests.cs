@@ -115,7 +115,7 @@ public class MultiQueueIntegrationTests : IsolatedIntegrationTestBase
 
         // Act - Dispatch 5 tasks that take 200ms each
         var taskIds = new List<Guid>();
-        for (int i = 0; i < 5; i++)
+        for (var i = 0; i < 5; i++)
         {
             var taskId = await Dispatcher.Dispatch(new TestTaskParallel());
             taskIds.Add(taskId);
@@ -315,7 +315,7 @@ public class MultiQueueIntegrationTests : IsolatedIntegrationTestBase
         var parallelTasks = new List<Guid>();
         var sequentialTasks = new List<Guid>();
 
-        for (int i = 0; i < 3; i++)
+        for (var i = 0; i < 3; i++)
         {
             parallelTasks.Add(await Dispatcher.Dispatch(new TestTaskParallel { Id = $"parallel-{i}" }));
             sequentialTasks.Add(await Dispatcher.Dispatch(new TestTaskSequential { Id = $"sequential-{i}" }));

@@ -19,21 +19,21 @@ public sealed class A2BareTaskRunFloor : IScenario
 
     public async Task<IterationOutcome> RunIterationAsync(RunConfig cfg, LatencyRecorder latency, CancellationToken ct)
     {
-        long count = cfg.Count;
-        int lanes = cfg.Parallelism;
-        long perLane = count / lanes;
-        long total = perLane * lanes; // ignore the remainder so every lane is identical
+        var count = cfg.Count;
+        var lanes = cfg.Parallelism;
+        var perLane = count / lanes;
+        var total = perLane * lanes; // ignore the remainder so every lane is identical
 
         var sw = Stopwatch.StartNew();
 
         var lanesTasks = new Task[lanes];
-        for (int l = 0; l < lanes; l++)
+        for (var l = 0; l < lanes; l++)
         {
             lanesTasks[l] = Task.Run(async () =>
             {
                 for (long i = 0; i < perLane; i++)
                 {
-                    long scheduled = Stopwatch.GetTimestamp();
+                    var scheduled = Stopwatch.GetTimestamp();
                     await Task.Run(() => latency.Record(Stopwatch.GetTimestamp() - scheduled), ct)
                               .ConfigureAwait(false);
                 }

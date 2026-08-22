@@ -38,7 +38,7 @@ public class ShardedSchedulerIntegrationTests : IsolatedIntegrationTestBase
 
         // Act - Schedule 1000 tasks rapidly (simula spike)
         var scheduleTasks = new List<Task<Guid>>();
-        for (int i = 0; i < 1000; i++)
+        for (var i = 0; i < 1000; i++)
         {
             scheduleTasks.Add(
                 Dispatcher.Dispatch(
@@ -67,7 +67,7 @@ public class ShardedSchedulerIntegrationTests : IsolatedIntegrationTestBase
 
         // Act - Schedule 20 tasks with execution time spread across 1-2 seconds
         var taskIds = new List<Guid>();
-        for (int i = 0; i < 20; i++)
+        for (var i = 0; i < 20; i++)
         {
             var taskId = await Dispatcher.Dispatch(
                 new TestTaskConcurrent1(),
@@ -153,7 +153,7 @@ public class ShardedSchedulerIntegrationTests : IsolatedIntegrationTestBase
 
         // Act - Schedule 3 recurring tasks (they will be distributed across shards)
         var taskIds = new List<Guid>();
-        for (int i = 0; i < 3; i++)
+        for (var i = 0; i < 3; i++)
         {
             var taskId = await Dispatcher.Dispatch(
                 new TestTaskRecurringSeconds(),

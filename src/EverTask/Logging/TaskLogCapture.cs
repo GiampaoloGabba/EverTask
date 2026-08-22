@@ -221,8 +221,8 @@ internal sealed class TaskLogCapture : ITaskLogCaptureInternal
             return;
         }
 
-        int alignment = 0;
-        bool hasAlignment = false;
+        var alignment = 0;
+        var hasAlignment = false;
         ReadOnlySpan<char> formatSpan = default;
 
         var colonIndex = placeholder.IndexOf(':');

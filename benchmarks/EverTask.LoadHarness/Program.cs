@@ -12,7 +12,7 @@ using EverTask.LoadHarness.Scenarios;
 //               --storage inmemory|sqlite|sqlserver|postgres   --poll-interval 1000   --out benchmarks/results
 
 var scenarioId = args.Length > 0 && !args[0].StartsWith("--") ? args[0].ToUpperInvariant() : "TIER0";
-int configStart = args.Length > 0 && !args[0].StartsWith("--") ? 1 : 0;
+var configStart = args.Length > 0 && !args[0].StartsWith("--") ? 1 : 0;
 var cfg = RunConfig.Parse(args, configStart);
 
 var registry = new Dictionary<string, IScenario>(StringComparer.OrdinalIgnoreCase)

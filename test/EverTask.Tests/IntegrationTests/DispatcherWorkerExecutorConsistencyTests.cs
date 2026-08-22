@@ -198,7 +198,7 @@ public class DispatcherWorkerExecutorConsistencyTests : IsolatedIntegrationTestB
 
         // Assert: Both Dispatcher (first run) and WorkerExecutor (subsequent runs)
         // should maintain consistent 2-second intervals
-        for (int i = 1; i < completedRuns.Count; i++)
+        for (var i = 1; i < completedRuns.Count; i++)
         {
             var interval = (completedRuns[i].ExecutedAt - completedRuns[i - 1].ExecutedAt).TotalSeconds;
             interval.ShouldBeGreaterThan(1.5);

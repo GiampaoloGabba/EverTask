@@ -51,7 +51,7 @@ public class MultiClientTests : MonitoringTestBase
     {
         // Arrange - Create 5 clients concurrently
         var clients = new List<SignalRTestClient>();
-        for (int i = 0; i < 5; i++)
+        for (var i = 0; i < 5; i++)
         {
             clients.Add(CreateSignalRClient());
         }

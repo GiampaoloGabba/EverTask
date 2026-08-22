@@ -36,14 +36,14 @@ public abstract class EngineScenarioBase : IScenario
         var gate = new CompletionGate(Math.Max(cfg.Parallelism * 4, 16));
         _host!.Context.Current = new RunContext.Run(gate, latency);
 
-        int producerCount = Math.Max(1, cfg.Producers);
-        long perProducer = cfg.Count / producerCount;
-        long total = perProducer * producerCount;
+        var producerCount = Math.Max(1, cfg.Producers);
+        var perProducer = cfg.Count / producerCount;
+        var total = perProducer * producerCount;
         var dispatcher = _host.Dispatcher;
 
         var sw = Stopwatch.StartNew();
         var producers = new Task[producerCount];
-        for (int p = 0; p < producerCount; p++)
+        for (var p = 0; p < producerCount; p++)
         {
             producers[p] = Task.Run(async () =>
             {

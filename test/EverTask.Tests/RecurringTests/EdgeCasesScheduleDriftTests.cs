@@ -358,7 +358,7 @@ public class EdgeCasesScheduleDriftTests : IsolatedIntegrationTestBase
         var currentRun = 0;
         var currentTime = scheduledTime;
 
-        for (int i = 0; i < 15; i++)
+        for (var i = 0; i < 15; i++)
         {
             var nextRun = task.CalculateNextRun(currentTime, currentRun);
             if (nextRun == null) break;
