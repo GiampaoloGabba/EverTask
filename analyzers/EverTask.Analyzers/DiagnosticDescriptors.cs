@@ -6,7 +6,8 @@ namespace EverTask.Analyzers;
 /// The EverTask diagnostics: the payload-contract rules (ET0001-ET0007), which mirror at compile time the
 /// System.Text.Json round-trip contract enforced at runtime by <c>EverTask.Serialization.EverTaskJson</c>
 /// (see <c>src/EverTask.Abstractions/CLAUDE.md</c> §Serialization Guidelines), plus the monitoring rule
-/// ET0008. Keep this list in lockstep with <c>AnalyzerReleases.Unshipped.md</c> (RS2002).
+/// ET0008 and the resilience rule ET0009 (delays above the maximum timer duration).
+/// Keep this list in lockstep with <c>AnalyzerReleases.Unshipped.md</c> (RS2002).
 /// </summary>
 internal static class DiagnosticDescriptors
 {
@@ -85,6 +86,16 @@ internal static class DiagnosticDescriptors
         isEnabledByDefault: true,
         description: "EverTask.Monitor.Api generates its OpenAPI document with the built-in ASP.NET Core generator (Microsoft.AspNetCore.OpenApi), which only exists on net9.0+. On a net8.0 target, enabling EnableOpenApiDocument or adding the Scalar UI serves nothing.",
         helpLinkUri: "https://github.com/GiampaoloGabba/EverTask/blob/master/docs/monitoring-dashboard.md");
+
+    public static readonly DiagnosticDescriptor DelayExceedsTimerLimit = new(
+        id: "ET0009",
+        title: "Delay exceeds the maximum timer duration",
+        messageFormat: "'{0}' exceeds the largest delay .NET timers support (uint.MaxValue - 1 ms, about 49.7 days); {1}",
+        category: "EverTask.Resilience",
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "Task.Delay and CancellationTokenSource.CancelAfter reject delays above uint.MaxValue - 1 milliseconds (about 49.7 days). EverTask validates retry delays at construction and clamps timeouts and cleanup intervals to that ceiling, so a larger value either throws or silently behaves as ~49.7 days instead of what was written.",
+        helpLinkUri: "https://github.com/GiampaoloGabba/EverTask/blob/master/docs/resilience/retry-policies.md");
 
     public static readonly DiagnosticDescriptor UnresolvableConstructor = new(
         id: "ET0007",

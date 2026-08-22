@@ -1,3 +1,4 @@
+// ReSharper disable once CheckNamespace
 namespace EverTask.Resilience;
 
 /// <summary>
@@ -28,12 +29,6 @@ namespace EverTask.Resilience;
 /// </remarks>
 public class ExponentialRetryPolicy : RetryPolicyBase<ExponentialRetryPolicy>
 {
-    // The largest delay a single attempt can wait: Task.Delay rejects anything above the maximum timer
-    // duration (uint.MaxValue - 1 ms, about 49.7 days) with an ArgumentOutOfRangeException, which would
-    // surface from Execute as an unexpected failure. Uncapped growth clamps here instead, and the jitter
-    // in GetRetryDelay re-caps against the same bound so it cannot overflow past it either.
-    private static readonly TimeSpan MaxSupportedDelay = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
-
     private readonly TimeSpan _delayCap;
     private readonly bool _useJitter;
 
@@ -88,16 +83,16 @@ public class ExponentialRetryPolicy : RetryPolicyBase<ExponentialRetryPolicy>
         return jitteredTicks > _delayCap.Ticks ? _delayCap : TimeSpan.FromTicks(jitteredTicks);
     }
 
+    // Uncapped growth clamps at TaskDelayLimit.Max instead of surfacing Task.Delay's own
+    // ArgumentOutOfRangeException from Execute; the jitter in GetRetryDelay re-caps against the
+    // same bound so it cannot overflow past it either.
     private static TimeSpan EffectiveCap(TimeSpan? maxDelay) =>
-        maxDelay is { } max && max < MaxSupportedDelay ? max : MaxSupportedDelay;
+        maxDelay is { } max && max < TaskDelayLimit.Max ? max : TaskDelayLimit.Max;
 
     private static TimeSpan[] BuildDelays(int retryCount, TimeSpan initialDelay, double backoffFactor, TimeSpan? maxDelay)
     {
-        if (retryCount <= 0)
-            throw new ArgumentOutOfRangeException(nameof(retryCount));
-
-        if (initialDelay <= TimeSpan.Zero)
-            throw new ArgumentOutOfRangeException(nameof(initialDelay));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(retryCount);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(initialDelay, TimeSpan.Zero);
 
         if (!double.IsFinite(backoffFactor) || backoffFactor < 1.0)
             throw new ArgumentOutOfRangeException(nameof(backoffFactor), "The backoff factor must be a finite value greater than or equal to 1.");

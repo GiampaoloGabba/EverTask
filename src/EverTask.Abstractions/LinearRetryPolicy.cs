@@ -1,3 +1,4 @@
+// ReSharper disable once CheckNamespace
 namespace EverTask.Resilience;
 
 /// <summary>
@@ -25,8 +26,8 @@ public class LinearRetryPolicy : RetryPolicyBase<LinearRetryPolicy>
     /// Creates a linear retry policy with a fixed retry count and delay.
     /// </summary>
     /// <param name="retryCount">Number of retry attempts (must be &gt; 0)</param>
-    /// <param name="retryDelay">Delay between each retry attempt (must be &gt; TimeSpan.Zero)</param>
-    /// <exception cref="ArgumentOutOfRangeException">Thrown when retryCount &lt;= 0 or retryDelay &lt;= TimeSpan.Zero</exception>
+    /// <param name="retryDelay">Delay between each retry attempt (must be &gt; TimeSpan.Zero and at most the largest delay <see cref="Task.Delay(TimeSpan, CancellationToken)"/> accepts, about 49.7 days)</param>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when retryCount &lt;= 0, retryDelay &lt;= TimeSpan.Zero or retryDelay is above the maximum timer duration</exception>
     public LinearRetryPolicy(int retryCount, TimeSpan retryDelay)
         : base(BuildDelays(retryCount, retryDelay))
     {
@@ -35,10 +36,10 @@ public class LinearRetryPolicy : RetryPolicyBase<LinearRetryPolicy>
     /// <summary>
     /// Creates a linear retry policy with custom delays for each retry attempt.
     /// </summary>
-    /// <param name="retryDelays">Array of delays for each retry attempt (must contain at least one element with all values &gt; TimeSpan.Zero)</param>
+    /// <param name="retryDelays">Array of delays for each retry attempt (must contain at least one element, all values &gt; TimeSpan.Zero and at most the largest delay <see cref="Task.Delay(TimeSpan, CancellationToken)"/> accepts, about 49.7 days)</param>
     /// <exception cref="ArgumentNullException">Thrown when retryDelays is null</exception>
     /// <exception cref="ArgumentException">Thrown when retryDelays is empty</exception>
-    /// <exception cref="ArgumentOutOfRangeException">Thrown when any delay is &lt;= TimeSpan.Zero</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when any delay is &lt;= TimeSpan.Zero or above the maximum timer duration</exception>
     public LinearRetryPolicy(TimeSpan[] retryDelays)
         : base(retryDelays)
     {
@@ -46,12 +47,16 @@ public class LinearRetryPolicy : RetryPolicyBase<LinearRetryPolicy>
 
     private static TimeSpan[] BuildDelays(int retryCount, TimeSpan retryDelay)
     {
-        if (retryCount <= 0)
-            throw new ArgumentOutOfRangeException(nameof(retryCount));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(retryCount);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(retryDelay, TimeSpan.Zero);
 
-        if (retryDelay <= TimeSpan.Zero)
-            throw new ArgumentOutOfRangeException(nameof(retryDelay));
+        // Checked again by the base on the whole array; this copy reports the scalar parameter name
+        if (retryDelay > TaskDelayLimit.Max)
+        {
+            throw new ArgumentOutOfRangeException(nameof(retryDelay),
+                $"The delay must not exceed the maximum timer duration ({TaskDelayLimit.Max.TotalDays:F1} days).");
+        }
 
-        return Enumerable.Repeat(retryDelay, retryCount).ToArray();
+        return [.. Enumerable.Repeat(retryDelay, retryCount)];
     }
 }

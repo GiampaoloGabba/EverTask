@@ -85,6 +85,8 @@ Validation rules: `retryCount` and `initialDelay` must be greater than zero, `ba
 
 Without a `maxDelay` the growth is still bounded: a single delay never exceeds the longest wait `Task.Delay` accepts (about 49.7 days), so a high retry count with a large factor clamps at that ceiling instead of failing at execution time. Jitter respects the same ceiling. In practice you will want a much lower `maxDelay` anyway.
 
+The same ceiling applies everywhere EverTask arms a timer: `LinearRetryPolicy` rejects explicit delays above it at construction, and task timeouts and audit cleanup intervals are clamped to it. The bundled analyzer reports **ET0009** when a constant value above the ceiling appears at one of these call sites, so the mismatch shows up at compile time rather than as a surprise at runtime.
+
 ### With Exception Filtering
 
 Filtering works exactly like on `LinearRetryPolicy` (whitelist, blacklist, predicate, presets):

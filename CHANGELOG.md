@@ -124,6 +124,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `HandleTransient*` extensions gained generic overloads that keep the concrete policy type for
   chaining; the original `(this LinearRetryPolicy)` overloads stay, so assemblies compiled against
   3.11.0 and subclasses of `LinearRetryPolicy` keep binding. Source- and binary-compatible.
+- **Analyzer rule ET0009** (`EverTask.Resilience` category): warns when a constant retry delay, timeout
+  or cleanup interval exceeds what .NET timers support (about 49.7 days). At runtime the built-in
+  policies now reject explicit over-limit delays at construction, while the worker timeout and the
+  audit cleanup intervals are clamped to that ceiling (the cleanup service logs a warning) instead of
+  crashing on `Task.Delay`/`CancelAfter`.
 - **`EverTask.Monitor.Api.Scalar`**: optional package serving a [Scalar](https://scalar.com) API
   reference at `/evertask-monitoring/scalar`. `.AddMonitoringApiScalar()` (chained after
   `AddMonitoringApi()`) enables the OpenAPI document automatically; net9.0+ (no-op with a startup

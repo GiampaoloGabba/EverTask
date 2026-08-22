@@ -1,4 +1,5 @@
 using EverTask.Logger;
+using EverTask.Resilience;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 
@@ -21,8 +22,6 @@ public sealed class AuditCleanupHostedService : BackgroundService
     private readonly EfCoreTaskStorage? _storage;
     private readonly IEverTaskLogger<AuditCleanupHostedService> _logger;
     private readonly AuditRetentionPolicy? _retentionPolicy;
-    private readonly TimeSpan _cleanupInterval;
-    private readonly TimeSpan _initialDelay;
 
     public AuditCleanupHostedService(
         ITaskStorage storage,
@@ -30,15 +29,16 @@ public sealed class AuditCleanupHostedService : BackgroundService
         IOptions<AuditCleanupOptions> cleanupOptions)
     {
         ArgumentNullException.ThrowIfNull(storage);
+        ArgumentNullException.ThrowIfNull(cleanupOptions);
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
         // Cleanup operations live on EfCoreTaskStorage (base) / SqliteTaskStorage (override).
         _storage = storage as EfCoreTaskStorage;
 
-        var options = cleanupOptions?.Value ?? new AuditCleanupOptions();
-        _retentionPolicy = options.RetentionPolicy;
-        _cleanupInterval = options.CleanupInterval;
-        _initialDelay    = options.InitialDelay;
+        var options = cleanupOptions.Value;
+        _retentionPolicy         = options.RetentionPolicy;
+        EffectiveCleanupInterval = ClampToTimerLimit(options.CleanupInterval, nameof(AuditCleanupOptions.CleanupInterval));
+        EffectiveInitialDelay    = ClampToTimerLimit(options.InitialDelay, nameof(AuditCleanupOptions.InitialDelay));
 
         if (_storage == null)
             _logger.StorageIsNotEfCore();
@@ -46,14 +46,31 @@ public sealed class AuditCleanupHostedService : BackgroundService
             _logger.NoRetentionPolicyConfigured();
     }
 
+    // Internal (visible to EverTask.Tests.Storage): the effective, clamped intervals.
+    internal TimeSpan EffectiveCleanupInterval { get; }
+    internal TimeSpan EffectiveInitialDelay    { get; }
+
+    // Task.Delay rejects anything above TaskDelayLimit.Max (~49.7 days), and this loop runs inside a
+    // BackgroundService: letting it throw would take the whole host down with the default
+    // BackgroundServiceExceptionBehavior.StopHost. A quarterly interval clamped to ~7 weeks just cleans
+    // a bit more often than asked, so clamp and warn. The ET0009 analyzer flags over-limit literals.
+    private TimeSpan ClampToTimerLimit(TimeSpan configured, string optionName)
+    {
+        if (configured <= TaskDelayLimit.Max)
+            return configured;
+
+        _logger.IntervalClampedToTimerLimit(optionName, configured, TaskDelayLimit.Max);
+        return TaskDelayLimit.Max;
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.ServiceStarted(_cleanupInterval);
+        _logger.ServiceStarted(EffectiveCleanupInterval);
 
         // Wait for a small delay before first cleanup to allow app to fully start
         try
         {
-            await Task.Delay(_initialDelay, stoppingToken).ConfigureAwait(false);
+            await Task.Delay(EffectiveInitialDelay, stoppingToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -74,7 +91,7 @@ public sealed class AuditCleanupHostedService : BackgroundService
             // Wait for next cleanup cycle
             try
             {
-                await Task.Delay(_cleanupInterval, stoppingToken).ConfigureAwait(false);
+                await Task.Delay(EffectiveCleanupInterval, stoppingToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -174,17 +191,18 @@ public sealed class AuditCleanupHostedService : BackgroundService
     /// </summary>
     private void WarnOnDisabledKnobs(AuditRetentionPolicy policy)
     {
-        void Warn(string knob, int? value)
-        {
-            if (value is <= 0)
-                _logger.RetentionKnobDisabled(knob, value);
-        }
-
         Warn(nameof(policy.StatusAuditRetentionDays),  policy.StatusAuditRetentionDays);
         Warn(nameof(policy.RunsAuditRetentionDays),    policy.RunsAuditRetentionDays);
         Warn(nameof(policy.ErrorAuditRetentionDays),   policy.ErrorAuditRetentionDays);
         Warn(nameof(policy.ExecutionLogRetentionDays), policy.ExecutionLogRetentionDays);
         Warn(nameof(policy.MaxExecutionLogsPerTask),   policy.MaxExecutionLogsPerTask);
+        return;
+
+        void Warn(string knob, int? value)
+        {
+            if (value is <= 0)
+                _logger.RetentionKnobDisabled(knob, value);
+        }
     }
 
     /// <summary>

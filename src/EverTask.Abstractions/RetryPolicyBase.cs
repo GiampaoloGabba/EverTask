@@ -1,6 +1,7 @@
 using EverTask.Abstractions;
 using Microsoft.Extensions.Logging;
 
+// ReSharper disable once CheckNamespace
 namespace EverTask.Resilience;
 
 /// <summary>
@@ -35,10 +36,10 @@ public abstract class RetryPolicyBase<TPolicy> : IRetryPolicy where TPolicy : Re
     /// <summary>
     /// Creates the policy from the precomputed delays for each retry attempt.
     /// </summary>
-    /// <param name="retryDelays">Array of delays for each retry attempt (must contain at least one element with all values &gt; TimeSpan.Zero)</param>
+    /// <param name="retryDelays">Array of delays for each retry attempt (must contain at least one element, all values &gt; TimeSpan.Zero and at most the largest delay <see cref="Task.Delay(TimeSpan, CancellationToken)"/> accepts, about 49.7 days)</param>
     /// <exception cref="ArgumentNullException">Thrown when retryDelays is null</exception>
     /// <exception cref="ArgumentException">Thrown when retryDelays is empty</exception>
-    /// <exception cref="ArgumentOutOfRangeException">Thrown when any delay is &lt;= TimeSpan.Zero</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when any delay is &lt;= TimeSpan.Zero or above the maximum timer duration</exception>
     /// <exception cref="InvalidOperationException">Thrown when the derived class is not <typeparamref name="TPolicy"/> (or a subclass of it)</exception>
     protected RetryPolicyBase(TimeSpan[] retryDelays)
     {
@@ -58,6 +59,15 @@ public abstract class RetryPolicyBase<TPolicy> : IRetryPolicy where TPolicy : Re
         if (retryDelays.Any(delay => delay <= TimeSpan.Zero))
         {
             throw new ArgumentOutOfRangeException(nameof(retryDelays), "All time spans must be greater than zero.");
+        }
+
+        // Task.Delay would reject these later, mid-Execute, with an infrastructure exception; fail at
+        // construction instead, where the wrong value is visible. ExponentialRetryPolicy pre-clamps its
+        // computed delays, so only explicit user-provided delays can trip this.
+        if (retryDelays.Any(delay => delay > TaskDelayLimit.Max))
+        {
+            throw new ArgumentOutOfRangeException(nameof(retryDelays),
+                $"Delays must not exceed the maximum timer duration ({TaskDelayLimit.Max.TotalDays:F1} days).");
         }
 
         _retryDelays = retryDelays;
@@ -97,7 +107,7 @@ public abstract class RetryPolicyBase<TPolicy> : IRetryPolicy where TPolicy : Re
                 "Cannot use Handle() after DoNotHandle(). Choose whitelist (Handle) or blacklist (DoNotHandle) approach.");
         }
 
-        _retryableExceptions ??= new HashSet<Type>();
+        _retryableExceptions ??= [];
         _retryableExceptions.Add(typeof(TException));
         return (TPolicy)this;
     }
@@ -123,7 +133,7 @@ public abstract class RetryPolicyBase<TPolicy> : IRetryPolicy where TPolicy : Re
             if (!typeof(Exception).IsAssignableFrom(type))
                 throw new ArgumentException($"Type {type.Name} must derive from Exception", nameof(exceptionTypes));
 
-            _retryableExceptions ??= new HashSet<Type>();
+            _retryableExceptions ??= [];
             _retryableExceptions.Add(type);
         }
         return (TPolicy)this;
@@ -156,7 +166,7 @@ public abstract class RetryPolicyBase<TPolicy> : IRetryPolicy where TPolicy : Re
                 "Cannot use DoNotHandle() after Handle(). Choose whitelist (Handle) or blacklist (DoNotHandle) approach.");
         }
 
-        _nonRetryableExceptions ??= new HashSet<Type>();
+        _nonRetryableExceptions ??= [];
         _nonRetryableExceptions.Add(typeof(TException));
         return (TPolicy)this;
     }
@@ -182,7 +192,7 @@ public abstract class RetryPolicyBase<TPolicy> : IRetryPolicy where TPolicy : Re
             if (!typeof(Exception).IsAssignableFrom(type))
                 throw new ArgumentException($"Type {type.Name} must derive from Exception", nameof(exceptionTypes));
 
-            _nonRetryableExceptions ??= new HashSet<Type>();
+            _nonRetryableExceptions ??= [];
             _nonRetryableExceptions.Add(type);
         }
         return (TPolicy)this;

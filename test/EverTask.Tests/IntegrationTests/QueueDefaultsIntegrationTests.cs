@@ -120,4 +120,27 @@ public class QueueDefaultsIntegrationTests : IsolatedIntegrationTestBase
         HandlerWinsHandler.AttemptCount.ShouldBe(2,
             "the handler override must win over the queue default (chain: handler → queue → global)");
     }
+
+    public record HugeTimeoutTask : IEverTask;
+
+    public class HugeTimeoutHandler : EverTaskHandler<HugeTimeoutTask>
+    {
+        // Above the maximum timer duration (~49.7 days): CancelAfter would reject it, the worker clamps
+        public override TimeSpan? Timeout => TimeSpan.FromDays(60);
+
+        public override Task Handle(HugeTimeoutTask backgroundTask, CancellationToken cancellationToken)
+            => Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task Should_complete_the_task_when_the_timeout_exceeds_the_maximum_timer_duration()
+    {
+        await CreateIsolatedHostAsync();
+
+        var taskId = await Dispatcher.Dispatch(new HugeTimeoutTask());
+
+        // Without the clamp, ExecuteWithTimeout would throw ArgumentOutOfRangeException from
+        // CancelAfter and the task would fail for an infrastructure reason
+        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed);
+    }
 }

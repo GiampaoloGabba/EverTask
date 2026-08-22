@@ -128,7 +128,9 @@ public static class EndpointRouteBuilderExtensions
             context.Response.ContentType = contentType;
             context.Response.Headers.CacheControl = "public, max-age=31536000"; // 1 year cache for assets
 
+#pragma warning disable CA2007
             await using var stream = fileInfo.CreateReadStream();
+#pragma warning restore CA2007
             await stream.CopyToAsync(context.Response.Body).ConfigureAwait(false);
         }).ExcludeFromDescription();
 
@@ -158,7 +160,9 @@ public static class EndpointRouteBuilderExtensions
             }
 
             context.Response.ContentType = contentType;
+#pragma warning disable CA2007
             await using var stream = fileInfo.CreateReadStream();
+#pragma warning restore CA2007
             await stream.CopyToAsync(context.Response.Body).ConfigureAwait(false);
         }).ExcludeFromDescription();
 

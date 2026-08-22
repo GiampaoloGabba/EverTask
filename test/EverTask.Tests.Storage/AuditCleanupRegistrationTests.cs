@@ -47,4 +47,49 @@ public class AuditCleanupRegistrationTests
         var options = provider.GetRequiredService<IOptions<AuditCleanupOptions>>().Value;
         options.CleanupInterval.ShouldBe(TimeSpan.FromHours(24));
     }
+
+    // Task.Delay rejects delays above uint.MaxValue - 1 ms (~49.7 days); without the clamp the first
+    // over-limit wait would crash ExecuteAsync and, with the default BackgroundServiceExceptionBehavior,
+    // stop the whole host. A quarterly interval is a plausible way to hit this.
+    [Fact]
+    public void Should_clamp_intervals_above_the_maximum_timer_duration()
+    {
+        using var provider = BuildProviderWithIntervals(
+            cleanupInterval: TimeSpan.FromDays(90), initialDelay: TimeSpan.FromDays(60));
+
+        var service = provider.GetRequiredService<AuditCleanupHostedService>();
+
+        var max = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+        service.EffectiveCleanupInterval.ShouldBe(max);
+        service.EffectiveInitialDelay.ShouldBe(max);
+    }
+
+    [Fact]
+    public void Should_keep_intervals_below_the_maximum_timer_duration_unchanged()
+    {
+        using var provider = BuildProviderWithIntervals(
+            cleanupInterval: TimeSpan.FromHours(24), initialDelay: TimeSpan.FromMinutes(1));
+
+        var service = provider.GetRequiredService<AuditCleanupHostedService>();
+
+        service.EffectiveCleanupInterval.ShouldBe(TimeSpan.FromHours(24));
+        service.EffectiveInitialDelay.ShouldBe(TimeSpan.FromMinutes(1));
+    }
+
+    private static ServiceProvider BuildProviderWithIntervals(TimeSpan cleanupInterval, TimeSpan initialDelay)
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddEverTask(opt => opt.RegisterTasksFromAssembly(typeof(AuditCleanupRegistrationTests).Assembly))
+                .AddMemoryStorage();
+        services.Configure<AuditCleanupOptions>(o =>
+        {
+            o.RetentionPolicy = new AuditRetentionPolicy { StatusAuditRetentionDays = 7 };
+            o.CleanupInterval = cleanupInterval;
+            o.InitialDelay    = initialDelay;
+        });
+        services.AddSingleton<AuditCleanupHostedService>();
+
+        return services.BuildServiceProvider();
+    }
 }

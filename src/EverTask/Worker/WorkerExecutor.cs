@@ -208,7 +208,9 @@ public class WorkerExecutor(
     {
         //Task storage could be a dbcontext wich is not thread safe.
         //So its safer to just use a new scope for each task
+#pragma warning disable CA2007
         await using var scope       = serviceScopeFactory.CreateAsyncScope();
+#pragma warning restore CA2007
         var taskStorage = scope.ServiceProvider.GetService<ITaskStorage>();
 
         // Create log capture instance (always logs to ILogger, optionally persists)
@@ -545,7 +547,9 @@ public class WorkerExecutor(
     private async ValueTask HandleRateLimitRejectionAsync(TaskHandlerExecutor task, RateLimitGateResult gateResult,
                                                           CancellationToken serviceToken)
     {
+#pragma warning disable CA2007
         await using var scope = serviceScopeFactory.CreateAsyncScope();
+#pragma warning restore CA2007
         var taskStorage = scope.ServiceProvider.GetService<ITaskStorage>();
 
         if (task.RecurringTask != null)
@@ -724,9 +728,19 @@ public class WorkerExecutor(
         }
     }
 
-    private async Task ExecuteWithTimeout(Func<CancellationToken, Task> action, TimeSpan timeout,
+    // CancelAfter rejects anything above the maximum timer duration (uint.MaxValue - 1 ms, ~49.7 days).
+    // Same constant as Resilience.TaskDelayLimit in Abstractions (internal there, no IVT to this assembly).
+    private static readonly TimeSpan MaxTimerDuration = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+
+    private static async Task ExecuteWithTimeout(Func<CancellationToken, Task> action, TimeSpan timeout,
                                           CancellationToken token)
     {
+        // A configured timeout above the timer ceiling (handler override, queue or global default) is
+        // indistinguishable from the ceiling in practice: clamp it instead of failing the task with an
+        // infrastructure ArgumentOutOfRangeException. The ET0009 analyzer flags over-limit literals.
+        if (timeout > MaxTimerDuration)
+            timeout = MaxTimerDuration;
+
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
         timeoutCts.CancelAfter(timeout);
 
@@ -792,7 +806,7 @@ public class WorkerExecutor(
     /// <summary>
     /// Gets the OnStarted callback from executor (eager mode) or extracts from handler (lazy mode)
     /// </summary>
-    private Func<Guid, ValueTask>? GetStartedCallback(TaskHandlerExecutor task, object handler)
+    private static Func<Guid, ValueTask>? GetStartedCallback(TaskHandlerExecutor task, object handler)
     {
         // If executor has callback (eager mode), use it
         if (task.HandlerStartedCallback != null)
@@ -809,7 +823,7 @@ public class WorkerExecutor(
     /// <summary>
     /// Gets the OnCompleted callback from executor (eager mode) or extracts from handler (lazy mode)
     /// </summary>
-    private Func<Guid, ValueTask>? GetCompletedCallback(TaskHandlerExecutor task, object handler)
+    private static Func<Guid, ValueTask>? GetCompletedCallback(TaskHandlerExecutor task, object handler)
     {
         // If executor has callback (eager mode), use it
         if (task.HandlerCompletedCallback != null)
@@ -826,7 +840,7 @@ public class WorkerExecutor(
     /// <summary>
     /// Gets the OnError callback from executor (eager mode) or extracts from handler (lazy mode)
     /// </summary>
-    private Func<Guid, Exception?, string, ValueTask>? GetErrorCallback(TaskHandlerExecutor task, object handler)
+    private static Func<Guid, Exception?, string, ValueTask>? GetErrorCallback(TaskHandlerExecutor task, object handler)
     {
         // If executor has callback (eager mode), use it
         if (task.HandlerErrorCallback != null)
@@ -1269,7 +1283,7 @@ public class WorkerExecutor(
         }
     }
 
-    private EverTaskEventData CreateEventDataCached(TaskHandlerExecutor executor, SeverityLevel severity,
+    private static EverTaskEventData CreateEventDataCached(TaskHandlerExecutor executor, SeverityLevel severity,
                                                     string message, Exception? exception,
                                                     IReadOnlyList<TaskExecutionLog>? executionLogs = null)
     {

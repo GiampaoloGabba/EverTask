@@ -38,4 +38,9 @@ internal static partial class AuditCleanupLog
         Message = "AuditRetentionPolicy.{Knob} is {Value} (<= 0) and is treated as DISABLED. " +
                   "Provide a positive value to enable it, or null to disable it explicitly")]
     public static partial void RetentionKnobDisabled(this ILogger logger, string knob, int? value);
+
+    [LoggerMessage(EventId = 2108, Level = LogLevel.Warning,
+        Message = "AuditCleanupOptions.{Option} of {Configured} exceeds the maximum timer duration and was clamped to {Clamped}")]
+    public static partial void IntervalClampedToTimerLimit(this ILogger logger, string option, TimeSpan configured,
+                                                           TimeSpan clamped);
 }

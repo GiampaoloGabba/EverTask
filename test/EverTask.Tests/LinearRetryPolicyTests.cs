@@ -423,4 +423,37 @@ public class LinearRetryPolicyTests
     }
 
     #endregion
+
+    #region Group 10: Maximum timer duration (3 tests)
+
+    // Task.Delay rejects delays above uint.MaxValue - 1 ms (~49.7 days); the policy fails at
+    // construction instead of mid-Execute with an infrastructure ArgumentOutOfRangeException.
+    private static readonly TimeSpan TaskDelayMax = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+
+    [Fact]
+    public void Should_throw_at_construction_when_the_scalar_delay_exceeds_the_timer_limit()
+    {
+        var ex = Should.Throw<ArgumentOutOfRangeException>(() =>
+            new LinearRetryPolicy(3, TimeSpan.FromDays(60)));
+
+        ex.ParamName.ShouldBe("retryDelay");
+    }
+
+    [Fact]
+    public void Should_throw_at_construction_when_an_array_delay_exceeds_the_timer_limit()
+    {
+        var ex = Should.Throw<ArgumentOutOfRangeException>(() =>
+            new LinearRetryPolicy(new[] { TimeSpan.FromSeconds(1), TimeSpan.FromDays(50) }));
+
+        ex.ParamName.ShouldBe("retryDelays");
+    }
+
+    [Fact]
+    public void Should_accept_a_delay_exactly_at_the_timer_limit()
+    {
+        _ = new LinearRetryPolicy(1, TaskDelayMax);
+        _ = new LinearRetryPolicy(new[] { TaskDelayMax });
+    }
+
+    #endregion
 }
