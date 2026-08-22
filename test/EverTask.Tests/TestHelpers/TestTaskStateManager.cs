@@ -42,18 +42,18 @@ public class TestTaskStateManager
     }
 
     /// <summary>
-    /// Increments the execution counter for a task
+    /// Increments the execution counter for a task and returns the new value. The increment is atomic,
+    /// so a handler can drive its own behaviour from the returned attempt number (e.g. fail the first N
+    /// invocations) even when two occurrences of the same task overlap.
     /// </summary>
-    public void IncrementCounter(string taskKey)
+    public int IncrementCounter(string taskKey)
     {
-        _states.AddOrUpdate(
-            taskKey,
-            _ => new TaskExecutionState { ExecutionCount = 1 },
-            (_, state) =>
-            {
-                state.ExecutionCount++;
-                return state;
-            });
+        var state = _states.GetOrAdd(taskKey, _ => new TaskExecutionState());
+
+        lock (state)
+        {
+            return ++state.ExecutionCount;
+        }
     }
 
     /// <summary>

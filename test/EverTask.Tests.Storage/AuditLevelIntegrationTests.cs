@@ -446,18 +446,16 @@ public class AuditLevelIntegrationTests : IsolatedIntegrationTestBase, IAsyncLif
     public async Task Should_audit_only_failures_in_recurring_task_with_minimal()
     {
         // Arrange
-        TestTaskRecurringWithFailure.Counter = 0; // Reset static counter
-        // With retry policy of 3 attempts (4 total calls per execution), we need FailUntilCount high enough
-        // to ensure first 2 recurring executions fail completely: 2 executions * 4 calls = 8
-        TestTaskRecurringWithFailure.FailUntilCount = 8; // First 2 executions will fail all retries
         await CreateHostWithSqlServerAsync(configureEverTask: cfg =>
         {
             cfg.SetDefaultAuditLevel(AuditLevel.Minimal);
         });
 
-        // Act - Recurring task where first 2 executions fail (with retries), then subsequent executions succeed
+        // Act - Recurring task where first 2 executions fail (with retries), then subsequent executions
+        // succeed. With a retry policy of 3 attempts (4 total calls per execution), FailUntilCount has to
+        // be high enough to make the first 2 recurring executions fail completely: 2 executions * 4 calls = 8
         var taskId = await Dispatcher.Dispatch(
-            new TestTaskRecurringWithFailure(),
+            new TestTaskRecurringWithFailure(FailUntilCount: 8),
             recurring: r => r.Schedule().Every(1).Seconds().MaxRuns(7) // 2 failed + 5 successful = 7 total
         );
 
@@ -491,18 +489,16 @@ public class AuditLevelIntegrationTests : IsolatedIntegrationTestBase, IAsyncLif
     public async Task Should_audit_no_successes_in_recurring_task_with_errors_only()
     {
         // Arrange
-        TestTaskRecurringWithFailure.Counter = 0; // Reset static counter
-        // With retry policy of 3 attempts (4 total calls per execution), we need FailUntilCount high enough
-        // to ensure first 2 recurring executions fail completely: 2 executions * 4 calls = 8
-        TestTaskRecurringWithFailure.FailUntilCount = 8; // First 2 executions will fail all retries
         await CreateHostWithSqlServerAsync(configureEverTask: cfg =>
         {
             cfg.SetDefaultAuditLevel(AuditLevel.ErrorsOnly);
         });
 
-        // Act - Recurring task where first 2 executions fail (with retries), then subsequent executions succeed
+        // Act - Recurring task where first 2 executions fail (with retries), then subsequent executions
+        // succeed. With a retry policy of 3 attempts (4 total calls per execution), FailUntilCount has to
+        // be high enough to make the first 2 recurring executions fail completely: 2 executions * 4 calls = 8
         var taskId = await Dispatcher.Dispatch(
-            new TestTaskRecurringWithFailure(),
+            new TestTaskRecurringWithFailure(FailUntilCount: 8),
             recurring: r => r.Schedule().Every(1).Seconds().MaxRuns(7) // 2 failed + 5 successful = 7 total
         );
 

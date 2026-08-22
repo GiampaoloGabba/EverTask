@@ -216,9 +216,8 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
     {
         await CreateIsolatedHostAsync();
 
-        TestTaskRecurringWithFailure.Counter = 0; // Reset static counter
-        TestTaskRecurringWithFailure.FailUntilCount = 2; // Fail first 2 attempts, succeed on 3rd
-        var task = new TestTaskRecurringWithFailure();
+        // Fail the first 2 attempts, succeed on the 3rd
+        var task = new TestTaskRecurringWithFailure(FailUntilCount: 2);
 
         // Every 2 seconds, max 3 runs - first run will retry internally due to LinearRetryPolicy(3, 50ms)
         var taskId = await Dispatcher.Dispatch(task, builder => builder.Schedule().Every(2).Seconds().MaxRuns(3));
@@ -239,8 +238,6 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
 
         // Verify all 3 recurring runs completed successfully (retries are internal to each run)
         pt[0].RunsAudits.All(r => r != null && r.Status == QueuedTaskStatus.Completed).ShouldBeTrue();
-
-        // Counter should be > 3 due to retries during first run
     }
 
     [Fact]

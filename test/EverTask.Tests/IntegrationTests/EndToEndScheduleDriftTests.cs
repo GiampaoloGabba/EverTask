@@ -54,12 +54,9 @@ public class EndToEndScheduleDriftTests : IsolatedIntegrationTestBase
             channelCapacity: 10,
             maxDegreeOfParallelism: 5);
 
-        TestTaskRecurringWithFailure.Counter = 0; // Reset static counter
-        TestTaskRecurringWithFailure.FailUntilCount = 2; // Fail twice, then succeed
-
-        // Act: Dispatch recurring task with retry policy (every 2 seconds)
+        // Act: Dispatch recurring task with retry policy (every 2 seconds), failing twice then succeeding
         var taskId = await Dispatcher.Dispatch(
-            new TestTaskRecurringWithFailure(),
+            new TestTaskRecurringWithFailure(FailUntilCount: 2),
             recurring => recurring.Schedule().Every(2).Seconds());
 
         // Wait for 2 successful executions (each might have retries)

@@ -278,14 +278,17 @@ public class QueueResilienceIntegrationTests : IsolatedIntegrationTestBase
     {
         await CreateIsolatedHostAsync(configureServices: s => s.AddSingleton(_state));
 
+        // 30s cron grid: the whole restart window (host teardown, host 2 build + start, recovery) has to
+        // fit BEFORE the anchored occurrence, or it fires and NextRunUtc legitimately advances. A */10
+        // grid caps that margin at 10s and the anchor threshold at 6s, which the window could exhaust.
         var taskId = await Dispatcher.Dispatch(new ResilienceRecurringTask(),
-            r => r.RunDelayed(TimeSpan.FromMilliseconds(300)).Then().UseCron("*/10 * * * * *"));
+            r => r.RunDelayed(TimeSpan.FromMilliseconds(300)).Then().UseCron("*/30 * * * * *"));
 
         // Wait for a completed run whose NextRunUtc is far enough away to survive the restart window.
         var anchorTask = await TaskWaitHelper.WaitUntilAsync(
             async () => (await Storage.GetAll()).FirstOrDefault(t => t.Id == taskId),
             t => t is { NextRunUtc: not null, CurrentRunCount: > 0 }
-                 && t.NextRunUtc.Value - DateTimeOffset.UtcNow > TimeSpan.FromSeconds(6),
+                 && t.NextRunUtc.Value - DateTimeOffset.UtcNow > TimeSpan.FromSeconds(15),
             timeoutMs: 35000);
 
         var anchor       = anchorTask!.NextRunUtc!.Value;
@@ -298,17 +301,21 @@ public class QueueResilienceIntegrationTests : IsolatedIntegrationTestBase
             s.AddSingleton<ITaskStorage>(sharedStorage);
         });
 
-        // Lost-update guard: revival must NOT rewrite the definition/NextRunUtc in storage.
-        await Task.Delay(1500); // recovery has certainly processed the row by now
+        // Lost-update guard: revival must NOT rewrite the definition/NextRunUtc in storage. Recovery runs
+        // in the background AFTER StartAsync returns, so wait for its observable end - the occurrence
+        // re-parked in THIS host's scheduler - instead of a blind delay.
+        var scheduler = Host!.Services.GetRequiredService<IScheduler>();
+        await TaskWaitHelper.WaitForConditionAsync(() => scheduler.IsScheduled(taskId), timeoutMs: 10000);
+
         var afterRevival = (await Storage.GetAll()).First(t => t.Id == taskId);
         afterRevival.NextRunUtc.ShouldBe(anchor);
 
         // Occurrence-skip guard (P0): the parked occurrence at 'anchor' must execute AT anchor,
-        // not at the following cron slot (anchor + 10s with the old recalculation).
+        // not at the following cron slot (anchor + 30s with the old recalculation).
         var afterRun = await TaskWaitHelper.WaitUntilAsync(
             async () => (await Storage.GetAll()).First(t => t.Id == taskId),
             t => (t.CurrentRunCount ?? 0) >= runsAtAnchor + 1,
-            timeoutMs: 25000);
+            timeoutMs: 45000);
 
         afterRun.LastExecutionUtc.ShouldNotBeNull();
         afterRun.LastExecutionUtc!.Value.ShouldBeLessThan(anchor.AddSeconds(8));

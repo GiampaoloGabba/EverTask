@@ -1,4 +1,5 @@
 using EverTask.Abstractions;
+using EverTask.Scheduler;
 using EverTask.Storage;
 using EverTask.Storage.SqlServer;
 using EverTask.Tests.TestHelpers;
@@ -174,13 +175,16 @@ public class SqlServerRecoveryIntegrationTests : IsolatedIntegrationTestBase, IA
         // Host 1: dynamically created recurring task, never re-registered at boot.
         await CreateSqlServerHostAsync();
 
+        // 30s cron grid: the whole restart window (host teardown, host 2 build + migrations check +
+        // start, recovery against the real DB) has to fit BEFORE the anchored occurrence, or it fires
+        // and NextRunUtc legitimately advances. A */10 grid caps that margin at 10s.
         var taskId = await Dispatcher.Dispatch(new ResilienceRecurringTask(),
-            r => r.RunDelayed(TimeSpan.FromMilliseconds(500)).Then().UseCron("*/10 * * * * *"));
+            r => r.RunDelayed(TimeSpan.FromMilliseconds(500)).Then().UseCron("*/30 * * * * *"));
 
         var anchorTask = await TaskWaitHelper.WaitUntilAsync(
             async () => (await Storage.GetAll()).FirstOrDefault(t => t.Id == taskId),
             t => t is { NextRunUtc: not null, CurrentRunCount: > 0 }
-                 && t.NextRunUtc!.Value - DateTimeOffset.UtcNow > TimeSpan.FromSeconds(6),
+                 && t.NextRunUtc!.Value - DateTimeOffset.UtcNow > TimeSpan.FromSeconds(15),
             timeoutMs: 40000);
 
         var anchor       = anchorTask!.NextRunUtc!.Value;
@@ -189,8 +193,12 @@ public class SqlServerRecoveryIntegrationTests : IsolatedIntegrationTestBase, IA
         // Host 2 (real restart, same DB): the recurring task must be revived and keep firing.
         await CreateSqlServerHostAsync();
 
-        // Lost-update guard: revival must not rewrite the stored NextRunUtc.
-        await Task.Delay(2000);
+        // Lost-update guard: revival must not rewrite the stored NextRunUtc. Recovery runs in the
+        // background AFTER StartAsync returns, so wait for its observable end - the occurrence re-parked
+        // in THIS host's scheduler - instead of a blind delay.
+        var scheduler = Host!.Services.GetRequiredService<IScheduler>();
+        await TaskWaitHelper.WaitForConditionAsync(() => scheduler.IsScheduled(taskId), timeoutMs: 15000);
+
         var afterRevival = (await Storage.GetAll()).First(t => t.Id == taskId);
         afterRevival.NextRunUtc.ShouldBe(anchor);
 
@@ -198,7 +206,7 @@ public class SqlServerRecoveryIntegrationTests : IsolatedIntegrationTestBase, IA
         var afterRun = await TaskWaitHelper.WaitUntilAsync(
             async () => (await Storage.GetAll()).First(t => t.Id == taskId),
             t => (t.CurrentRunCount ?? 0) >= runsAtAnchor + 1,
-            timeoutMs: 30000);
+            timeoutMs: 45000);
 
         afterRun.LastExecutionUtc.ShouldNotBeNull();
         afterRun.LastExecutionUtc!.Value.ShouldBeLessThan(anchor.AddSeconds(8));
