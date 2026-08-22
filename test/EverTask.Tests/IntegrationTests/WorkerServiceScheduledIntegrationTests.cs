@@ -153,12 +153,16 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
                    .Every(2).Seconds()
                    .MaxRuns(3));
 
-        // Wait for task to be scheduled
-        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.WaitingQueue, timeoutMs: 1000);
+        // RunDelayed(500ms): WaitingQueue is observable only for that 500ms window, and the row never
+        // returns to it once the occurrence is delivered - a first poll landing after the window made
+        // the wait run out its whole timeout with nothing left to observe. Wait for the row to be
+        // accepted by the pipeline instead.
+        await WaitForTaskAcceptedAsync(taskId, timeoutMs: 2000);
 
         var pt = await Storage.GetAll();
         pt.Length.ShouldBe(1);
-        pt[0].Status.ShouldBe(QueuedTaskStatus.WaitingQueue);
+        pt[0].Status.ShouldBeOneOf(QueuedTaskStatus.WaitingQueue, QueuedTaskStatus.Queued,
+                                   QueuedTaskStatus.InProgress, QueuedTaskStatus.Completed);
         pt[0].IsRecurring.ShouldBeTrue();
 
         // Wait for recurring task to complete 3 runs

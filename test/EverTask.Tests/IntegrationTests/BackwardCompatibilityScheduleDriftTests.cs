@@ -38,16 +38,12 @@ public class BackwardCompatibilityScheduleDriftTests : IsolatedIntegrationTestBa
 
         await Storage.UpdateTask(queuedTask);
 
-        // Act: Wait for the task to be picked up and executed
-        await TaskWaitHelper.WaitForConditionAsync(
-            () => StateManager.GetCounter(nameof(TestTaskRecurringSeconds)) >= 1,
-            timeoutMs: 5000); // 5 seconds should be enough for 2-second interval
+        // Act: wait for the task to be picked up, executed AND rescheduled. The handler counter only
+        // proves the handler returned; CurrentRunCount and the new NextRunUtc asserted below are
+        // written afterwards, by the WorkerExecutor's post-execution advance of the series.
+        var updatedTask = await WaitForRecurringRunsAsync(taskId, expectedRuns: 1, timeoutMs: 5000);
 
         // Assert: Task should have been deserialized and rescheduled correctly
-        var updatedTasks = await Storage.GetAll();
-        var updatedTask = updatedTasks.FirstOrDefault(t => t.Id == taskId);
-
-        updatedTask.ShouldNotBeNull();
         updatedTask.IsRecurring.ShouldBeTrue();
         updatedTask.CurrentRunCount?.ShouldBeGreaterThanOrEqualTo(1);
 
@@ -78,16 +74,11 @@ public class BackwardCompatibilityScheduleDriftTests : IsolatedIntegrationTestBa
 
         await Storage.UpdateTask(queuedTask);
 
-        // Act: Wait for execution
-        await TaskWaitHelper.WaitForConditionAsync(
-            () => StateManager.GetCounter(nameof(TestTaskRecurringSeconds)) >= 1,
-            timeoutMs: 5000);
+        // Act: wait for the execution AND the reschedule - same race as above, the handler counter is
+        // raised before the row carries CurrentRunCount and the new NextRunUtc.
+        var updatedTask = await WaitForRecurringRunsAsync(taskId, expectedRuns: 1, timeoutMs: 5000);
 
         // Assert: Task should still execute and reschedule
-        var updatedTasks = await Storage.GetAll();
-        var updatedTask = updatedTasks.FirstOrDefault(t => t.Id == taskId);
-
-        updatedTask.ShouldNotBeNull();
         updatedTask.CurrentRunCount?.ShouldBeGreaterThanOrEqualTo(1);
         updatedTask.NextRunUtc.ShouldNotBeNull();
     }
@@ -153,16 +144,12 @@ public class BackwardCompatibilityScheduleDriftTests : IsolatedIntegrationTestBa
 
         await Storage.UpdateTask(queuedTask);
 
-        // Act: Let the task execute with new logic
-        await TaskWaitHelper.WaitForConditionAsync(
-            () => StateManager.GetCounter(nameof(TestTaskRecurringSeconds)) >= 2,
-            timeoutMs: 8000);
+        // Act: let the task execute with the new logic. Waiting on the handler counter is off by one
+        // run here: it reaches 2 when the SECOND handler ENTERS, while CurrentRunCount and the second
+        // runs audit are written only after that handler returns - so the row could still say 1.
+        var updatedTask = await WaitForRecurringRunsAsync(taskId, expectedRuns: 2, timeoutMs: 8000);
 
         // Assert: New logic should take over after first execution
-        var updatedTasks = await Storage.GetAll();
-        var updatedTask = updatedTasks.FirstOrDefault(t => t.Id == taskId);
-
-        updatedTask.ShouldNotBeNull();
         updatedTask.CurrentRunCount?.ShouldBeGreaterThanOrEqualTo(2);
 
         // Subsequent runs should use ExecutionTime-based calculation

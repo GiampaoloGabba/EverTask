@@ -23,35 +23,45 @@ public class WorkerExecutorNextRunCalculationTests : IsolatedIntegrationTestBase
             new TestTaskRecurringSeconds(),
             recurring => recurring.Schedule().Every(5).Seconds());
 
-        // Wait for first execution
-        await TaskWaitHelper.WaitForConditionAsync(
-            () => StateManager.GetCounter(nameof(TestTaskRecurringSeconds)) >= 1,
-            timeoutMs: 7000);
+        // The Dispatcher persists the row - with the slot it picked for the first occurrence - before
+        // Dispatch returns, and that slot is a full interval away: this read cannot see a NextRunUtc
+        // already advanced by the WorkerExecutor.
+        var taskAfterDispatch = await TaskWaitHelper.WaitForTaskExistsAsync(Storage, taskId);
+        var dispatcherNextRun = taskAfterDispatch.NextRunUtc;
+        dispatcherNextRun.ShouldNotBeNull();
 
-        // Get task state after first run
-        var tasks = await Storage.GetAll();
-        var task = tasks.FirstOrDefault(t => t.Id == taskId);
+        // Wait for the first execution AND its post-execution write: CurrentRunCount, the runs audit
+        // and the new NextRunUtc are persisted after the handler returns, so the handler counter
+        // alone would race the row read that follows.
+        var task = await WaitForRecurringRunsAsync(taskId, expectedRuns: 1, timeoutMs: 7000);
 
-        task.ShouldNotBeNull();
         task.CurrentRunCount.HasValue.ShouldBeTrue();
         task.CurrentRunCount?.ShouldBeGreaterThanOrEqualTo(1);
         task.NextRunUtc.ShouldNotBeNull();
 
-        // Get the scheduled execution time (ExecutionTime) from the first run
         var firstRun = task.RunsAudits
             .Where(a => a.Status == QueuedTaskStatus.Completed)
             .OrderBy(a => a.ExecutedAt)
-            .FirstOrDefault();
+            .First();
 
-        firstRun.ShouldNotBeNull();
+        // The occurrence that ran is the one the Dispatcher scheduled: the scheduler dequeues a slot
+        // only once it is due, so the audited execution is never earlier.
+        firstRun.ExecutedAt.ShouldBeGreaterThanOrEqualTo(dispatcherNextRun.Value);
 
-        // Assert: Next run should be ExecutionTime + 5 seconds, not UtcNow + 5 seconds
-        // This verifies that WorkerExecutor used ExecutionTime for calculation
-        var expectedNextRun = firstRun.ExecutedAt.AddSeconds(5);
-        var timeDiff = Math.Abs((task.NextRunUtc!.Value - expectedNextRun).TotalSeconds);
+        // Assert: the WorkerExecutor re-schedules from the SCHEDULED slot, not from the wall clock.
+        // QueueNextOccourrence feeds CalculateNextValidRun with TaskHandlerExecutor.ExecutionTime,
+        // which for this first occurrence IS the slot the Dispatcher picked - NOT firstRun.ExecutedAt,
+        // which is stamped when the run finishes. The new NextRunUtc therefore lands on the occurrence
+        // grid anchored at dispatcherNextRun (+ k * 5s, with k > 1 only when the run was late enough
+        // for CalculateNextValidRun to realign, which stays on the SAME grid), whereas a UtcNow-based
+        // re-schedule would land at "instant the run finished + 5s", i.e. off that grid by the
+        // execution latency. The previous form compared NextRunUtc against ExecutedAt + 5s with a 1s
+        // tolerance, which is exactly that latency: under contention it legitimately exceeded 1s.
+        var interval = TimeSpan.FromSeconds(5); // matches Every(5).Seconds() above
+        var advance  = task.NextRunUtc!.Value - dispatcherNextRun.Value;
 
-        // Allow 1 second tolerance for processing delays
-        timeDiff.ShouldBeLessThan(1);
+        advance.ShouldBeGreaterThanOrEqualTo(interval);
+        (advance.Ticks % interval.Ticks).ShouldBe(0L);
     }
 
     [Fact]
