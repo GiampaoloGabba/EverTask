@@ -80,7 +80,7 @@ public record EverTaskEventData(
   "TaskType": "MyApp.Tasks.SendEmailTask",
   "TaskHandlerType": "MyApp.Handlers.SendEmailHandler",
   "TaskParameters": "{\"Email\":\"user@example.com\",\"Subject\":\"Welcome\"}",
-  "Message": "Task with id dc49351d-476d-49f0-a1e8-3e2a39182d22 was completed.",
+  "Message": "Task with id dc49351d-476d-49f0-a1e8-3e2a39182d22 was completed in 12.5 ms",
   "Exception": null
 }
 ```

@@ -489,14 +489,14 @@ dotnet_diagnostic.IDE0301.severity = warning
 dotnet_diagnostic.CA2012.severity = warning
 
 # --- Visible, not enforced: real findings with an open backlog --------------
-# Logging (issue #32, IN PROGRESS): every logging call in src/ is being moved to source-generated
-# [LoggerMessage] methods (no object[] / boxing before the level check, constant templates,
-# PascalCase placeholders). These four are at `suggestion` while the work is split across
-# parallel workstreams; they go to `warning` in the same PR once the solution is at zero hits.
-dotnet_diagnostic.CA1848.severity = suggestion
-dotnet_diagnostic.CA1873.severity = suggestion
-dotnet_diagnostic.CA2254.severity = suggestion
-dotnet_diagnostic.CA1727.severity = suggestion
+# Logging (issue #32): every log in src/ is a source-generated [LoggerMessage] method on the
+# component's `<Component>Log` class - no object[] / boxing before the level check, constant
+# templates, PascalCase placeholders. Enforced by the build; the single justified exception is
+# the TaskLogCapture forward of consumer-supplied templates (scoped #pragma there).
+dotnet_diagnostic.CA1848.severity = warning
+dotnet_diagnostic.CA1873.severity = warning
+dotnet_diagnostic.CA2254.severity = warning
+dotnet_diagnostic.CA1727.severity = warning
 # Culture-sensitive string/format calls in a library.
 dotnet_diagnostic.CA1305.severity = suggestion
 dotnet_diagnostic.CA1307.severity = suggestion

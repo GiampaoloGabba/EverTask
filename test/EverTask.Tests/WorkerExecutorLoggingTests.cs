@@ -28,7 +28,7 @@ public class WorkerExecutorLoggingTests
 
         public IReadOnlyList<LogEntry> Entries
         {
-            get { lock (_entries) return _entries.ToArray(); }
+            get { lock (_entries) return [.. _entries]; }
         }
 
         public bool IsEnabled(LogLevel logLevel) => true;

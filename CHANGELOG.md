@@ -28,6 +28,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   package's own controllers. Host routes relying on the accidental prefix move back to their
   natural paths.
 
+### Changed (logging, #32)
+
+- **Per-task lifecycle and storage status-transition logs moved from `Information` to `Debug`.**
+  With `Information` enabled (the default in most hosts) every executed task produced 3+ lines per
+  storage provider (`Set Task … with Status …` on each `Queued` → `InProgress` → `Completed`
+  transition, `Update the current run counter`, `Complete recurring run`, `Task … persisted`,
+  `Updating task … with key …`, `Removing task …`) plus the worker's `Starting task with id …` and
+  `Task with id … was completed in … ms`, the dispatcher's task-key re-dispatch lines and the
+  scheduler's `Next run …`. All of these now log at `Debug`; the in-memory storage emits the same
+  volume as the EF Core providers. Hosts that relied on one line per task at `Information` must set
+  the `EverTask` category to `Debug`. Recovery summaries, series finalization, poisoning, startup and
+  shutdown lines, and every `Warning`/`Error`/`Critical` keep their level. **Monitoring events are
+  not affected**: `TaskEventOccurredAsync`, SignalR and the dashboard still receive the task-started
+  and task-completed events with `Severity = "Information"` — the log level is now independent of
+  the event severity.
+- **Internal logs are source-generated (`[LoggerMessage]`) with stable, named, non-zero `EventId`s
+  and PascalCase structured properties.** Every logging call in the library goes through a
+  per-component `<Component>Log` class (no `object[]`, no boxing, `IsEnabled` guard before any
+  argument work). Placeholder names that were camelCase (`{taskId}`, `{status}`, `{taskKey}`,
+  `{name}`) are now `{TaskId}`, `{Status}`, `{TaskKey}`, `{TaskType}`: a structured sink treats
+  the two casings as different properties, so saved queries on the old names must be updated.
+  EventIds are allocated per component (core 1000–1999, EF Core storage 2000–2199, monitoring
+  3000–3299) and a test asserts solution-wide uniqueness; previously every internal log had
+  `EventId = 0`.
+- **Worker lifecycle events reach the log as real templates.** `WorkerExecutor` used to render
+  the monitoring message with `string.Format` and log the *rendered string as the template*, so a
+  structured sink saw a different "template" per task and no `TaskId` property. The log now carries
+  the properties (`{TaskId}`, `{ElapsedMs}`, `{Key}`, `{SlotUtc}`, …); the monitoring event
+  `Message` is still the rendered sentence, rendered only when at least one subscriber exists, with
+  `CultureInfo.InvariantCulture` (before: current culture, so `12,5 ms` under `it-IT`).
+- **Log and event message texts** (consumers matching on the full text must adjust; the fragments
+  `Rate limit deferred task <id>: key=… slotUtc=… policy=… deferredCount=…`, `fail OPEN`,
+  `retry attempt`, `was completed in`, `Error occurred`, `marked as Failed`, `cancelled` are
+  unchanged):
+  - no message ends with a period any more (19 worker/dispatcher templates, all monitoring event
+    messages — e.g. `Task with id … was completed in 12.5 ms`);
+  - the storage providers no longer append `using SQL Server stored procedure` / `using PostgreSQL
+    writable CTE` / `using MySQL stored procedure` (the logger category already names the provider);
+  - `Update the current run counter for Task for taskId …` (a Critical that read like a progress
+    line) → `Unable to update the current run counter for taskId {TaskId}`; the base
+    `… atomically` suffix on the status-update Critical is gone;
+  - `Error occurred executing while executing the callback override …` → `Error occurred executing
+    the callback override {CallbackName} for task with id {TaskId}`;
+  - a task cancelled by the user no longer reports `was cancelled by service while stopping`: the
+    two cases are `Task with id {TaskId} was cancelled by the user` / `… by service while stopping`;
+  - the SignalR monitor logs `message received for task {TaskId} ({Severity})` at `Debug` instead of
+    destructuring the whole event (payload JSON and execution logs included) at `Information`;
+  - `JwtTokenService` debug lines use `{Reason}` instead of `{Message}` (which collides with the
+    rendered-message property in structured sinks).
+- **`EverTask.Logging.Serilog` routes through `Serilog.Extensions.Logging`** (already in the
+  package's dependency closure) instead of a hand-written adapter that passed the *rendered* string
+  to Serilog as the message template. Consequences: `MessageTemplate` is the real template again and
+  named properties, `@` destructuring, the `EventId` property and `SourceContext` reach the sinks;
+  `IsEnabled(LogLevel.None)` is `false` (was `true` whenever Verbose was enabled); scopes opened with
+  `BeginScope` are attached per logger instead of being pushed into the process-global
+  `LogContext`, so `Enrich.FromLogContext()` is no longer needed for EverTask scopes and an
+  EverTask scope no longer leaks into the host's own Serilog loggers. The public
+  `EverTaskSerilogLogger<T>(Serilog.ILogger)` constructor and the `AddSerilog` overloads are
+  unchanged.
+- The handler-facing `ITaskLogCapture` (the logger that also persists to the database) is
+  unchanged: consumer templates are still forwarded with their own placeholders and persisted as
+  before.
+- `CA1848`, `CA1873`, `CA2254` and `CA1727` are now build errors in `src/`.
+
 ### Added
 
 - **`EverTask.Monitor.Api.Scalar`**: optional package serving a [Scalar](https://scalar.com) API

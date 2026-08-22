@@ -152,6 +152,10 @@ from the host's `ILogger`).
 Without it, EverTask logs flow to the host's `ILogger<T>` automatically (no setup). LogLevel maps
 Trace→Verbose, Critical→Fatal.
 
+Per-task lifecycle lines (task started/completed, storage status transitions) are logged at `Debug`;
+set the `EverTask` category to `Debug` to see one line per task. Warnings and errors stay visible at
+the default level; the monitoring events (SignalR/dashboard) are not affected by the log level.
+
 ## Persistent execution logs (DB)
 
 ```csharp

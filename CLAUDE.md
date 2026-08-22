@@ -35,10 +35,17 @@ applied while writing:
   CA2007 there means splitting the declaration in two or, for the `AsyncServiceScope` struct, boxing it into
   a `ConfiguredAsyncDisposable` — one allocation per task on the hot path. That is why CA2007 sits at
   `suggestion`; do not "fix" those sites.
+- **Internal logs are source-generated**: every log in `src/` is a `[LoggerMessage]` method on the component's
+  `internal static partial class <Component>Log` (extension form, `this ILogger`, explicit EventId from the
+  component's range — a test asserts solution-wide uniqueness). Never call `logger.LogX(...)` directly in
+  `src/` (CA1848/CA1873/CA2254/CA1727 are build errors); the one exception is the `TaskLogCapture` forward of
+  consumer-supplied templates. Per-task lifecycle and storage status-transition lines log at `Debug`; in
+  `WorkerExecutor` the log level is independent of the monitoring event's `Severity`.
 - **Structured log placeholders in PascalCase** (`{TaskId}`, never `{taskId}`): a sink treats the two casings
   as different properties, so a query on one silently misses the other.
 - **Log messages are fragments, no trailing period.** In `WorkerExecutor` they are also the monitoring
-  event's `Message`, visible in the dashboard.
+  event's `Message`, visible in the dashboard and text-matched by consumers (keep `Rate limit deferred task `,
+  `completed`, `cancelled`, `Error occurred` fragments stable).
 - **Never flatten an explicit `object[]` into `params` on `ExecuteSqlRawAsync(sql, args, ct)`**: overload
   resolution moves to `params object[]` and the `CancellationToken` silently becomes a SQL parameter. It
   compiles.
