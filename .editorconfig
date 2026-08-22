@@ -489,16 +489,14 @@ dotnet_diagnostic.IDE0301.severity = warning
 dotnet_diagnostic.CA2012.severity = warning
 
 # --- Visible, not enforced: real findings with an open backlog --------------
-# Logging allocates and boxes before the level check. Tracked as a whole in issue #32,
-# NOT as ~400 per-call-site suggestions: these two fire on every single logging call in
-# the solution, which is noise, not visibility. Re-enable once #32 lands.
-dotnet_diagnostic.CA1848.severity = none
-dotnet_diagnostic.CA1873.severity = none
-# Log message templates must be constant, and placeholders PascalCase. Same work as the two
-# rules above (issue #32), so same treatment: off until that work starts, then turned back on
-# FIRST so the analyzer drives it.
-dotnet_diagnostic.CA2254.severity = none
-dotnet_diagnostic.CA1727.severity = none
+# Logging (issue #32, IN PROGRESS): every logging call in src/ is being moved to source-generated
+# [LoggerMessage] methods (no object[] / boxing before the level check, constant templates,
+# PascalCase placeholders). These four are at `suggestion` while the work is split across
+# parallel workstreams; they go to `warning` in the same PR once the solution is at zero hits.
+dotnet_diagnostic.CA1848.severity = suggestion
+dotnet_diagnostic.CA1873.severity = suggestion
+dotnet_diagnostic.CA2254.severity = suggestion
+dotnet_diagnostic.CA1727.severity = suggestion
 # Culture-sensitive string/format calls in a library.
 dotnet_diagnostic.CA1305.severity = suggestion
 dotnet_diagnostic.CA1307.severity = suggestion
@@ -522,6 +520,12 @@ dotnet_diagnostic.CA2227.severity = none
 # own context and there is nothing to deadlock.
 [{test,samples,benchmarks}/**.cs]
 dotnet_diagnostic.CA2007.severity = none
+# Consumer-side logging: the [LoggerMessage] discipline of src/ (issue #32) is not imposed on
+# test, sample and benchmark code.
+dotnet_diagnostic.CA1848.severity = none
+dotnet_diagnostic.CA1873.severity = none
+dotnet_diagnostic.CA2254.severity = none
+dotnet_diagnostic.CA1727.severity = none
 # Test method names are sentences by convention (Should_x_when_y).
 dotnet_diagnostic.CA1707.severity = none
 # Test types are public for the runner, not as an API surface.
