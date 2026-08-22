@@ -36,7 +36,7 @@ public class AuthController : ControllerBase
     /// <returns>JWT token and expiration information</returns>
 
     [HttpPost("login")]
-    [EnableRateLimiting("login")]
+    [EnableRateLimiting(EverTaskApiOptions.LoginRateLimitPolicyName)]
     [ProducesResponseType(typeof(LoginResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
@@ -69,7 +69,7 @@ public class AuthController : ControllerBase
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public ActionResult<TokenValidationResponse> Validate([FromBody] TokenValidationRequest? request = null)
     {
-        string? token = request?.Token;
+        var token = request?.Token;
 
         // Try to get token from Authorization header if not in body
         if (string.IsNullOrWhiteSpace(token))
@@ -77,7 +77,7 @@ public class AuthController : ControllerBase
             var authHeader = Request.Headers.Authorization.FirstOrDefault();
             if (authHeader?.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) == true)
             {
-                token = authHeader.Substring("Bearer ".Length).Trim();
+                token = authHeader["Bearer ".Length..].Trim();
             }
         }
 

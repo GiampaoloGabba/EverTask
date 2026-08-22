@@ -1,37 +1,20 @@
 using EverTask.Monitor.Api.Extensions;
-using EverTask.Monitor.Api.Options;
 using EverTask.Tests.Monitoring.TestData;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 
 namespace EverTask.Tests.Monitoring.TestHelpers;
 
 /// <summary>
 /// Custom WebApplicationFactory for testing EverTask Monitoring API
 /// </summary>
-public class MonitoringTestWebAppFactory : WebApplicationFactory<TestProgram>
+public class MonitoringTestWebAppFactory(
+    bool requireAuthentication = false,
+    bool enableWorker = false,
+    Action<IServiceCollection>? configureServices = null,
+    Action<EverTaskApiOptions>? configureOptions = null,
+    bool useRateLimiter = false,
+    Action<IEndpointRouteBuilder>? configureEndpoints = null)
+    : WebApplicationFactory<TestProgram>
 {
-    private readonly bool _requireAuthentication;
-    private readonly bool _enableWorker;
-    private readonly Action<IServiceCollection>? _configureServices;
-    private readonly Action<EverTaskApiOptions>? _configureOptions;
-
-    public MonitoringTestWebAppFactory(
-        bool requireAuthentication = false,
-        bool enableWorker = false,
-        Action<IServiceCollection>? configureServices = null,
-        Action<EverTaskApiOptions>? configureOptions = null)
-    {
-        _requireAuthentication = requireAuthentication;
-        _enableWorker          = enableWorker;
-        _configureServices     = configureServices;
-        _configureOptions      = configureOptions;
-    }
-
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         // Set the environment to use the bin directory as content root
@@ -41,7 +24,7 @@ public class MonitoringTestWebAppFactory : WebApplicationFactory<TestProgram>
         builder.ConfigureServices(services =>
         {
             // Add EverTask with memory storage
-            var builder = services.AddEverTask(cfg => cfg
+            var everTaskBuilder = services.AddEverTask(cfg => cfg
                                                       .RegisterTasksFromAssembly(typeof(SampleTask).Assembly)
                                                       .SetChannelOptions(10)
                                                       .SetMaxDegreeOfParallelism(5)
@@ -52,13 +35,13 @@ public class MonitoringTestWebAppFactory : WebApplicationFactory<TestProgram>
                                   .AddSignalRMonitoring(); // Add SignalR monitoring for real-time events
 
             // Add empty queues for testing queues without tasks
-            builder.AddQueue("reports", queueCfg => queueCfg.MaxDegreeOfParallelism       = 3);
-            builder.AddQueue("notifications", queueCfg => queueCfg.MaxDegreeOfParallelism = 2);
+            everTaskBuilder.AddQueue("reports", queueCfg => queueCfg.MaxDegreeOfParallelism       = 3);
+            everTaskBuilder.AddQueue("notifications", queueCfg => queueCfg.MaxDegreeOfParallelism = 2);
 
             // Remove WorkerService for API tests unless explicitly enabled
             // This prevents seeded tasks from being processed and changing state during tests
             // SignalR tests need the worker enabled to execute tasks and receive events
-            if (!_enableWorker)
+            if (!enableWorker)
             {
                 var workerServiceDescriptor = services.FirstOrDefault(d =>
                     d.ServiceType == typeof(IHostedService) &&
@@ -77,17 +60,17 @@ public class MonitoringTestWebAppFactory : WebApplicationFactory<TestProgram>
             {
                 // BasePath and SignalRHubPath are now fixed to "/evertask-monitoring" and "/evertask-monitoring/hub"
                 options.EnableUI             = false; // Disable UI for tests
-                options.EnableAuthentication = _requireAuthentication;
+                options.EnableAuthentication = requireAuthentication;
                 options.Username             = "testuser";
                 options.Password             = "testpass";
                 options.EnableCors           = true;
 
                 // Allow custom options configuration (e.g., for magic link testing)
-                _configureOptions?.Invoke(options);
+                configureOptions?.Invoke(options);
             });
 
             // Allow custom service configuration
-            _configureServices?.Invoke(services);
+            configureServices?.Invoke(services);
         });
 
         builder.Configure(app =>
@@ -102,10 +85,17 @@ public class MonitoringTestWebAppFactory : WebApplicationFactory<TestProgram>
 
             app.UseRouting();
 
+            // Endpoint-aware rate limiting (must sit between UseRouting and UseEndpoints)
+            if (useRateLimiter)
+            {
+                app.UseRateLimiter();
+            }
+
             // Map EverTask API (middleware is auto-registered via StartupFilter)
             app.UseEndpoints(endpoints =>
             {
                 endpoints.MapEverTaskApi();
+                configureEndpoints?.Invoke(endpoints);
             });
         });
     }

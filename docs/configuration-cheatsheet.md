@@ -159,8 +159,8 @@ Defaults differ between the auto-created `default`/`recurring` queues (inherit t
 | `JwtSecret` | `null` (random 256-bit per instance) | Set explicitly (≥ 32 bytes) for multi-instance deployments |
 | `JwtIssuer` / `JwtAudience` | `"EverTask.Monitor.Api"` | n/a |
 | `JwtExpirationHours` | `8` | Token TTL |
-| `EnableCors` | `true` | ⚠ Only **registers** a named CORS policy (`EverTaskMonitoringApi`); EverTask does **not** apply it (no `UseCors`/`RequireCors`). To enforce CORS you must apply it yourself in your app pipeline |
-| `CorsAllowedOrigins` | `[]` (allow all) | Origins for the registered policy (used only when non-empty + the policy is actually applied). Restrict in production |
+| `EnableCors` | `true` | Applies the `EverTaskMonitoringApi` CORS policy to requests under `/evertask-monitoring` only (since 3.12.0); the host's CORS setup is untouched |
+| `CorsAllowedOrigins` | `[]` (allow all) | Origins for the monitoring CORS policy (non-empty adds `AllowCredentials`). Restrict in production |
 | `AllowedIpAddresses` | `[]` (allow all) | IPv4/IPv6/CIDR; checked before auth |
 | `MagicLinkToken` | `null` (disabled) | Instant auth via `/magic?token=...` |
 | `EventDebounceMs` | `1000` | Dashboard SignalR refresh debounce |

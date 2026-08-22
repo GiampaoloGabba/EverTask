@@ -48,6 +48,7 @@ cd UI && npm run build  # → ../wwwroot/
 - **Storage**: Depends on `ITaskStorage` (injected via DI)
 
 ### Middleware Chain
+0. Scoped CORS branch (`UseWhen` path under BasePath → `UseCors(EverTaskApiOptions.CorsPolicyName)`) when `EnableCors` — host pipeline untouched (#21)
 1. IP whitelist check (if configured) → 403 if blocked
 2. JWT authentication (if `EnableAuthentication = true`)
    - Skips: `/api/config`, `/api/auth/login`, `/api/auth/validate`, `/api/auth/magic`
@@ -58,6 +59,9 @@ cd UI && npm run build  # → ../wwwroot/
 - camelCase properties (`JsonNamingPolicy.CamelCase`)
 - Null values omitted (`JsonIgnoreCondition.WhenWritingNull`)
 - Enums as strings (`JsonStringEnumConverter`)
+- Applied ONLY to this package's controllers via `MonitoringJsonResultFilter` (scoped
+  `SystemTextJsonOutputFormatter` attached per-controller by `RoutePrefixConvention`) — never via
+  `AddJsonOptions`, which would rewrite the host's shared MVC JsonOptions (#21)
 
 ## Key Gotchas
 

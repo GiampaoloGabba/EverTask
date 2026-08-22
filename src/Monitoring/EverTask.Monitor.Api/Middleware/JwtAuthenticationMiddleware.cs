@@ -50,8 +50,8 @@ public class JwtAuthenticationMiddleware
         if (_options.AllowedIpAddresses.Length > 0)
         {
             var clientIp = GetClientIpAddress(context);
-            // Fail-secure: block if IP is null or not allowed when whitelist is configured
-            if (clientIp == null || !IsIpAllowed(clientIp))
+            // Fail-secure: block if the IP is not allowed when a whitelist is configured
+            if (!IsIpAllowed(clientIp))
             {
                 context.Response.StatusCode = 403;
                 await context.Response.WriteAsync("Access denied");
@@ -96,10 +96,10 @@ public class JwtAuthenticationMiddleware
         string? token = null;
 
         // Try Authorization header first
-        var authHeader = context.Request.Headers["Authorization"].FirstOrDefault();
+        var authHeader = context.Request.Headers.Authorization.FirstOrDefault();
         if (authHeader?.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) == true)
         {
-            token = authHeader.Substring("Bearer ".Length).Trim();
+            token = authHeader["Bearer ".Length..].Trim();
         }
         // For SignalR, also check query string (SignalR sends token as ?access_token=...)
         else if (isHubPath && context.Request.Query.TryGetValue("access_token", out var accessToken))
@@ -128,11 +128,6 @@ public class JwtAuthenticationMiddleware
         await _next(context);
     }
 
-    private static bool IsReadOnlyRequest(HttpRequest request)
-    {
-        return request.Method == HttpMethods.Get || request.Method == HttpMethods.Head;
-    }
-
     private static Task ChallengeAsync(HttpContext context)
     {
         context.Response.StatusCode = 401;
@@ -140,7 +135,7 @@ public class JwtAuthenticationMiddleware
         return Task.CompletedTask;
     }
 
-    private static IPAddress? GetClientIpAddress(HttpContext context)
+    private static IPAddress GetClientIpAddress(HttpContext context)
     {
         // Check X-Forwarded-For header first (reverse proxy scenario)
         var forwardedFor = context.Request.Headers["X-Forwarded-For"].FirstOrDefault();
@@ -210,15 +205,8 @@ public class JwtAuthenticationMiddleware
             }
 
             // Compare masked addresses
-            for (var i = 0; i < clientBytes.Length; i++)
-            {
-                if ((clientBytes[i] & maskBytes[i]) != (networkBytes[i] & maskBytes[i]))
-                {
-                    return false;
-                }
-            }
-
-            return true;
+            return Enumerable.Range(0, clientBytes.Length)
+                             .All(i => (clientBytes[i] & maskBytes[i]) == (networkBytes[i] & maskBytes[i]));
         }
         catch
         {

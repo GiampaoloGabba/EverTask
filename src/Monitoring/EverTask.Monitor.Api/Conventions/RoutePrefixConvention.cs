@@ -1,16 +1,19 @@
+using EverTask.Monitor.Api.Infrastructure;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ApplicationModels;
 
 namespace EverTask.Monitor.Api.Conventions;
 
 /// <summary>
-/// Application model convention that scopes the EverTask monitoring controllers:
-/// adds the monitoring route prefix and assigns the ApiExplorer group name, so the
-/// controllers stay isolated from the host application's routes and OpenAPI documents.
-/// Controllers from other assemblies are left untouched.
+/// Application model convention that scopes the EverTask monitoring controllers: adds the
+/// monitoring route prefix, assigns the ApiExplorer group name and attaches the monitoring
+/// JSON contract, so the controllers stay isolated from the host application's routes, OpenAPI
+/// documents and MVC JsonOptions. Controllers from other assemblies are left untouched.
 /// </summary>
 public class RoutePrefixConvention(string prefix, string apiExplorerGroupName) : IApplicationModelConvention
 {
+    private static readonly MonitoringJsonResultFilter JsonFilter = new();
+
     private readonly string _prefix = prefix.Trim('/');
 
     /// <summary>
@@ -30,6 +33,9 @@ public class RoutePrefixConvention(string prefix, string apiExplorerGroupName) :
             // The group name keeps these controllers out of the host's OpenAPI/Swagger
             // documents (default inclusion filters match on group name) and inside ours
             controller.ApiExplorer.GroupName = apiExplorerGroupName;
+
+            // Monitoring JSON contract without touching the host's shared MVC JsonOptions
+            controller.Filters.Add(JsonFilter);
 
             foreach (var selector in controller.Selectors)
             {

@@ -163,7 +163,7 @@ All configuration is done through the `EverTaskApiOptions` class passed to `AddM
 | `JwtAudience` | string | `"EverTask.Monitor.Api"` | JWT token audience |
 | `JwtExpirationHours` | int | `8` | JWT token expiration time in hours |
 | `EnableAuthentication` | bool | `true` | Enable JWT authentication |
-| `EnableCors` | bool | `true` | Register the `EverTaskMonitoringApi` CORS policy. The policy is registered but not applied by the integration; call `app.UseCors("EverTaskMonitoringApi")` in your pipeline to activate it |
+| `EnableCors` | bool | `true` | Apply the `EverTaskMonitoringApi` CORS policy to requests under `/evertask-monitoring` (since 3.12.0; the host pipeline is untouched) |
 | `CorsAllowedOrigins` | string[] | `[]` | CORS allowed origins (empty = allow all) |
 | `AllowedIpAddresses` | string[] | `[]` | IP whitelist (empty = allow all IPs). Supports IPv4/IPv6 and CIDR notation |
 | `MagicLinkToken` | string? | `null` | Static token for magic link access. If set, enables `/api/auth/magic` endpoint for instant authentication |
@@ -249,6 +249,14 @@ POST to `/evertask-monitoring/api/auth/login` to obtain a JWT token:
 }
 ```
 
+### Login Rate Limiting
+
+The login endpoint carries the `evertask-monitoring-login` rate-limit policy: 5 attempts per
+15 minutes per client IP, 429 once exhausted. The policy is registered by the package but
+ASP.NET Core enforces it only when your pipeline runs `app.UseRateLimiter()` (after
+`UseRouting()`). The namespaced name keeps it separate from any `login` policy your application
+defines.
+
 ### Using the Token
 
 Include the token in the `Authorization` header for all API requests:
@@ -328,6 +336,10 @@ This is useful when:
 - Third-party dashboard integration
 
 ### CORS Configuration
+
+Since 3.12.0 the CORS policy applies automatically to requests under `/evertask-monitoring`
+(API, hub and UI) and only there: your application's CORS setup, or its absence, is untouched
+and there is nothing to add to the pipeline.
 
 Configure CORS for custom frontend applications:
 

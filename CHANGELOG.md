@@ -38,6 +38,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Analyzer rule ET0008** (`EverTask.Monitoring` category): warns when a net8.0 compilation sets
   `EnableOpenApiDocument = true` or calls `AddMonitoringApiScalar()`, both no-ops there.
 
+### Fixed (Monitor.Api host isolation, #21)
+
+- **The monitoring JSON contract no longer touches the host's MVC `JsonOptions`.** camelCase,
+  null-omission and string enums are applied per-controller through a scoped output formatter
+  (`MonitoringJsonResultFilter`), so the wire format of the host's own controllers stays whatever
+  the host configured.
+- **The SPA fallback is constrained to `/evertask-monitoring/{**path}`.** The old unconstrained
+  `MapFallback` collided with a host SPA fallback (`AmbiguousMatchException` on every unmatched
+  path) and took over the host's 404 handling.
+- **The login rate-limit policy now exists and has a namespaced name.**
+  `[EnableRateLimiting]` on the login endpoint pointed at a `login` policy the package never
+  registered (startup crash on hosts calling `UseRateLimiter()`). The package now registers
+  `evertask-monitoring-login` (5 attempts / 15 min per client IP, 429 on rejection); enforcement
+  still requires the host to run `UseRateLimiter()`.
+- **`EnableCors` now actually does something**: the `EverTaskMonitoringApi` policy is applied to
+  requests under `/evertask-monitoring` (and only there) via a scoped pipeline branch. Before,
+  the policy was registered and never applied anywhere.
+- Removed dead code (`JwtAuthenticationMiddleware.IsReadOnlyRequest`,
+  `ServiceCollectionExtensions.GenerateRandomSecret`).
+
 ### Security
 
 - Bump `System.Security.Cryptography.Xml` pins to 8.0.4 / 9.0.19 / 10.0.11 (five new high-severity GHSAs).

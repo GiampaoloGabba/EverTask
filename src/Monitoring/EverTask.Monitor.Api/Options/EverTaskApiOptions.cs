@@ -7,6 +7,19 @@ namespace EverTask.Monitor.Api.Options;
 public class EverTaskApiOptions
 {
     /// <summary>
+    /// Name of the CORS policy built when <see cref="EnableCors"/> is true. Applied only to
+    /// requests under <see cref="BasePath"/>; the host's CORS setup is untouched.
+    /// </summary>
+    public const string CorsPolicyName = "EverTaskMonitoringApi";
+
+    /// <summary>
+    /// Name of the rate-limit policy registered for the login endpoint. Namespaced so it cannot
+    /// collide with a host-defined policy; enforced only when the host pipeline calls
+    /// <c>UseRateLimiter()</c>.
+    /// </summary>
+    public const string LoginRateLimitPolicyName = "evertask-monitoring-login";
+
+    /// <summary>
     /// Base path for API and UI (fixed: "/evertask-monitoring")
     /// API is always accessible at: /evertask-monitoring/api/*
     /// When EnableUI is true:

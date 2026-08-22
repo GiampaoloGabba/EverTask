@@ -1,9 +1,8 @@
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using EverTask.Monitor.Api.Infrastructure;
 using EverTask.Monitor.Api.Options;
 using EverTask.Monitor.Api.Services;
 using EverTask.Monitoring;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -58,44 +57,29 @@ public static class ServiceCollectionExtensions
         // 2. Our middleware handles JWT via both Authorization header AND query string (?access_token=...)
         // 3. Our middleware applies layered protection (IP first, then JWT only for API/Hub)
 
-// TODO: Rate limiting - requires NuGet package or framework reference fix
-        // Temporarily commented out to allow build to succeed
-        /*
-#if NET8_0_OR_GREATER
+        // Namespaced login rate-limit policy (5 attempts / 15 min per client IP, 429 on rejection).
+        // Registration only adds the named policy the AuthController attribute refers to; nothing
+        // is enforced unless the host pipeline runs UseRateLimiter() (issue #21).
         services.AddRateLimiter(rateLimiterOptions =>
-        {
-            rateLimiterOptions.AddFixedWindowLimiter("login", limiterOptions =>
-            {
-                limiterOptions.Window = TimeSpan.FromMinutes(15);
-                limiterOptions.PermitLimit = 5;
-                limiterOptions.QueueProcessingOrder = System.Threading.RateLimiting.QueueProcessingOrder.OldestFirst;
-                limiterOptions.QueueLimit = 0;
-            });
-        });
-#endif
-        */
+            rateLimiterOptions.AddPolicy<string, LoginRateLimitPolicy>(EverTaskApiOptions.LoginRateLimitPolicyName));
 
-        // Add controllers with this assembly and route prefix convention
+        // Add controllers with this assembly and route prefix convention. The monitoring JSON
+        // contract is attached per-controller by the convention (MonitoringJsonResultFilter), so
+        // the host's shared MVC JsonOptions are never touched (issue #21).
         services.AddControllers(mvcOptions =>
             {
                 // Prefix + ApiExplorer group for the monitoring controllers only (host controllers untouched)
                 mvcOptions.Conventions.Add(
                     new Conventions.RoutePrefixConvention(options.BasePath, options.OpenApiDocumentName));
             })
-            .AddApplicationPart(typeof(ServiceCollectionExtensions).Assembly)
-            .AddJsonOptions(jsonOptions =>
-            {
-                jsonOptions.JsonSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
-                jsonOptions.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
-                jsonOptions.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
-            });
+            .AddApplicationPart(typeof(ServiceCollectionExtensions).Assembly);
 
         // Add CORS if enabled
         if (options.EnableCors)
         {
             services.AddCors(corsOptions =>
             {
-                corsOptions.AddPolicy("EverTaskMonitoringApi", policy =>
+                corsOptions.AddPolicy(EverTaskApiOptions.CorsPolicyName, policy =>
                 {
                     if (options.CorsAllowedOrigins.Length > 0)
                     {
@@ -164,44 +148,29 @@ public static class ServiceCollectionExtensions
         // 2. Our middleware handles JWT via both Authorization header AND query string (?access_token=...)
         // 3. Our middleware applies layered protection (IP first, then JWT only for API/Hub)
 
-// TODO: Rate limiting - requires NuGet package or framework reference fix
-        // Temporarily commented out to allow build to succeed
-        /*
-#if NET8_0_OR_GREATER
+        // Namespaced login rate-limit policy (5 attempts / 15 min per client IP, 429 on rejection).
+        // Registration only adds the named policy the AuthController attribute refers to; nothing
+        // is enforced unless the host pipeline runs UseRateLimiter() (issue #21).
         services.AddRateLimiter(rateLimiterOptions =>
-        {
-            rateLimiterOptions.AddFixedWindowLimiter("login", limiterOptions =>
-            {
-                limiterOptions.Window = TimeSpan.FromMinutes(15);
-                limiterOptions.PermitLimit = 5;
-                limiterOptions.QueueProcessingOrder = System.Threading.RateLimiting.QueueProcessingOrder.OldestFirst;
-                limiterOptions.QueueLimit = 0;
-            });
-        });
-#endif
-        */
+            rateLimiterOptions.AddPolicy<string, LoginRateLimitPolicy>(EverTaskApiOptions.LoginRateLimitPolicyName));
 
-        // Add controllers with this assembly and route prefix convention
+        // Add controllers with this assembly and route prefix convention. The monitoring JSON
+        // contract is attached per-controller by the convention (MonitoringJsonResultFilter), so
+        // the host's shared MVC JsonOptions are never touched (issue #21).
         services.AddControllers(mvcOptions =>
             {
                 // Prefix + ApiExplorer group for the monitoring controllers only (host controllers untouched)
                 mvcOptions.Conventions.Add(
                     new Conventions.RoutePrefixConvention(options.BasePath, options.OpenApiDocumentName));
             })
-            .AddApplicationPart(typeof(ServiceCollectionExtensions).Assembly)
-            .AddJsonOptions(jsonOptions =>
-            {
-                jsonOptions.JsonSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
-                jsonOptions.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
-                jsonOptions.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
-            });
+            .AddApplicationPart(typeof(ServiceCollectionExtensions).Assembly);
 
         // Add CORS if enabled
         if (options.EnableCors)
         {
             services.AddCors(corsOptions =>
             {
-                corsOptions.AddPolicy("EverTaskMonitoringApi", policy =>
+                corsOptions.AddPolicy(EverTaskApiOptions.CorsPolicyName, policy =>
                 {
                     if (options.CorsAllowedOrigins.Length > 0)
                     {

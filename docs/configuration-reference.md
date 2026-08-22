@@ -1248,16 +1248,32 @@ The SignalR hub path is now fixed to `/evertask-monitoring/hub` and cannot be ch
 
 #### EnableCors
 
-When `true`, **registers** a named CORS policy (`EverTaskMonitoringApi`) via `AddCors`.
+When `true`, registers the `EverTaskMonitoringApi` CORS policy and applies it to requests under
+`/evertask-monitoring` (since 3.12.0). The host pipeline is untouched: no global `UseCors` and
+nothing to wire manually. With `CorsAllowedOrigins` empty the policy allows any origin; with
+origins set it restricts to them and adds `AllowCredentials`.
 
 **Examples:**
 ```csharp
-// Register the CORS policy (default)
+// Apply the monitoring CORS policy (default)
 options.EnableCors = true;
 
-// Don't register it
+// No CORS handling on the monitoring endpoints
 options.EnableCors = false;
 ```
+
+#### Login rate limiting
+
+`POST /evertask-monitoring/api/auth/login` carries the `evertask-monitoring-login` rate-limit
+policy (`EverTaskApiOptions.LoginRateLimitPolicyName`): 5 attempts per 15 minutes per client IP,
+429 on rejection. The package registers the policy; ASP.NET Core only enforces rate limiting when
+the host pipeline runs the middleware:
+
+```csharp
+app.UseRateLimiter(); // after UseRouting()
+```
+
+The name is namespaced so it cannot merge with a `login` policy the host may define.
 
 > ⚠ **Important:** EverTask only *registers* this policy; it does **not** apply it (`MapEverTaskApi`/the startup filter never call `UseCors` or `RequireCors`). For cross-origin requests to actually be permitted, your application must apply the policy itself, e.g. `app.UseCors("EverTaskMonitoringApi")` in the pipeline. With API and dashboard on the same origin (the default embedded-UI setup) no CORS is needed.
 

@@ -12,4 +12,13 @@ public class HostSampleController : ControllerBase
 {
     [HttpGet("ping")]
     public IActionResult Ping() => Ok("pong");
+
+    /// <summary>
+    /// Probe for the host's MVC JSON defaults: numeric enums and nulls written. If monitoring
+    /// registration leaked its JSON contract into the shared options, this shape would change.
+    /// </summary>
+    [HttpGet("json-contract")]
+    public IActionResult JsonContract() => Ok(new HostJsonProbe(DayOfWeek.Friday, null));
+
+    public record HostJsonProbe(DayOfWeek Day, string? Missing);
 }
