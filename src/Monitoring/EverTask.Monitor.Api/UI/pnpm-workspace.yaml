@@ -1,0 +1,13 @@
+allowBuilds:
+  esbuild: true
+# pnpm >= 10 reads settings from this file instead of the "pnpm" field in
+# package.json. Keep these overrides in sync with package.json, which is still
+# read by pnpm 9 (the version pinned in .github/workflows/build.yml).
+overrides:
+  "brace-expansion@<1.1.16": ">=1.1.16 <2"
+  "brace-expansion@>=3.0.0 <5.0.7": ">=5.0.7"
+  "esbuild@<0.28.1": ">=0.28.1"
+  "flatted@<3.4.2": ">=3.4.2"
+  "js-yaml@>=4.0.0 <4.3.1": ">=4.3.1 <5"
+  "picomatch@<2.3.2": ">=2.3.2"
+  "picomatch@>=4 <4.0.4": ">=4.0.4"
