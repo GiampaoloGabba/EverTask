@@ -128,6 +128,13 @@ public class MyIntegrationTests : IntegrationTestBase
 
 **Async Coordination**: Use `TaskWaitHelper` instead of `Task.Delay()` for reliable timing.
 
+## Gotchas
+
+- **`startHost: false` does NOT pause the scheduler**: `PeriodicTimerScheduler`/`ShardedScheduler` start their
+  loop in the constructor, so an already-due occurrence (e.g. `RunNow()`) can be handed to the worker queue and
+  marked `Queued` right after `Dispatch` returns. Only the consumers wait for `Host.StartAsync()`. Assert
+  `ShouldBeOneOf(WaitingQueue, Queued)` there — asserting `WaitingQueue` alone is flaky under load.
+
 ## Integration Test Prerequisites
 
 **SQL Server tests**: Require Docker container (see `src/Storage/EverTask.Storage.SqlServer/CLAUDE.md`).

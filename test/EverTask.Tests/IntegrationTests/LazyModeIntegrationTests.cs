@@ -69,20 +69,11 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
         tasks.Length.ShouldBe(1);
         tasks[0].Status.ShouldBe(QueuedTaskStatus.Completed);
 
-        var completedRuns = tasks[0].RunsAudits.Count(x => x != null && x.Status == QueuedTaskStatus.Completed);
+        var completedRuns = tasks[0].RunsAudits.Count(x => x.Status == QueuedTaskStatus.Completed);
         completedRuns.ShouldBe(3, "Task should execute exactly 3 times (MaxRuns=3)");
 
-        // Secondary verification: Check static counters (may be unreliable due to parallel test execution)
-        // These should match storage counts in an ideal scenario, but may differ due to race conditions
-        int executionCount, disposeCount;
-        lock (TestTaskLazyModeRecurringWithAsyncDispose.LockObject)
-        {
-            executionCount = TestTaskLazyModeRecurringWithAsyncDispose.ExecutionCount;
-            disposeCount = TestTaskLazyModeRecurringWithAsyncDispose.DisposeCount;
-        }
-
-        // Note: We don't assert on static counters anymore - they're unreliable in parallel execution
-        // Storage RunsAudits is the source of truth
+        // Static counters are deliberately NOT asserted: they are shared across parallel tests.
+        // Storage RunsAudits is the source of truth.
     }
 
     [Fact]
@@ -95,7 +86,7 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
         });
 
         // Reset static properties for this isolated test
-        TestTaskLazyModeDelayedWithAsyncDispose.CallbackOrder = new List<string>();
+        TestTaskLazyModeDelayedWithAsyncDispose.CallbackOrder = [];
         TestTaskLazyModeDelayedWithAsyncDispose.WasDisposed = false;
         TestTaskLazyModeDelayedWithAsyncDispose.WasDisposedDuringDispatch = false;
 
@@ -175,10 +166,15 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
         TestTaskLazyModeRecurringWithAsyncDispose.ExecutionCount.ShouldBe(0,
             "Task should not have executed yet (host not started)");
 
-        // Verify task was persisted to storage
+        // Verify task was persisted to storage.
+        // The scheduler loop does NOT depend on IHost.StartAsync: PeriodicTimerScheduler starts
+        // ProcessScheduledTasksAsync in its constructor, so the RunNow occurrence (already due) can be
+        // handed to the worker queue - and marked Queued - at any moment after Dispatch returns.
+        // WaitingQueue and Queued are therefore both legitimate pre-execution states here; what this
+        // test pins down is that nothing has EXECUTED yet (no consumer runs until the host starts).
         var tasksBefore = await Storage.GetAll();
         tasksBefore.Length.ShouldBe(1);
-        tasksBefore[0].Status.ShouldBe(QueuedTaskStatus.WaitingQueue);
+        tasksBefore[0].Status.ShouldBeOneOf(QueuedTaskStatus.WaitingQueue, QueuedTaskStatus.Queued);
 
         // IMPORTANT: Clear the task from storage before starting host to prevent recovery logic
         // from re-dispatching it (which would cause double execution).
@@ -209,7 +205,7 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
         var tasksAfter = await Storage.GetAll();
         tasksAfter.Length.ShouldBe(1);
         tasksAfter[0].Status.ShouldBe(QueuedTaskStatus.Completed);
-        tasksAfter[0].RunsAudits.Count(x => x != null && x.Status == QueuedTaskStatus.Completed).ShouldBe(1,
+        tasksAfter[0].RunsAudits.Count(x => x.Status == QueuedTaskStatus.Completed).ShouldBe(1,
             "Task should have executed exactly once (MaxRuns=1)");
     }
 
@@ -232,7 +228,7 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
             });
 
         // Reset static properties
-        TestTaskLazyModeDelayedWithAsyncDispose.CallbackOrder = new List<string>();
+        TestTaskLazyModeDelayedWithAsyncDispose.CallbackOrder = [];
         TestTaskLazyModeDelayedWithAsyncDispose.WasDisposed = false;
         TestTaskLazyModeDelayedWithAsyncDispose.WasDisposedDuringDispatch = false;
 
@@ -291,7 +287,7 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
         });
 
         // Reset static properties
-        TestTaskLifecycleWithAsyncDispose.CallbackOrder = new List<string>();
+        TestTaskLifecycleWithAsyncDispose.CallbackOrder = [];
         TestTaskLifecycleWithAsyncDispose.WasDisposed = false;
 
         var task = new TestTaskLifecycleWithAsyncDispose();
@@ -361,7 +357,7 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
 
         // Verify first run completed successfully
         var tasks = await Storage.GetAll();
-        tasks[0].RunsAudits.Count(x => x?.Status == QueuedTaskStatus.Completed).ShouldBeGreaterThanOrEqualTo(1, "At least one run should be completed");
+        tasks[0].RunsAudits.Count(x => x.Status == QueuedTaskStatus.Completed).ShouldBeGreaterThanOrEqualTo(1, "At least one run should be completed");
     }
 
     [Fact]
@@ -410,7 +406,7 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
         // Verify task has executed at least once
         var tasks = await Storage.GetAll();
         tasks.Length.ShouldBe(1);
-        tasks[0].RunsAudits.Count(x => x?.Status == QueuedTaskStatus.Completed).ShouldBeGreaterThanOrEqualTo(1);
+        tasks[0].RunsAudits.Count(x => x.Status == QueuedTaskStatus.Completed).ShouldBeGreaterThanOrEqualTo(1);
     }
 
     [Fact]
@@ -496,7 +492,7 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
         // Verify task has executed at least once
         var tasks = await Storage.GetAll();
         tasks.Length.ShouldBe(1);
-        tasks[0].RunsAudits.Count(x => x?.Status == QueuedTaskStatus.Completed).ShouldBeGreaterThanOrEqualTo(1);
+        tasks[0].RunsAudits.Count(x => x.Status == QueuedTaskStatus.Completed).ShouldBeGreaterThanOrEqualTo(1);
     }
 
     [Fact]
@@ -546,6 +542,6 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
         // Verify task has executed at least once
         var tasks = await Storage.GetAll();
         tasks.Length.ShouldBe(1);
-        tasks[0].RunsAudits.Count(x => x?.Status == QueuedTaskStatus.Completed).ShouldBeGreaterThanOrEqualTo(1);
+        tasks[0].RunsAudits.Count(x => x.Status == QueuedTaskStatus.Completed).ShouldBeGreaterThanOrEqualTo(1);
     }
 }
