@@ -1,143 +1,102 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+EverTask is a .NET background task execution library inspired by MediatR: persistent, resilient execution of
+immediate, delayed and recurring tasks, with retry policies, timeouts, keyed rate limiting and monitoring.
+Multi-targets **net8.0, net9.0, net10.0** (`Directory.Build.props`).
 
-## Project Overview
-
-EverTask is a .NET background task execution library inspired by MediatR. It provides persistent, resilient task execution with support for scheduled, delayed, and recurring tasks. Multi-targets **net8.0, net9.0, net10.0** (see `Directory.Build.props`).
-
-**Key Features**: Request/handler pattern, persistent storage (SQL Server, PostgreSQL, MySQL/MariaDB, SQLite, In-Memory), retry policies with exception filtering, scheduled/recurring tasks (cron + fluent API), keyed rate limiting (per tenant/account/resource), lifecycle callbacks, timeout handling, monitoring integrations.
-
-## File Organization Principle
-
-- **Root CLAUDE.md** (this file) = Global rules, architecture, standards
-- **Local CLAUDE.md** = Module-specific gotchas, prerequisites, operational notes only
-- **IMPORTANT**: Avoid duplicating content between root and local files. Root = general guidance, local = specific operational details.
-
-## Solution Structure
-
-- **src/EverTask**: Core library (dispatcher, worker executor, scheduler, in-memory storage)
-- **src/EverTask.Abstractions**: Lightweight interfaces package (IEverTask, ITaskDispatcher, IEverTaskHandler)
-- **src/Storage/**: Persistence providers (EfCore, SqlServer, Postgres, MySql, Sqlite)
-- **src/Logging/**: Logging integrations (Serilog)
-- **src/Monitoring/**: Monitoring integrations (SignalR)
-- **analyzers/**: Roslyn analyzers (`EverTask.Analyzers` + `.CodeFixes`, netstandard2.0) — payload contract (ET0001–ET0007) + monitoring OpenAPI-on-net8 (ET0008) — bundled into the `EverTask.Abstractions` package
-- **samples/**: Example implementations
-- **test/**: Test projects mirroring src/
-
-## Build & Test Commands
+## Build & Test
 
 | Task | Command | Notes |
 |------|---------|-------|
-| **Build** | `dotnet build EverTask.slnx -c Release` | Warnings as errors; solution is `.slnx` (XML format, needs SDK 9.0.200+) |
-| **Test All** | `dotnet test EverTask.slnx -c Release` | Exclude SQL Server: add `--filter "FullyQualifiedName!~SqlServerEfCoreTaskStorageTests"` |
-| **Pack** | `dotnet pack <project.csproj> -c Release -o nupkg` | For all projects in src/ |
-| **Run Sample** | `dotnet run --project samples/<project>/<project>.csproj` | AspnetCore or Console |
+| **Build** | `dotnet build EverTask.slnx -c Release` | Warnings as errors; `.slnx` needs SDK 9.0.200+ |
+| **Test All** | `dotnet test EverTask.slnx -c Release` | Skip SQL Server: `--filter "FullyQualifiedName!~SqlServerEfCoreTaskStorageTests"` |
+| **Pack** | `dotnet pack <project.csproj> -c Release -o nupkg` | |
 
-**Prerequisites**: .NET 9 SDK (pinned in `global.json`), SQL Server/LocalDB optional for storage tests.
+**Prerequisites**: .NET 9 SDK (`global.json`, rollForward latestMajor). Storage tests for SQL Server,
+PostgreSQL and MySQL/MariaDB need Docker (Testcontainers).
+
+**Never run a build while the test suite is running**: the test hosts hold the output assemblies, and the
+container-backed tests fall over under the contention.
 
 ## Coding Standards
 
-**IMPORTANT**: Strict code quality enforced.
+- **Tests**: xUnit + Shouldly + Moq (NOT MSTest), named `Should_{expected}_when_{condition}`
+- **Warnings as errors** across the solution — code MUST build warning-free
+- **Namespaces** match folder paths (e.g. `EverTask.Storage.SqlServer`)
 
-- **Test Framework**: xUnit + Shouldly + Moq (NOT MSTest)
-- **Nullable**: Enabled project-wide (`<Nullable>enable</Nullable>`)
-- **Warnings as Errors**: `<TreatWarningsAsErrors>true</TreatWarningsAsErrors>` — code MUST build warning-free
-- **EditorConfig**: `.editorconfig` enforces 4-space indent, LF line endings, implicit `var`
-- **Naming**: PascalCase (types/public), camelCase (params/locals), _camelCase (private fields), I prefix (interfaces)
-- **Namespaces**: Match folder paths (e.g., `EverTask.Storage.SqlServer`)
+### Write it right the first time
 
-## Architecture Overview
+The analyzer ruleset is an explicit rule list at the end of `.editorconfig` (NOT `AnalysisMode=All`). Rules
+set to `warning` there are build ERRORS. What follows is what the build canNOT enforce, so it only holds if
+applied while writing:
 
-EverTask uses MediatR-inspired request/handler pattern adapted for persistent background execution:
+- **`ConfigureAwait(false)` on every awaited call in `src/`** — this is a library; a consumer awaiting from a
+  sync context must not deadlock. **Deliberate exception: NOT on `await using` declarations.** Satisfying
+  CA2007 there means splitting the declaration in two or, for the `AsyncServiceScope` struct, boxing it into
+  a `ConfiguredAsyncDisposable` — one allocation per task on the hot path. That is why CA2007 sits at
+  `suggestion`; do not "fix" those sites.
+- **Structured log placeholders in PascalCase** (`{TaskId}`, never `{taskId}`): a sink treats the two casings
+  as different properties, so a query on one silently misses the other.
+- **Log messages are fragments, no trailing period.** In `WorkerExecutor` they are also the monitoring
+  event's `Message`, visible in the dashboard.
+- **Never flatten an explicit `object[]` into `params` on `ExecuteSqlRawAsync(sql, args, ct)`**: overload
+  resolution moves to `params object[]` and the `CancellationToken` silently becomes a SQL parameter. It
+  compiles.
+- **EF migrations are frozen**: exclude them from every formatting/cleanup pass (`dotnet format` does not
+  honor the exclusion used for the ReSharper pass — pass `--exclude "**/Migrations/**"`).
 
-- **Dispatcher** → Serializes & persists tasks (ITaskStorage) → Routes to queues:
-  - Immediate tasks: BoundedQueue (System.Threading.Channels)
-  - Scheduled/recurring: ConcurrentPriorityQueue (TimerScheduler)
-- **WorkerExecutor** → Executes with retry policies, timeouts, lifecycle callbacks (OnStarted, OnCompleted, OnError, OnRetry)
-  - **RateLimitGate** (only for handlers declaring a `RateLimitPolicy`): per-key GCRA budget at dequeue; over-budget tasks re-park into the scheduler at their reserved slot with NO storage write (see `src/EverTask/RateLimiting/CLAUDE.md`)
-- **TaskHandlerExecutor** → Task execution metadata, converts to/from QueuedTask for persistence
-- **ITaskStorage** → Abstract persistence (SqlServer, Sqlite, InMemory implementations in src/Storage/)
-- **Scheduler** → Cron + fluent API for recurring tasks
+## Architecture
 
-**Key Pattern**:
-```csharp
-// Request: public record MyTask(...) : IEverTask;
-// Handler: public class MyHandler : EverTaskHandler<MyTask> { ... }
-// Register: services.AddEverTask(opt => opt.RegisterTasksFromAssembly(...)).AddSqlServerStorage(...);
-```
+- **Dispatcher** → serializes & persists (`ITaskStorage`) → routes: immediate to a bounded channel,
+  scheduled/recurring to the priority queue of `PeriodicTimerScheduler` / `ShardedScheduler`
+- **WorkerExecutor** → executes with retry policy, timeout and lifecycle callbacks, in a **scoped service
+  scope per task** (DbContext is not thread-safe)
+- **RateLimitGate** (handlers declaring a `RateLimitPolicy` only) → per-key GCRA budget at dequeue;
+  over-budget tasks re-park into the scheduler with NO storage write
+- **ITaskStorage** → SqlServer, Postgres, MySql, Sqlite (all EF Core) + InMemory
 
-See local CLAUDE.md files for implementation details.
+The no-loss / no-deadlock invariants of the queue and recovery paths live in `src/EverTask/CLAUDE.md` — read
+them before touching the dispatcher, the worker or a recovery filter.
 
-## Operative Checklists
+## Critical Design Decisions
 
-### Critical Design Decisions
-- **MediatR Inspiration**: `IEverTask` ≈ `INotification`, `IEverTaskHandler<T>` ≈ `INotificationHandler<T>`, `ITaskDispatcher` ≈ `IMediator`
-  - **Key Differences**: Persistent (survives restarts), scheduling/recurring, retry policies, timeouts, monitoring
-- **Serialization**: Uses **System.Text.Json** (migrated from Newtonsoft.Json in v3.9) via the internal,
-  isolated `EverTaskJson` (private static `JsonSerializerOptions`, L33). Reads legacy Newtonsoft rows
-  leniently (quoted numbers, string-named enums via a tolerant converter) but writes the historical numeric
-  form (byte-parity). STJ pinned (Option 2, `System.Text.Json` 10.0.x in `Directory.Packages.props`) across
-  net8/9/10. Newtonsoft remains ONLY in the test projects as the "legacy producer".
-  - **Best Practice**: Keep tasks simple (primitives, Guid, DateTimeOffset, public **properties**), use IDs not entities (e.g., `Guid OrderId` not `Order Order`)
-  - **STJ contract** (differs from Newtonsoft — public properties only, fields dropped, Newtonsoft attributes NOT honored): see `src/EverTask.Abstractions/CLAUDE.md`
-- **DI Scoping**: WorkerExecutor creates **scoped service scope per task** (safe DbContext usage, no shared state)
-- **Retry Policies (v1.6.0+)**: Exception filtering (whitelist/blacklist), predicate filtering, OnRetry callback
-  - **Default**: Retry all except `OperationCanceledException` and `TimeoutException`
-  - See `src/EverTask.Abstractions/CLAUDE.md` for details
+- **Serialization**: System.Text.Json via the internal, isolated `EverTaskJson` (private static options).
+  Reads legacy Newtonsoft rows leniently, writes the historical numeric form. Payload contract (public
+  properties only, fields dropped, Newtonsoft attributes NOT honored): `src/EverTask.Abstractions/CLAUDE.md`.
+  Keep payloads simple and carry IDs, not entities.
+- **Retry policies**: exception filtering (whitelist/blacklist), predicate filtering, OnRetry callback.
+  Default retries everything except `OperationCanceledException` and `TimeoutException`.
 
-### Testing
-- **Framework**: xUnit + Shouldly + Moq
-- **Naming**: `Should_{expected_behavior}_when_{condition}` or `Should_{expected_behavior}`
-- **Organization**: Tests mirror src/ structure
-- **Helpers**: `test/EverTask.Tests/TestHelpers/` (TaskWaitHelper, TestTaskStateManager)
-- **SQL Server Tests**: Require Docker (see `src/Storage/EverTask.Storage.SqlServer/CLAUDE.md`)
-- See `test/EverTask.Tests/CLAUDE.md` for patterns
+## Commit & PR
 
-### Commit & PR
-- **Format**: Conventional commits (imperative mood) — `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `build:`
-- **Scoped**: `feat(storage):`, `fix(scheduler):`, etc.
-- **PRs**: Link issues, outline behavioral impact/breaking changes, list verification steps, update docs/samples
+- Conventional commits, imperative mood, scoped: `feat(storage):`, `fix(scheduler):`
+- PRs: link issues, state behavioral impact and breaking changes, list verification steps
+- **Public option changes (anti-stale)**: adding or changing any public configuration option/default requires
+  updating ALL THREE in the same PR — `docs/configuration-cheatsheet.md` (exhaustive, one row per option),
+  `docs/configuration-reference.md`, and `plugins/evertask/skills/integrate-evertask/`
 
 ## Ops Quick Facts
 
-- **Package Management**: Central Package Management (`Directory.Packages.props`) — do NOT add `<PackageReference>` versions in .csproj, add to Directory.Packages.props
-- **Version**: defined in `Directory.Build.props` (lockstep across all packages; current 3.11.0)
-- **CI/CD**: Build on push/PR to master (`.github/workflows/build.yml`), manual release workflow (`.github/workflows/release.yml`)
-- **MediatR Attribution**: Core files adapted from MediatR (Apache 2.0) — see attribution comments in Dispatcher.cs, TaskHandlerExecutor.cs, TaskHandlerWrapper.cs, HandlerRegistrar.cs
-- **Public option changes (anti-stale)**: when adding or changing a public configuration option/default (service, queue, storage, audit/retention, rate-limit, monitoring/logging, or handler property/dispatch parameter), update ALL THREE in the same PR: `docs/configuration-cheatsheet.md`, `docs/configuration-reference.md`, AND the integration skill (`plugins/evertask/skills/integrate-evertask/`). The cheatsheet must stay exhaustive (one row per option) and the skill must not go stale.
+- **Central Package Management**: versions go in `Directory.Packages.props`, never in a `.csproj`
+- **Version**: `Directory.Build.props`, lockstep across all packages (current 3.11.0)
+- **CI**: build on push/PR to master; release is a manual workflow
+- **MediatR attribution**: `Dispatcher.cs`, `TaskHandlerExecutor.cs`, `TaskHandlerWrapper.cs`,
+  `HandlerRegistrar.cs` are adapted from MediatR (Apache 2.0) — keep the attribution comments
 
 ## Module-Specific Guidance
 
-| Module | Local CLAUDE.md | Focus |
-|--------|-----------------|-------|
-| **Core** | `src/EverTask/CLAUDE.md` | Dispatcher/worker implementation, MediatR attribution, async guidance |
-| **Abstractions** | `src/EverTask.Abstractions/CLAUDE.md` | Interfaces, retry policy details, serialization gotchas, bundled analyzers (ET0001–ET0008) |
-| **Rate Limiting** | `src/EverTask/RateLimiting/CLAUDE.md` | Keyed rate limiting invariants (no-storage-write deferrals, re-park rules, retry/restart semantics) |
-| **Recurring** | `src/EverTask/Scheduler/Recurring/CLAUDE.md` | Cron scheduling, builder flow, calculation gotchas |
-| **SQL Server** | `src/Storage/EverTask.Storage.SqlServer/CLAUDE.md` | Setup, schema-aware migrations, Docker testing |
-| **PostgreSQL** | `src/Storage/EverTask.Storage.Postgres/CLAUDE.md` | Npgsql, schema-aware (Option B), writable-CTE optimizations, Testcontainers |
-| **MySQL/MariaDB** | `src/Storage/EverTask.Storage.MySql/CLAUDE.md` | Microting fork, no schema, server-side base + one override, net9/net10, Testcontainers MariaDB |
-| **SQLite** | `src/Storage/EverTask.Storage.Sqlite/CLAUDE.md` | Setup, connection strings |
-| **EF Core** | `src/Storage/EverTask.Storage.EfCore/CLAUDE.md` | Base EF Core implementation |
-| **Serilog** | `src/Logging/EverTask.Logging.Serilog/CLAUDE.md` | Serilog integration |
-| **SignalR** | `src/Monitoring/EverTask.Monitor.AspnetCore.SignalR/CLAUDE.md` | SignalR monitoring |
-| **Tests** | `test/EverTask.Tests/CLAUDE.md` | Test organization, naming conventions, helpers |
-| **Storage Tests** | `test/EverTask.Tests.Storage/CLAUDE.md` | Storage integration tests |
-| **Logging Tests** | `test/EverTask.Tests.Logging/CLAUDE.md` | Logging integration tests |
+| Module | Local CLAUDE.md |
+|--------|-----------------|
+| Core (dispatcher, worker, queue/recovery invariants) | `src/EverTask/CLAUDE.md` |
+| Abstractions (interfaces, retry, payload contract, analyzers ET0001–ET0008) | `src/EverTask.Abstractions/CLAUDE.md` |
+| Rate limiting (hard invariants) | `src/EverTask/RateLimiting/CLAUDE.md` |
+| Recurring (cron, builder, skip-forward) | `src/EverTask/Scheduler/Recurring/CLAUDE.md` |
+| EF Core base | `src/Storage/EverTask.Storage.EfCore/CLAUDE.md` |
+| SQL Server / PostgreSQL / MySQL / SQLite | `src/Storage/EverTask.Storage.<Provider>/CLAUDE.md` |
+| Monitoring API + dashboard UI | `src/Monitoring/EverTask.Monitor.Api/CLAUDE.md`, `.../UI/CLAUDE.md` |
+| SignalR monitoring | `src/Monitoring/EverTask.Monitor.AspnetCore.SignalR/CLAUDE.md` |
+| Serilog | `src/Logging/EverTask.Logging.Serilog/CLAUDE.md` |
+| Tests | `test/EverTask.Tests/CLAUDE.md`, `test/EverTask.Tests.Storage/CLAUDE.md`, `test/EverTask.Tests.Logging/CLAUDE.md` |
 
-**Adding New Modules**: Create local CLAUDE.md only for module-specific prerequisites or critical gotchas. Link to external docs for extended explanations. Follow 40-100 line guideline.
-
-## Rider MCP
-
-Rider open on the solution exposes an MCP server for semantic C# work — prefer it over
-grep/read/edit for symbol tasks; if it doesn't respond, use native tools.
-- Callers/callees of a symbol → `analyze_calls`; find a declaration → `search_symbol`;
-  understand a symbol without opening the file → `get_symbol_info`.
-- Rename / change signature / safe-delete / move type / extract → `rename_refactoring` & co
-  (`preview:true` on wide-blast-radius changes).
-- Runtime bug not obvious from source/logs → the `debugging-code` skill (Rider debugger), not print-debugging.
-
-Read-only tools are allowlisted (no prompt); mutating refactorings prompt. `get_class_hierarchy`
-is Unreal-only. An end-of-turn Stop hook runs one batched Rider analysis on the turn's edited code
-files and blocks the turn until clean (analysis only — no reformat, no git).
+Create a local CLAUDE.md only for module-specific prerequisites or critical gotchas; keep it 40-100 lines and
+do not duplicate what is here.

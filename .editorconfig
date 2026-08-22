@@ -493,9 +493,11 @@ dotnet_diagnostic.CA1873.severity = none
 # ValueTask consumed incorrectly on two public seams (issue #33). NOT suppressed:
 # suppressing it would bury an open issue.
 dotnet_diagnostic.CA2012.severity = suggestion
-# Log message templates must be constant, and placeholders PascalCase.
-dotnet_diagnostic.CA2254.severity = suggestion
-dotnet_diagnostic.CA1727.severity = suggestion
+# Log message templates must be constant, and placeholders PascalCase. Same work as the two
+# rules above (issue #32), so same treatment: off until that work starts, then turned back on
+# FIRST so the analyzer drives it.
+dotnet_diagnostic.CA2254.severity = none
+dotnet_diagnostic.CA1727.severity = none
 # Culture-sensitive string/format calls in a library.
 dotnet_diagnostic.CA1305.severity = suggestion
 dotnet_diagnostic.CA1307.severity = suggestion

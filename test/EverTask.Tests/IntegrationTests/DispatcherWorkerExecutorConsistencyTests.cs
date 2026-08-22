@@ -39,21 +39,39 @@ public class DispatcherWorkerExecutorConsistencyTests : IsolatedIntegrationTestB
         dispatcherNextRun.ShouldNotBeNull();
         dispatcherNextRun.Value.ShouldBeGreaterThan(DateTimeOffset.UtcNow.AddSeconds(-1));
 
-        // Wait for first execution and re-scheduling (done by WorkerExecutor)
-        await TaskWaitHelper.WaitForConditionAsync(
-            () => StateManager.GetCounter(nameof(TestTaskRecurringMinutes)) >= 1,
-            timeoutMs: 8000);
+        // Wait for the first execution AND its re-scheduling: CompleteRecurringRun writes the runs
+        // audit, CurrentRunCount and the new NextRunUtc under a single atomic operation, so waiting
+        // on the audit guarantees the NextRunUtc read below is the WorkerExecutor's value and never
+        // the Dispatcher's still-unmodified one.
+        var taskAfterExecution = await WaitForRecurringRunsAsync(taskId, expectedRuns: 1, timeoutMs: 8000);
 
-        // Get task after WorkerExecutor re-schedules
-        var tasksAfterExecution = await Storage.GetAll();
-        var taskAfterExecution = tasksAfterExecution.FirstOrDefault(t => t.Id == taskId);
+        var firstRun = taskAfterExecution.RunsAudits
+            .Where(a => a.Status == QueuedTaskStatus.Completed)
+            .OrderBy(a => a.ExecutedAt)
+            .First();
 
-        taskAfterExecution.ShouldNotBeNull();
+        // The occurrence that ran is the one the Dispatcher scheduled: the scheduler dequeues only
+        // when the slot is due (scheduledTime <= now), so the audited execution is never earlier.
+        firstRun.ExecutedAt.ShouldBeGreaterThanOrEqualTo(dispatcherNextRun.Value);
+
         var workerExecutorNextRun = taskAfterExecution.NextRunUtc;
-
-        // Assert: WorkerExecutor should also calculate from ExecutionTime, not UtcNow
         workerExecutorNextRun.ShouldNotBeNull();
-        workerExecutorNextRun.Value.ShouldBeGreaterThan(DateTimeOffset.UtcNow);
+
+        // Assert: the WorkerExecutor re-schedules from the SCHEDULED slot, not from the wall clock.
+        // QueueNextOccourrence feeds CalculateNextValidRun with TaskHandlerExecutor.ExecutionTime,
+        // which for this first occurrence IS the slot the Dispatcher picked (and NOT firstRun's
+        // ExecutedAt, which is stamped when the run finishes). The new NextRunUtc therefore always
+        // lands on the occurrence grid anchored at dispatcherNextRun: dispatcherNextRun + k * 5s,
+        // with k == 1 normally and k > 1 only when the run was late enough for CalculateNextValidRun
+        // to realign past missed occurrences — which stays on the SAME grid. A UtcNow-based
+        // re-schedule would instead land at "instant the run finished + 5s", i.e. off that grid by
+        // the execution latency. Deliberately NOT compared against "now": with a 5s interval the
+        // next run is only 5s away, so a slow run/read let the wall clock catch up with it.
+        var interval = TimeSpan.FromSeconds(5); // matches Every(5).Seconds() above
+        var advance = workerExecutorNextRun.Value - dispatcherNextRun.Value;
+
+        advance.ShouldBeGreaterThanOrEqualTo(interval);
+        (advance.Ticks % interval.Ticks).ShouldBe(0L);
 
         // Cleanup automatic via IAsyncDisposable
     }
@@ -105,23 +123,35 @@ public class DispatcherWorkerExecutorConsistencyTests : IsolatedIntegrationTestB
             new TestTaskRecurringSeconds(),
             recurring => recurring.RunAt(pastTime).Then().Every(1).Seconds());
 
-        // Wait for first execution (WorkerExecutor should skip past occurrences)
-        await TaskWaitHelper.WaitForConditionAsync(
-            () => StateManager.GetCounter(nameof(TestTaskRecurringSeconds)) >= 1,
-            timeoutMs: 3000);
+        // Wait for the first execution AND its re-scheduling: the runs audit and the new NextRunUtc
+        // are written together, so this never observes the Dispatcher's NextRunUtc by mistake.
+        var task = await WaitForRecurringRunsAsync(taskId, expectedRuns: 1, timeoutMs: 3000);
 
-        // Assert: WorkerExecutor should have skipped past occurrences
-        var tasks = await Storage.GetAll();
-        var task = tasks.FirstOrDefault(t => t.Id == taskId);
-
-        task.ShouldNotBeNull();
-
-        // Next run should be in the future (not catching up on missed runs)
+        // Assert: WorkerExecutor should have skipped past occurrences.
+        // The occurrence grid is {pastTime + k * 1s}. The Dispatcher realigned past the ~5 missed
+        // occurrences to the first slot strictly after "now" (so >= pastTime + 6s) and the
+        // WorkerExecutor advanced it by at least one more interval from that slot, hence
+        // >= pastTime + 7s. An implementation catching up on missed runs would instead sit at
+        // pastTime + 2s (the second missed occurrence). Anchored on pastTime — a value this test
+        // owns — rather than on DateTimeOffset.UtcNow at assertion time, which raced the 1s cadence:
+        // the next run is only 1s ahead, so any hiccup between the execution and the assertion let
+        // the wall clock overtake it.
         task.NextRunUtc.ShouldNotBeNull();
-        task.NextRunUtc.Value.ShouldBeGreaterThanOrEqualTo(DateTimeOffset.UtcNow.AddSeconds(-1));
+        task.NextRunUtc.Value.ShouldBeGreaterThanOrEqualTo(pastTime.AddSeconds(7));
 
-        // Should have executed only once (not 5 times catching up)
-        StateManager.GetCounter(nameof(TestTaskRecurringSeconds)).ShouldBe(1);
+        // Should NOT have caught up on the ~5 missed occurrences. The storage hands out live
+        // instances and the cadence is 1s, so a second legitimate run can complete between the wait
+        // and this line: "counter == 1" raced it. Instead prove that every run that executed belongs
+        // to a slot the Dispatcher realigned to (>= pastTime + 6s): a catching-up implementation
+        // would execute the missed occurrences right after dispatch (~pastTime + 5s), and the
+        // scheduler only dequeues a slot once it is due, so a delayed assertion can only make this
+        // more true, never less.
+        var completedRuns = task.RunsAudits
+            .Where(a => a.Status == QueuedTaskStatus.Completed)
+            .ToList();
+
+        completedRuns.ShouldNotBeEmpty();
+        completedRuns.ShouldAllBe(a => a.ExecutedAt >= pastTime.AddSeconds(6));
 
         // Cleanup automatic via IAsyncDisposable
     }

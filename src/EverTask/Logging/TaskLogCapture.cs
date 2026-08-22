@@ -238,22 +238,19 @@ internal sealed class TaskLogCapture : ITaskLogCaptureInternal
             nameSpan = placeholder;
         }
 
+        // The placeholder NAME is only parsed far enough to locate the alignment separator: rendering is
+        // positional (args[argumentIndex]), so the name itself — including a '@'/'$' destructuring prefix —
+        // never reaches the output. Do not reintroduce code that strips or inspects it without a reader.
         var alignmentIndex = nameSpan.IndexOf(',');
         if (alignmentIndex >= 0)
         {
             var alignmentSpan = nameSpan[(alignmentIndex + 1)..].Trim();
-            nameSpan = nameSpan[..alignmentIndex];
 
             if (int.TryParse(alignmentSpan, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedAlignment))
             {
                 alignment = parsedAlignment;
                 hasAlignment = true;
             }
-        }
-
-        if (!nameSpan.IsEmpty && (nameSpan[0] == '@' || nameSpan[0] == '$'))
-        {
-            nameSpan = nameSpan[1..];
         }
 
         var value = args[argumentIndex++];
