@@ -46,15 +46,15 @@ Tasks can be CPU-bound or I/O-bound, long- or short-running. Works with ASP.NET 
 - **Audit levels**: tune how much audit history you keep, to control table growth
 
 ### Resilience
-- **Retry policies**: built-in linear retry, custom policies, Polly integration, exception filtering
+- **Retry policies**: built-in linear and exponential backoff (cap + jitter), custom policies, Polly integration, exception filtering
 - **Timeouts**: global and per-task
 
 ### Developer experience
 - **Extensible**: custom storage, retry policies, and schedulers
 - **Serilog integration**: structured logging
 - **Async throughout**
-- **Compile-time payload analyzer**: a Roslyn analyzer (ET0001–ET0007) bundled in `EverTask.Abstractions`
-  catches System.Text.Json contract violations in the IDE/build, with code fixes (see below)
+- **Compile-time analyzer**: a Roslyn analyzer (ET0001–ET0009) bundled in `EverTask.Abstractions`
+  catches System.Text.Json contract violations and configuration mistakes in the IDE/build, with code fixes (see below)
 
 
 <img src="assets/screenshots/4.png" style="width:100%;max-width:900px;display: block; margin:20px auto;" alt="Task Details" />
