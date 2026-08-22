@@ -8,7 +8,7 @@ latest published version of each package (they release in lockstep). Current rep
 | Feature / choice | Package | Notes |
 |---|---|---|
 | Core (always) | `EverTask` | Dispatcher, worker, scheduler, in-memory storage. |
-| Interfaces only (referenced by the task/handler library) | `EverTask.Abstractions` | `IEverTask`, `ITaskDispatcher`, `EverTaskHandler<T>`, retry/rate-limit types. **Bundles the ET0001–ET0007 analyzers.** |
+| Interfaces only (referenced by the task/handler library) | `EverTask.Abstractions` | `IEverTask`, `ITaskDispatcher`, `EverTaskHandler<T>`, retry/rate-limit types. **Bundles the ET0001–ET0008 analyzers.** |
 | In-Memory storage | (none) | Built into `EverTask`; just call `.AddMemoryStorage()`. |
 | SQL Server storage | `EverTask.Storage.SqlServer` | Pulls `EverTask.Storage.EfCore` + EF SqlServer. |
 | PostgreSQL storage | `EverTask.Storage.Postgres` | Pulls `EverTask.Storage.EfCore` + Npgsql. |
@@ -16,7 +16,8 @@ latest published version of each package (they release in lockstep). Current rep
 | SQLite storage | `EverTask.Storage.Sqlite` | Pulls `EverTask.Storage.EfCore` + EF Sqlite. |
 | Audit retention/cleanup | `EverTask.Storage.EfCore` | `AddAuditCleanup(...)`; already transitive via any relational provider. |
 | SignalR monitoring (events) | `EverTask.Monitor.AspnetCore.SignalR` | ASP.NET Core; `MapEverTaskMonitorHub()`. |
-| Monitoring dashboard + REST API | `EverTask.Monitor.Api` | ASP.NET Core; `MapEverTaskApi()`. Auto-registers SignalR. |
+| Monitoring dashboard + REST API | `EverTask.Monitor.Api` | ASP.NET Core; `MapEverTaskApi()`. Auto-registers SignalR. Fully additive to the host (own route prefix, JSON contract, CORS and fallback all scoped under `/evertask-monitoring`). |
+| Scalar API reference for the monitoring API | `EverTask.Monitor.Api.Scalar` | `.AddMonitoringApiScalar()` chained AFTER `AddMonitoringApi()`; serves `/evertask-monitoring/scalar` and auto-enables the monitoring OpenAPI document. Effective on net9.0+ only (no-op with a warning on net8.0; analyzer ET0008 flags it). |
 | Serilog pipeline | `EverTask.Logging.Serilog` | Dedicated Serilog pipeline for EverTask's internal logs. |
 
 ## Package-management mechanics
@@ -34,7 +35,8 @@ latest published version of each package (they release in lockstep). Current rep
 
 - **Dev/test (web or worker):** `EverTask` (+ `EverTask.Abstractions` if tasks live in a separate lib).
 - **Production web app:** `EverTask` + `EverTask.Storage.Postgres` (or `.SqlServer`) +
-  `EverTask.Monitor.Api` [+ `EverTask.Logging.Serilog`].
+  `EverTask.Monitor.Api` [+ `EverTask.Monitor.Api.Scalar` for an API reference UI]
+  [+ `EverTask.Logging.Serilog`].
 - **Worker service:** `EverTask` + `EverTask.Storage.SqlServer`/`.Postgres` (no `Monitor.Api`, no
   HTTP pipeline; use SignalR-to-external-hub or event subscription).
 - **Desktop/edge:** `EverTask` + `EverTask.Storage.Sqlite`.
@@ -44,4 +46,5 @@ latest published version of each package (they release in lockstep). Current rep
 All packages (core, storage, monitoring, SignalR, Serilog) multi-target **net8.0/net9.0/net10.0**
 (inherited from `Directory.Build.props`; no project overrides this). net8.0 is the minimum.
 **Exception:** `EverTask.Storage.MySql` targets **net9.0/net10.0 only** — its underlying Microting
-provider has no EF Core 8 build.
+provider has no EF Core 8 build. `EverTask.Monitor.Api.Scalar` compiles for all three TFMs but is
+functional on net9.0+ only (the built-in ASP.NET Core OpenAPI generator does not exist on net8.0).

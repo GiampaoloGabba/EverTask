@@ -66,6 +66,10 @@ Multi-server: add a backplane (`AddSignalR().AddAzureSignalR(...)` or `.AddStack
 
 Full embedded React dashboard + REST API; auto-registers SignalR. **ASP.NET Core only.**
 
+Additive by design (3.12+): route prefix, JSON contract (camelCase/string enums), CORS, SPA
+fallback and OpenAPI document all apply to the monitoring endpoints only. The host's controllers
+keep their routes and MVC JsonOptions, and a host SPA fallback keeps working (issue #21).
+
 ```csharp
 .AddMonitoringApi(options =>
 {
@@ -96,11 +100,12 @@ monitoring base path: the host's own OpenAPI/Swagger/Scalar setup is never touch
 **Required after `Build()`:** `app.MapEverTaskApi();` (maps hub + controllers + SPA). It also accepts
 an optional `Action<HttpConnectionDispatcherOptions>` to tune the SignalR hub connection.
 
-> ⚠ **CORS is registered but NOT applied.** `EnableCors = true` only **registers** a named CORS policy
-> (`EverTaskMonitoringApi`); EverTask's pipeline never calls `UseCors`/`RequireCors`, so the policy has
-> no effect until **you** apply it in your app (e.g. `app.UseCors("EverTaskMonitoringApi")`). Setting
-> `CorsAllowedOrigins` alone does nothing for the monitoring endpoints. (`BasePath`, `ApiBasePath`,
-> `UIBasePath`, `SignalRHubPath` are read-only computed properties; don't try to set them.)
+> CORS (3.12+): `EnableCors = true` applies the `EverTaskMonitoringApi` policy to requests under
+> `/evertask-monitoring` automatically; the host pipeline is untouched and nothing needs wiring.
+> Login rate limit (3.12+): the `evertask-monitoring-login` policy (5 attempts/15 min per IP, 429)
+> is registered by the package but enforced only if the host runs `app.UseRateLimiter()` after
+> `UseRouting()`. (`BasePath`, `ApiBasePath`, `UIBasePath`, `SignalRHubPath` are read-only computed
+> properties; don't try to set them.)
 
 Fixed paths: dashboard `/evertask-monitoring`, API `/evertask-monitoring/api`, hub
 `/evertask-monitoring/hub`. Auth is a custom JWT middleware (IP whitelist first → JWT via

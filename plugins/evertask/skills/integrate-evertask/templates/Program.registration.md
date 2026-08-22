@@ -25,6 +25,8 @@ var everTask = builder.Services.AddEverTask(opt => opt
                      ?? throw new InvalidOperationException("Set EverTask:Monitor:Pass");
         o.JwtSecret = builder.Configuration["EverTask:Monitor:JwtSecret"]; // set for multi-instance
     });
+// Optional: chain .AddMonitoringApiScalar() right after AddMonitoringApi(...) for a Scalar API
+// reference at /evertask-monitoring/scalar (package EverTask.Monitor.Api.Scalar, net9+)
 
 // Audit retention is on IServiceCollection (NOT the builder):
 builder.Services.AddAuditCleanup(
