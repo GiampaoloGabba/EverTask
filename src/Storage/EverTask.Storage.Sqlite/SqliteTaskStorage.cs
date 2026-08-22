@@ -1,6 +1,5 @@
 using EverTask.Abstractions;
 using EverTask.Logger;
-using Microsoft.Extensions.Logging;
 
 namespace EverTask.Storage.Sqlite;
 
@@ -23,8 +22,7 @@ public class SqliteTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     {
         await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
-        logger.LogInformation("Retrieving Pending Tasks (SQLite keyset: lastCreatedAt={LastCreatedAt}, lastId={LastId}, take={Take})",
-            lastCreatedAt, lastId, take);
+        logger.RetrievingPendingTasks(lastCreatedAt, lastId, take);
 
         var now = DateTimeOffset.UtcNow;
 
@@ -72,7 +70,7 @@ public class SqliteTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
         var transitioned = await TrySetQueuedClientSideAsync(dbContext, taskId, DateTimeOffset.UtcNow, auditLevel, ct).ConfigureAwait(false);
         if (!transitioned)
-            logger.LogDebug("Task {taskId} is no longer recoverable, skipping SetQueued", taskId);
+            logger.TaskNoLongerRecoverable(taskId);
 
         return transitioned;
     }

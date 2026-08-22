@@ -1,7 +1,6 @@
 using EverTask.Abstractions;
 using EverTask.Logger;
 using Microsoft.Data.SqlClient;
-using Microsoft.Extensions.Logging;
 
 namespace EverTask.Storage.SqlServer;
 
@@ -33,7 +32,7 @@ public class SqlServerTaskStorage(
     public override async Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception, AuditLevel auditLevel,
                                             double? executionTimeMs = null, CancellationToken ct = default)
     {
-        logger.LogInformation("Set Task {TaskId} with Status {Status} using SQL Server stored procedure", taskId, status);
+        logger.SettingTaskStatus(taskId, status);
 
         await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
@@ -59,7 +58,7 @@ public class SqlServerTaskStorage(
         }
         catch (Exception e)
         {
-            logger.LogCritical(e, "Unable to update the status {Status} for taskId {TaskId}", status, taskId);
+            logger.StatusUpdateFailed(e, status, taskId);
         }
     }
 
@@ -75,7 +74,7 @@ public class SqlServerTaskStorage(
     public override async Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
                                                 AuditLevel auditLevel)
     {
-        logger.LogInformation("Update the current run counter for Task {TaskId} using SQL Server stored procedure", taskId);
+        logger.UpdatingCurrentRun(taskId);
 
         await using var dbContext = await _contextFactory.CreateDbContextAsync().ConfigureAwait(false);
 
@@ -94,7 +93,7 @@ public class SqlServerTaskStorage(
         {
             // Residual D: propagate (do not swallow) so a failed counter persist does not advance the
             // schedule on unpersisted state; the recoverable row is re-run instead.
-            logger.LogCritical(e, "Update the current run counter for Task for taskId {TaskId}", taskId);
+            logger.CurrentRunUpdateFailed(e, taskId);
             throw;
         }
     }
@@ -112,7 +111,7 @@ public class SqlServerTaskStorage(
     public override async Task CompleteRecurringRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
                                                     AuditLevel auditLevel)
     {
-        logger.LogInformation("Complete recurring run for Task {TaskId} using SQL Server stored procedure", taskId);
+        logger.CompletingRecurringRun(taskId);
 
         await using var dbContext = await _contextFactory.CreateDbContextAsync().ConfigureAwait(false);
 
@@ -132,7 +131,7 @@ public class SqlServerTaskStorage(
             // Residual D: propagate (do not swallow) — a failed completion must NOT advance the schedule on
             // unpersisted state; the recoverable row is re-run instead. Same contract as UpdateCurrentRun,
             // deliberately NOT the swallow pattern of SetStatus.
-            logger.LogCritical(e, "Unable to complete recurring run for taskId {TaskId}", taskId);
+            logger.RecurringRunCompletionFailed(e, taskId);
             throw;
         }
     }

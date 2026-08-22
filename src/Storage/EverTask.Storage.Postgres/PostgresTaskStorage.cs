@@ -1,6 +1,5 @@
 using EverTask.Abstractions;
 using EverTask.Logger;
-using Microsoft.Extensions.Logging;
 using Npgsql;
 
 namespace EverTask.Storage.Postgres;
@@ -43,7 +42,7 @@ public class PostgresTaskStorage(
     public override async Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception, AuditLevel auditLevel,
                                          double? executionTimeMs = null, CancellationToken ct = default)
     {
-        logger.LogInformation("Set Task {TaskId} with Status {Status} using PostgreSQL writable CTE", taskId, status);
+        logger.SettingTaskStatus(taskId, status);
 
         await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
@@ -87,7 +86,7 @@ SELECT @taskId, now(), @status, @exception FROM updated WHERE @createAudit;";
         {
             // Same swallow contract as the base SetStatus / usp_SetTaskStatus (NOT the rethrow contract of
             // the run-counter writes below).
-            logger.LogCritical(e, "Unable to update the status {Status} for taskId {TaskId}", status, taskId);
+            logger.StatusUpdateFailed(e, status, taskId);
         }
     }
 
@@ -102,7 +101,7 @@ SELECT @taskId, now(), @status, @exception FROM updated WHERE @createAudit;";
     public override async Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
                                                 AuditLevel auditLevel)
     {
-        logger.LogInformation("Update the current run counter for Task {TaskId} using PostgreSQL writable CTE", taskId);
+        logger.UpdatingCurrentRun(taskId);
 
         await using var dbContext = await _contextFactory.CreateDbContextAsync().ConfigureAwait(false);
 
@@ -133,7 +132,7 @@ WHERE (@auditLevel IN (0, 1))
         {
             // Residual D: propagate (do NOT swallow) — a failed counter persist must not advance the schedule
             // on unpersisted state; the recoverable row is re-run instead.
-            logger.LogCritical(e, "Update the current run counter for Task for taskId {TaskId}", taskId);
+            logger.CurrentRunUpdateFailed(e, taskId);
             throw;
         }
     }
@@ -149,7 +148,7 @@ WHERE (@auditLevel IN (0, 1))
     public override async Task CompleteRecurringRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
                                                     AuditLevel auditLevel)
     {
-        logger.LogInformation("Complete recurring run for Task {TaskId} using PostgreSQL writable CTE", taskId);
+        logger.CompletingRecurringRun(taskId);
 
         await using var dbContext = await _contextFactory.CreateDbContextAsync().ConfigureAwait(false);
 
@@ -191,7 +190,7 @@ SELECT @taskId, now(), @execTime, 'Completed', NULL FROM updated WHERE @runsAudi
         catch (Exception e)
         {
             // Residual D: propagate — a failed completion must not advance the schedule on unpersisted state.
-            logger.LogCritical(e, "Unable to complete recurring run for taskId {TaskId}", taskId);
+            logger.RecurringRunCompletionFailed(e, taskId);
             throw;
         }
     }

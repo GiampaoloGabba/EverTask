@@ -1,6 +1,5 @@
 using EverTask.Logger;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace EverTask.Storage.EfCore;
@@ -42,14 +41,14 @@ public sealed class AuditCleanupHostedService : BackgroundService
         _initialDelay    = options.InitialDelay;
 
         if (_storage == null)
-            _logger.LogWarning("AuditCleanupHostedService requires an EF Core task storage; cleanup is disabled for the configured storage");
+            _logger.StorageIsNotEfCore();
         else if (_retentionPolicy == null)
-            _logger.LogWarning("AuditCleanupHostedService started but no AuditRetentionPolicy configured. Service will run but perform no cleanup");
+            _logger.NoRetentionPolicyConfigured();
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("AuditCleanupHostedService started. Cleanup interval: {Interval}", _cleanupInterval);
+        _logger.ServiceStarted(_cleanupInterval);
 
         // Wait for a small delay before first cleanup to allow app to fully start
         try
@@ -69,7 +68,7 @@ public sealed class AuditCleanupHostedService : BackgroundService
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _logger.LogError(ex, "Error occurred during audit cleanup");
+                _logger.CleanupCycleFailed(ex);
             }
 
             // Wait for next cleanup cycle
@@ -84,7 +83,7 @@ public sealed class AuditCleanupHostedService : BackgroundService
             }
         }
 
-        _logger.LogInformation("AuditCleanupHostedService stopped");
+        _logger.ServiceStopped();
     }
 
     private async Task PerformCleanup(CancellationToken ct)
@@ -92,7 +91,7 @@ public sealed class AuditCleanupHostedService : BackgroundService
         if (_retentionPolicy == null || _storage == null)
             return; // Nothing to do
 
-        _logger.LogInformation("Starting audit cleanup cycle");
+        _logger.CleanupCycleStarting();
 
         WarnOnDisabledKnobs(_retentionPolicy);
 
@@ -100,9 +99,7 @@ public sealed class AuditCleanupHostedService : BackgroundService
         var (status, runs, logs, tasks) =
             await RunCleanupAsync(_storage, _retentionPolicy, DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
 
-        _logger.LogInformation(
-            "Cleanup complete. Deleted {StatusCount} status audits, {RunsCount} runs audits, {LogCount} execution logs, {TasksCount} completed tasks",
-            status, runs, logs, tasks);
+        _logger.CleanupComplete(status, runs, logs, tasks);
     }
 
     /// <summary>
@@ -180,10 +177,7 @@ public sealed class AuditCleanupHostedService : BackgroundService
         void Warn(string knob, int? value)
         {
             if (value is <= 0)
-                _logger.LogWarning(
-                    "AuditRetentionPolicy.{Knob} is {Value} (<= 0) and is treated as DISABLED. " +
-                    "Provide a positive value to enable it, or null to disable it explicitly",
-                    knob, value);
+                _logger.RetentionKnobDisabled(knob, value);
         }
 
         Warn(nameof(policy.StatusAuditRetentionDays),  policy.StatusAuditRetentionDays);

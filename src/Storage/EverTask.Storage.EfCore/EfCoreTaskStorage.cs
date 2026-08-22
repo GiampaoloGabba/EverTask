@@ -1,7 +1,6 @@
 ﻿using System.Linq.Expressions;
 using EverTask.Abstractions;
 using EverTask.Logger;
-using Microsoft.Extensions.Logging;
 
 namespace EverTask.Storage.EfCore;
 
@@ -65,7 +64,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
         await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
 
-        logger.LogInformation("Task {name} persisted", taskEntity.Type);
+        logger.TaskPersisted(taskEntity.Type);
     }
 
     public virtual async Task<QueuedTask[]> RetrievePending(DateTimeOffset? lastCreatedAt, Guid? lastId, int take,
@@ -73,9 +72,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     {
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
-        logger.LogInformation(
-            "Retrieving Pending Tasks (keyset: lastCreatedAt={LastCreatedAt}, lastId={LastId}, take={Take})",
-            lastCreatedAt, lastId, take);
+        logger.RetrievingPendingTasks(lastCreatedAt, lastId, take);
 
         var now = UtcNowNormalized;
 
@@ -127,7 +124,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         {
             var transitionedClientSide = await TrySetQueuedClientSideAsync(dbContext, taskId, now, auditLevel, ct).ConfigureAwait(false);
             if (!transitionedClientSide)
-                logger.LogDebug("Task {taskId} is no longer recoverable, skipping SetQueued", taskId);
+                logger.TaskNoLongerRecoverable(taskId);
             return transitionedClientSide;
         }
 
@@ -147,7 +144,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         if (rowsAffected == 0)
         {
             await transaction.RollbackAsync(ct).ConfigureAwait(false);
-            logger.LogDebug("Task {taskId} is no longer recoverable, skipping SetQueued", taskId);
+            logger.TaskNoLongerRecoverable(taskId);
             return false;
         }
 
@@ -216,7 +213,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                                         double? executionTimeMs = null,
                                         CancellationToken ct = default)
     {
-        logger.LogInformation("Set Task {taskId} with Status {status}", taskId, status);
+        logger.SettingTaskStatus(taskId, status);
 
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
@@ -272,12 +269,12 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             await transaction.CommitAsync(ct).ConfigureAwait(false);
 
             if (rowsAffected == 0)
-                logger.LogWarning("Task {taskId} not found for status update to {status}", taskId, status);
+                logger.TaskNotFoundForStatusUpdate(taskId, status);
         }
         catch (Exception e)
         {
             await transaction.RollbackAsync(ct).ConfigureAwait(false);
-            logger.LogCritical(e, "Unable to update the status {status} for taskId {taskId} atomically", status, taskId);
+            logger.StatusUpdateFailed(e, status, taskId);
         }
     }
 
@@ -344,7 +341,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
     public virtual async Task<int> GetCurrentRunCount(Guid taskId)
     {
-        logger.LogInformation("Get the current run counter for Task {taskId}", taskId);
+        logger.GettingCurrentRunCount(taskId);
         await using var dbContext = await contextFactory.CreateDbContextAsync().ConfigureAwait(false);
 
         var task = await dbContext.QueuedTasks
@@ -387,7 +384,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     public virtual async Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
                                                AuditLevel auditLevel)
     {
-        logger.LogInformation("Update the current run counter for Task {taskId}", taskId);
+        logger.UpdatingCurrentRun(taskId);
 
         await using var dbContext = await contextFactory.CreateDbContextAsync().ConfigureAwait(false);
 
@@ -407,7 +404,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                                                   .ConfigureAwait(false);
 
                 if (rowsAffected == 0)
-                    logger.LogWarning("Task {taskId} not found for run count update", taskId);
+                    logger.TaskNotFoundForRunCountUpdate(taskId);
 
                 return;
             }
@@ -421,7 +418,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
             if (task == null)
             {
-                logger.LogWarning("Task {taskId} not found for run count update", taskId);
+                logger.TaskNotFoundForRunCountUpdate(taskId);
                 return;
             }
 
@@ -454,7 +451,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             // Residual D: do NOT swallow. A failed counter persist must propagate so WorkerExecutor does
             // not advance the schedule on unpersisted state; the recoverable row is re-run instead. The
             // consumer (WorkerService.ConsumeAsync) catches this defensively and continues with other tasks.
-            logger.LogCritical(e, "Update the current run counter for Task for taskId {taskId}", taskId);
+            logger.CurrentRunUpdateFailed(e, taskId);
             throw;
         }
     }
@@ -470,7 +467,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     public virtual async Task CompleteRecurringRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
                                                    AuditLevel auditLevel)
     {
-        logger.LogInformation("Complete recurring run for Task {taskId}", taskId);
+        logger.CompletingRecurringRun(taskId);
 
         await using var dbContext = await contextFactory.CreateDbContextAsync().ConfigureAwait(false);
 
@@ -483,7 +480,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
             if (task == null)
             {
-                logger.LogWarning("Task {taskId} not found for recurring completion", taskId);
+                logger.TaskNotFoundForRecurringCompletion(taskId);
                 return;
             }
 
@@ -527,7 +524,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         {
             // Residual D: propagate (do not swallow) so a failed completion does not advance the schedule
             // on unpersisted state — the row stays recoverable (the transaction rolled back) and is re-run.
-            logger.LogCritical(e, "Unable to complete recurring run for taskId {taskId}", taskId);
+            logger.RecurringRunCompletionFailed(e, taskId);
             throw;
         }
     }
@@ -542,7 +539,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     /// </summary>
     public virtual async Task SetRecurringSeriesCompleted(Guid taskId, double executionTimeMs, AuditLevel auditLevel)
     {
-        logger.LogInformation("Finalize recurring series (terminal skip) for Task {taskId}", taskId);
+        logger.FinalizingRecurringSeries(taskId);
 
         await using var dbContext = await contextFactory.CreateDbContextAsync().ConfigureAwait(false);
 
@@ -555,7 +552,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
             if (task == null)
             {
-                logger.LogWarning("Task {taskId} not found for recurring series completion", taskId);
+                logger.TaskNotFoundForRecurringSeriesCompletion(taskId);
                 return;
             }
 
@@ -586,7 +583,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         catch (Exception e)
         {
             // Residual D: propagate so a failed finalize does not advance the schedule on unpersisted state.
-            logger.LogCritical(e, "Unable to finalize recurring series for taskId {taskId}", taskId);
+            logger.RecurringSeriesFinalizationFailed(e, taskId);
             throw;
         }
     }
@@ -603,7 +600,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     public virtual async Task SetRecurringTaskPoisoned(Guid taskId, Exception exception, AuditLevel auditLevel,
                                                        CancellationToken ct = default)
     {
-        logger.LogInformation("Poison recurring Task {taskId} terminally", taskId);
+        logger.PoisoningRecurringTask(taskId);
 
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
@@ -616,7 +613,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
             if (task == null)
             {
-                logger.LogWarning("Task {taskId} not found for recurring poison", taskId);
+                logger.TaskNotFoundForRecurringPoison(taskId);
                 return;
             }
 
@@ -648,7 +645,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         {
             // Swallow (like SetStatus): a failed poison must not abort the recovery of other tasks. The row
             // stays recoverable and is retried at the next restart.
-            logger.LogCritical(e, "Unable to poison recurring task {taskId}", taskId);
+            logger.RecurringTaskPoisonFailed(e, taskId);
         }
     }
 
@@ -665,7 +662,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
     public virtual async Task UpdateTask(QueuedTask task, CancellationToken ct = default)
     {
-        logger.LogInformation("Updating task {taskId} with key {taskKey}", task.Id, task.TaskKey);
+        logger.UpdatingTask(task.Id, task.TaskKey);
 
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
@@ -698,19 +695,19 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
             if (rowsAffected == 0)
             {
-                logger.LogWarning("Task {taskId} not found for update", task.Id);
+                logger.TaskNotFoundForUpdate(task.Id);
             }
         }
         catch (Exception e)
         {
-            logger.LogCritical(e, "Unable to update task {taskId}", task.Id);
+            logger.TaskUpdateFailed(e, task.Id);
             throw;
         }
     }
 
     public virtual async Task Remove(Guid taskId, CancellationToken ct = default)
     {
-        logger.LogInformation("Removing task {taskId}", taskId);
+        logger.RemovingTask(taskId);
 
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
@@ -723,12 +720,12 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
             if (rowsAffected == 0)
             {
-                logger.LogWarning("Task {taskId} not found for removal", taskId);
+                logger.TaskNotFoundForRemoval(taskId);
             }
         }
         catch (Exception e)
         {
-            logger.LogCritical(e, "Unable to remove task {taskId}", taskId);
+            logger.TaskRemoveFailed(e, taskId);
             throw;
         }
     }

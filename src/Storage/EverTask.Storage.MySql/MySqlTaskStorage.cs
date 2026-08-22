@@ -1,6 +1,5 @@
 using EverTask.Abstractions;
 using EverTask.Logger;
-using Microsoft.Extensions.Logging;
 using MySqlConnector;
 
 namespace EverTask.Storage.MySql;
@@ -39,7 +38,7 @@ public class MySqlTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTa
     public override async Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception, AuditLevel auditLevel,
                                          double? executionTimeMs = null, CancellationToken ct = default)
     {
-        logger.LogInformation("Set Task {TaskId} with Status {Status} using MySQL stored procedure", taskId, status);
+        logger.SettingTaskStatus(taskId, status);
 
         await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
@@ -70,7 +69,7 @@ public class MySqlTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTa
         catch (Exception e)
         {
             // Same swallow contract as the base SetStatus (NOT the rethrow contract of the run-counter writes).
-            logger.LogCritical(e, "Unable to update the status {Status} for taskId {TaskId}", status, taskId);
+            logger.StatusUpdateFailed(e, status, taskId);
         }
     }
 
@@ -93,7 +92,7 @@ public class MySqlTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTa
             return;
         }
 
-        logger.LogInformation("Update the current run counter for Task {TaskId} using MySQL stored procedure", taskId);
+        logger.UpdatingCurrentRun(taskId);
 
         await using var dbContext = await _contextFactory.CreateDbContextAsync().ConfigureAwait(false);
 
@@ -110,7 +109,7 @@ public class MySqlTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTa
         {
             // Residual D: propagate (do NOT swallow) — a failed counter persist must not advance the schedule on
             // unpersisted state; the recoverable row is re-run instead.
-            logger.LogCritical(e, "Update the current run counter for Task for taskId {TaskId}", taskId);
+            logger.CurrentRunUpdateFailed(e, taskId);
             throw;
         }
     }
@@ -126,7 +125,7 @@ public class MySqlTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTa
     public override async Task CompleteRecurringRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
                                                     AuditLevel auditLevel)
     {
-        logger.LogInformation("Complete recurring run for Task {TaskId} using MySQL stored procedure", taskId);
+        logger.CompletingRecurringRun(taskId);
 
         await using var dbContext = await _contextFactory.CreateDbContextAsync().ConfigureAwait(false);
 
@@ -146,7 +145,7 @@ public class MySqlTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTa
         catch (Exception e)
         {
             // Residual D: propagate — a failed completion must not advance the schedule on unpersisted state.
-            logger.LogCritical(e, "Unable to complete recurring run for taskId {TaskId}", taskId);
+            logger.RecurringRunCompletionFailed(e, taskId);
             throw;
         }
     }
