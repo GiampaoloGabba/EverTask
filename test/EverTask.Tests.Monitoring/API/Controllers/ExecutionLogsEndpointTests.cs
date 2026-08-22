@@ -1,6 +1,4 @@
-using EverTask.Monitor.Api.DTOs.Tasks;
 using EverTask.Tests.Monitoring.TestHelpers;
-using EverTask.Tests.TestHelpers;
 using UUIDNext;
 
 namespace EverTask.Tests.Monitoring.API.Controllers;
@@ -158,7 +156,7 @@ public class ExecutionLogsEndpointTests : MonitoringTestBase
         result.ShouldNotBeNull();
         result.Logs.Count.ShouldBe(2);
         result.Logs.All(l => l.Level == "Error").ShouldBeTrue();
-        result.Logs.Select(l => l.Message).ShouldBe(new[] { "Error 1", "Error 2" });
+        result.Logs.Select(l => l.Message).ShouldBe(["Error 1", "Error 2"]);
     }
 
     [Theory]

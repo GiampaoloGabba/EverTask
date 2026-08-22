@@ -1,5 +1,5 @@
-﻿using EverTask.Storage.EfCore;
-using EverTask.Storage;
+﻿using EverTask.Storage;
+using EverTask.Storage.EfCore;
 using Microsoft.EntityFrameworkCore;
 
 namespace EverTask.Tests.Storage.EfCore;

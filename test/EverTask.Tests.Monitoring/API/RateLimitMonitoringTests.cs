@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using EverTask.Monitor.Api.Controllers;
 using EverTask.Monitor.Api.DTOs.RateLimits;
 using EverTask.RateLimiting;
@@ -46,14 +47,13 @@ public class RateLimitMonitoringTests
         // PendingCount fix: Queued was previously omitted from the dashboard bucketing
         var storage = new Mock<ITaskStorage>();
         storage.Setup(s => s.GetAll(It.IsAny<CancellationToken>()))
-               .ReturnsAsync(new[]
-               {
+               .ReturnsAsync([
                    CreateTask(QueuedTaskStatus.WaitingQueue),
                    CreateTask(QueuedTaskStatus.Pending),
                    CreateTask(QueuedTaskStatus.Queued),
                    CreateTask(QueuedTaskStatus.InProgress),
                    CreateTask(QueuedTaskStatus.Completed)
-               });
+               ]);
 
         var service  = new DashboardService(storage.Object);
         var overview = await service.GetOverviewAsync(DateRange.All);
@@ -69,7 +69,7 @@ public class RateLimitMonitoringTests
     {
         var storage = new Mock<ITaskStorage>();
         storage.Setup(s => s.GetAll(It.IsAny<CancellationToken>()))
-               .ReturnsAsync(new[] { CreateTask(QueuedTaskStatus.Queued), CreateTask(QueuedTaskStatus.Queued) });
+               .ReturnsAsync([CreateTask(QueuedTaskStatus.Queued), CreateTask(QueuedTaskStatus.Queued)]);
 
         var introspection = new FakeRateLimiterIntrospection
         {
@@ -92,7 +92,7 @@ public class RateLimitMonitoringTests
     {
         var storage = new Mock<ITaskStorage>();
         storage.Setup(s => s.GetAll(It.IsAny<CancellationToken>()))
-               .ReturnsAsync(new[] { CreateTask(QueuedTaskStatus.Queued) });
+               .ReturnsAsync([CreateTask(QueuedTaskStatus.Queued)]);
 
         var overview = await new DashboardService(storage.Object).GetOverviewAsync(DateRange.All);
 
@@ -107,11 +107,10 @@ public class RateLimitMonitoringTests
     {
         var storage = new Mock<ITaskStorage>();
         storage.Setup(s => s.GetAll(It.IsAny<CancellationToken>()))
-               .ReturnsAsync(new[]
-               {
+               .ReturnsAsync([
                    CreateTask(QueuedTaskStatus.Queued, "default"),
                    CreateTask(QueuedTaskStatus.Queued, "exports")
-               });
+               ]);
 
         var introspection = new FakeRateLimiterIntrospection
         {
@@ -135,7 +134,7 @@ public class RateLimitMonitoringTests
     {
         var storage = new Mock<ITaskStorage>();
         storage.Setup(s => s.GetAll(It.IsAny<CancellationToken>()))
-               .ReturnsAsync(new[] { CreateTask(QueuedTaskStatus.Queued, "default") });
+               .ReturnsAsync([CreateTask(QueuedTaskStatus.Queued, "default")]);
 
         var configs = await new StatisticsService(storage.Object).GetQueueConfigurationsAsync();
 
@@ -153,7 +152,7 @@ public class RateLimitMonitoringTests
 
         var storage = new Mock<ITaskStorage>();
         storage.Setup(s => s.GetAll(It.IsAny<CancellationToken>()))
-               .ReturnsAsync(new[] { parkedTask, plainTask });
+               .ReturnsAsync([parkedTask, plainTask]);
 
         var introspection = new FakeRateLimiterIntrospection
         {
@@ -174,9 +173,9 @@ public class RateLimitMonitoringTests
         var slot       = DateTimeOffset.UtcNow.AddSeconds(7);
 
         var storage = new Mock<ITaskStorage>();
-        storage.Setup(s => s.Get(It.IsAny<System.Linq.Expressions.Expression<Func<QueuedTask, bool>>>(),
+        storage.Setup(s => s.Get(It.IsAny<Expression<Func<QueuedTask, bool>>>(),
                    It.IsAny<CancellationToken>()))
-               .ReturnsAsync(new[] { parkedTask });
+               .ReturnsAsync([parkedTask]);
 
         var introspection = new FakeRateLimiterIntrospection { ThrottledUntil = { [parkedTask.Id] = slot } };
 

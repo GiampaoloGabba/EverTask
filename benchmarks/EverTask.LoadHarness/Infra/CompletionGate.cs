@@ -1,5 +1,3 @@
-using System.Diagnostics;
-
 namespace EverTask.LoadHarness.Infra;
 
 /// <summary>

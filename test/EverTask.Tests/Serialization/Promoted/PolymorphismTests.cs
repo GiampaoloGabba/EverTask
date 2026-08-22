@@ -1,8 +1,5 @@
-using Newtonsoft.Json;
-
 using EverTask.Serialization;
-using EverTask.Scheduler.Recurring;
-using EverTask.Scheduler.Recurring.Intervals;
+using Newtonsoft.Json;
 
 namespace EverTask.Tests.Serialization;
 

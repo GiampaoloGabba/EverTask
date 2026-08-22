@@ -32,11 +32,11 @@ public class RecurringSkipForwardHardeningTests
         // OnDays rides on DayInterval(Interval=0); the predicate must inspect OnDays regardless of Interval.
         new RecurringTask
         {
-            DayInterval    = new DayInterval(0, new[] { DayOfWeek.Monday }),
+            DayInterval    = new DayInterval(0, [DayOfWeek.Monday]),
             MinuteInterval = new MinuteInterval(5)
         }.IsUniformGrid().ShouldBeFalse();
 
-        new RecurringTask { DayInterval = new DayInterval(0, new[] { DayOfWeek.Monday }) }
+        new RecurringTask { DayInterval = new DayInterval(0, [DayOfWeek.Monday]) }
             .IsUniformGrid().ShouldBeFalse();
     }
 
@@ -47,7 +47,8 @@ public class RecurringSkipForwardHardeningTests
     {
         // A calendar schedule whose span exceeds the walk cap must return null (stop) — NEVER a stale past
         // value that would be scheduled immediately and re-fire, consuming MaxRuns.
-        var task   = new RecurringTask { HourInterval = new HourInterval(1, new[] { 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23 }) };
+        var task   = new RecurringTask { HourInterval = new HourInterval(1, [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23
+        ]) };
         var anchor = Utc(2026, 1, 1, 0, 0);
         var after  = anchor.AddHours(2_000_050); // > MaxNextRunWalkIterations
 
@@ -118,7 +119,9 @@ public class RecurringSkipForwardHardeningTests
         // not a garbage division.
         var task   = new RecurringTask
         {
-            DayInterval    = new DayInterval(0, new[] { DayOfWeek.Monday, DayOfWeek.Wednesday, DayOfWeek.Friday }) { OnTimes = new[] { new TimeOnly(9, 0) } }
+            DayInterval    = new DayInterval(0, [DayOfWeek.Monday, DayOfWeek.Wednesday, DayOfWeek.Friday]) { OnTimes =
+                [new TimeOnly(9, 0)]
+            }
         };
         var anchor = Utc(2026, 1, 5, 9, 0);   // Monday
         var after  = Utc(2026, 1, 16, 12, 0); // ~Friday two weeks on
@@ -162,7 +165,9 @@ public class RecurringSkipForwardHardeningTests
         // due yet, so the slipped Wednesday is STILL the current one -> recovery must execute it, not skip it.
         var task = new RecurringTask
         {
-            DayInterval = new DayInterval(0, new[] { DayOfWeek.Monday, DayOfWeek.Wednesday, DayOfWeek.Friday }) { OnTimes = new[] { new TimeOnly(9, 0) } }
+            DayInterval = new DayInterval(0, [DayOfWeek.Monday, DayOfWeek.Wednesday, DayOfWeek.Friday]) { OnTimes = [new TimeOnly(9, 0)
+                ]
+            }
         };
         var occurrence = Utc(2026, 1, 7, 9, 0);  // Wednesday 09:00
         var now        = Utc(2026, 1, 7, 14, 0); // 5h later, still before Friday
@@ -180,7 +185,9 @@ public class RecurringSkipForwardHardeningTests
         // recovery must skip forward, not execute the stale one.
         var task = new RecurringTask
         {
-            DayInterval = new DayInterval(0, new[] { DayOfWeek.Monday, DayOfWeek.Wednesday, DayOfWeek.Friday }) { OnTimes = new[] { new TimeOnly(9, 0) } }
+            DayInterval = new DayInterval(0, [DayOfWeek.Monday, DayOfWeek.Wednesday, DayOfWeek.Friday]) { OnTimes = [new TimeOnly(9, 0)
+                ]
+            }
         };
         var occurrence = Utc(2026, 1, 7, 9, 0);   // Wednesday
         var now        = Utc(2026, 1, 10, 12, 0); // Saturday (Friday 09:00 already passed)

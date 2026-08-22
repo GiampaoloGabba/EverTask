@@ -1,7 +1,7 @@
+using EverTask.Tests.Monitoring.TestHelpers;
 #if NET9_0_OR_GREATER
 using EverTask.Monitor.Api.Scalar.Extensions;
 #endif
-using EverTask.Tests.Monitoring.TestHelpers;
 
 namespace EverTask.Tests.Monitoring.API;
 

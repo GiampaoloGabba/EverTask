@@ -21,7 +21,7 @@ public class WorkerServiceRecoveryPoisonTests
 {
     private sealed class RecordingLogger<T> : IEverTaskLogger<T>
     {
-        public readonly List<(LogLevel Level, string Message)> Entries = new();
+        public readonly List<(LogLevel Level, string Message)> Entries = [];
 
         public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
         public bool IsEnabled(LogLevel logLevel) => true;
@@ -57,7 +57,7 @@ public class WorkerServiceRecoveryPoisonTests
         storage.Setup(s => s.RetrievePending(It.IsAny<DateTimeOffset?>(), It.IsAny<Guid?>(), It.IsAny<int>(),
                    It.IsAny<CancellationToken>()))
                .ReturnsAsync((DateTimeOffset? last, Guid? id, int take, CancellationToken ct) =>
-                   last == null && row.Status != QueuedTaskStatus.Failed ? new[] { row } : Array.Empty<QueuedTask>());
+                   last == null && row.Status != QueuedTaskStatus.Failed ? [row] : []);
         storage.Setup(s => s.IncrementRecoveryFailure(row.Id, It.IsAny<CancellationToken>()))
                .ReturnsAsync(() =>
                {
@@ -154,7 +154,7 @@ public class WorkerServiceRecoveryPoisonTests
         storage.Setup(s => s.RetrievePending(It.IsAny<DateTimeOffset?>(), It.IsAny<Guid?>(), It.IsAny<int>(),
                    It.IsAny<CancellationToken>()))
                .ReturnsAsync((DateTimeOffset? last, Guid? id, int take, CancellationToken ct) =>
-                   last == null && row.Status != QueuedTaskStatus.Failed ? new[] { row } : Array.Empty<QueuedTask>());
+                   last == null && row.Status != QueuedTaskStatus.Failed ? [row] : []);
         storage.Setup(s => s.IncrementRecoveryFailure(row.Id, It.IsAny<CancellationToken>()))
                .ReturnsAsync(() =>
                {
@@ -226,7 +226,7 @@ public class WorkerServiceRecoveryPoisonTests
         storage.Setup(s => s.RetrievePending(It.IsAny<DateTimeOffset?>(), It.IsAny<Guid?>(), It.IsAny<int>(),
                    It.IsAny<CancellationToken>()))
                .ReturnsAsync((DateTimeOffset? last, Guid? id, int take, CancellationToken ct) =>
-                   last == null && row.Status != QueuedTaskStatus.Failed ? new[] { row } : Array.Empty<QueuedTask>());
+                   last == null && row.Status != QueuedTaskStatus.Failed ? [row] : []);
         storage.Setup(s => s.SetStatus(row.Id, QueuedTaskStatus.Failed, It.IsAny<Exception?>(), It.IsAny<AuditLevel>(),
                    It.IsAny<double?>(), It.IsAny<CancellationToken>()))
                .Callback(() => row.Status = QueuedTaskStatus.Failed)
@@ -282,7 +282,7 @@ public class WorkerServiceRecoveryPoisonTests
         storage.Setup(s => s.RetrievePending(It.IsAny<DateTimeOffset?>(), It.IsAny<Guid?>(), It.IsAny<int>(),
                    It.IsAny<CancellationToken>()))
                .ReturnsAsync((DateTimeOffset? last, Guid? id, int take, CancellationToken ct) =>
-                   last == null ? new[] { row } : Array.Empty<QueuedTask>());
+                   last == null ? [row] : []);
 
         var provider = new Mock<IServiceProvider>();
         provider.Setup(p => p.GetService(typeof(ITaskStorage))).Returns(storage.Object);

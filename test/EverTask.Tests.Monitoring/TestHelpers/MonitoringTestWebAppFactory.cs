@@ -1,4 +1,5 @@
 using EverTask.Monitor.Api.Extensions;
+using EverTask.Resilience;
 using EverTask.Tests.Monitoring.TestData;
 
 namespace EverTask.Tests.Monitoring.TestHelpers;
@@ -29,7 +30,7 @@ public class MonitoringTestWebAppFactory(
                                                       .SetChannelOptions(10)
                                                       .SetMaxDegreeOfParallelism(5)
                                                       .SetDefaultRetryPolicy(
-                                                          new EverTask.Resilience.LinearRetryPolicy(1,
+                                                          new LinearRetryPolicy(1,
                                                               TimeSpan.FromMilliseconds(1))))
                                   .AddMemoryStorage()
                                   .AddSignalRMonitoring(); // Add SignalR monitoring for real-time events

@@ -1,13 +1,6 @@
-using EverTask.Dispatcher;
-using EverTask.Logger;
 using EverTask.Scheduler.Recurring;
 using EverTask.Scheduler.Recurring.Intervals;
-using EverTask.Storage;
 using EverTask.Tests.TestHelpers;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
-using Shouldly;
 
 namespace EverTask.Tests.IntegrationTests;
 

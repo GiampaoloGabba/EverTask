@@ -2,8 +2,8 @@ using EverTask.Scheduler.Recurring;
 using EverTask.Scheduler.Recurring.Intervals;
 using EverTask.Storage;
 using EverTask.Storage.Sqlite;
-using EverTask.Tests;
 using EverTask.Tests.TestHelpers;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Newtonsoft.Json;
@@ -102,7 +102,7 @@ public sealed class SqliteLegacyRecoveryIntegrationTests : IsolatedIntegrationTe
 
     public void Dispose()
     {
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        SqliteConnection.ClearAllPools();
         try { if (File.Exists(_dbFile)) File.Delete(_dbFile); } catch { /* best-effort cleanup */ }
     }
 }

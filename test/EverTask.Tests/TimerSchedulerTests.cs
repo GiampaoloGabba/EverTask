@@ -1,5 +1,3 @@
-using EverTask.Tests.TestHelpers;
-﻿using System.Reflection;
 using Cronos;
 using EverTask.Configuration;
 using EverTask.Handler;
@@ -7,6 +5,7 @@ using EverTask.Logger;
 using EverTask.Scheduler;
 using EverTask.Scheduler.Recurring;
 using EverTask.Scheduler.Recurring.Intervals;
+using EverTask.Tests.TestHelpers;
 using Microsoft.Extensions.Logging;
 
 namespace EverTask.Tests;

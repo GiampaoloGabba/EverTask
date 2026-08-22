@@ -1,6 +1,6 @@
-using EverTask.Tests.TestHelpers;
 using EverTask.Logger;
 using EverTask.Storage;
+using EverTask.Tests.TestHelpers;
 
 namespace EverTask.Tests;
 

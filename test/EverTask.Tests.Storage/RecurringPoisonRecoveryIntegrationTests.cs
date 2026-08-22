@@ -3,9 +3,9 @@ using EverTask.Scheduler.Recurring.Intervals;
 using EverTask.Storage;
 using EverTask.Storage.Sqlite;
 using EverTask.Storage.SqlServer;
-using EverTask.Tests;
 using EverTask.Tests.TestHelpers;
 using Microsoft.Data.SqlClient;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Newtonsoft.Json;
@@ -160,14 +160,14 @@ public abstract class RecurringPoisonRecoveryIntegrationTestsBase : IsolatedInte
     public Task Out_of_range_OnDays_schedule_is_poisoned_terminally() =>
         AssertCorruptScheduleIsPoisonedTerminally(new RecurringTask
         {
-            DayInterval = new DayInterval(0, new[] { (DayOfWeek)99 })
+            DayInterval = new DayInterval(0, [(DayOfWeek)99])
         });
 
     [Fact]
     public Task Out_of_range_OnHours_schedule_is_poisoned_terminally() =>
         AssertCorruptScheduleIsPoisonedTerminally(new RecurringTask
         {
-            HourInterval = new HourInterval(0, new[] { 99 })
+            HourInterval = new HourInterval(0, [99])
         });
 
     [Fact]
@@ -218,7 +218,7 @@ public sealed class SqliteRecurringPoisonRecoveryTests : RecurringPoisonRecovery
 
     public void Dispose()
     {
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        SqliteConnection.ClearAllPools();
         try { if (File.Exists(_dbFile)) File.Delete(_dbFile); } catch { /* best-effort cleanup */ }
     }
 }

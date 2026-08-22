@@ -1,4 +1,3 @@
-using System.Threading.Tasks;
 using Xunit;
 using AnalyzerVerifier = EverTask.Analyzers.Tests.CSharpAnalyzerVerifier<EverTask.Analyzers.PayloadContractAnalyzer>;
 

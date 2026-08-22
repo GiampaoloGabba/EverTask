@@ -1,4 +1,5 @@
 using EverTask.Abstractions;
+using EverTask.Configuration;
 using EverTask.Example.AspnetCore;
 using EverTask.Logging.Serilog;
 using EverTask.Monitor.Api.Extensions;
@@ -43,18 +44,18 @@ builder.Services.AddEverTask(opt =>
        .ConfigureDefaultQueue(q => q
                                    .SetMaxDegreeOfParallelism(5)
                                    .SetChannelCapacity(100)
-                                   .SetFullBehavior(EverTask.Configuration.QueueFullBehavior.FallbackToDefault))
+                                   .SetFullBehavior(QueueFullBehavior.FallbackToDefault))
        // Add a high-priority queue for critical tasks like payments
        .AddQueue("high-priority", q => q
                                        .SetMaxDegreeOfParallelism(10)
                                        .SetChannelCapacity(200)
-                                       .SetFullBehavior(EverTask.Configuration.QueueFullBehavior.Wait)
+                                       .SetFullBehavior(QueueFullBehavior.Wait)
                                        .SetDefaultTimeout(TimeSpan.FromMinutes(5)))
        // Add a background queue for low-priority CPU-intensive tasks
        .AddQueue("low-priority", q => q
                                       .SetMaxDegreeOfParallelism(2) // Limit parallelism for CPU-intensive work
                                       .SetChannelCapacity(50)
-                                      .SetFullBehavior(EverTask.Configuration.QueueFullBehavior.FallbackToDefault)
+                                      .SetFullBehavior(QueueFullBehavior.FallbackToDefault)
                                       .SetDefaultTimeout(TimeSpan.FromMinutes(30)))
        // Configure the recurring queue for scheduled tasks
        .ConfigureRecurringQueue(q => q

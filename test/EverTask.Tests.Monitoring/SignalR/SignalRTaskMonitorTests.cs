@@ -1,6 +1,5 @@
-using EverTask.Monitoring;
-using EverTask.Tests.Monitoring.TestHelpers;
 using EverTask.Tests.Monitoring.TestData;
+using EverTask.Tests.Monitoring.TestHelpers;
 
 namespace EverTask.Tests.Monitoring.SignalR;
 

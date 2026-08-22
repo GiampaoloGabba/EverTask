@@ -1,4 +1,3 @@
-using EverTask.Monitor.Api.DTOs.Dashboard;
 using EverTask.Tests.Monitoring.TestHelpers;
 
 namespace EverTask.Tests.Monitoring.API.Controllers;

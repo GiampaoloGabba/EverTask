@@ -1,6 +1,6 @@
-using EverTask.Abstractions;
 using EverTask.Handler;
 using EverTask.Monitoring;
+using EverTask.Serialization;
 
 namespace EverTask.Tests.Serialization;
 
@@ -50,7 +50,7 @@ public class MonitoringWireFormatTests
 
         // Astral-plane characters (4-byte emoji) ARE emitted as an escaped surrogate pair by STJ's relaxed
         // encoder — a benign byte-divergence from Newtonsoft (F12), NOT data loss: the value round-trips.
-        var restored = EverTask.Serialization.EverTaskJson.Deserialize<MonitoredTask>(data.TaskParameters)!;
+        var restored = EverTaskJson.Deserialize<MonitoredTask>(data.TaskParameters)!;
         restored.Note.ShouldBe(note);
     }
 }

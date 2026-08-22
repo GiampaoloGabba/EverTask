@@ -1,9 +1,5 @@
-using EverTask.Configuration;
-using EverTask.Scheduler.Recurring;
-using EverTask.Scheduler.Recurring.Intervals;
 using EverTask.Storage;
 using EverTask.Tests.TestHelpers;
-using EverTask.Worker;
 
 namespace EverTask.Tests.IntegrationTests;
 

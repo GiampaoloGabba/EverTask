@@ -5,7 +5,6 @@ using EverTask.RateLimiting;
 using EverTask.Scheduler;
 using EverTask.Storage;
 using EverTask.Tests.TestHelpers;
-using EverTask.Worker;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace EverTask.Tests.IntegrationTests;
@@ -182,7 +181,7 @@ public class RateLimitingIntegrationTests : IsolatedIntegrationTestBase
         await Task.Delay(2500);
 
         var executed = _state.ExecutedPayloads.Where(p => p != "warmup").ToArray();
-        executed.ShouldBe(new[] { "v2" },
+        executed.ShouldBe(["v2"],
             "the latest payload must execute exactly once; the stale parked payload must not fire");
     }
 

@@ -1,4 +1,3 @@
-using EverTask.Abstractions;
 using UUIDNext;
 
 namespace EverTask.Tests.TestHelpers;

@@ -1,9 +1,8 @@
-using EverTask.Tests.TestHelpers;
+using System.Threading.Channels;
 using EverTask.Configuration;
 using EverTask.Handler;
-using EverTask.Logger;
 using EverTask.Storage;
-using EverTask.Worker;
+using EverTask.Tests.TestHelpers;
 using Microsoft.Extensions.Logging;
 
 namespace EverTask.Tests;
@@ -41,7 +40,7 @@ public class QueueFullBehaviorTests
         {
             Name = "test-queue",
             MaxDegreeOfParallelism = 1,
-            ChannelOptions = new System.Threading.Channels.BoundedChannelOptions(2)
+            ChannelOptions = new BoundedChannelOptions(2)
         };
 
         var queue = new WorkerQueue(queueConfig, loggerMock.Object, mockBlacklist.Object);
@@ -74,7 +73,7 @@ public class QueueFullBehaviorTests
         {
             Name = "test-queue",
             MaxDegreeOfParallelism = 1,
-            ChannelOptions = new System.Threading.Channels.BoundedChannelOptions(2)
+            ChannelOptions = new BoundedChannelOptions(2)
         };
 
         var queue = new WorkerQueue(queueConfig, loggerMock.Object, mockBlacklist.Object);
@@ -107,9 +106,9 @@ public class QueueFullBehaviorTests
         {
             Name = "test-queue",
             MaxDegreeOfParallelism = 1,
-            ChannelOptions = new System.Threading.Channels.BoundedChannelOptions(2)
+            ChannelOptions = new BoundedChannelOptions(2)
             {
-                FullMode = System.Threading.Channels.BoundedChannelFullMode.Wait
+                FullMode = BoundedChannelFullMode.Wait
             }
         };
 
@@ -151,9 +150,9 @@ public class QueueFullBehaviorTests
         {
             Name = "test-queue",
             MaxDegreeOfParallelism = 1,
-            ChannelOptions = new System.Threading.Channels.BoundedChannelOptions(1)
+            ChannelOptions = new BoundedChannelOptions(1)
             {
-                FullMode = System.Threading.Channels.BoundedChannelFullMode.Wait
+                FullMode = BoundedChannelFullMode.Wait
             }
         };
 
@@ -190,7 +189,7 @@ public class QueueFullBehaviorTests
         {
             Name = "test-queue",
             MaxDegreeOfParallelism = 1,
-            ChannelOptions = new System.Threading.Channels.BoundedChannelOptions(10)
+            ChannelOptions = new BoundedChannelOptions(10)
         };
 
         var queue = new WorkerQueue(queueConfig, loggerMock.Object, mockBlacklist.Object);
@@ -219,7 +218,7 @@ public class QueueFullBehaviorTests
         {
             Name = "test-queue",
             MaxDegreeOfParallelism = 1,
-            ChannelOptions = new System.Threading.Channels.BoundedChannelOptions(10)
+            ChannelOptions = new BoundedChannelOptions(10)
         };
 
         var queue = new WorkerQueue(queueConfig, loggerMock.Object, mockBlacklist.Object, mockStorage.Object);
@@ -245,7 +244,7 @@ public class QueueFullBehaviorTests
         {
             Name = "test-queue",
             MaxDegreeOfParallelism = 1,
-            ChannelOptions = new System.Threading.Channels.BoundedChannelOptions(1)
+            ChannelOptions = new BoundedChannelOptions(1)
         };
 
         var queue = new WorkerQueue(queueConfig, loggerMock.Object, mockBlacklist.Object, mockStorage.Object);

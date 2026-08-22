@@ -1,12 +1,6 @@
-using EverTask.Tests.TestHelpers;
-using System;
-using System.Linq;
-using System.Threading.Tasks;
-using Microsoft.Extensions.Logging;
-using Moq;
-using Xunit;
 using EverTask.Logging;
-using EverTask.Storage;
+using EverTask.Tests.TestHelpers;
+using Microsoft.Extensions.Logging;
 
 namespace EverTask.Tests.Logging;
 

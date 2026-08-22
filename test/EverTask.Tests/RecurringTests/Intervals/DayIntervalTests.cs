@@ -29,7 +29,7 @@ public class DayIntervalTests
     [InlineData(2, 2023, 11, 22, 12, 30, 0, new string[] {}, 2023, 11, 24, 12, 30, 0)]   // Aggiunge 2 giorni, nessun orario specificato, imposta mezzanotte
     public void Day_GetNextOccurrence(int days, int year, int month, int day, int hour, int minute, int second, string[] onTimes, int expectedYear, int expectedMonth, int expectedDay, int expectedHour, int expectedMinute, int expectedSecond)
     {
-        var interval = new DayInterval(days) { OnTimes = onTimes.Select(TimeOnly.Parse).ToArray() };
+        var interval = new DayInterval(days) { OnTimes = [.. onTimes.Select(TimeOnly.Parse)] };
         var current = new DateTimeOffset(year, month, day, hour, minute, second, TimeSpan.Zero);
         var expected = new DateTimeOffset(expectedYear, expectedMonth, expectedDay, expectedHour, expectedMinute, expectedSecond, TimeSpan.Zero);
 
@@ -79,7 +79,7 @@ public class DayIntervalTests
     [Fact]
     public void Day_Validate_ThrowsArgumentException()
     {
-        var interval = new DayInterval(0, Array.Empty<DayOfWeek>());
+        var interval = new DayInterval(0, []);
 
         var exception = Record.Exception(() => interval.Validate());
 
@@ -132,12 +132,12 @@ public class DayIntervalTests
         // Simulate direct property assignment (not via builder)
         var interval = new DayInterval(1)
         {
-            OnTimes = new[]
-            {
+            OnTimes =
+            [
                 TimeOnly.Parse("23:59"),
                 TimeOnly.Parse("00:01"),
                 TimeOnly.Parse("12:00")
-            }
+            ]
         };
 
         // Should be auto-sorted

@@ -33,7 +33,7 @@ public class WorkerExecutorHotPathTests : IsolatedIntegrationTestBase
         foreach (var id in ids)
             await WaitForTaskStatusAsync(id, QueuedTaskStatus.Completed, timeoutMs: 15000);
 
-        EverTask.Worker.WorkerExecutor.GetLifecycleResolutionCount(handlerType).ShouldBe(1,
+        Worker.WorkerExecutor.GetLifecycleResolutionCount(handlerType).ShouldBe(1,
             "the lifecycle MethodInfo of a handler type must be resolved exactly once across many " +
             "lazy executions of that type (F23 per-type cache)");
     }

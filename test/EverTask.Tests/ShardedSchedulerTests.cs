@@ -1,7 +1,7 @@
-using EverTask.Tests.TestHelpers;
 using EverTask.Handler;
 using EverTask.Logger;
 using EverTask.Scheduler;
+using EverTask.Tests.TestHelpers;
 using Microsoft.Extensions.Logging;
 
 namespace EverTask.Tests;

@@ -1,4 +1,3 @@
-using System.Net.Http.Json;
 using EverTask.Monitor.Api.DTOs.Auth;
 using EverTask.Tests.Monitoring.TestHelpers;
 

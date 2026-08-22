@@ -1,7 +1,6 @@
 using EverTask.Handler;
 using EverTask.Logger;
 using EverTask.Scheduler;
-using EverTask.Storage;
 using EverTask.Tests.TestHelpers;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;

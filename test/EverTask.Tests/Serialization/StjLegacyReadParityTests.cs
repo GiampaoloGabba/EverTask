@@ -1,4 +1,3 @@
-using EverTask.Abstractions;
 using EverTask.Scheduler.Recurring;
 using EverTask.Scheduler.Recurring.Intervals;
 using EverTask.Serialization;
@@ -65,14 +64,14 @@ public class StjLegacyReadParityTests
     {
         // MonthInterval.OnFirst is DayOfWeek? with a PUBLIC setter, so this isolates the enum-as-string
         // read parity (B1) from the internal-setter OnDays gap (B2).
-        var original   = new RecurringTask { MonthInterval = new MonthInterval(1, new[] { 6 }) { OnFirst = DayOfWeek.Saturday } };
+        var original   = new RecurringTask { MonthInterval = new MonthInterval(1, [6]) { OnFirst = DayOfWeek.Saturday } };
         var legacyJson = JsonConvert.SerializeObject(original, LegacyStringEnum);
         legacyJson.ShouldContain("\"Saturday\"");
 
         var restored = EverTaskJson.Deserialize<RecurringTask>(legacyJson)!;
 
         restored.MonthInterval!.OnFirst.ShouldBe(DayOfWeek.Saturday);
-        restored.MonthInterval!.OnMonths.ShouldBe(new[] { 6 });
+        restored.MonthInterval!.OnMonths.ShouldBe([6]);
     }
 
     [Fact]

@@ -1,4 +1,6 @@
+using System.Text.Json;
 using EverTask.Scheduler.Recurring;
+using EverTask.Scheduler.Recurring.Intervals;
 using EverTask.Storage;
 using EverTask.Tests.TestHelpers;
 
@@ -99,7 +101,7 @@ public class TaskKeyIntegrationTests : IsolatedIntegrationTestBase
         allTasks[0].ScheduledExecutionUtc.ShouldBe(newTime);
 
         // Verify request was updated
-        var updatedRequest = System.Text.Json.JsonSerializer.Deserialize<TestTaskRequest>(allTasks[0].Request);
+        var updatedRequest = JsonSerializer.Deserialize<TestTaskRequest>(allTasks[0].Request);
         updatedRequest!.Name.ShouldBe("updated");
 
     }
@@ -244,7 +246,7 @@ public class TaskKeyIntegrationTests : IsolatedIntegrationTestBase
 
         var tasks1 = await Storage.Get(t => t.Id == taskId1);
         var task1 = tasks1.FirstOrDefault();
-        var request1 = System.Text.Json.JsonSerializer.Deserialize<TestTaskRequest>(task1!.Request);
+        var request1 = JsonSerializer.Deserialize<TestTaskRequest>(task1!.Request);
         request1!.Name.ShouldBe("version1");
 
         // Update parameters
@@ -258,7 +260,7 @@ public class TaskKeyIntegrationTests : IsolatedIntegrationTestBase
 
         var updatedTasks = await Storage.Get(t => t.Id == taskId1);
         var updatedTask = updatedTasks.FirstOrDefault();
-        var request2 = System.Text.Json.JsonSerializer.Deserialize<TestTaskRequest>(updatedTask!.Request);
+        var request2 = JsonSerializer.Deserialize<TestTaskRequest>(updatedTask!.Request);
         request2!.Name.ShouldBe("version2");
 
     }
@@ -828,9 +830,9 @@ public class TaskKeyIntegrationTests : IsolatedIntegrationTestBase
 
         // Arrange
         var baseTime = DateTimeOffset.UtcNow.AddMinutes(-22); // 22 minutes ago
-        var recurringTask = new EverTask.Scheduler.Recurring.RecurringTask
+        var recurringTask = new RecurringTask
         {
-            MinuteInterval = new EverTask.Scheduler.Recurring.Intervals.MinuteInterval(5)
+            MinuteInterval = new MinuteInterval(5)
         };
 
         // Simulate: task was supposed to run at baseTime+15min (7 minutes ago)
@@ -866,10 +868,10 @@ public class TaskKeyIntegrationTests : IsolatedIntegrationTestBase
 
         // Arrange
         var specificStartTime = DateTimeOffset.UtcNow.AddHours(-1); // Started 1 hour ago
-        var recurringTask = new EverTask.Scheduler.Recurring.RecurringTask
+        var recurringTask = new RecurringTask
         {
             SpecificRunTime = specificStartTime,
-            MinuteInterval = new EverTask.Scheduler.Recurring.Intervals.MinuteInterval(5)
+            MinuteInterval = new MinuteInterval(5)
         };
 
         // Simulate: server was down, many runs were missed

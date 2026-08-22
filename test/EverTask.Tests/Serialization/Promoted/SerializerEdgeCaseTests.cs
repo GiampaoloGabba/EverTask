@@ -1,8 +1,5 @@
 using System.Globalization;
-
 using EverTask.Serialization;
-using EverTask.Scheduler.Recurring;
-using EverTask.Scheduler.Recurring.Intervals;
 
 namespace EverTask.Tests.Serialization;
 

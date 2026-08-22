@@ -1,6 +1,6 @@
+using System.Collections.Concurrent;
 using EverTask.Monitoring;
 using EverTask.Storage;
-using EverTask.Worker;
 
 namespace EverTask.Tests.TestHelpers;
 
@@ -11,7 +11,7 @@ namespace EverTask.Tests.TestHelpers;
 public sealed class DeferralEventCollector : IDisposable
 {
     private readonly IEverTaskWorkerExecutor _workerExecutor;
-    private readonly System.Collections.Concurrent.ConcurrentQueue<EverTaskEventData> _events = new();
+    private readonly ConcurrentQueue<EverTaskEventData> _events = new();
     private readonly SemaphoreSlim _signal = new(0, int.MaxValue);
 
     public DeferralEventCollector(IEverTaskWorkerExecutor workerExecutor)

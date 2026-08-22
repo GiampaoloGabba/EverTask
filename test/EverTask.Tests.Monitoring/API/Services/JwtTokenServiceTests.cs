@@ -1,10 +1,5 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
-using System.Text;
-using EverTask.Monitor.Api.Options;
-using EverTask.Monitor.Api.Services;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 
 namespace EverTask.Tests.Monitoring.API.Services;
@@ -100,7 +95,7 @@ public class JwtTokenServiceTests
         var token = new JwtSecurityToken(
             issuer: "TestIssuer",
             audience: "TestAudience",
-            claims: new[] { new Claim(JwtRegisteredClaimNames.Sub, "testuser") },
+            claims: [new Claim(JwtRegisteredClaimNames.Sub, "testuser")],
             notBefore: DateTime.UtcNow.AddHours(-2),
             expires: DateTime.UtcNow.AddHours(-1), // Expired 1 hour ago
             signingCredentials: credentials
@@ -141,7 +136,7 @@ public class JwtTokenServiceTests
         var token = new JwtSecurityToken(
             issuer: "TestIssuer",
             audience: "TestAudience",
-            claims: new[] { new Claim(JwtRegisteredClaimNames.Sub, "testuser") },
+            claims: [new Claim(JwtRegisteredClaimNames.Sub, "testuser")],
             expires: DateTime.UtcNow.AddHours(1),
             signingCredentials: credentials
         );

@@ -1,7 +1,7 @@
-﻿using EverTask.Configuration;
+﻿using System.Threading.Channels;
+using EverTask.Configuration;
 using EverTask.Handler;
 using EverTask.Logger;
-using EverTask.Scheduler;
 using EverTask.Storage;
 using EverTask.Tests.TestHelpers;
 
@@ -24,7 +24,7 @@ public class QueueTests
         {
             Name = "default",
             MaxDegreeOfParallelism = 5,
-            ChannelOptions = new System.Threading.Channels.BoundedChannelOptions(100)
+            ChannelOptions = new BoundedChannelOptions(100)
         };
 
         _memoryStorage = new MemoryTaskStorage(loggerMock2.Object);

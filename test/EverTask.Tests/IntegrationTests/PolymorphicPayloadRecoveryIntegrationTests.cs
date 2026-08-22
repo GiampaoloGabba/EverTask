@@ -1,7 +1,7 @@
+using System.Text;
 using EverTask.Serialization;
 using EverTask.Storage;
 using EverTask.Tests.TestHelpers;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace EverTask.Tests.IntegrationTests;
 
@@ -106,7 +106,7 @@ public class PolymorphicPayloadRecoveryIntegrationTests : IsolatedIntegrationTes
         await Storage.Persist(new QueuedTask
         {
             Id           = Guid.NewGuid(),
-            Type         = typeof(System.Text.StringBuilder).AssemblyQualifiedName!, // real, loadable, NOT IEverTask
+            Type         = typeof(StringBuilder).AssemblyQualifiedName!, // real, loadable, NOT IEverTask
             Request      = "{}",
             Handler      = "seeded-by-test",
             Status       = QueuedTaskStatus.Queued,

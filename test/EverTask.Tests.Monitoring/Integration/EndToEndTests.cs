@@ -1,7 +1,5 @@
-using EverTask.Monitor.Api.DTOs.Dashboard;
-using EverTask.Monitor.Api.DTOs.Tasks;
-using EverTask.Tests.Monitoring.TestHelpers;
 using EverTask.Tests.Monitoring.TestData;
+using EverTask.Tests.Monitoring.TestHelpers;
 
 namespace EverTask.Tests.Monitoring.Integration;
 

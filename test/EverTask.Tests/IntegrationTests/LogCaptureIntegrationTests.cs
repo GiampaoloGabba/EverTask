@@ -1,9 +1,5 @@
-using System;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
-using EverTask.Tests.TestHelpers;
 using EverTask.Storage;
+using EverTask.Tests.TestHelpers;
 using Microsoft.Extensions.Logging;
 
 namespace EverTask.Tests.IntegrationTests;
@@ -65,16 +61,16 @@ public class LogCaptureIntegrationTests : IsolatedIntegrationTestBase
             if (task != null)
             {
                 // Task exists, check its status
-                System.Console.WriteLine($"Task Status: {task.Status}");
+                Console.WriteLine($"Task Status: {task.Status}");
             }
             else
             {
-                System.Console.WriteLine("Task not found in storage!");
+                Console.WriteLine("Task not found in storage!");
             }
         }
         else
         {
-            System.Console.WriteLine("Storage is empty!");
+            Console.WriteLine("Storage is empty!");
         }
 
         await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed, timeoutMs: 10000);

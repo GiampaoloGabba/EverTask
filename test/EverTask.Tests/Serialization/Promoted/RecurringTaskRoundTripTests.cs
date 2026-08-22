@@ -1,6 +1,6 @@
-using EverTask.Serialization;
 using EverTask.Scheduler.Recurring;
 using EverTask.Scheduler.Recurring.Intervals;
+using EverTask.Serialization;
 
 namespace EverTask.Tests.Serialization;
 
@@ -78,18 +78,18 @@ public class RecurringTaskRoundTripTests
         // MonthInterval.OnDays/OnMonths are PUBLIC setters (F11 fix) → must round-trip fully.
         var original = new RecurringTask
         {
-            MonthInterval = new MonthInterval(1, new[] { 1, 6, 12 })
+            MonthInterval = new MonthInterval(1, [1, 6, 12])
             {
                 OnDay   = 15,
-                OnTimes = new[] { new TimeOnly(8, 30), new TimeOnly(20, 0) }
+                OnTimes = [new TimeOnly(8, 30), new TimeOnly(20, 0)]
             }
         };
         var restored = RoundTrip(original);
         restored.MonthInterval.ShouldNotBeNull();
         restored.MonthInterval!.Interval.ShouldBe(1);
         restored.MonthInterval!.OnDay.ShouldBe(15);
-        restored.MonthInterval!.OnMonths.ShouldBe(new[] { 1, 6, 12 });
-        restored.MonthInterval!.OnTimes.ShouldBe(new[] { new TimeOnly(8, 30), new TimeOnly(20, 0) });
+        restored.MonthInterval!.OnMonths.ShouldBe([1, 6, 12]);
+        restored.MonthInterval!.OnTimes.ShouldBe([new TimeOnly(8, 30), new TimeOnly(20, 0)]);
         AssertSameSchedule(original, restored);
     }
 

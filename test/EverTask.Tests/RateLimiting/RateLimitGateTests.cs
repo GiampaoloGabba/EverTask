@@ -6,8 +6,8 @@ using EverTask.Scheduler;
 using EverTask.Scheduler.Recurring;
 using EverTask.Scheduler.Recurring.Intervals;
 using EverTask.Storage;
-using EverTask.Worker;
 using Microsoft.Extensions.Logging.Abstractions;
+using UUIDNext;
 
 namespace EverTask.Tests.RateLimiting;
 
@@ -33,7 +33,7 @@ public class RateLimitGateTests
 
     public RateLimitGateTests()
     {
-        var options = new EverTask.RateLimiting.RateLimiterOptions();
+        var options = new RateLimiterOptions();
         options.ResolveDefaults(1000);
         _parkingLot = new RateLimitParkingLot(options);
     }
@@ -505,7 +505,7 @@ public class RateLimitGateTests
     {
         // Guards the double-CAS fix: a fail-open observed INSIDE a closed window must not be
         // consumed silently — once the window elapses, the next Proceed must still emit it
-        var options = new EverTask.RateLimiting.RateLimiterOptions { MaxTrackedKeys = 1 };
+        var options = new RateLimiterOptions { MaxTrackedKeys = 1 };
         options.ResolveDefaults(1000);
         var limiter = new InMemoryKeyedRateLimiter(options,
             new Mock<IEverTaskLogger<InMemoryKeyedRateLimiter>>().Object, sweepInterval: TimeSpan.Zero);
@@ -677,7 +677,7 @@ public class RateLimitGateTests
 
         var services = new ServiceCollection();
         services.AddTransient<NoopGateTaskEHandler>();
-        services.AddSingleton<IGuidGenerator>(new DefaultGuidGenerator(UUIDNext.Database.Other));
+        services.AddSingleton<IGuidGenerator>(new DefaultGuidGenerator(Database.Other));
         await using var provider = services.BuildServiceProvider();
 
         var scopeFactory = new Mock<IServiceScopeFactory>();
@@ -843,7 +843,7 @@ public class RateLimitGateTests
         var services = new ServiceCollection();
         services.AddSingleton(storage.Object);
         services.AddTransient<AlwaysFailingRecurringHandler>();
-        services.AddSingleton<IGuidGenerator>(new DefaultGuidGenerator(UUIDNext.Database.Other));
+        services.AddSingleton<IGuidGenerator>(new DefaultGuidGenerator(Database.Other));
         await using var provider = services.BuildServiceProvider();
 
         var scopeFactory = new Mock<IServiceScopeFactory>();
@@ -901,7 +901,7 @@ public class RateLimitGateTests
 
         var services = new ServiceCollection();
         services.AddSingleton<ITaskStorage>(storage);
-        services.AddSingleton<IGuidGenerator>(new DefaultGuidGenerator(UUIDNext.Database.Other));
+        services.AddSingleton<IGuidGenerator>(new DefaultGuidGenerator(Database.Other));
         await using var provider = services.BuildServiceProvider();
 
         var scopeFactory = new Mock<IServiceScopeFactory>();
@@ -959,7 +959,7 @@ public class RateLimitGateTests
 
         var services = new ServiceCollection();
         services.AddSingleton<ITaskStorage>(storage);
-        services.AddSingleton<IGuidGenerator>(new DefaultGuidGenerator(UUIDNext.Database.Other));
+        services.AddSingleton<IGuidGenerator>(new DefaultGuidGenerator(Database.Other));
         await using var provider = services.BuildServiceProvider();
 
         var scopeFactory = new Mock<IServiceScopeFactory>();
@@ -1009,7 +1009,7 @@ public class RateLimitGateTests
         var services = new ServiceCollection();
         services.AddSingleton(coordinator);
         services.AddTransient<BlockingGateTaskBHandler>();
-        services.AddSingleton<IGuidGenerator>(new DefaultGuidGenerator(UUIDNext.Database.Other));
+        services.AddSingleton<IGuidGenerator>(new DefaultGuidGenerator(Database.Other));
         var provider = services.BuildServiceProvider();
 
         var scopeFactory = new Mock<IServiceScopeFactory>();
@@ -1035,7 +1035,7 @@ public class RateLimitGateTests
         var services = new ServiceCollection();
         services.AddTransient<IEverTaskHandler<RateLimitedWrapperTask>, RateLimitedWrapperTaskHandler>();
         services.AddTransient<IEverTaskHandler<RateLimitedThrowingKeyTask>, RateLimitedThrowingKeyTaskHandler>();
-        services.AddSingleton<IGuidGenerator>(new DefaultGuidGenerator(UUIDNext.Database.Other));
+        services.AddSingleton<IGuidGenerator>(new DefaultGuidGenerator(Database.Other));
         return services.BuildServiceProvider();
     }
 

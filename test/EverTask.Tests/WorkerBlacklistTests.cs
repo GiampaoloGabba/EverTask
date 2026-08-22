@@ -1,5 +1,3 @@
-using EverTask.Worker;
-
 namespace EverTask.Tests;
 
 /// <summary>

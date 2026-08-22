@@ -1,5 +1,5 @@
-using EverTask.Tests.TestHelpers;
 using EverTask.Storage;
+using EverTask.Tests.TestHelpers;
 using Microsoft.Extensions.Logging;
 
 namespace EverTask.Tests.IntegrationTests;

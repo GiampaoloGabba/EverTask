@@ -1,7 +1,6 @@
 using EverTask.Abstractions;
 using EverTask.Storage;
 using EverTask.Storage.SqlServer;
-using EverTask.Tests;
 using EverTask.Tests.TestHelpers;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.DependencyInjection;

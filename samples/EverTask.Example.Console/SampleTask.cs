@@ -1,5 +1,4 @@
 ﻿using EverTask.Abstractions;
-using Microsoft.Extensions.Logging;
 
 namespace EverTask.Example.Console;
 

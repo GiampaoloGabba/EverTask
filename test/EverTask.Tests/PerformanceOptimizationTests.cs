@@ -1,9 +1,10 @@
-using EverTask.Tests.TestHelpers;
+using System.Collections.Concurrent;
 using EverTask.Configuration;
 using EverTask.Handler;
 using EverTask.Scheduler.Recurring;
 using EverTask.Scheduler.Recurring.Intervals;
 using EverTask.Storage;
+using EverTask.Tests.TestHelpers;
 
 namespace EverTask.Tests;
 
@@ -91,7 +92,7 @@ public class PerformanceOptimizationTests
         var handler = new TestTaskHanlder();
         var executors = tasks.Select(t => CreateTaskHandlerExecutor(t, handler)).ToArray();
 
-        var queuedTasks = new System.Collections.Concurrent.ConcurrentBag<QueuedTask>();
+        var queuedTasks = new ConcurrentBag<QueuedTask>();
 
         // Act - call ToQueuedTask concurrently from multiple threads
         Parallel.For(0, 100, i =>
@@ -125,7 +126,7 @@ public class PerformanceOptimizationTests
         var executors2 = type2Tasks.Select(t => CreateTaskHandlerExecutor(t, handler2)).ToArray();
 
         var allExecutors = executors1.Concat(executors2).ToArray();
-        var queuedTasks = new System.Collections.Concurrent.ConcurrentBag<QueuedTask>();
+        var queuedTasks = new ConcurrentBag<QueuedTask>();
 
         // Act - process all concurrently
         Parallel.For(0, 100, i =>

@@ -1,6 +1,7 @@
 using EverTask.Storage;
 using EverTask.Storage.EfCore;
 using EverTask.Storage.Sqlite;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Shouldly;
 using Xunit;
@@ -97,7 +98,7 @@ public sealed class AuditCleanupHostedServiceIntegrationTests : IDisposable
     public void Dispose()
     {
         try { _provider.Dispose(); } catch { /* ignore */ }
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        SqliteConnection.ClearAllPools();
         try { if (File.Exists(_dbFile)) File.Delete(_dbFile); } catch { /* ignore */ }
     }
 }

@@ -18,11 +18,11 @@ public class RecurringAccountingTests
     {
         // F11: OnMonths is get-only, so Newtonsoft cannot repopulate it on deserialization — a
         // month-restricted recurrence loses its constraint after persistence/recovery and fires every month.
-        var original = new MonthInterval(2, new[] { 3, 6, 9 });
+        var original = new MonthInterval(2, [3, 6, 9]);
 
         var restored = JsonConvert.DeserializeObject<MonthInterval>(JsonConvert.SerializeObject(original))!;
 
-        restored.OnMonths.ShouldBe(new[] { 3, 6, 9 });
+        restored.OnMonths.ShouldBe([3, 6, 9]);
     }
 
     [Fact]

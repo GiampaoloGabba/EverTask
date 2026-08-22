@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json.Serialization;
 
 namespace EverTask.Tests;
 
@@ -50,9 +51,9 @@ public class LegacyPayloadProbeTaskHandler(ResilienceTestState state) : EverTask
 // [JsonPolymorphic] + [JsonDerivedType] (a CLOSED, declared discriminator set — NOT arbitrary type loading,
 // so the L33 isolation invariant holds). EverTaskJson round-trips it with no core change.
 
-[System.Text.Json.Serialization.JsonPolymorphic(TypeDiscriminatorPropertyName = "$kind")]
-[System.Text.Json.Serialization.JsonDerivedType(typeof(EmailChannel), "email")]
-[System.Text.Json.Serialization.JsonDerivedType(typeof(SmsChannel), "sms")]
+[JsonPolymorphic(TypeDiscriminatorPropertyName = "$kind")]
+[JsonDerivedType(typeof(EmailChannel), "email")]
+[JsonDerivedType(typeof(SmsChannel), "sms")]
 public abstract class NotifyChannel { }
 
 public sealed class EmailChannel : NotifyChannel { public string Address { get; set; } = ""; }

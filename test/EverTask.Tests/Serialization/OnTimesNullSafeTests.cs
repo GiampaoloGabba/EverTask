@@ -1,6 +1,5 @@
-using EverTask.Serialization;
-using EverTask.Scheduler.Recurring;
 using EverTask.Scheduler.Recurring.Intervals;
+using EverTask.Serialization;
 using EverTask.Storage;
 using EverTask.Tests.TestHelpers;
 
@@ -20,21 +19,21 @@ public class OnTimesNullSafeTests : IsolatedIntegrationTestBase
     public void DayInterval_with_null_OnTimes_deserializes_to_midnight()
     {
         var day = EverTaskJson.Deserialize<DayInterval>("{\"Interval\":1,\"OnTimes\":null}")!;
-        day.OnTimes.ShouldBe(new[] { new TimeOnly(0, 0) });
+        day.OnTimes.ShouldBe([new TimeOnly(0, 0)]);
     }
 
     [Fact]
     public void WeekInterval_with_null_OnTimes_deserializes_to_midnight()
     {
         var week = EverTaskJson.Deserialize<WeekInterval>("{\"Interval\":1,\"OnTimes\":null}")!;
-        week.OnTimes.ShouldBe(new[] { new TimeOnly(0, 0) });
+        week.OnTimes.ShouldBe([new TimeOnly(0, 0)]);
     }
 
     [Fact]
     public void MonthInterval_with_null_OnTimes_deserializes_to_midnight()
     {
         var month = EverTaskJson.Deserialize<MonthInterval>("{\"Interval\":1,\"OnTimes\":null}")!;
-        month.OnTimes.ShouldBe(new[] { new TimeOnly(0, 0) });
+        month.OnTimes.ShouldBe([new TimeOnly(0, 0)]);
     }
 
     [Fact]
@@ -50,8 +49,8 @@ public class OnTimesNullSafeTests : IsolatedIntegrationTestBase
     public void Valid_OnTimes_still_roundtrips_sorted()
     {
         var day = EverTaskJson.Deserialize<DayInterval>(
-            EverTaskJson.Serialize(new DayInterval(1) { OnTimes = new[] { new TimeOnly(18, 0), new TimeOnly(9, 0) } }))!;
-        day.OnTimes.ShouldBe(new[] { new TimeOnly(9, 0), new TimeOnly(18, 0) });
+            EverTaskJson.Serialize(new DayInterval(1) { OnTimes = [new TimeOnly(18, 0), new TimeOnly(9, 0)] }))!;
+        day.OnTimes.ShouldBe([new TimeOnly(9, 0), new TimeOnly(18, 0)]);
     }
 
     [Fact]

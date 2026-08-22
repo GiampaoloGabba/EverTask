@@ -1,10 +1,10 @@
 ﻿using Cronos;
-using EverTask.Dispatcher;
 using EverTask.Handler;
 using EverTask.Logger;
 using EverTask.RateLimiting;
 using EverTask.Scheduler;
 using EverTask.Scheduler.Recurring.Intervals;
+using UUIDNext;
 
 namespace EverTask.Tests;
 
@@ -42,7 +42,7 @@ public class DispatcherTests
                            .Returns(new WorkerBlacklist());
 
         serviceProviderMock.Setup(s => s.GetService(typeof(IGuidGenerator)))
-                           .Returns(new DefaultGuidGenerator(UUIDNext.Database.Other));
+                           .Returns(new DefaultGuidGenerator(Database.Other));
 
         // Lazy dispatches resolve the metadata handler in a short-lived scope (MEM-2):
         // expose a scope factory whose scope serves from the same mocked provider

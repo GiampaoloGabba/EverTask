@@ -1,6 +1,5 @@
+using System.Globalization;
 using EverTask.Serialization;
-using EverTask.Scheduler.Recurring;
-using EverTask.Scheduler.Recurring.Intervals;
 
 namespace EverTask.Tests.Serialization;
 
@@ -71,7 +70,7 @@ public class PayloadTypeMatrixTests
     [InlineData("79228162514264337593543950335")] // decimal.MaxValue
     public void Decimal_roundtrips(string literal)
     {
-        var v = decimal.Parse(literal, System.Globalization.CultureInfo.InvariantCulture);
+        var v = decimal.Parse(literal, CultureInfo.InvariantCulture);
         Rt(v).ShouldBe(v);
     }
 
@@ -136,7 +135,7 @@ public class PayloadTypeMatrixTests
     [InlineData("-00:05:00")]
     public void TimeSpan_roundtrips(string literal)
     {
-        var v = TimeSpan.Parse(literal, System.Globalization.CultureInfo.InvariantCulture);
+        var v = TimeSpan.Parse(literal, CultureInfo.InvariantCulture);
         Rt(v).ShouldBe(v);
     }
 
@@ -152,15 +151,15 @@ public class PayloadTypeMatrixTests
     [Fact]
     public void Collections_roundtrip()
     {
-        Rt(new[] { 1, 2, 3 }).ShouldBe(new[] { 1, 2, 3 });
-        Rt(new List<string> { "a", "b" }).ShouldBe(new List<string> { "a", "b" });
+        Rt(new[] { 1, 2, 3 }).ShouldBe([1, 2, 3]);
+        Rt(new List<string> { "a", "b" }).ShouldBe(["a", "b"]);
         Rt(Array.Empty<int>()).ShouldBeEmpty();
 
         var dict = new Dictionary<string, int> { ["x"] = 1, ["y"] = 2 };
         Rt(dict).ShouldBe(dict);
 
-        var nested = new Dictionary<string, List<int>> { ["a"] = new() { 1, 2 }, ["b"] = new() { 3 } };
-        var rn = Rt(nested);
+        var nested = new Dictionary<string, List<int>> { ["a"] = [1, 2], ["b"] = [3] };
+        var rn     = Rt(nested);
         rn["a"].ShouldBe(new[] { 1, 2 });
         rn["b"].ShouldBe(new[] { 3 });
     }

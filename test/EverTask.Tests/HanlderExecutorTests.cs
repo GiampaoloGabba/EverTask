@@ -1,9 +1,10 @@
-using EverTask.Tests.TestHelpers;
-﻿using EverTask.Handler;
+using EverTask.Handler;
 using EverTask.Monitoring;
 using EverTask.Scheduler.Recurring;
 using EverTask.Serialization;
 using EverTask.Storage;
+using EverTask.Tests.TestHelpers;
+using UUIDNext;
 
 namespace EverTask.Tests;
 
@@ -21,7 +22,7 @@ public class HanlderExecutorTests
         services.AddTransient<TestTaskHanlder>();
         services.AddTransient<IEverTaskHandler<TestTaskRequestNoSerializable>, TestTaskHandlertNoSerializable>();
         services.AddTransient<TestTaskHandlertNoSerializable>();
-        services.AddSingleton<IGuidGenerator>(new DefaultGuidGenerator(UUIDNext.Database.Other));
+        services.AddSingleton<IGuidGenerator>(new DefaultGuidGenerator(Database.Other));
 
         _provider = services.BuildServiceProvider();
     }
@@ -109,7 +110,7 @@ public class HanlderExecutorTests
     {
         var serviceCollection = new ServiceCollection();
         serviceCollection.AddTransient<IEverTaskHandler<TestTaskRequest>, TestTaskHanlder>();
-        serviceCollection.AddSingleton<IGuidGenerator>(new DefaultGuidGenerator(UUIDNext.Database.Other));
+        serviceCollection.AddSingleton<IGuidGenerator>(new DefaultGuidGenerator(Database.Other));
         await using var provider = serviceCollection.BuildServiceProvider();
 
         var guid               = TestGuidGenerator.New();

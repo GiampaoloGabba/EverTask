@@ -1,8 +1,7 @@
-using Newtonsoft.Json;
-
-using EverTask.Serialization;
 using EverTask.Scheduler.Recurring;
 using EverTask.Scheduler.Recurring.Intervals;
+using EverTask.Serialization;
+using Newtonsoft.Json;
 
 namespace EverTask.Tests.Serialization;
 
@@ -59,19 +58,19 @@ public class BackwardCompatTests
     {
         var original = new RecurringTask
         {
-            MonthInterval = new MonthInterval(1, new[] { 3, 9 })
+            MonthInterval = new MonthInterval(1, [3, 9])
             {
                 OnDay   = 10,
-                OnTimes = new[] { new TimeOnly(7, 45), new TimeOnly(19, 15) }
+                OnTimes = [new TimeOnly(7, 45), new TimeOnly(19, 15)]
             }
         };
 
         var restored = EverTaskJson.Deserialize<RecurringTask>(Legacy(original))!;
 
         restored.MonthInterval!.OnDay.ShouldBe(10);
-        restored.MonthInterval!.OnMonths.ShouldBe(new[] { 3, 9 });
+        restored.MonthInterval!.OnMonths.ShouldBe([3, 9]);
         // Proves TimeOnly[] written by Newtonsoft parses under STJ.
-        restored.MonthInterval!.OnTimes.ShouldBe(new[] { new TimeOnly(7, 45), new TimeOnly(19, 15) });
+        restored.MonthInterval!.OnTimes.ShouldBe([new TimeOnly(7, 45), new TimeOnly(19, 15)]);
     }
 
     [Fact]
@@ -81,7 +80,7 @@ public class BackwardCompatTests
             Guid.NewGuid(), 7, 5_000_000_000L, 99.99m, 0.5, false,
             new DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.FromHours(-5)),
             TimeSpan.FromSeconds(123), PocPriority.Normal, "hello",
-            new List<int> { 9, 8 }, new[] { "x" },
+            [9, 8], ["x"],
             new Dictionary<string, string> { ["a"] = "1" },
             new NestedDto("n", 3) { Flag = true });
 
@@ -102,12 +101,12 @@ public class BackwardCompatTests
         // PRE-fix this asserted OnDays was LOST (internal setter dropped by STJ). B2 made OnDays a public
         // setter on the production DayInterval/WeekInterval, so a legacy Newtonsoft row now round-trips with
         // its OnDays schedule intact under STJ — no backward-compat data loss.
-        var original   = new DayInterval(0, new[] { DayOfWeek.Monday, DayOfWeek.Saturday });
+        var original   = new DayInterval(0, [DayOfWeek.Monday, DayOfWeek.Saturday]);
         var legacyJson = Legacy(original);
         legacyJson.ShouldContain("OnDays");
 
         var restored = EverTaskJson.Deserialize<DayInterval>(legacyJson)!;
 
-        restored.OnDays.ShouldBe(new[] { DayOfWeek.Monday, DayOfWeek.Saturday });
+        restored.OnDays.ShouldBe([DayOfWeek.Monday, DayOfWeek.Saturday]);
     }
 }

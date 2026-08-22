@@ -1,8 +1,5 @@
 using System.Text.Json;
-
 using EverTask.Serialization;
-using EverTask.Scheduler.Recurring;
-using EverTask.Scheduler.Recurring.Intervals;
 
 namespace EverTask.Tests.Serialization;
 
@@ -24,8 +21,8 @@ public class ComplexPayloadRoundTripTests
         Ttl:       TimeSpan.FromHours(25).Add(TimeSpan.FromSeconds(5)),
         Priority:  PocPriority.High,
         Note:      null,
-        Ids:       new List<int> { 1, 2, 3 },
-        Tags:      new[] { "a", "b" },
+        Ids: [1, 2, 3],
+        Tags: ["a", "b"],
         Metadata:  new Dictionary<string, string> { ["k1"] = "v1", ["k2"] = "v2" },
         Nested:    new NestedDto("inner", 7) { Flag = true });
 

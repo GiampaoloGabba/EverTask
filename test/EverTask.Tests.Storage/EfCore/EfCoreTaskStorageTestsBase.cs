@@ -1,13 +1,14 @@
 ﻿using EverTask.Abstractions;
-using Xunit;
-using EverTask.Storage.EfCore;
-using EverTask.Storage;
 using EverTask.Scheduler.Recurring;
 using EverTask.Scheduler.Recurring.Intervals;
 using EverTask.Serialization;
-using Shouldly;
+using EverTask.Storage;
+using EverTask.Storage.EfCore;
 using EverTask.Tests.TestHelpers;
+using Microsoft.EntityFrameworkCore;
 using Newtonsoft.Json;
+using Shouldly;
+using Xunit;
 
 namespace EverTask.Tests.Storage.EfCore;
 
@@ -2015,7 +2016,7 @@ public abstract class EfCoreTaskStorageTestsBase
 
         // P2-4: don't stop at DB byte fidelity — exercise the REAL recovery READ path (EverTaskJson) on the
         // bytes that came back from this provider, asserting the TYPED payload, not just the raw string.
-        var recovered = EverTaskJson.Deserialize<EverTask.Tests.LegacyPayloadProbeTask>(row.Request)!;
+        var recovered = EverTaskJson.Deserialize<LegacyPayloadProbeTask>(row.Request)!;
         recovered.Text.ShouldBe(emojiPayload,
             "the legacy emoji payload must deserialize back to the exact string via the real STJ read path");
     }
@@ -2028,7 +2029,7 @@ public abstract class EfCoreTaskStorageTestsBase
         // schedule under STJ (OnDays preservation itself is pinned by the unit interval-parity tests).
         var recurring = new RecurringTask
         {
-            DayInterval = new DayInterval(0, new[] { DayOfWeek.Monday, DayOfWeek.Friday })
+            DayInterval = new DayInterval(0, [DayOfWeek.Monday, DayOfWeek.Friday])
         };
         var legacyRecurring = JsonConvert.SerializeObject(recurring, LegacyJsonSettings);
         legacyRecurring.ShouldContain("OnDays");
@@ -2055,7 +2056,7 @@ public abstract class EfCoreTaskStorageTestsBase
         // schedule (OnDays) survived — not just the raw JSON string. This is exactly what recovery does.
         var recovered = EverTaskJson.Deserialize<RecurringTask>(row.RecurringTask!)!;
         recovered.DayInterval.ShouldNotBeNull();
-        recovered.DayInterval!.OnDays.ShouldBe(new[] { DayOfWeek.Monday, DayOfWeek.Friday },
+        recovered.DayInterval!.OnDays.ShouldBe([DayOfWeek.Monday, DayOfWeek.Friday],
             "the legacy DayInterval.OnDays schedule must deserialize back typed via the real STJ read path");
     }
 
@@ -2148,7 +2149,7 @@ public abstract class EfCoreTaskStorageTestsBase
             Request          = "{}",
             Handler          = "CleanupHandler",
             Status           = QueuedTaskStatus.Completed,
-            ExecutionLogs    = logs.ToList()
+            ExecutionLogs    = [.. logs]
         };
     }
 
@@ -2291,7 +2292,7 @@ public abstract class EfCoreTaskStorageTestsBase
             Request      = "{}",
             Handler      = "CleanupHandler",
             Status       = QueuedTaskStatus.Completed,
-            StatusAudits = audits.ToList()
+            StatusAudits = [.. audits]
         };
     }
 
@@ -2309,7 +2310,7 @@ public abstract class EfCoreTaskStorageTestsBase
             Request      = "{}",
             Handler      = "CleanupHandler",
             Status       = QueuedTaskStatus.Completed,
-            RunsAudits   = audits.ToList()
+            RunsAudits   = [.. audits]
         };
     }
 
@@ -2339,7 +2340,7 @@ public abstract class EfCoreTaskStorageTestsBase
     {
         _mockedDbContext.QueuedTasks.AddRange(tasks);
         await _mockedDbContext.SaveChangesAsync(CancellationToken.None);
-        if (_mockedDbContext is Microsoft.EntityFrameworkCore.DbContext ef)
+        if (_mockedDbContext is DbContext ef)
             ef.ChangeTracker.Clear();
     }
 
@@ -2838,7 +2839,7 @@ public abstract class EfCoreTaskStorageTestsBase
 
         var aged   = Enumerable.Range(0, 250).Select(i => LogAt(now.AddDays(-40), i)).ToArray();
         var recent = LogAt(now.AddDays(-1), 250);
-        var task   = CompletedTask(now, aged.Append(recent).ToArray());
+        var task   = CompletedTask(now, [.. aged, recent]);
 
         await PersistAndDetach(task);
 

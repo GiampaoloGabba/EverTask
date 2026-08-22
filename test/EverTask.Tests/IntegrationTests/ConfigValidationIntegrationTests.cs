@@ -4,7 +4,6 @@ using EverTask.Configuration;
 using EverTask.Monitoring;
 using EverTask.Storage;
 using EverTask.Tests.TestHelpers;
-using EverTask.Worker;
 using Microsoft.Extensions.Logging;
 
 namespace EverTask.Tests.IntegrationTests;

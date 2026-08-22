@@ -2,7 +2,6 @@ using EverTask.Configuration;
 using EverTask.Scheduler;
 using EverTask.Storage;
 using EverTask.Tests.TestHelpers;
-using EverTask.Worker;
 using Newtonsoft.Json;
 
 namespace EverTask.Tests.IntegrationTests;

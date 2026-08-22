@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Reflection;
 using EverTask.Handler;
 using EverTask.Logger;
 using EverTask.Scheduler;
@@ -512,7 +514,7 @@ public class SchedulerResilienceTests
             // Loop is parked inside dispatch. Dispose the wake-up semaphore now: when dispatch completes
             // and the loop calls WaitAsync again, it hits a disposed semaphore.
             var signal = (SemaphoreSlim)typeof(PeriodicTimerScheduler)
-                .GetField("_wakeUpSignal", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .GetField("_wakeUpSignal", BindingFlags.NonPublic | BindingFlags.Instance)!
                 .GetValue(scheduler)!;
             signal.Dispose();
 
@@ -531,7 +533,7 @@ public class SchedulerResilienceTests
 
     private sealed class CapturingLogger<T> : IEverTaskLogger<T>
     {
-        private readonly System.Collections.Concurrent.ConcurrentQueue<Exception?> _errors = new();
+        private readonly ConcurrentQueue<Exception?> _errors = new();
 
         public IEnumerable<Exception?> Errors => _errors.ToArray();
 

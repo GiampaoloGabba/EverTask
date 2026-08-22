@@ -1,13 +1,5 @@
-using System.Net;
-using System.Net.Http.Headers;
-using System.Net.Http.Json;
-using System.Text;
 using EverTask.Monitor.Api.DTOs.Auth;
-using EverTask.Monitor.Api.Options;
 using EverTask.Tests.Monitoring.TestHelpers;
-using Microsoft.Extensions.DependencyInjection;
-using Shouldly;
-using Xunit;
 
 namespace EverTask.Tests.Monitoring.API.Middleware;
 
@@ -225,7 +217,7 @@ public class IpWhitelistMiddlewareTests : IAsyncLifetime
                     EnableAuthentication = false,
                     Username             = "testuser",
                     Password             = "testpass",
-                    AllowedIpAddresses   = new[] { "192.168.1.100" } // Client IP will be ::1 or 127.0.0.1
+                    AllowedIpAddresses   = ["192.168.1.100"] // Client IP will be ::1 or 127.0.0.1
                 });
             });
         _client = _factory.CreateClient();
@@ -254,7 +246,7 @@ public class IpWhitelistMiddlewareTests : IAsyncLifetime
                     EnableAuthentication = false,
                     Username             = "testuser",
                     Password             = "testpass",
-                    AllowedIpAddresses   = new[] { "127.0.0.1", "::1" } // Allow localhost
+                    AllowedIpAddresses   = ["127.0.0.1", "::1"] // Allow localhost
                 });
             });
         _client = _factory.CreateClient();
@@ -283,7 +275,7 @@ public class IpWhitelistMiddlewareTests : IAsyncLifetime
                     EnableAuthentication = false,
                     Username             = "testuser",
                     Password             = "testpass",
-                    AllowedIpAddresses   = new[] { "127.0.0.0/8", "::1" } // Loopback range
+                    AllowedIpAddresses   = ["127.0.0.0/8", "::1"] // Loopback range
                 });
             });
         _client = _factory.CreateClient();
@@ -312,7 +304,7 @@ public class IpWhitelistMiddlewareTests : IAsyncLifetime
                     EnableAuthentication = false,
                     Username             = "testuser",
                     Password             = "testpass",
-                    AllowedIpAddresses   = new[] { "::1" } // IPv6 localhost
+                    AllowedIpAddresses   = ["::1"] // IPv6 localhost
                 });
             });
         _client = _factory.CreateClient();
@@ -341,7 +333,7 @@ public class IpWhitelistMiddlewareTests : IAsyncLifetime
                     EnableAuthentication = true,
                     Username             = "testuser",
                     Password             = "testpass",
-                    AllowedIpAddresses   = new[] { "192.168.1.100" } // Wrong IP
+                    AllowedIpAddresses   = ["192.168.1.100"] // Wrong IP
                 });
             });
         _client = _factory.CreateClient();
@@ -373,7 +365,7 @@ public class IpWhitelistMiddlewareTests : IAsyncLifetime
                     EnableAuthentication = true,
                     Username             = "testuser",
                     Password             = "testpass",
-                    AllowedIpAddresses   = new[] { "127.0.0.1", "::1" } // Correct IP
+                    AllowedIpAddresses   = ["127.0.0.1", "::1"] // Correct IP
                 });
             });
         _client = _factory.CreateClient();
@@ -410,7 +402,7 @@ public class IpWhitelistMiddlewareTests : IAsyncLifetime
                     EnableAuthentication = false,
                     Username             = "testuser",
                     Password             = "testpass",
-                    AllowedIpAddresses   = new[] { "192.168.0.0/16" } // Private network only
+                    AllowedIpAddresses   = ["192.168.0.0/16"] // Private network only
                 });
             });
         _client = _factory.CreateClient();
@@ -468,7 +460,7 @@ public class UiAndHubProtectionTests : IAsyncLifetime
                     EnableUI             = true,
                     Username             = "testuser",
                     Password             = "testpass",
-                    AllowedIpAddresses   = new[] { "192.168.1.100" } // Wrong IP
+                    AllowedIpAddresses   = ["192.168.1.100"] // Wrong IP
                 });
             });
         _client = _factory.CreateClient();
@@ -498,7 +490,7 @@ public class UiAndHubProtectionTests : IAsyncLifetime
                     EnableUI             = true,
                     Username             = "testuser",
                     Password             = "testpass",
-                    AllowedIpAddresses   = new[] { "127.0.0.1", "::1" } // Valid IP
+                    AllowedIpAddresses   = ["127.0.0.1", "::1"] // Valid IP
                 });
             });
         _client = _factory.CreateClient();
@@ -527,7 +519,7 @@ public class UiAndHubProtectionTests : IAsyncLifetime
                     EnableAuthentication = false,
                     Username             = "testuser",
                     Password             = "testpass",
-                    AllowedIpAddresses   = new[] { "192.168.1.100" } // Wrong IP
+                    AllowedIpAddresses   = ["192.168.1.100"] // Wrong IP
                 });
             });
         _client = _factory.CreateClient();
@@ -556,7 +548,7 @@ public class UiAndHubProtectionTests : IAsyncLifetime
                     EnableAuthentication = true,
                     Username             = "testuser",
                     Password             = "testpass",
-                    AllowedIpAddresses   = new[] { "127.0.0.1", "::1" } // Valid IP
+                    AllowedIpAddresses   = ["127.0.0.1", "::1"] // Valid IP
                 });
             });
         _client = _factory.CreateClient();
@@ -585,7 +577,7 @@ public class UiAndHubProtectionTests : IAsyncLifetime
                     EnableAuthentication = true,
                     Username             = "testuser",
                     Password             = "testpass",
-                    AllowedIpAddresses   = new[] { "127.0.0.1", "::1" }
+                    AllowedIpAddresses   = ["127.0.0.1", "::1"]
                 });
             });
         _client = _factory.CreateClient();
@@ -619,7 +611,7 @@ public class UiAndHubProtectionTests : IAsyncLifetime
                     EnableAuthentication = true,
                     Username             = "testuser",
                     Password             = "testpass",
-                    AllowedIpAddresses   = new[] { "127.0.0.1", "::1" }
+                    AllowedIpAddresses   = ["127.0.0.1", "::1"]
                 });
             });
         _client = _factory.CreateClient();
@@ -653,7 +645,7 @@ public class UiAndHubProtectionTests : IAsyncLifetime
                     EnableAuthentication = true,
                     Username             = "testuser",
                     Password             = "testpass",
-                    AllowedIpAddresses   = new[] { "127.0.0.1", "::1" }
+                    AllowedIpAddresses   = ["127.0.0.1", "::1"]
                 });
             });
         _client = _factory.CreateClient();
@@ -684,7 +676,7 @@ public class UiAndHubProtectionTests : IAsyncLifetime
                     EnableAuthentication = true,
                     Username             = "testuser",
                     Password             = "testpass",
-                    AllowedIpAddresses   = new[] { "192.168.1.100" } // Wrong IP
+                    AllowedIpAddresses   = ["192.168.1.100"] // Wrong IP
                 });
             });
         _client = _factory.CreateClient();

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using EverTask.Serialization;
 
 namespace EverTask.Tests.Serialization;
@@ -44,7 +45,7 @@ public class PolymorphicPayloadTests
         // STJ rejects it (closed-set guarantee). This is the property that keeps the L33 invariant intact.
         const string hostileJson = "{\"Channel\":{\"$kind\":\"System.Diagnostics.Process\",\"Address\":\"x\"}}";
 
-        Should.Throw<System.Text.Json.JsonException>(
+        Should.Throw<JsonException>(
             () => EverTaskJson.Deserialize<PolymorphicNotifyTask>(hostileJson));
     }
 }

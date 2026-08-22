@@ -1,5 +1,7 @@
+using System.Collections;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using EverTask.Handler;
 using EverTask.Scheduler.Recurring;
 using EverTask.Storage;
 using EverTask.Tests.TestHelpers;
@@ -236,10 +238,10 @@ public class MemoryLeakRegressionTests : IsolatedIntegrationTestBase
 
     private static int GetRecurringToStringCacheCount()
     {
-        var field = typeof(EverTask.Handler.TaskHandlerExecutorExtensions)
+        var field = typeof(TaskHandlerExecutorExtensions)
             .GetField("RecurringTaskToStringCache", BindingFlags.NonPublic | BindingFlags.Static);
 
-        if (field?.GetValue(null) is not System.Collections.ICollection cache)
+        if (field?.GetValue(null) is not ICollection cache)
             return 0; // cache removed by the F22 fix -> nothing retained
 
         return cache.Count;

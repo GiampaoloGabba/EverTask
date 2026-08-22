@@ -1,5 +1,4 @@
-﻿using EverTask.Abstractions;
-using EverTask.Storage;
+﻿using EverTask.Storage;
 using EverTask.Storage.EfCore;
 using EverTask.Storage.SqlServer;
 using EverTask.Tests.Storage.EfCore;

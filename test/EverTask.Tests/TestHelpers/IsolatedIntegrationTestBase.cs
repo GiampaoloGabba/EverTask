@@ -1,5 +1,4 @@
 using EverTask.Storage;
-using EverTask.Worker;
 
 namespace EverTask.Tests.TestHelpers;
 

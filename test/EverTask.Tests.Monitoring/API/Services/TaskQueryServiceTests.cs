@@ -1,6 +1,4 @@
 using System.Linq.Expressions;
-using EverTask.Monitor.Api.DTOs.Tasks;
-using EverTask.Monitor.Api.Services;
 using EverTask.Tests.Monitoring.TestData;
 
 namespace EverTask.Tests.Monitoring.API.Services;
@@ -22,9 +20,9 @@ public class TaskQueryServiceTests
         // Arrange
         var tasks = CreateSampleTasks(20);
         _storageMock.Setup(s => s.GetAll(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(tasks.ToArray());
+            .ReturnsAsync([.. tasks]);
 
-        var filter = new TaskFilter { Statuses = new List<QueuedTaskStatus> { QueuedTaskStatus.Completed } };
+        var filter     = new TaskFilter { Statuses   = [QueuedTaskStatus.Completed] };
         var pagination = new PaginationParams { Page = 1, PageSize = 5 };
 
         // Act
@@ -44,7 +42,7 @@ public class TaskQueryServiceTests
         var taskId = Guid.NewGuid();
         var task = CreateTaskWithAudits(taskId);
         _storageMock.Setup(s => s.Get(It.IsAny<Expression<Func<QueuedTask, bool>>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new[] { task });
+            .ReturnsAsync([task]);
 
         // Act
         var result = await _service.GetTaskDetailAsync(taskId);
@@ -62,7 +60,7 @@ public class TaskQueryServiceTests
     {
         // Arrange
         _storageMock.Setup(s => s.GetAll(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Array.Empty<QueuedTask>());
+            .ReturnsAsync([]);
 
         var filter = new TaskFilter();
         var pagination = new PaginationParams { Page = 1, PageSize = 10 };
@@ -82,7 +80,7 @@ public class TaskQueryServiceTests
         // Arrange
         var taskId = Guid.NewGuid();
         _storageMock.Setup(s => s.Get(It.IsAny<Expression<Func<QueuedTask, bool>>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Array.Empty<QueuedTask>());
+            .ReturnsAsync([]);
 
         // Act
         var result = await _service.GetTaskDetailAsync(taskId);

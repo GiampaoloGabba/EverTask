@@ -1,6 +1,3 @@
-using System.Linq.Expressions;
-using EverTask.Monitor.Api.DTOs.Dashboard;
-using EverTask.Monitor.Api.Services;
 using EverTask.Tests.Monitoring.TestData;
 
 namespace EverTask.Tests.Monitoring.API.Services;
@@ -22,7 +19,7 @@ public class DashboardServiceTests
         // Arrange
         var tasks = CreateTasksWithVariousStatuses();
         _storageMock.Setup(s => s.GetAll(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(tasks.ToArray());
+            .ReturnsAsync([.. tasks]);
 
         // Act
         var result = await _service.GetOverviewAsync(DateRange.Today);
@@ -49,7 +46,7 @@ public class DashboardServiceTests
         }
 
         _storageMock.Setup(s => s.GetAll(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(tasks.ToArray());
+            .ReturnsAsync([.. tasks]);
 
         // Act
         var result = await _service.GetOverviewAsync(DateRange.Today);
@@ -65,7 +62,7 @@ public class DashboardServiceTests
         // Arrange
         var tasks = CreateTasksWithRecentActivity();
         _storageMock.Setup(s => s.GetAll(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(tasks.ToArray());
+            .ReturnsAsync([.. tasks]);
 
         // Act
         var result = await _service.GetRecentActivityAsync(10);
@@ -82,15 +79,15 @@ public class DashboardServiceTests
 
     private List<QueuedTask> CreateTasksWithVariousStatuses()
     {
-        return new List<QueuedTask>
-        {
+        return
+        [
             CreateTask(QueuedTaskStatus.Completed),
             CreateTask(QueuedTaskStatus.Completed),
             CreateTask(QueuedTaskStatus.Failed),
             CreateTask(QueuedTaskStatus.InProgress),
             CreateTask(QueuedTaskStatus.Queued),
             CreateTask(QueuedTaskStatus.Queued)
-        };
+        ];
     }
 
     private List<QueuedTask> CreateTasksWithRecentActivity()

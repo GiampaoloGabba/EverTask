@@ -1,14 +1,9 @@
-using EverTask.Tests.TestHelpers;
 using System.Threading.Channels;
 using EverTask.Configuration;
 using EverTask.Handler;
 using EverTask.Logger;
-using EverTask.Storage;
-using EverTask.Worker;
-using Microsoft.Extensions.DependencyInjection;
+using EverTask.Tests.TestHelpers;
 using Microsoft.Extensions.Logging;
-using Moq;
-using Xunit;
 
 namespace EverTask.Tests.MultiQueue;
 
@@ -179,7 +174,7 @@ public class QueueFullBehaviorTests
         );
     }
 
-    private record TestTask : EverTask.Abstractions.IEverTask
+    private record TestTask : IEverTask
     {
         public string Id { get; init; } = "";
     }

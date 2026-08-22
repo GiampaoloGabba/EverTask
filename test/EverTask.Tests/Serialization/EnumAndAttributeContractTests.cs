@@ -1,4 +1,3 @@
-using EverTask.Abstractions;
 using EverTask.Serialization;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Converters;

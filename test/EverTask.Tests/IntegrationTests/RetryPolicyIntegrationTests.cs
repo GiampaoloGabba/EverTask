@@ -1,13 +1,8 @@
-using EverTask.Abstractions;
+using System.Collections.Concurrent;
+using EverTask.Monitoring;
 using EverTask.Resilience;
 using EverTask.Storage;
-using EverTask.Monitoring;
 using EverTask.Tests.TestHelpers;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
-using System.Collections.Concurrent;
-using System.Data.Common;
 
 namespace EverTask.Tests.IntegrationTests;
 

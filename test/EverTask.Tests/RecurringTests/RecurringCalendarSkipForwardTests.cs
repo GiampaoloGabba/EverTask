@@ -47,9 +47,9 @@ public class RecurringCalendarSkipForwardTests
         // .Every().Days().OnDays(Mon,Wed,Fri) builds DayInterval(0, days); flat GetMinimumInterval == 5 min.
         var task = new RecurringTask
         {
-            DayInterval = new DayInterval(0, new[] { DayOfWeek.Monday, DayOfWeek.Wednesday, DayOfWeek.Friday })
+            DayInterval = new DayInterval(0, [DayOfWeek.Monday, DayOfWeek.Wednesday, DayOfWeek.Friday])
             {
-                OnTimes = new[] { new TimeOnly(9, 0) }
+                OnTimes = [new TimeOnly(9, 0)]
             }
         };
 
@@ -69,9 +69,9 @@ public class RecurringCalendarSkipForwardTests
     {
         var task = new RecurringTask
         {
-            WeekInterval = new WeekInterval(1, new[] { DayOfWeek.Monday, DayOfWeek.Wednesday, DayOfWeek.Friday })
+            WeekInterval = new WeekInterval(1, [DayOfWeek.Monday, DayOfWeek.Wednesday, DayOfWeek.Friday])
             {
-                OnTimes = new[] { new TimeOnly(9, 0) }
+                OnTimes = [new TimeOnly(9, 0)]
             }
         };
 
@@ -91,7 +91,7 @@ public class RecurringCalendarSkipForwardTests
         // Monthly on the 15th at 10:00. Flat 30-day arithmetic drifts earlier than the 15th over months.
         var task = new RecurringTask
         {
-            MonthInterval = new MonthInterval(1) { OnDay = 15, OnTimes = new[] { new TimeOnly(10, 0) } }
+            MonthInterval = new MonthInterval(1) { OnDay = 15, OnTimes = [new TimeOnly(10, 0)] }
         };
 
         var scheduledTime = Utc(2026, 1, 15, 10, 0);
@@ -112,7 +112,7 @@ public class RecurringCalendarSkipForwardTests
         // Fires at 09/12/15/18 only (gaps 3h/3h/3h/15h). Flat 1-hour math lands on an invalid hour.
         var task = new RecurringTask
         {
-            HourInterval = new HourInterval(1, new[] { 9, 12, 15, 18 })
+            HourInterval = new HourInterval(1, [9, 12, 15, 18])
         };
 
         var scheduledTime = Utc(2026, 1, 1, 9, 0);
@@ -129,54 +129,57 @@ public class RecurringCalendarSkipForwardTests
     public static IEnumerable<object[]> SkipForwardConsistencyCases()
     {
         // schedule, scheduledTime, now — skip-forward result must equal the iterated normal path.
-        yield return new object[]
-        {
-            new RecurringTask { DayInterval = new DayInterval(0, new[] { DayOfWeek.Tuesday, DayOfWeek.Thursday }) { OnTimes = new[] { new TimeOnly(8, 0) } } },
+        yield return
+        [
+            new RecurringTask { DayInterval = new DayInterval(0, [DayOfWeek.Tuesday, DayOfWeek.Thursday]) { OnTimes =
+                [new TimeOnly(8, 0)]
+            } },
             Utc(2026, 1, 6, 8, 0), Utc(2026, 1, 19, 11, 0)
-        };
-        yield return new object[]
-        {
-            new RecurringTask { WeekInterval = new WeekInterval(2, new[] { DayOfWeek.Monday }) { OnTimes = new[] { new TimeOnly(7, 30) } } },
+        ];
+        yield return
+        [
+            new RecurringTask { WeekInterval = new WeekInterval(2, [DayOfWeek.Monday]) { OnTimes = [new TimeOnly(7, 30)]
+            } },
             Utc(2026, 1, 5, 7, 30), Utc(2026, 2, 20, 9, 0)
-        };
-        yield return new object[]
-        {
-            new RecurringTask { MonthInterval = new MonthInterval(1) { OnDay = 31, OnTimes = new[] { new TimeOnly(0, 0) } } },
+        ];
+        yield return
+        [
+            new RecurringTask { MonthInterval = new MonthInterval(1) { OnDay = 31, OnTimes = [new TimeOnly(0, 0)] } },
             Utc(2026, 1, 31, 0, 0), Utc(2026, 7, 5, 0, 0)
-        };
-        yield return new object[]
-        {
-            new RecurringTask { MonthInterval = new MonthInterval(3) { OnDay = 1, OnTimes = new[] { new TimeOnly(6, 0) } } },
+        ];
+        yield return
+        [
+            new RecurringTask { MonthInterval = new MonthInterval(3) { OnDay = 1, OnTimes = [new TimeOnly(6, 0)] } },
             Utc(2026, 1, 1, 6, 0), Utc(2027, 2, 10, 0, 0)
-        };
-        yield return new object[]
-        {
-            new RecurringTask { HourInterval = new HourInterval(1, new[] { 0, 6, 12, 18 }) },
+        ];
+        yield return
+        [
+            new RecurringTask { HourInterval = new HourInterval(1, [0, 6, 12, 18]) },
             Utc(2026, 1, 1, 0, 0), Utc(2026, 1, 3, 13, 0)
-        };
+        ];
         // Multi-field combinations: not classified as a uniform grid -> routed through the calendar walk,
         // which must still match the iterated normal path exactly.
-        yield return new object[]
-        {
+        yield return
+        [
             new RecurringTask { DayInterval = new DayInterval(2), HourInterval = new HourInterval(6) },
             Utc(2026, 1, 1, 0, 0), Utc(2026, 1, 15, 5, 0)
-        };
-        yield return new object[]
-        {
+        ];
+        yield return
+        [
             new RecurringTask { MinuteInterval = new MinuteInterval(5), SecondInterval = new SecondInterval(30) },
             Utc(2026, 1, 1, 0, 0), Utc(2026, 1, 1, 0, 40)
-        };
+        ];
         // Uniform schedules: must stay consistent too (guards against regressions on the fast path).
-        yield return new object[]
-        {
+        yield return
+        [
             new RecurringTask { MinuteInterval = new MinuteInterval(5) },
             Utc(2026, 1, 10, 10, 0), Utc(2026, 1, 10, 10, 22)
-        };
-        yield return new object[]
-        {
+        ];
+        yield return
+        [
             new RecurringTask { HourInterval = new HourInterval(2) },
             Utc(2026, 1, 10, 0, 0), Utc(2026, 1, 11, 7, 0)
-        };
+        ];
     }
 
     [Theory]
@@ -197,7 +200,7 @@ public class RecurringCalendarSkipForwardTests
         // Monthly on the 15th, but the series ends before the realigned occurrence would fall.
         var task = new RecurringTask
         {
-            MonthInterval = new MonthInterval(1) { OnDay = 15, OnTimes = new[] { new TimeOnly(10, 0) } },
+            MonthInterval = new MonthInterval(1) { OnDay = 15, OnTimes = [new TimeOnly(10, 0)] },
             RunUntil      = Utc(2026, 12, 1, 0, 0)
         };
 
@@ -216,9 +219,9 @@ public class RecurringCalendarSkipForwardTests
         // NOT consume the MaxRuns budget — the calendar walk path must honor Option B like the uniform one.
         RecurringTask Build() => new()
         {
-            DayInterval = new DayInterval(0, new[] { DayOfWeek.Monday, DayOfWeek.Wednesday, DayOfWeek.Friday })
+            DayInterval = new DayInterval(0, [DayOfWeek.Monday, DayOfWeek.Wednesday, DayOfWeek.Friday])
             {
-                OnTimes = new[] { new TimeOnly(9, 0) }
+                OnTimes = [new TimeOnly(9, 0)]
             },
             MaxRuns = 5
         };

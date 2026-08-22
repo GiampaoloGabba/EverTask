@@ -1,5 +1,3 @@
-using System.Net;
-
 namespace EverTask.Tests;
 
 // Test tasks for error handling scenarios

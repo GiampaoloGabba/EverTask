@@ -1,4 +1,3 @@
-using EverTask.Abstractions;
 using EverTask.Storage;
 
 namespace EverTask.Tests.IntegrationTests;

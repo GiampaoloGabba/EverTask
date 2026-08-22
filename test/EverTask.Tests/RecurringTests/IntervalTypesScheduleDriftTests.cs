@@ -166,7 +166,7 @@ public class IntervalTypesScheduleDriftTests
         // Arrange: Task runs at specific hours (9 AM, 12 PM, 3 PM, 6 PM)
         var task = new RecurringTask
         {
-            HourInterval = new HourInterval(1) { OnHours = new[] { 9, 12, 15, 18 } }
+            HourInterval = new HourInterval(1) { OnHours = [9, 12, 15, 18] }
         };
 
         var scheduledTime = new DateTimeOffset(2024, 1, 1, 9, 0, 0, TimeSpan.Zero);
@@ -219,7 +219,7 @@ public class IntervalTypesScheduleDriftTests
         // Arrange: Task runs daily at 9:00 AM
         var task = new RecurringTask
         {
-            DayInterval = new DayInterval(1) { OnTimes = new[] { new TimeOnly(9, 0, 0) } }
+            DayInterval = new DayInterval(1) { OnTimes = [new TimeOnly(9, 0, 0)] }
         };
 
         var scheduledTime = new DateTimeOffset(2024, 1, 1, 9, 0, 0, TimeSpan.Zero);
@@ -240,8 +240,9 @@ public class IntervalTypesScheduleDriftTests
         {
             DayInterval = new DayInterval(1)
             {
-                OnDays = new[] { DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday, DayOfWeek.Friday },
-                OnTimes = new[] { new TimeOnly(10, 0, 0) }
+                OnDays = [DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday, DayOfWeek.Friday
+                ],
+                OnTimes = [new TimeOnly(10, 0, 0)]
             }
         };
 
@@ -263,7 +264,7 @@ public class IntervalTypesScheduleDriftTests
         // Arrange: Task runs daily at 10:00 AM
         var task = new RecurringTask
         {
-            DayInterval = new DayInterval(1) { OnTimes = new[] { new TimeOnly(10, 0, 0) } }
+            DayInterval = new DayInterval(1) { OnTimes = [new TimeOnly(10, 0, 0)] }
         };
 
         // Scheduled 7 days ago

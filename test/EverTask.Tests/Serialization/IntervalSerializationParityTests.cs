@@ -2,6 +2,7 @@ using System.Reflection;
 using EverTask.Scheduler.Recurring.Intervals;
 using EverTask.Serialization;
 using Newtonsoft.Json;
+using JsonConstructorAttribute = System.Text.Json.Serialization.JsonConstructorAttribute;
 
 namespace EverTask.Tests.Serialization;
 
@@ -24,34 +25,34 @@ public class IntervalSerializationParityTests
     [Fact]
     public void DayInterval_OnDays_roundtrips_through_EverTaskJson()
     {
-        var original = new DayInterval(0, new[] { DayOfWeek.Monday, DayOfWeek.Friday });
+        var original = new DayInterval(0, [DayOfWeek.Monday, DayOfWeek.Friday]);
 
         var restored = EverTaskJson.Deserialize<DayInterval>(EverTaskJson.Serialize(original))!;
 
         restored.Interval.ShouldBe(0);
-        restored.OnDays.ShouldBe(new[] { DayOfWeek.Monday, DayOfWeek.Friday });
+        restored.OnDays.ShouldBe([DayOfWeek.Monday, DayOfWeek.Friday]);
     }
 
     [Fact]
     public void WeekInterval_OnDays_roundtrips_through_EverTaskJson()
     {
-        var original = new WeekInterval(2, new[] { DayOfWeek.Tuesday, DayOfWeek.Thursday });
+        var original = new WeekInterval(2, [DayOfWeek.Tuesday, DayOfWeek.Thursday]);
 
         var restored = EverTaskJson.Deserialize<WeekInterval>(EverTaskJson.Serialize(original))!;
 
         restored.Interval.ShouldBe(2);
-        restored.OnDays.ShouldBe(new[] { DayOfWeek.Tuesday, DayOfWeek.Thursday });
+        restored.OnDays.ShouldBe([DayOfWeek.Tuesday, DayOfWeek.Thursday]);
     }
 
     [Fact]
     public void Legacy_DayInterval_OnDays_recovers_with_identical_schedule()
     {
-        var original = new DayInterval(0, new[] { DayOfWeek.Monday, DayOfWeek.Friday });
+        var original = new DayInterval(0, [DayOfWeek.Monday, DayOfWeek.Friday]);
 
         var restored = EverTaskJson.Deserialize<DayInterval>(LegacyJson(original))!;
 
         restored.Interval.ShouldBe(0);
-        restored.OnDays.ShouldBe(new[] { DayOfWeek.Monday, DayOfWeek.Friday });
+        restored.OnDays.ShouldBe([DayOfWeek.Monday, DayOfWeek.Friday]);
         Should.NotThrow(() => restored.GetNextOccurrence(Anchor));
         // Schedule must be byte-for-byte the same occurrence as before the migration.
         restored.GetNextOccurrence(Anchor).ShouldBe(original.GetNextOccurrence(Anchor));
@@ -60,15 +61,15 @@ public class IntervalSerializationParityTests
     [Fact]
     public void Legacy_WeekInterval_OnDays_recovers_with_identical_schedule()
     {
-        var original = new WeekInterval(2, new[] { DayOfWeek.Tuesday, DayOfWeek.Thursday })
+        var original = new WeekInterval(2, [DayOfWeek.Tuesday, DayOfWeek.Thursday])
         {
-            OnTimes = new[] { new TimeOnly(9, 30) }
+            OnTimes = [new TimeOnly(9, 30)]
         };
 
         var restored = EverTaskJson.Deserialize<WeekInterval>(LegacyJson(original))!;
 
         restored.Interval.ShouldBe(2);
-        restored.OnDays.ShouldBe(new[] { DayOfWeek.Tuesday, DayOfWeek.Thursday });
+        restored.OnDays.ShouldBe([DayOfWeek.Tuesday, DayOfWeek.Thursday]);
         restored.GetNextOccurrence(Anchor).ShouldBe(original.GetNextOccurrence(Anchor));
     }
 
@@ -112,8 +113,8 @@ public class IntervalSerializationParityTests
             "{\"interval\":3,\"onDays\":[1,5],\"onTimes\":[\"06:00:00\"]}")!;
 
         day.Interval.ShouldBe(3);
-        day.OnDays.ShouldBe(new[] { DayOfWeek.Monday, DayOfWeek.Friday });
-        day.OnTimes.ShouldBe(new[] { new TimeOnly(6, 0) });
+        day.OnDays.ShouldBe([DayOfWeek.Monday, DayOfWeek.Friday]);
+        day.OnTimes.ShouldBe([new TimeOnly(6, 0)]);
     }
 
     // --- Build-time guard (gap #1): every interval MUST keep a public parameterless ctor annotated as the
@@ -141,7 +142,7 @@ public class IntervalSerializationParityTests
         {
             var ctor = t.GetConstructor(Type.EmptyTypes);
             ctor.ShouldNotBeNull($"{t.Name} must keep a public parameterless constructor for STJ.");
-            ctor!.GetCustomAttribute<System.Text.Json.Serialization.JsonConstructorAttribute>()
+            ctor!.GetCustomAttribute<JsonConstructorAttribute>()
                 .ShouldNotBeNull($"{t.Name}'s parameterless ctor must be the STJ [JsonConstructor].");
         }
     }

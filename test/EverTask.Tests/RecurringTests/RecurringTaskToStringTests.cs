@@ -26,7 +26,7 @@ public class RecurringTaskToStringTests
     [Fact]
     public void ToString_WithMultipleHourInterval_ShouldIncludeHourDetails()
     {
-        var task = new RecurringTask { HourInterval = new HourInterval(0, new[] { 1, 15, 16 }) { OnMinute = 15 } };
+        var task = new RecurringTask { HourInterval = new HourInterval(0, [1, 15, 16]) { OnMinute = 15 } };
         var str  = task.ToString();
 
         Assert.Contains("at hour(s) 1 - 15 - 16 at minute 15", str);
@@ -35,8 +35,8 @@ public class RecurringTaskToStringTests
     [Fact]
     public void ToString_WithDayIntervalAndSpecificDays_ShouldIncludeDayDetails()
     {
-        var task = new RecurringTask { DayInterval = new DayInterval(1, new[] { DayOfWeek.Monday, DayOfWeek.Friday }) };
-        var str = task.ToString();
+        var task = new RecurringTask { DayInterval = new DayInterval(1, [DayOfWeek.Monday, DayOfWeek.Friday]) };
+        var str  = task.ToString();
 
         Assert.Contains("every 1 day(s) at 00:00 on Monday - Friday", str);
     }
@@ -44,8 +44,8 @@ public class RecurringTaskToStringTests
     [Fact]
     public void ToString_WithMonthIntervalAndSpecificMonths_ShouldIncludeMonthDetails()
     {
-        var task = new RecurringTask { MonthInterval = new MonthInterval(3, new[] { 1, 6, 12 }) };
-        var str = task.ToString();
+        var task = new RecurringTask { MonthInterval = new MonthInterval(3, [1, 6, 12]) };
+        var str  = task.ToString();
 
         Assert.Contains("every 3 month(s) at 00:00 in 1 - 6 - 12", str);
     }

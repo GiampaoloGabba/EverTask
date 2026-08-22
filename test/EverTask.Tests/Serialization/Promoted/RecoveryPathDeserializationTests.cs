@@ -1,7 +1,6 @@
-
-using EverTask.Serialization;
 using EverTask.Scheduler.Recurring;
 using EverTask.Scheduler.Recurring.Intervals;
+using EverTask.Serialization;
 
 namespace EverTask.Tests.Serialization;
 
@@ -16,7 +15,7 @@ public class RecoveryPathDeserializationTests
     private static ComplexTask SampleTask() => new(
         Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"), 3, 1_000L, 9.5m, 0.25, true,
         new DateTimeOffset(2026, 6, 17, 12, 0, 0, TimeSpan.Zero), TimeSpan.FromMinutes(2),
-        PocPriority.Normal, "n", new List<int> { 1 }, new[] { "t" },
+        PocPriority.Normal, "n", [1], ["t"],
         new Dictionary<string, string> { ["k"] = "v" }, new NestedDto("nd", 1) { Flag = false });
 
     [Fact]
@@ -63,7 +62,7 @@ public class RecoveryPathDeserializationTests
     {
         var rt = new RecurringTask
         {
-            MonthInterval = new MonthInterval(1, new[] { 1, 6 }) { OnDay = 15, OnTimes = new[] { new TimeOnly(8, 0) } },
+            MonthInterval = new MonthInterval(1, [1, 6]) { OnDay = 15, OnTimes = [new TimeOnly(8, 0)] },
             MaxRuns       = 12,
             RunUntil      = new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero)
         };

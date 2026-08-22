@@ -143,7 +143,7 @@ public class DateTimeOffsetExtensionsTests
         var dateTime = DateTimeOffset.UtcNow;
 
         var exception = Assert.Throws<ArgumentException>(() =>
-            dateTime.NextValidDayOfWeek(Array.Empty<DayOfWeek>()));
+            dateTime.NextValidDayOfWeek([]));
 
         Assert.Contains("validDays cannot be empty", exception.Message);
     }
@@ -154,7 +154,7 @@ public class DateTimeOffsetExtensionsTests
         var dateTime = DateTimeOffset.UtcNow;
 
         var exception = Assert.Throws<ArgumentException>(() =>
-            dateTime.NextValidDay(Array.Empty<int>()));
+            dateTime.NextValidDay([]));
 
         Assert.Contains("validDays cannot be empty", exception.Message);
     }
@@ -165,7 +165,7 @@ public class DateTimeOffsetExtensionsTests
         var dateTime = DateTimeOffset.UtcNow;
 
         var exception = Assert.Throws<ArgumentException>(() =>
-            dateTime.NextValidDay(new[] { 0, 32, -5 })); // Out of 1-31 range
+            dateTime.NextValidDay([0, 32, -5])); // Out of 1-31 range
 
         Assert.Contains("validDays must contain values between 1 and 31", exception.Message);
     }
@@ -176,7 +176,7 @@ public class DateTimeOffsetExtensionsTests
         var dateTime = DateTimeOffset.UtcNow;
 
         var exception = Assert.Throws<ArgumentException>(() =>
-            dateTime.NextValidHour(Array.Empty<int>()));
+            dateTime.NextValidHour([]));
 
         Assert.Contains("validHour cannot be empty", exception.Message);
     }
@@ -187,7 +187,7 @@ public class DateTimeOffsetExtensionsTests
         var dateTime = DateTimeOffset.UtcNow;
 
         var exception = Assert.Throws<ArgumentException>(() =>
-            dateTime.NextValidHour(new[] { -1, 24, 50 })); // Out of 0-23 range
+            dateTime.NextValidHour([-1, 24, 50])); // Out of 0-23 range
 
         Assert.Contains("validHour must contain values between 0 and 23", exception.Message);
     }
@@ -198,7 +198,7 @@ public class DateTimeOffsetExtensionsTests
         var dateTime = DateTimeOffset.UtcNow;
 
         var exception = Assert.Throws<ArgumentException>(() =>
-            dateTime.NextValidMonth(Array.Empty<int>()));
+            dateTime.NextValidMonth([]));
 
         Assert.Contains("validMonths cannot be empty", exception.Message);
     }
@@ -209,7 +209,7 @@ public class DateTimeOffsetExtensionsTests
         var dateTime = DateTimeOffset.UtcNow;
 
         var exception = Assert.Throws<ArgumentException>(() =>
-            dateTime.NextValidMonth(new[] { 0, 13 })); // Out of 1-12 range
+            dateTime.NextValidMonth([0, 13])); // Out of 1-12 range
 
         Assert.Contains("validMonths must contain values between 1 and 12", exception.Message);
     }

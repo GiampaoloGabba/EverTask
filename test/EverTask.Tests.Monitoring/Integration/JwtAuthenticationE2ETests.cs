@@ -1,11 +1,5 @@
-using System.Net;
-using System.Net.Http.Headers;
-using System.Net.Http.Json;
 using EverTask.Monitor.Api.DTOs.Auth;
-using EverTask.Monitor.Api.DTOs.Dashboard;
-using EverTask.Monitor.Api.DTOs.Queues;
-using EverTask.Monitor.Api.DTOs.Statistics;
-using EverTask.Monitor.Api.DTOs.Tasks;
+using EverTask.Tests.Monitoring.TestData;
 using EverTask.Tests.Monitoring.TestHelpers;
 
 namespace EverTask.Tests.Monitoring.Integration;
@@ -67,7 +61,7 @@ public class JwtAuthenticationE2ETests : MonitoringTestBase
         var token = await LoginAndGetTokenAsync();
 
         var dispatcher = Factory.Services.GetRequiredService<ITaskDispatcher>();
-        var taskId = await dispatcher.Dispatch(new TestData.SampleTask("E2E test task"));
+        var taskId = await dispatcher.Dispatch(new SampleTask("E2E test task"));
         await Task.Delay(500); // Give time for task to be processed
 
         // Act - Get task detail with authentication

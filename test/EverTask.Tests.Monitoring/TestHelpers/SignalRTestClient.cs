@@ -1,4 +1,3 @@
-using EverTask.Monitoring;
 using System.Collections.Concurrent;
 
 namespace EverTask.Tests.Monitoring.TestHelpers;

@@ -1,7 +1,3 @@
-using System.Linq.Expressions;
-using EverTask.Monitor.Api.DTOs.Dashboard;
-using EverTask.Monitor.Api.DTOs.Statistics;
-using EverTask.Monitor.Api.Services;
 using EverTask.Tests.Monitoring.TestData;
 
 namespace EverTask.Tests.Monitoring.API.Services;
@@ -23,7 +19,7 @@ public class StatisticsServiceTests
         // Arrange
         var tasks = CreateTasksOverTime();
         _storageMock.Setup(s => s.GetAll(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(tasks.ToArray());
+            .ReturnsAsync([.. tasks]);
 
         // Act
         var result = await _service.GetSuccessRateTrendAsync(TimePeriod.Last7Days);
@@ -40,7 +36,7 @@ public class StatisticsServiceTests
         // Arrange
         var tasks = CreateTasksWithDifferentTypes();
         _storageMock.Setup(s => s.GetAll(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(tasks.ToArray());
+            .ReturnsAsync([.. tasks]);
 
         // Act
         var result = await _service.GetTaskTypeDistributionAsync(DateRange.Week);
@@ -56,7 +52,7 @@ public class StatisticsServiceTests
         // Arrange
         var tasks = CreateCompletedTasksWithExecutionTimes();
         _storageMock.Setup(s => s.GetAll(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(tasks.ToArray());
+            .ReturnsAsync([.. tasks]);
 
         // Act
         var result = await _service.GetExecutionTimesAsync(DateRange.Today);
@@ -71,7 +67,7 @@ public class StatisticsServiceTests
         // Arrange
         var tasks = CreateTasksInDifferentQueues();
         _storageMock.Setup(s => s.GetAll(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(tasks.ToArray());
+            .ReturnsAsync([.. tasks]);
 
         // Act
         var result = await _service.GetQueueMetricsAsync();
@@ -99,13 +95,13 @@ public class StatisticsServiceTests
 
     private List<QueuedTask> CreateTasksWithDifferentTypes()
     {
-        return new List<QueuedTask>
-        {
+        return
+        [
             CreateTaskOfType(typeof(SampleTask)),
             CreateTaskOfType(typeof(SampleTask)),
             CreateTaskOfType(typeof(SampleRecurringTask)),
             CreateTaskOfType(typeof(SampleFailingTask))
-        };
+        ];
     }
 
     private List<QueuedTask> CreateCompletedTasksWithExecutionTimes()
@@ -132,13 +128,13 @@ public class StatisticsServiceTests
 
     private List<QueuedTask> CreateTasksInDifferentQueues()
     {
-        return new List<QueuedTask>
-        {
+        return
+        [
             CreateTaskInQueue("default", QueuedTaskStatus.Completed),
             CreateTaskInQueue("default", QueuedTaskStatus.Queued),
             CreateTaskInQueue("emails", QueuedTaskStatus.Completed),
             CreateTaskInQueue("processing", QueuedTaskStatus.InProgress)
-        };
+        ];
     }
 
     private QueuedTask CreateTaskAtTime(DateTimeOffset createdAt, QueuedTaskStatus status)

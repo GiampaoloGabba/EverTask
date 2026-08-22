@@ -1,6 +1,5 @@
 using System.Linq.Expressions;
 using EverTask.Logger;
-using EverTask.Scheduler;
 using EverTask.Storage;
 using EverTask.Tests.TestHelpers;
 

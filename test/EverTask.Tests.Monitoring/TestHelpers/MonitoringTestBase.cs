@@ -11,7 +11,7 @@ public abstract class MonitoringTestBase : IAsyncLifetime
 
     protected virtual bool RequireAuthentication => false;
     protected virtual bool EnableWorker => false;
-    protected virtual Action<Monitor.Api.Options.EverTaskApiOptions>? ConfigureOptions => null;
+    protected virtual Action<EverTaskApiOptions>? ConfigureOptions => null;
 
     public virtual async Task InitializeAsync()
     {

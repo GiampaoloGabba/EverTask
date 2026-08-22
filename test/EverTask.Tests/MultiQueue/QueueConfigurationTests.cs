@@ -1,9 +1,6 @@
 using System.Threading.Channels;
-using EverTask.Abstractions;
 using EverTask.Configuration;
 using EverTask.Resilience;
-using Microsoft.Extensions.DependencyInjection;
-using Xunit;
 
 namespace EverTask.Tests.MultiQueue;
 

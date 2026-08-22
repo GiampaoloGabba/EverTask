@@ -17,13 +17,13 @@ public class IntervalValidationTests
     [Fact]
     public void Valid_intervals_do_not_throw()
     {
-        Should.NotThrow(() => new DayInterval(0, new[] { DayOfWeek.Monday, DayOfWeek.Friday }).Validate());
+        Should.NotThrow(() => new DayInterval(0, [DayOfWeek.Monday, DayOfWeek.Friday]).Validate());
         Should.NotThrow(() => new DayInterval(2).Validate());
-        Should.NotThrow(() => new WeekInterval(0, new[] { DayOfWeek.Sunday }).Validate());
+        Should.NotThrow(() => new WeekInterval(0, [DayOfWeek.Sunday]).Validate());
         Should.NotThrow(() => new WeekInterval(1).Validate());
-        Should.NotThrow(() => new MonthInterval(0, new[] { 1, 6, 12 }).Validate());
-        Should.NotThrow(() => new MonthInterval(1) { OnDay = 15, OnDays = new[] { 1, 28 } }.Validate());
-        Should.NotThrow(() => new HourInterval(0, new[] { 0, 9, 23 }) { OnMinute = 30, OnSecond = 59 }.Validate());
+        Should.NotThrow(() => new MonthInterval(0, [1, 6, 12]).Validate());
+        Should.NotThrow(() => new MonthInterval(1) { OnDay               = 15, OnDays   = [1, 28] }.Validate());
+        Should.NotThrow(() => new HourInterval(0, [0, 9, 23]) { OnMinute = 30, OnSecond = 59 }.Validate());
         Should.NotThrow(() => new HourInterval(3).Validate());
         Should.NotThrow(() => new MinuteInterval(5) { OnSecond = 30 }.Validate());
         Should.NotThrow(() => new SecondInterval(10).Validate());
@@ -36,11 +36,11 @@ public class IntervalValidationTests
 
     [Fact]
     public void DayInterval_with_out_of_range_OnDays_throws() =>
-        Should.Throw<ArgumentException>(() => new DayInterval(0, new[] { (DayOfWeek)99 }).Validate());
+        Should.Throw<ArgumentException>(() => new DayInterval(0, [(DayOfWeek)99]).Validate());
 
     [Fact]
     public void WeekInterval_with_out_of_range_OnDays_throws() =>
-        Should.Throw<ArgumentException>(() => new WeekInterval(0, new[] { (DayOfWeek)42 }).Validate());
+        Should.Throw<ArgumentException>(() => new WeekInterval(0, [(DayOfWeek)42]).Validate());
 
     // --- negative interval ---
 
@@ -61,7 +61,7 @@ public class IntervalValidationTests
 
     [Fact]
     public void HourInterval_with_out_of_range_OnHours_throws() =>
-        Should.Throw<ArgumentException>(() => new HourInterval(0, new[] { 99 }).Validate());
+        Should.Throw<ArgumentException>(() => new HourInterval(0, [99]).Validate());
 
     [Fact]
     public void HourInterval_with_out_of_range_OnMinute_or_OnSecond_throws()
@@ -76,13 +76,13 @@ public class IntervalValidationTests
 
     [Fact]
     public void MonthInterval_with_out_of_range_OnMonths_throws() =>
-        Should.Throw<ArgumentException>(() => new MonthInterval(0, new[] { 13 }).Validate());
+        Should.Throw<ArgumentException>(() => new MonthInterval(0, [13]).Validate());
 
     [Fact]
     public void MonthInterval_with_out_of_range_OnDay_or_OnDays_throws()
     {
         Should.Throw<ArgumentException>(() => new MonthInterval(1) { OnDay = 40 }.Validate());
-        Should.Throw<ArgumentException>(() => new MonthInterval(1) { OnDays = new[] { 99 } }.Validate());
+        Should.Throw<ArgumentException>(() => new MonthInterval(1) { OnDays = [99] }.Validate());
     }
 
     // --- cron parseability ---
@@ -100,20 +100,20 @@ public class IntervalValidationTests
     public void RecurringTask_Validate_throws_when_any_present_interval_is_corrupt()
     {
         Should.Throw<ArgumentException>(() =>
-            new RecurringTask { DayInterval = new DayInterval(0, new[] { (DayOfWeek)99 }) }.Validate());
+            new RecurringTask { DayInterval = new DayInterval(0, [(DayOfWeek)99]) }.Validate());
 
         Should.Throw<Exception>(() =>
             new RecurringTask { CronInterval = new CronInterval("not a cron") }.Validate());
 
         Should.Throw<ArgumentException>(() =>
-            new RecurringTask { HourInterval = new HourInterval(0, new[] { 99 }) }.Validate());
+            new RecurringTask { HourInterval = new HourInterval(0, [99]) }.Validate());
     }
 
     [Fact]
     public void RecurringTask_Validate_does_not_throw_for_a_valid_schedule() =>
         Should.NotThrow(() => new RecurringTask
         {
-            DayInterval = new DayInterval(0, new[] { DayOfWeek.Monday }) { OnTimes = new[] { new TimeOnly(9, 0) } },
+            DayInterval = new DayInterval(0, [DayOfWeek.Monday]) { OnTimes = [new TimeOnly(9, 0)] },
             MaxRuns     = 5
         }.Validate());
 }

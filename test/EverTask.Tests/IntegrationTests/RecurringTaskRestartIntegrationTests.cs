@@ -2,6 +2,7 @@ using EverTask.Scheduler.Recurring;
 using EverTask.Scheduler.Recurring.Intervals;
 using EverTask.Storage;
 using EverTask.Tests.TestHelpers;
+using Newtonsoft.Json;
 
 namespace EverTask.Tests.IntegrationTests;
 
@@ -104,7 +105,7 @@ public class RecurringTaskRestartIntegrationTests : IsolatedIntegrationTestBase
         var baseTime = new DateTimeOffset(2024, 1, 1, 9, 0, 0, TimeSpan.Zero);
         var recurringTask = new RecurringTask
         {
-            DayInterval = new DayInterval(1) { OnTimes = new[] { new TimeOnly(9, 0) } }
+            DayInterval = new DayInterval(1) { OnTimes = [new TimeOnly(9, 0)] }
         };
 
         // Simulate: server was down for 3 days, now it's Jan 4 at 10:00
@@ -638,7 +639,7 @@ public class RecurringTaskRestartIntegrationTests : IsolatedIntegrationTestBase
         updatedTask.ShouldNotBeNull();
         updatedTask!.RecurringInfo.ShouldNotBeNull();
         // Verify MaxRuns was set (the RecurringTask should have MaxRuns = 100)
-        var recurringTask = Newtonsoft.Json.JsonConvert.DeserializeObject<EverTask.Scheduler.Recurring.RecurringTask>(updatedTask.RecurringTask!);
+        var recurringTask = JsonConvert.DeserializeObject<RecurringTask>(updatedTask.RecurringTask!);
         recurringTask!.MaxRuns.ShouldBe(100);
     }
 
