@@ -66,12 +66,7 @@ internal sealed class RateLimitGate(
             // A policy without a key is a configuration mistake: warn once per task type and
             // execute ungated (fail-safe)
             if (EmptyKeyWarned.TryAdd(taskType, 0))
-            {
-                logger.LogWarning(
-                    "Task type {TaskType} declares a RateLimitPolicy but produced a null/empty rate-limit key: " +
-                    "tasks execute WITHOUT rate limiting. Implement IRateLimitedTask or override GetRateLimitKey",
-                    taskType.Name);
-            }
+                logger.EmptyRateLimitKey(taskType.Name);
 
             return new RateLimitGateResult(RateLimitGateOutcome.Proceed);
         }
@@ -150,9 +145,7 @@ internal sealed class RateLimitGate(
             // occurrence the recurrence would consider ended must not be fired by the limiter at the boundary tick.
             if (runUntil.HasValue && slot >= runUntil.Value)
             {
-                logger.LogWarning(
-                    "Rate limit: in-flight redelivery of recurring task {TaskId} (key {Key}) dropped — re-park " +
-                    "slot {SlotUtc:O} falls past RunUntil {RunUntil:O}",
+                logger.InFlightRedeliveryDroppedPastRunUntil(
                     task.PersistenceId, task.RateLimitKey, slot, runUntil.Value);
                 return;
             }
@@ -173,9 +166,7 @@ internal sealed class RateLimitGate(
 
         DropStaleRegistrationIfInvalidated(task, task.Task.GetType(), task.RateLimitKey, parked, epoch);
 
-        logger.LogDebug(
-            "Task {TaskId} redelivered while still executing in this process: re-parked at {SlotUtc:O}",
-            task.PersistenceId, slot);
+        logger.InFlightRedeliveryReparked(task.PersistenceId, slot);
     }
 
     /// <summary>
@@ -197,9 +188,7 @@ internal sealed class RateLimitGate(
 
         if (scheduler.TryUnschedule(task.PersistenceId, parked) || !scheduler.IsScheduled(task.PersistenceId))
         {
-            logger.LogDebug(
-                "Rate limit: parked registration of task {TaskId} dropped (cancelled or re-dispatched during re-park)",
-                task.PersistenceId);
+            logger.StaleParkedRegistrationDropped(task.PersistenceId);
             parkingLot.Remove(task.PersistenceId);
 
             if (!string.IsNullOrEmpty(key))
@@ -224,10 +213,7 @@ internal sealed class RateLimitGate(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex,
-                "Rate limit: best-effort release of the reservation of task {TaskId} (key {Key}) failed, " +
-                "the reservation lapses via TTL",
-                reservationId, key);
+            logger.BestEffortReleaseFailed(ex, reservationId, key);
         }
     }
 
@@ -286,9 +272,7 @@ internal sealed class RateLimitGate(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex,
-                "Rate limiter failed for task {TaskId} (key {Key}): failing OPEN, the task executes unthrottled",
-                reservationId, key);
+            logger.LimiterFailedOpen(ex, reservationId, key);
             return new RateLimitDecision(true, default);
         }
     }
@@ -303,9 +287,7 @@ internal sealed class RateLimitGate(
         // the typed exception; recurring → occurrence skipped, series alive.
         if (slot - now > task.RateLimitPolicy!.MaxReservationHorizon)
         {
-            logger.LogWarning(
-                "Rate limit: task {TaskId} (key {Key}) rejected — next available slot {SlotUtc:O} exceeds " +
-                "the {Horizon} reservation horizon",
+            logger.SlotExceedsReservationHorizon(
                 task.PersistenceId, key, slot, task.RateLimitPolicy.MaxReservationHorizon);
 
             return Reject(RateLimitRejectionKind.HorizonExceeded, slot);
@@ -329,10 +311,7 @@ internal sealed class RateLimitGate(
                 // Never fire late: the occurrence is skipped (same semantics as downtime; the
                 // caller routes it through the normal next-occurrence path so the series state
                 // is updated). Free the reservation best-effort.
-                logger.LogWarning(
-                    "Rate limit: occurrence of recurring task {TaskId} (key {Key}) skipped — reserved slot " +
-                    "{SlotUtc:O} falls past RunUntil {RunUntil:O}",
-                    task.PersistenceId, key, slot, runUntil.Value);
+                logger.OccurrenceSkippedPastRunUntil(task.PersistenceId, key, slot, runUntil.Value);
 
                 _ = ReleaseBestEffortAsync(taskType, key, task.PersistenceId);
 
@@ -359,9 +338,7 @@ internal sealed class RateLimitGate(
         // parked yet). If the epoch moved, drop OUR registration and bookkeeping.
         DropStaleRegistrationIfInvalidated(task, taskType, key, parked, epoch);
 
-        logger.LogDebug(
-            "Rate limit deferred task {TaskId}: key={Key} slotUtc={SlotUtc:O} policy={TaskType}",
-            task.PersistenceId, key, slot, taskType);
+        logger.TaskDeferred(task.PersistenceId, key, slot, taskType);
 
         return DeferralResult(taskType, key, slot, now);
     }

@@ -31,7 +31,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
     /// <inheritdoc />
     public Task Persist(QueuedTask task, CancellationToken ct = default)
     {
-        logger.LogInformation("Persist Task: {type}", task.Type);
+        logger.TaskPersisted(task.Type);
 
         lock (_pendingTasksLock)
         {
@@ -54,8 +54,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
     /// <inheritdoc />
     public Task<QueuedTask[]> RetrievePending(DateTimeOffset? lastCreatedAt, Guid? lastId, int take, CancellationToken ct = default)
     {
-        logger.LogInformation("Retrieve Pending Tasks (keyset: lastCreatedAt={LastCreatedAt}, lastId={LastId}, take={Take})",
-            lastCreatedAt, lastId, take);
+        logger.RetrievingPendingTasks(lastCreatedAt, lastId, take);
 
         lock (_pendingTasksLock)
         {
@@ -100,7 +99,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
 
             if (!recoverable)
             {
-                logger.LogDebug("Task {taskId} is no longer recoverable, skipping SetQueued", taskId);
+                logger.TaskNoLongerRecoverable(taskId);
                 return Task.FromResult(false);
             }
 
@@ -141,7 +140,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
     public Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception, AuditLevel auditLevel,
                           double? executionTimeMs = null, CancellationToken ct = default)
     {
-        logger.LogInformation("Set Task {taskId} with Status {status}", taskId, status);
+        logger.StatusSet(taskId, status);
 
         lock (_pendingTasksLock)
         {
@@ -185,7 +184,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
 
     public Task<int> GetCurrentRunCount(Guid taskId)
     {
-        logger.LogInformation("Get the current run counter for Task {taskId}", taskId);
+        logger.GettingCurrentRunCount(taskId);
 
         lock (_pendingTasksLock)
         {
@@ -226,7 +225,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
 
     public Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel)
     {
-        logger.LogInformation("Update the current run counter for Task {taskId}", taskId);
+        logger.UpdatingCurrentRunCount(taskId);
 
         lock (_pendingTasksLock)
         {
@@ -264,7 +263,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
     public Task CompleteRecurringRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
                                      AuditLevel auditLevel)
     {
-        logger.LogInformation("Complete recurring run for Task {taskId}", taskId);
+        logger.CompletingRecurringRun(taskId);
 
         lock (_pendingTasksLock)
         {
@@ -313,7 +312,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
 
     public Task SetRecurringSeriesCompleted(Guid taskId, double executionTimeMs, AuditLevel auditLevel)
     {
-        logger.LogInformation("Finalize recurring series (terminal skip) for Task {taskId}", taskId);
+        logger.FinalizingRecurringSeries(taskId);
 
         lock (_pendingTasksLock)
         {
@@ -352,7 +351,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
     public Task SetRecurringTaskPoisoned(Guid taskId, Exception exception, AuditLevel auditLevel,
                                          CancellationToken ct = default)
     {
-        logger.LogInformation("Poison recurring Task {taskId} terminally", taskId);
+        logger.PoisoningRecurringTask(taskId);
 
         lock (_pendingTasksLock)
         {
@@ -397,7 +396,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
 
     public Task UpdateTask(QueuedTask task, CancellationToken ct = default)
     {
-        logger.LogInformation("Updating task {taskId} with key {taskKey}", task.Id, task.TaskKey);
+        logger.UpdatingTask(task.Id, task.TaskKey);
 
         lock (_pendingTasksLock)
         {
@@ -420,7 +419,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
             }
             else
             {
-                logger.LogWarning("Task {taskId} not found for update", task.Id);
+                logger.TaskNotFoundForUpdate(task.Id);
             }
         }
 
@@ -429,7 +428,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
 
     public Task Remove(Guid taskId, CancellationToken ct = default)
     {
-        logger.LogInformation("Removing task {taskId}", taskId);
+        logger.RemovingTask(taskId);
 
         lock (_pendingTasksLock)
         {
@@ -450,7 +449,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         if (logs.Count == 0)
             return Task.CompletedTask;
 
-        logger.LogInformation("Saving {Count} execution logs for task {TaskId}", logs.Count, taskId);
+        logger.SavingExecutionLogs(logs.Count, taskId);
 
         lock (_executionLogsLock)
         {

@@ -36,6 +36,10 @@ public class RateLimitGateTests
 
     public RateLimitGateTests()
     {
+        // [LoggerMessage]-generated methods short-circuit on IsEnabled, which a loose mock answers
+        // false: WarningLogged() would never observe its Log call without this.
+        _logger.Setup(l => l.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+
         var options = new RateLimiterOptions();
         options.ResolveDefaults(1000);
         _parkingLot = new RateLimitParkingLot(options);

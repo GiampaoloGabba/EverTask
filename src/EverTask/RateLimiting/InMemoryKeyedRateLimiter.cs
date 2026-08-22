@@ -322,10 +322,7 @@ public sealed class InMemoryKeyedRateLimiter : IKeyedRateLimiter, IDisposable
         if (nowTicks - last >= TimeSpan.FromSeconds(30).Ticks
             && Interlocked.CompareExchange(ref _lastFailOpenWarningTicks, nowTicks, last) == last)
         {
-            _logger.LogWarning(
-                "Rate limiter tracked-keys cap ({MaxTrackedKeys}) reached: new keys fail OPEN " +
-                "(tasks execute without throttling). Task type: {TaskType}. Total fail-open count: {FailOpenCount}",
-                _options.MaxTrackedKeys, taskType.Name, FailOpenCount);
+            _logger.TrackedKeysCapReached(_options.MaxTrackedKeys, taskType.Name, FailOpenCount);
         }
     }
 
