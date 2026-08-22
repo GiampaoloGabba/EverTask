@@ -11,7 +11,9 @@
 **Tesi:** «Il catch-up first-class non è un cursore più furbo: è una riga per occorrenza. Tutto il resto di
 EverTask (one-shot, recovery, retry, audit, rate limiting, monitoring) già sa gestire una riga.»
 
-**7 fasi** in sequenza (una sub-issue di #23 + una PR ciascuna), tutte sotto la release additiva **3.12.0**.
+**7 fasi** in sequenza (una sub-issue di #23 + una PR ciascuna), tutte sotto la release **4.0.0** (la major è
+imposta dal refactor Abstractions `62d2010` già su master; le modifiche di #23 restano additive — decisioni
+v1.1/X6).
 Ordine riorganizzato dopo il round 1: **prima gli invarianti** (evaluator, clock, compatibilità, storage CAS),
 poi i consumatori (contesto, zona, occorrenze), **per ultimo** il provider.
 
@@ -66,7 +68,7 @@ poi i consumatori (contesto, zona, occorrenze), **per ultimo** il provider.
 | `src/EverTask/Monitoring/EverTaskEventData.cs:3-43` | Proprietà `init` nel body: `Guid? ParentTaskId`, `DateTimeOffset? ScheduledAtUtc`, `int? ScheduleVersion`. Valorizzate in `FromExecutor` (`:14`) e in `WorkerExecutor.CreateEventDataCached` (`:1201-1239`). |
 | `src/EverTask/Scheduler/Recurring/RecurringTask.cs` + `src/EverTask.Abstractions/OccurrenceMode.cs` (scaffold) | `OccurrenceMode { Inline = 0, Durable = 1 }` e `RecurringTask.OccurrenceMode` (default `Inline`, `[JsonIgnore(WhenWritingDefault)]`, golden-byte): nessun builder né comportamento in fase 1 — serve solo a `IsScheduleOnly` e alla recovery a due passate. |
 | `src/EverTask/Handler/TaskHandlerExecutor.cs:19-39,177-224` | Proprietà `init`: `Guid? ParentTaskId`, `string? RuntimeInfo`, `int? RunNumber`, `int ScheduleVersion`, `DateTimeOffset? NominalSlotUtc`. `ToLazy()` ⇒ `this with { Handler = null, HandlerCallback = null, HandlerErrorCallback = null, HandlerStartedCallback = null, HandlerCompletedCallback = null, HandlerScope = null, HandlerTypeName = HandlerTypeName ?? TypeNameCache.GetAssemblyQualifiedName(Handler!.GetType()) }`. `IsScheduleOnly => RecurringTask?.OccurrenceMode == Durable`. |
-| `test/EverTask.Tests/Serialization/` (nuovi) | `RecurringTaskGoldenJsonTests`: fixture JSON 3.11 per ogni interval e per schedule compositi ⇒ deserializzazione + riserializzazione **byte-identica**. `ConsumerCompatibilityTests`: fixture compilata contro 3.11 (progetto di test separato che referenzia il pacchetto 3.11) caricata con 3.12 per builder, `ITaskDispatcher`, `EverTaskEventData`, `TaskHandlerExecutor`. |
+| `test/EverTask.Tests/Serialization/` (nuovi) | `RecurringTaskGoldenJsonTests`: fixture JSON 3.11 per ogni interval e per schedule compositi ⇒ deserializzazione + riserializzazione **byte-identica**. `ConsumerCompatibilityTests`: fixture compilata contro la **baseline `issue23-baseline`** (progetto di test separato che referenzia i pacchetti baseline buildati da master pre-#23, feed locale `nupkg/`) caricata con 4.0 per builder, `ITaskDispatcher`, `EverTaskEventData`, `TaskHandlerExecutor` — dimostra che #23 è additiva (X6 rev. v1.1; il pacchetto pubblico 3.11 non è utilizzabile: il refactor `62d2010` ne rompe già il load). |
 
 ### 1.4 Factory executor-da-riga (recovery e materializer)
 
@@ -206,7 +208,7 @@ poi i consumatori (contesto, zona, occorrenze), **per ultimo** il provider.
 | README | `README.md` | Paragrafo breve nella feature list (durable occurrences, time zones, misfire policies, runtime reschedule) + link a `docs/recurring-tasks/durable-occurrences.md` e `time-zones.md`; via `humanizer`. |
 | Skill di progetto | `.claude/skills/new-relational-storage-provider/` **e** il mirror `.agents/skills/new-relational-storage-provider/` (tenuti identici) | La skill scaffolda un nuovo provider relazionale: dopo la fase 1 DEVE includere le nuove colonne (`ParentTaskId`+FK/unique/check, `RuntimeInfo`, `ScheduleVersion`), le operazioni atomiche (`MaterializeOccurrence`, `TrySetRecurringSeriesCompleted`, `TryRequeueStaleOccurrence`, `TryHaltSchedule`, `CancelSchedule`, `RequeueTerminal`, `UpdateSchedule`, overload CAS e `nowUtc`), le due capability e la matrice di verifica per-database aggiornata — altrimenti un provider futuro nascerebbe senza il supporto occorrenze. Aggiornata **nella fase 1** (colonne/ops) e ritoccata nella fase 4 (semantiche); qui in fase 7 solo verifica finale di coerenza. |
 | Plugin | `plugins/evertask/skills/integrate-evertask/` (`SKILL.md` + `references/01-setup.md`, `03-storage.md`, `05-scheduling.md`, `07-monitoring-logging.md`, `templates/RecurringRegistrar.md`) | Già coperto dalla regola anti-stale per fase; in fase 7 verifica finale: wizard decision points (calendario⇒`InTimeZone`+`OnMisfire(CatchUp)`; ora runtime⇒`Reschedule`/provider), template registrar aggiornato. |
-| Release | `CHANGELOG.md` (`## [Unreleased]` → 3.12.0; precedenti `:273,:303-304`), `Directory.Build.props`, CLAUDE.md locali finali, `test/EverTask.Tests/CLAUDE.md` (`FakeTimeProvider`, oracolo Cronos, fault injection) | |
+| Release | `CHANGELOG.md` (`## [Unreleased]` → 4.0.0, includendo la voce breaking del refactor Abstractions già presente in Unreleased; precedenti `:273,:303-304`), `Directory.Build.props` (→ 4.0.0), CLAUDE.md locali finali, `test/EverTask.Tests/CLAUDE.md` (`FakeTimeProvider`, oracolo Cronos, fault injection) | |
 | Issue | Commento su #23, 7 sub-issue, chiusura alla release; nuova issue "distributed execution lease" (M17-A). | |
 
 ---
@@ -241,4 +243,4 @@ poi i consumatori (contesto, zona, occorrenze), **per ultimo** il provider.
 - Bisezione `SkipOldest`: dimostrare il bound (numero di sonde × `cap + 1` conteggi); con provider non deterministici la policy è rifiutata al dispatch (`IsDeterministic == false`).
 - Proc SqlServer/MySql: compatibilità delle nuove versioni con righe vecchie (`ScheduleVersion` 0, colonne NULL).
 - UI: build `pnpm` e embedding `wwwroot` nel pacchetto.
-- Consumer compatibility fixture: come referenziare il pacchetto 3.11 in un progetto di test (feed locale `nupkg/`).
+- Consumer compatibility fixture: come buildare i pacchetti baseline da `issue23-baseline` e referenziarli in un progetto di test (feed locale `nupkg/`).

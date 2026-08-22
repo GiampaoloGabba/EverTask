@@ -88,7 +88,7 @@ const PHASES = [
     title: 'Invarianti: evaluator, clock deterministico, compatibilita, migrazione unica, operazioni storage atomiche, recovery X3',
     fableLenses: [
       'storage atomicity: MaterializeOccurrence/TrySetRecurringSeriesCompleted/TryRequeueStaleOccurrence/TryHaltSchedule/CancelSchedule CAS semantics, unique index + restrict FK + check constraint, per-provider parity (SqlServer procs, Postgres CTEs, MySQL procs, SQLite, Memory), migration Up/Down correctness',
-      'backward compatibility: golden-byte JSON of legacy schedules, JsonIgnore placement, init-only record extensions, ToLazy via with, consumer 3.11 fixture, DIM delegation direction for nowUtc overloads (custom storages must not be bypassed)',
+      'backward compatibility: golden-byte JSON of legacy schedules, JsonIgnore placement, init-only record extensions, ToLazy via with, consumer baseline fixture (compiled against issue23-baseline packages, NOT the 3.11 nupkg), DIM delegation direction for nowUtc overloads (custom storages must not be bypassed)',
       'recovery correctness: X3 grouped predicate identical in all 4 copies and SQL-translatable, execution vs finalize-only split, finalize-before-grace ordering, natural-successor grace, TimeProvider threading through dispatcher/worker/schedulers/builders/limiter with no behavior change' ],
     minorLens: 'code quality: reuse, simplification, allocation/round-trip regressions on hot paths, naming consistency with the existing codebase' },
   { n: 2, issue: 25, planSection: '## 2. FASE 2', risk: 'normal', perf: false,
@@ -121,7 +121,7 @@ const PHASES = [
       'contract quality: NextOccurrenceRequest fields, strictly-after guarantee, null ends series, opaque config, registry key validation on all paths (dispatch, recovery, reschedule)' ],
     minorLens: 'API/docs, sample BusinessDaysProvider realism' },
   { n: 7, issue: 30, planSection: '## 7. FASE 7', risk: 'normal', perf: false,
-    title: 'Monitoring API/UI, docs sweep, samples, release 3.12.0',
+    title: 'Monitoring API/UI, docs sweep, samples, release 4.0.0',
     fableLenses: [
       'surface coherence: DTOs vs mirrored TS types (must match exactly), new events wired in BOTH EverTaskEventData constructors, occurrence endpoints and backlog-by-state semantics, monitoring-events.md accuracy (it was already stale), pnpm build + wwwroot embedding' ],
     minorLens: 'docs sweep completeness: README blurb, index, config reference ToC, CHANGELOG, version bump, CLAUDE.md locals, integrate-evertask skill wizard, new-relational-storage-provider skill in .claude AND .agents' },
@@ -299,7 +299,7 @@ async function commitPhase(phaseObj, phaseTag, reportLines) {
     '2. Write a commit message file (temp path) with subject: "feat(scheduler): phase ' + phaseObj.n + ' of #23 - ' + phaseObj.title.toLowerCase().slice(0, 60) + ' (#' + phaseObj.issue + ')" - adjust the conventional scope if the phase is docs/monitoring-heavy - and a body of 3-6 bullet lines summarizing the changes. Commit with git commit -F <file>. Do NOT use -m with multiline text, do NOT push, do NOT amend, do NOT skip hooks.',
     '3. Write the phase report to "' + OUT + '/phase-' + phaseObj.n + '-report.md" (create dirs) with this content:',
     reportLines,
-    '4. Post the same report as a comment on GitHub issue #' + phaseObj.issue + ' with: gh issue comment ' + phaseObj.issue + ' --body-file "<report path>", then close it: gh issue close ' + phaseObj.issue + ' --comment "Implemented on master, see the report above."',
+    '4. Post the same report as a comment on GitHub issue #' + phaseObj.issue + ' with: gh issue comment ' + phaseObj.issue + ' --body-file "<report path>", then close it: gh issue close ' + phaseObj.issue + ' --comment "Implemented on the feature/issue23-durable-occurrences branch (merges to master via PR), see the report above."',
     'Return done=true with the commit hash in summary. If the commit hook fails, report done=false with the error in blockers - do not bypass hooks.',
   ].join('\n'), { model: 'opus', effort: 'low', label: 'commit:f' + phaseObj.n, phase: phaseTag, schema: DEV_SCHEMA })
 }
@@ -451,7 +451,7 @@ const FINAL_FABLE_LENSES = [
   'data loss and crash recovery: fault windows (insert vs advance vs schedule vs completion), finalize-vs-cancel, catch-up after downtime within caps, zombie rows, at-least-once documented honestly',
   'time and DST: full sweep of the zone math against Cronos semantics, Elapsed/Calendar boundaries, rebase nominal periods, skip-forward with zones, clock-domain consistency (P9)',
   'storage: per-provider parity of every new op (procs/CTEs vs base), migration Up/Down, SQL translation of new predicates, indexes/constraints, retention, hot-path round-trips and allocations',
-  'public surface and compatibility: golden JSON, record extensions, DIM defaults, builder DIMs, consumer 3.11 fixture, event wire format, API naming coherence, docs accuracy vs behavior',
+  'public surface and compatibility: golden JSON, record extensions, DIM defaults, builder DIMs, consumer baseline fixture, event wire format, API naming coherence, docs accuracy vs behavior',
 ]
 const FINAL_OPUS_LENSES = [
   'test suite honesty: are the new tests REAL (integration-first, real storage/host), do they pin the test matrix of plan section 8, is anything rigged, tautological or asserting too little?',
@@ -519,7 +519,7 @@ if (critic && !critic.complete && critic.missing.length) {
 
 const synthesis = await agent([
   SPEC,
-  'Open medium findings accepted at the final cap (include them in the report): ' + JSON.stringify(finalOpenMediums.map(f => f.title)) + '. Synthesize the final report of the #23 delivery into "' + OUT + '/final-report.md" (write the file). Include: per-phase outcomes (read review/orchestrator/phase-*-report.md), final adversarial review outcome (rounds, confirmed/fixed findings, anything left open at low severity), perf baseline vs after (read the perf files), completeness critic verdict, the exact test totals from the last full run (run dotnet test if you need fresh numbers), commit list since the issue23-baseline tag (git log --oneline issue23-baseline..HEAD), and an honest "known limits" section (single-active-host contract, at-least-once, anything recorded as unresolved-low). End with a short GO/NO-GO for releasing 3.12.0. Return done=true and a 10-line executive summary in summary.',
+  'Open medium findings accepted at the final cap (include them in the report): ' + JSON.stringify(finalOpenMediums.map(f => f.title)) + '. Synthesize the final report of the #23 delivery into "' + OUT + '/final-report.md" (write the file). Include: per-phase outcomes (read review/orchestrator/phase-*-report.md), final adversarial review outcome (rounds, confirmed/fixed findings, anything left open at low severity), perf baseline vs after (read the perf files), completeness critic verdict, the exact test totals from the last full run (run dotnet test if you need fresh numbers), commit list since the issue23-baseline tag (git log --oneline issue23-baseline..HEAD), and an honest "known limits" section (single-active-host contract, at-least-once, anything recorded as unresolved-low). End with a short GO/NO-GO for releasing 4.0.0. Return done=true and a 10-line executive summary in summary.',
 ].join('\n'), { ...JUDGE, label: 'final:synthesis', phase: FTAG, schema: DEV_SCHEMA })
 
 return {
