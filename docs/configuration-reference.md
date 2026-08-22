@@ -1118,7 +1118,7 @@ not auto-register SignalR monitoring and requires you to register `ITaskStorage`
 | `EnableCors` | `bool` | `true` | **Registers** a named CORS policy (`EverTaskMonitoringApi`); EverTask does NOT apply it: your app must (`app.UseCors(...)`). See note below |
 | `CorsAllowedOrigins` | `string[]` | `[]` | Origins for the registered policy (empty = allow-any). Only effective once the policy is actually applied |
 | `AllowedIpAddresses` | `string[]` | `[]` | IP address whitelist (empty = allow all IPs). Supports IPv4, IPv6, and CIDR notation |
-| `MagicLinkToken` | `string?` | `null` | Static token for magic link authentication. When set, enables instant access via `/api/auth/magic?token=...` |
+| `MagicLinkToken` | `string?` | `null` | Static token for magic link authentication. When set, enables instant access via `/evertask-monitoring/magic#token=...` (exchanged with `POST /api/auth/magic`; the `?token=` query form is deprecated since 3.12.0 because it lands in request logs) |
 | `EventDebounceMs` | `int` | `1000` | Debounce time in milliseconds for SignalR event-driven cache invalidation in the dashboard. Higher values reduce API load during task bursts but introduce slight UI update delays. Recommended: 300ms (very responsive), 500ms (balanced), 1000ms (conservative for high-volume) |
 | `BasePath` | `string` | `/evertask-monitoring` | **Read-only** computed property (fixed; cannot be set) |
 | `ApiBasePath` | `string` | `/evertask-monitoring/api` | **Read-only** computed property (`{BasePath}/api`) |
@@ -1222,7 +1222,7 @@ options.EnableAuthentication = !builder.Environment.IsDevelopment();
 - `/api/config` - Dashboard configuration endpoint
 - `/api/auth/login` - Login endpoint for obtaining JWT
 - `/api/auth/validate` - Token validation endpoint
-- `/api/auth/magic` - Magic-link token exchange (returns 404 when `MagicLinkToken` is not configured)
+- `/api/auth/magic` - Magic-link token exchange, `POST` with the token in the body (the `GET ?token=` form is deprecated); returns 404 when `MagicLinkToken` is not configured
 - UI static files (HTML, JS, CSS)
 
 **JWT Authentication Flow:**
@@ -1371,20 +1371,24 @@ options.MagicLinkToken = "your-secret-token";
 options.AllowedIpAddresses = new[] { "10.0.0.0/8" };
 ```
 
-**Access URL:**
+**Access URL** (since 3.12.0, token in the URL fragment):
 ```
-https://your-server/evertask-monitoring/magic?token=your-very-long-secret-token-here-min-32-chars
+https://your-server/evertask-monitoring/magic#token=your-very-long-secret-token-here-min-32-chars
 ```
 
 **How it works:**
-1. User visits the magic link URL
-2. Backend validates the token against `MagicLinkToken`
-3. If valid, generates a standard JWT session token
-4. User is redirected to the dashboard, fully authenticated
+1. User visits the magic link URL; the fragment stays in the browser and is never sent to the server
+2. The dashboard reads the token from the fragment and exchanges it with `POST /api/auth/magic` (token in the request body)
+3. Backend validates the token against `MagicLinkToken` (fixed-time comparison)
+4. If valid, generates a standard JWT session token
+5. User is redirected to the dashboard, fully authenticated
 
 **Security Notes:**
 - Use a long, random token (32+ characters recommended)
 - Token never expires - change it in configuration to revoke all magic link access
+- Use the `#token=` fragment form. The older `?token=` query form still works, but every component that logs request URLs (Serilog `UseSerilogRequestLogging()` through `RawTarget`, reverse proxies, Azure App Service HTTP logs, browser history) stores the token verbatim, and it does not expire. See [Magic Link Access](monitoring-dashboard.md#magic-link-access) for host-side mitigations
+- `GET /api/auth/magic?token=` is deprecated and kept only for existing integrations; the dashboard uses the POST form
+- Both exchange endpoints share the `evertask-monitoring-login` rate-limit policy (5 attempts per 15 minutes per client IP, enforced when the host runs `UseRateLimiter()`)
 - Combine with `AllowedIpAddresses` for defense in depth
 - If `MagicLinkToken` is not set, the endpoint returns 404
 

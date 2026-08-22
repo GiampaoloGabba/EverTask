@@ -1,6 +1,4 @@
 using EverTask.Tests.Monitoring.TestHelpers;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Http;
 
 namespace EverTask.Tests.Monitoring.API;
 
@@ -71,6 +69,36 @@ public class HostIsolationTests
         // ...the 6th is throttled by the evertask-monitoring-login policy
         var throttled = await client.PostAsync("/evertask-monitoring/api/auth/login", payload);
         throttled.StatusCode.ShouldBe(HttpStatusCode.TooManyRequests);
+    }
+
+    [Theory]
+    [InlineData("POST")]
+    [InlineData("GET")]
+    public async Task Should_rate_limit_magic_link_exchange_like_login(string method)
+    {
+        // Issue #22: the magic endpoints share the login budget so the static token cannot be brute-forced
+        await using var factory = new MonitoringTestWebAppFactory(
+            requireAuthentication: true,
+            useRateLimiter: true,
+            configureOptions: options => options.MagicLinkToken = "rate-limit-magic-token-abc123");
+        using var client = factory.CreateClient();
+
+        for (var attempt = 1; attempt <= 5; attempt++)
+        {
+            var response = await client.SendAsync(Attempt());
+            response.StatusCode.ShouldBe(HttpStatusCode.Unauthorized, $"attempt {attempt}");
+        }
+
+        var throttled = await client.SendAsync(Attempt());
+        throttled.StatusCode.ShouldBe(HttpStatusCode.TooManyRequests);
+        return;
+
+        HttpRequestMessage Attempt() => method == "POST"
+            ? new HttpRequestMessage(HttpMethod.Post, "/evertask-monitoring/api/auth/magic")
+            {
+                Content = new StringContent("""{"token":"wrong"}""", Encoding.UTF8, "application/json")
+            }
+            : new HttpRequestMessage(HttpMethod.Get, "/evertask-monitoring/api/auth/magic?token=wrong");
     }
 
     [Fact]

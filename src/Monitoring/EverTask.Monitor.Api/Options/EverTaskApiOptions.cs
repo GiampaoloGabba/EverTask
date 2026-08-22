@@ -149,10 +149,14 @@ public class EverTaskApiOptions
     public string[] AllowedIpAddresses { get; set; } = [];
 
     /// <summary>
-    /// Static token for magic link authentication. If set, enables magic link access via /api/auth/magic endpoint.
+    /// Static token for magic link authentication. If set, enables magic link access via the /api/auth/magic endpoint.
     /// Use a long random string (32+ characters recommended) for security.
     /// Example: "your-very-long-secret-token-abc123xyz"
-    /// When configured, users can access the dashboard via: /evertask-monitoring/magic?token=YOUR_TOKEN
+    /// When configured, users can access the dashboard via: /evertask-monitoring/magic#token=YOUR_TOKEN
+    /// Prefer the URL fragment form (#token=): the fragment is never sent to the server, so the token
+    /// stays out of request logs (Serilog request logging, reverse proxies, Azure HTTP logs) and the
+    /// dashboard exchanges it via POST body. The legacy ?token= query form still works but writes the
+    /// token verbatim into anything that logs request URLs.
     /// </summary>
     public string? MagicLinkToken { get; set; }
 

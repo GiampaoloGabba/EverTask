@@ -62,11 +62,16 @@ Content-Type: application/json
 
 ### Magic Link Authentication
 
-If `MagicLinkToken` is configured, you can authenticate via a simple GET request:
+If `MagicLinkToken` is configured, exchange it for a JWT by sending the token in the request body (since 3.12.0):
 
 **Request:**
 ```bash
-GET /evertask-monitoring/api/auth/magic?token=your-configured-token
+POST /evertask-monitoring/api/auth/magic
+Content-Type: application/json
+
+{
+  "token": "your-configured-token"
+}
 ```
 
 **Response (200 OK):**
@@ -78,11 +83,18 @@ GET /evertask-monitoring/api/auth/magic?token=your-configured-token
 }
 ```
 
+The response carries `Cache-Control: no-store`.
+
 **Error Responses:**
 - `404 Not Found` - Magic link not configured (`MagicLinkToken` is null)
 - `401 Unauthorized` - Invalid token
+- `429 Too Many Requests` - Login rate limit exhausted (5 attempts per 15 minutes per client IP, only when the host runs `UseRateLimiter()`)
 
 The returned JWT can be used like any other JWT token for subsequent API requests.
+
+**Deprecated: `GET /evertask-monitoring/api/auth/magic?token=...`**
+
+The query-string form is still served for existing integrations, with the same responses, but it is deprecated (flagged as such in the OpenAPI document). The query string ends up in server request logs (Serilog request logging records `RawTarget`), reverse-proxy access logs and browser history, and the token is a permanent credential. Use the POST form; see [Magic Link Access](monitoring-dashboard.md#magic-link-access) for the dashboard URL shape and host-side logging advice.
 
 ## Tasks Endpoints
 

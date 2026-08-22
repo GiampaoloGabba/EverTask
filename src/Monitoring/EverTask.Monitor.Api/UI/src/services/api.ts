@@ -140,7 +140,8 @@ class ApiService {
 
   async magicLinkLogin(token: string) {
     await this.initialize();
-    return this.client.get<LoginResponse>(`/auth/magic?token=${encodeURIComponent(token)}`);
+    // POST with the token in the body: keeps it out of URLs and request logs (issue #22)
+    return this.client.post<LoginResponse>('/auth/magic', { token });
   }
 
   // Tasks API

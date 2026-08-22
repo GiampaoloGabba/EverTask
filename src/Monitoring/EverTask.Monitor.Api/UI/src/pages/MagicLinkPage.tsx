@@ -11,7 +11,16 @@ export function MagicLinkPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const token = searchParams.get('token');
+    // Preferred form: /magic#token=... — the fragment never reaches the server,
+    // so the token stays out of request logs. Query (?token=) kept as legacy fallback.
+    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    const token = hashParams.get('token') ?? searchParams.get('token');
+
+    if (token) {
+      // Scrub the credential from the address bar (and from the history entry)
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+
     if (!token) {
       setError('Missing token parameter');
       setLoading(false);

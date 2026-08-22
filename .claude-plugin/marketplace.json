@@ -6,14 +6,14 @@
   },
   "metadata": {
     "description": "Claude Code plugins for the EverTask .NET background-task library.",
-    "version": "1.1.0"
+    "version": "1.1.1"
   },
   "plugins": [
     {
       "name": "evertask",
       "source": "./plugins/evertask",
       "description": "Interactive playbook to integrate EverTask into a .NET project: choose a storage provider, wire AddEverTask, and scaffold tasks/handlers that satisfy the System.Text.Json payload analyzers (ET0001-ET0008).",
-      "version": "1.1.0"
+      "version": "1.1.1"
     }
   ]
 }

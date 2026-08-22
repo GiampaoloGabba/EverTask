@@ -396,7 +396,9 @@ builder.Services.AddEverTaskApi(options =>
 });
 ```
 
-Access URL: `https://yourapp.com/evertask-monitoring/magic?token=your-32-char-secret-token-here`
+Access URL: `https://yourapp.com/evertask-monitoring/magic#token=your-32-char-secret-token-here`
+
+Put the token in the URL fragment (`#token=`): the fragment never reaches the server, and the dashboard exchanges it with `POST /api/auth/magic` (token in the body), so it stays out of request logs. The older `?token=` query form still works but is written verbatim by anything that logs request URLs (Serilog request logging, reverse proxies, browser history), and the token never expires. See [Magic Link Access](../../../docs/monitoring-dashboard.md#magic-link-access).
 
 The magic link validates the token and returns a standard JWT session. If `MagicLinkToken` is not configured, the endpoint returns 404.
 

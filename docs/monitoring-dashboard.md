@@ -251,7 +251,8 @@ POST to `/evertask-monitoring/api/auth/login` to obtain a JWT token:
 
 ### Login Rate Limiting
 
-The login endpoint carries the `evertask-monitoring-login` rate-limit policy: 5 attempts per
+The login endpoint and the magic-link exchange endpoints (`/api/auth/magic`, since 3.12.0) carry
+the `evertask-monitoring-login` rate-limit policy: 5 attempts per
 15 minutes per client IP, 429 once exhausted. The policy is registered by the package but
 ASP.NET Core enforces it only when your pipeline runs `app.UseRateLimiter()` (after
 `UseRouting()`). The namespaced name keeps it separate from any `login` policy your application
@@ -289,12 +290,34 @@ For external system integration (embedding in other dashboards, direct access fr
 });
 ```
 
-**Access URL:**
+**Access URL** (since 3.12.0, put the token in the URL fragment):
 ```
-https://your-server/evertask-monitoring/magic?token=your-very-long-secret-token-here-min-32-chars
+https://your-server/evertask-monitoring/magic#token=your-very-long-secret-token-here-min-32-chars
 ```
 
-When a user visits this URL, they're automatically authenticated and redirected to the dashboard. The magic link generates a standard JWT session token, so all subsequent requests work normally.
+When a user visits this URL, the dashboard reads the token from the fragment, exchanges it with `POST /api/auth/magic` (token in the request body) and redirects to the dashboard. The magic link generates a standard JWT session token, so all subsequent requests work normally.
+
+The older `?token=` query form still works, but read the next section before using it.
+
+**Keep the token out of your logs**
+
+`MagicLinkToken` is a static credential: it never expires and a leaked copy keeps working until you rotate the setting. Anything that records request URLs will store it verbatim if it travels in the query string:
+
+- Serilog's `UseSerilogRequestLogging()` logs `RequestPath` from `IHttpRequestFeature.RawTarget`, which includes the query string. Every dashboard open via `?token=` writes the token into your application log.
+- Reverse proxies (nginx, IIS, Azure App Service HTTP logs, API gateways) log the full request line.
+- The browser keeps the URL in its history.
+
+The fragment (`#token=`) is never sent to the server, so none of those components see it. With the fragment form the token exists only in the browser that already has it and in the `POST` body of the exchange call, which request loggers do not record. If you link to the dashboard from your own application, prefer a server-side redirect to the fragment URL (the fragment survives a `302`): the token stays out of your frontend bundle and your HTML.
+
+If you must keep the `?token=` form (older bookmarks, tooling you cannot change), exclude the monitoring path from request logging in your host, for example with Serilog:
+
+```csharp
+app.UseWhen(
+    ctx => !ctx.Request.Path.StartsWithSegments("/evertask-monitoring"),
+    branch => branch.UseSerilogRequestLogging());
+```
+
+The same applies to `GET /api/auth/magic?token=`: it is deprecated (still served for compatibility) and the dashboard no longer calls it.
 
 **Use cases:**
 - Embedding in internal dashboards or portals
@@ -305,6 +328,8 @@ When a user visits this URL, they're automatically authenticated and redirected 
 **Security notes:**
 - Use a long, random token (32+ characters recommended)
 - The token never expires - change it in configuration to revoke access
+- Use the `#token=` fragment form; treat any `?token=` URL as a leaked credential once it has hit a log
+- The exchange endpoints share the login rate limit (5 attempts per 15 minutes per client IP) when the host runs `UseRateLimiter()`
 - Combine with IP whitelist (`AllowedIpAddresses`) for additional security
 - Always use HTTPS in production
 

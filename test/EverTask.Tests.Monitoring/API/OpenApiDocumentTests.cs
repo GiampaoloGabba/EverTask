@@ -49,6 +49,26 @@ public class OpenApiDocumentTests
     }
 
     [Fact]
+    public async Task Should_flag_magic_link_get_as_deprecated_and_keep_post()
+    {
+        // Issue #22: the query-string exchange is [Obsolete]; the body-based POST is the supported form
+        await using var factory = new MonitoringTestWebAppFactory(
+            configureOptions: options => options.EnableOpenApiDocument = true);
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync(DocumentPath);
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var magic = document.RootElement.GetProperty("paths").GetProperty("/evertask-monitoring/api/auth/magic");
+
+        magic.GetProperty("get").GetProperty("deprecated").GetBoolean().ShouldBeTrue();
+        magic.TryGetProperty("post", out var post).ShouldBeTrue();
+        post.TryGetProperty("deprecated", out var postDeprecated).ShouldBeFalse(
+            $"POST must not be deprecated (was: {postDeprecated})");
+    }
+
+    [Fact]
     public async Task Should_not_map_openapi_document_by_default()
     {
         await using var factory = new MonitoringTestWebAppFactory();

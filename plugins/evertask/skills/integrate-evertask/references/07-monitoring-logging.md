@@ -84,7 +84,7 @@ keep their routes and MVC JsonOptions, and a host SPA fallback keeps working (is
     options.EnableCors           = true;     // default
     options.CorsAllowedOrigins   = new[] { "https://myapp.com" };   // empty = allow all
     options.AllowedIpAddresses   = new[] { "10.0.0.0/8" };          // empty = allow all; CIDR ok
-    options.MagicLinkToken       = null;     // set a 32+ char token to enable /auth/magic
+    options.MagicLinkToken       = null;     // set a 32+ char token to enable /magic#token=... (see below)
     options.EnableOpenApiDocument = false;   // default; true serves the OpenAPI doc at
                                              // /evertask-monitoring/openapi/evertask-monitoring.json (net9+)
     options.EventDebounceMs      = 1000;     // dashboard cache-invalidation debounce
@@ -103,15 +103,25 @@ an optional `Action<HttpConnectionDispatcherOptions>` to tune the SignalR hub co
 > CORS (3.12+): `EnableCors = true` applies the `EverTaskMonitoringApi` policy to requests under
 > `/evertask-monitoring` automatically; the host pipeline is untouched and nothing needs wiring.
 > Login rate limit (3.12+): the `evertask-monitoring-login` policy (5 attempts/15 min per IP, 429)
-> is registered by the package but enforced only if the host runs `app.UseRateLimiter()` after
-> `UseRouting()`. (`BasePath`, `ApiBasePath`, `UIBasePath`, `SignalRHubPath` are read-only computed
-> properties; don't try to set them.)
+> covers `/api/auth/login` and both `/api/auth/magic` forms; it is registered by the package but
+> enforced only if the host runs `app.UseRateLimiter()` after `UseRouting()`. (`BasePath`,
+> `ApiBasePath`, `UIBasePath`, `SignalRHubPath` are read-only computed properties; don't try to
+> set them.)
 
 Fixed paths: dashboard `/evertask-monitoring`, API `/evertask-monitoring/api`, hub
 `/evertask-monitoring/hub`. Auth is a custom JWT middleware (IP whitelist first → JWT via
 `Authorization: Bearer` or `?access_token=`). Login: `POST /evertask-monitoring/api/auth/login`
-`{username,password}`. Default creds `admin`/`admin`: **always change in production.** Magic link
-when `MagicLinkToken` set: `GET .../api/auth/magic?token=...`.
+`{username,password}`. Default creds `admin`/`admin`: **always change in production.**
+
+Magic link when `MagicLinkToken` is set (3.12+): hand users
+`https://host/evertask-monitoring/magic#token=<MagicLinkToken>`. The fragment never reaches the
+server; the dashboard exchanges it with `POST /api/auth/magic` `{token}`. Never generate a
+`?token=` URL or call `GET /api/auth/magic?token=` (deprecated, kept for compat): the query string
+is written verbatim by Serilog `UseSerilogRequestLogging()` (`RawTarget`), reverse proxies and
+browser history, and the token never expires (issue #22). When the host app links to the
+dashboard, redirect server-side to the fragment URL instead of embedding the token in the
+frontend. If a legacy `?token=` link must stay, branch request logging around the monitoring path:
+`app.UseWhen(ctx => !ctx.Request.Path.StartsWithSegments("/evertask-monitoring"), b => b.UseSerilogRequestLogging());`.
 
 REST endpoints (under `/evertask-monitoring/api`): `GET /tasks` (filter status/queue/type/date,
 paged ≤100), `/tasks/{id}` (+ `/status-audit`, `/runs-audit`, `/execution-logs`),

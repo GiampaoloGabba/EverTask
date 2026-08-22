@@ -1,7 +1,3 @@
-using System.Net;
-using System.Net.Http.Headers;
-using System.Net.Http.Json;
-using System.Text;
 using EverTask.Monitor.Api.DTOs.Auth;
 using EverTask.Tests.Monitoring.TestHelpers;
 
@@ -127,7 +123,7 @@ public class AuthControllerTests : MonitoringTestBase
     public async Task Should_return_validation_error_for_invalid_token()
     {
         // Arrange - Use a malformed token
-        var invalidToken = "this.is.not.a.valid.jwt.token";
+        const string invalidToken = "this.is.not.a.valid.jwt.token";
         var validateRequest = new TokenValidationRequest(invalidToken);
 
         // Act
@@ -151,6 +147,17 @@ public class AuthControllerTests : MonitoringTestBase
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.NotFound);
     }
+
+    [Fact]
+    public async Task Should_return_404_on_post_when_magic_link_not_configured()
+    {
+        // Act - Body-based exchange without the feature configured
+        var response = await Client.PostAsJsonAsync("/evertask-monitoring/api/auth/magic",
+            new MagicLinkLoginRequest("anytoken"));
+
+        // Assert
+        response.StatusCode.ShouldBe(HttpStatusCode.NotFound);
+    }
 }
 
 /// <summary>
@@ -161,8 +168,93 @@ public class MagicLinkAuthControllerTests : MonitoringTestBase
     private const string TestMagicToken = "test-magic-link-token-abc123";
 
     protected override bool RequireAuthentication => true;
-    protected override Action<Monitor.Api.Options.EverTaskApiOptions>? ConfigureOptions =>
+    protected override Action<EverTaskApiOptions> ConfigureOptions =>
         options => options.MagicLinkToken = TestMagicToken;
+
+    // ---------------------------------------------------------------- POST (body-based, preferred — issue #22)
+
+    [Fact]
+    public async Task Should_return_token_on_valid_magic_link_via_post_body()
+    {
+        // Act
+        var response = await Client.PostAsJsonAsync("/evertask-monitoring/api/auth/magic",
+            new MagicLinkLoginRequest(TestMagicToken));
+
+        // Assert
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+
+        var loginResponse = await DeserializeResponseAsync<LoginResponse>(response);
+        loginResponse.ShouldNotBeNull();
+        loginResponse.Token.ShouldNotBeNullOrEmpty();
+        loginResponse.Username.ShouldBe("testuser");
+        loginResponse.ExpiresAt.ShouldBeGreaterThan(DateTimeOffset.UtcNow);
+    }
+
+    [Fact]
+    public async Task Should_return_401_on_invalid_magic_link_token_via_post_body()
+    {
+        var response = await Client.PostAsJsonAsync("/evertask-monitoring/api/auth/magic",
+            new MagicLinkLoginRequest("wrong-token"));
+
+        response.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(null)]
+    public async Task Should_return_401_on_missing_magic_link_token_via_post_body(string? token)
+    {
+        var response = await Client.PostAsJsonAsync("/evertask-monitoring/api/auth/magic",
+            new MagicLinkLoginRequest(token));
+
+        response.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task Should_return_401_when_token_differs_only_in_length()
+    {
+        // Prefix/suffix variants must not pass the fixed-time comparison
+        var longer  = await Client.PostAsJsonAsync("/evertask-monitoring/api/auth/magic",
+            new MagicLinkLoginRequest(TestMagicToken + "x"));
+        var shorter = await Client.PostAsJsonAsync("/evertask-monitoring/api/auth/magic",
+            new MagicLinkLoginRequest(TestMagicToken[..^1]));
+
+        longer.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
+        shorter.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task Should_mark_magic_link_responses_as_no_store()
+    {
+        // The response body is a session credential: intermediaries must not cache it
+        var post = await Client.PostAsJsonAsync("/evertask-monitoring/api/auth/magic",
+            new MagicLinkLoginRequest(TestMagicToken));
+        var get = await Client.GetAsync($"/evertask-monitoring/api/auth/magic?token={TestMagicToken}");
+
+        post.Headers.CacheControl!.NoStore.ShouldBeTrue();
+        get.Headers.CacheControl!.NoStore.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Should_allow_api_access_with_jwt_from_magic_link_post_body()
+    {
+        // Arrange - Get JWT via the body-based exchange
+        var magicResponse = await Client.PostAsJsonAsync("/evertask-monitoring/api/auth/magic",
+            new MagicLinkLoginRequest(TestMagicToken));
+        magicResponse.EnsureSuccessStatusCode();
+
+        var loginResult = await DeserializeResponseAsync<LoginResponse>(magicResponse);
+        var jwtToken    = loginResult!.Token;
+
+        // Act - Use JWT to access protected API
+        Client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", jwtToken);
+        var apiResponse = await Client.GetAsync("/evertask-monitoring/api/dashboard/overview");
+
+        // Assert
+        apiResponse.StatusCode.ShouldBe(HttpStatusCode.OK);
+    }
+
+    // ---------------------------------------------------------------- GET (legacy ?token= form, kept for compatibility)
 
     [Fact]
     public async Task Should_return_token_on_valid_magic_link()

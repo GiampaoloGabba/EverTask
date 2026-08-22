@@ -60,9 +60,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Magic-link token no longer travels in the URL (#22).** New `POST /api/auth/magic` takes the
+  token in the request body; the dashboard reads it from the URL fragment
+  (`/evertask-monitoring/magic#token=...`, never sent to the server), scrubs it from the address
+  bar and calls the POST endpoint. The `?token=` query form was written verbatim into anything
+  that logs request URLs (Serilog `UseSerilogRequestLogging()` via `RawTarget`, reverse proxies,
+  Azure HTTP logs, browser history), so a year-old log file still held a working credential.
+- Both magic-link endpoints now carry the `evertask-monitoring-login` rate-limit policy (they had
+  no throttling), compare the token with `CryptographicOperations.FixedTimeEquals` and answer
+  with `Cache-Control: no-store`.
 - Bump `System.Security.Cryptography.Xml` pins to 8.0.4 / 9.0.19 / 10.0.11 (five new high-severity GHSAs).
 - Pin `SSH.NET` to 2026.0.0 in Testcontainers consumers (GHSA-q939-rpr3-3284, high).
 - Pin `Microsoft.OpenApi` to 2.12.2 on net10 (transitive 2.0.0 flagged by GHSA-v5pm-xwqc-g5wc).
+- Clear all 11 open Dependabot alerts in the dashboard UI bundled with `EverTask.Monitor.Api`: bump
+  `react-router-dom` to 7.18.2 (CSRF bypass, DoS, open redirect, XSS) and `postcss` to 8.5.23 (path
+  traversal), pin transitive `brace-expansion` / `js-yaml` via `pnpm.overrides`.
+
+### Deprecated
+
+- `GET /api/auth/magic?token=...` and the `/evertask-monitoring/magic?token=...` dashboard URL
+  (#22). Both keep working for existing links; the GET is `[Obsolete]` and flagged `deprecated`
+  in the OpenAPI document. Use the fragment URL and the POST exchange instead. Docs
+  (`monitoring-dashboard.md`, `monitoring-api-reference.md`, configuration reference/cheatsheet)
+  explain the log exposure and the host-side Serilog mitigation; the `integrate-evertask` plugin
+  skill now hands out the fragment URL (plugin 1.1.1).
 
 ## [3.11.0] - 2026-06-30
 

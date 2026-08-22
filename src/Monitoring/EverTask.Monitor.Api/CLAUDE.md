@@ -38,7 +38,10 @@ cd UI && npm run build  # → ../wwwroot/
 - `JwtExpirationHours` (int, default: 8) - Token TTL
 - `SignalRHubPath` (readonly: "/evertask-monitoring/hub") - Fixed, cannot change
 - `AllowedIpAddresses` (string[], default: empty = allow all) - IP whitelist (CIDR supported)
-- `MagicLinkToken` (string?, default: null) - Static token for instant auth via `/api/auth/magic?token=...`
+- `MagicLinkToken` (string?, default: null) - Static token for instant auth. UI URL `/magic#token=...` (fragment,
+  never sent to the server) → `POST /api/auth/magic` with the token in the body. `GET ?token=` is `[Obsolete]`
+  (kept for compat, deprecated in OpenAPI) because the query lands in request logs (#22). Both share the login
+  rate-limit policy; comparison is `CryptographicOperations.FixedTimeEquals`; responses are `no-store`
 
 ## Architecture
 

@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using EverTask.Monitor.Api.DTOs.Auth;
 using EverTask.Monitor.Api.Options;
 using EverTask.Monitor.Api.Services;
@@ -92,24 +94,51 @@ public class AuthController : ControllerBase
     }
 
     /// <summary>
-    /// Authenticate via magic link token.
+    /// Authenticate via magic link token supplied in the request body.
     /// Returns a JWT session token if the magic link token is valid.
     /// Magic link must be configured via EverTaskApiOptions.MagicLinkToken.
+    /// Preferred over the GET variant: the token never appears in a URL, so it stays
+    /// out of server request logs, proxy access logs and browser history.
+    /// </summary>
+    /// <param name="request">Magic link exchange request</param>
+    /// <returns>JWT token and expiration information</returns>
+    [HttpPost("magic")]
+    [EnableRateLimiting(EverTaskApiOptions.LoginRateLimitPolicyName)]
+    [ProducesResponseType(typeof(LoginResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public ActionResult<LoginResponse> MagicLinkExchange([FromBody] MagicLinkLoginRequest? request = null)
+        => ExchangeMagicLinkToken(request?.Token);
+
+    /// <summary>
+    /// Authenticate via magic link token supplied in the query string.
+    /// Deprecated: the query string is written to server request logs (e.g. Serilog request
+    /// logging via RawTarget), reverse-proxy access logs and browser history, permanently
+    /// exposing the token. Use POST /api/auth/magic with the token in the body instead.
+    /// Kept for backward compatibility with existing ?token= links.
     /// </summary>
     /// <param name="token">The magic link token</param>
     /// <returns>JWT token and expiration information</returns>
+    [Obsolete("The query-string form leaks the token into request logs. Use POST /api/auth/magic with the token in the request body.")]
     [HttpGet("magic")]
+    [EnableRateLimiting(EverTaskApiOptions.LoginRateLimitPolicyName)]
     [ProducesResponseType(typeof(LoginResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     public ActionResult<LoginResponse> MagicLinkLogin([FromQuery] string? token)
+        => ExchangeMagicLinkToken(token);
+
+    private ActionResult<LoginResponse> ExchangeMagicLinkToken(string? token)
     {
+        // The response carries a session credential: keep it out of intermediary caches
+        Response.Headers.CacheControl = "no-store";
+
         if (string.IsNullOrEmpty(_options.MagicLinkToken))
         {
             return NotFound(new { message = "Magic link is not configured" });
         }
 
-        if (string.IsNullOrEmpty(token) || !string.Equals(token, _options.MagicLinkToken, StringComparison.Ordinal))
+        if (string.IsNullOrEmpty(token) || !FixedTimeEquals(token, _options.MagicLinkToken))
         {
             return Unauthorized(new { message = "Invalid magic link token" });
         }
@@ -119,4 +148,7 @@ public class AuthController : ControllerBase
 
         return Ok(response);
     }
+
+    private static bool FixedTimeEquals(string a, string b) =>
+        CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(a), Encoding.UTF8.GetBytes(b));
 }

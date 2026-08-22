@@ -5,6 +5,9 @@ using EverTask.Monitoring;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
+#if NET9_0_OR_GREATER
+using Microsoft.AspNetCore.OpenApi;
+#endif
 
 namespace EverTask.Monitor.Api.Extensions;
 
@@ -101,11 +104,7 @@ public static class ServiceCollectionExtensions
         // Register the isolated OpenAPI document (built-in ASP.NET Core generator). Registration is
         // unconditional so the EverTask.Monitor.Api.Scalar package can enable the document after this
         // call; the endpoint is only mapped when EnableOpenApiDocument is true (see MapEverTaskApi).
-        services.AddOpenApi(options.OpenApiDocumentName, openApiOptions =>
-        {
-            // Strictly this document's group: ungrouped host endpoints stay in the host's documents
-            openApiOptions.ShouldInclude = description => description.GroupName == options.OpenApiDocumentName;
-        });
+        services.AddOpenApi(options.OpenApiDocumentName, openApiOptions => ConfigureOpenApi(openApiOptions, options));
 #endif
 
         // Register startup filter to automatically configure middleware pipeline
@@ -192,11 +191,7 @@ public static class ServiceCollectionExtensions
         // Register the isolated OpenAPI document (built-in ASP.NET Core generator). Registration is
         // unconditional so the EverTask.Monitor.Api.Scalar package can enable the document after this
         // call; the endpoint is only mapped when EnableOpenApiDocument is true (see MapEverTaskApi).
-        services.AddOpenApi(options.OpenApiDocumentName, openApiOptions =>
-        {
-            // Strictly this document's group: ungrouped host endpoints stay in the host's documents
-            openApiOptions.ShouldInclude = description => description.GroupName == options.OpenApiDocumentName;
-        });
+        services.AddOpenApi(options.OpenApiDocumentName, openApiOptions => ConfigureOpenApi(openApiOptions, options));
 #endif
 
         // Register startup filter to automatically configure middleware pipeline
@@ -205,4 +200,23 @@ public static class ServiceCollectionExtensions
 
         return services;
     }
+
+#if NET9_0_OR_GREATER
+    private static void ConfigureOpenApi(OpenApiOptions openApiOptions, EverTaskApiOptions options)
+    {
+        // Strictly this document's group: ungrouped host endpoints stay in the host's documents
+        openApiOptions.ShouldInclude = description => description.GroupName == options.OpenApiDocumentName;
+
+        // The built-in generator ignores [Obsolete]; surface it as "deprecated" (GET /auth/magic, #22)
+        openApiOptions.AddOperationTransformer((operation, context, _) =>
+        {
+            if (context.Description.ActionDescriptor.EndpointMetadata.OfType<ObsoleteAttribute>().Any())
+            {
+                operation.Deprecated = true;
+            }
+
+            return Task.CompletedTask;
+        });
+    }
+#endif
 }
