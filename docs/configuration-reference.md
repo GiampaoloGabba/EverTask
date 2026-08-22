@@ -114,16 +114,23 @@ opt.SetDefaultRetryPolicy(new LinearRetryPolicy(new[]
     TimeSpan.FromSeconds(2)
 }))
 
+// Exponential backoff: 500ms, 1s, 2s, 4s, 8s
+opt.SetDefaultRetryPolicy(new ExponentialRetryPolicy(5, TimeSpan.FromMilliseconds(500)))
+
+// Exponential backoff with cap and jitter: 1s, 3s, 9s, 10s, 10s (±20% jitter, still capped)
+opt.SetDefaultRetryPolicy(new ExponentialRetryPolicy(5, TimeSpan.FromSeconds(1),
+    backoffFactor: 3.0, maxDelay: TimeSpan.FromSeconds(10), useJitter: true))
+
 // Custom retry policy (your own IRetryPolicy implementation; see
-// resilience/retry-policies.md for an exponential backoff example)
-opt.SetDefaultRetryPolicy(new MyExponentialBackoffPolicy())
+// resilience/retry-policies.md)
+opt.SetDefaultRetryPolicy(new MyCustomRetryPolicy())
 ```
 
 **Notes:**
-- `LinearRetryPolicy` is the only built-in policy; `retryCount` is the number of retries AFTER the initial attempt (e.g. `LinearRetryPolicy(3, ...)` = up to 4 executions), and both `retryCount` and `retryDelay` must be greater than zero.
-- Retries cannot be disabled via `LinearRetryPolicy`: to disable them, implement a trivial `IRetryPolicy` that invokes the action once; see [Custom Retry Policies](resilience/retry-policies.md#custom-retry-policies).
+- Built-in policies: `LinearRetryPolicy` (fixed delay or per-attempt delay array) and `ExponentialRetryPolicy` (growing delay: `initialDelay × backoffFactor^(n-1)`, optional `maxDelay` cap, optional ±20% per-attempt jitter). `retryCount` is the number of retries AFTER the initial attempt (e.g. `LinearRetryPolicy(3, ...)` = up to 4 executions); `retryCount` and delays must be greater than zero, `backoffFactor` must be >= 1.0 (1.0 behaves like linear), and `maxDelay` (when set) must be >= `initialDelay`.
+- Retries cannot be disabled via the built-in policies: to disable them, implement a trivial `IRetryPolicy` that invokes the action once; see [Custom Retry Policies](resilience/retry-policies.md#custom-retry-policies).
 
-**Exception filtering** (`LinearRetryPolicy`, fluent): by default every exception is retried **except** `OperationCanceledException` and `TimeoutException`, which are always fail-fast (hardcoded, cannot be overridden by a filter). Configure which exceptions retry with one of these modes (whitelist and blacklist **cannot** be mixed: doing so throws `InvalidOperationException`):
+**Exception filtering** (fluent, shared by `LinearRetryPolicy` and `ExponentialRetryPolicy` via `RetryPolicyBase<TPolicy>`): by default every exception is retried **except** `OperationCanceledException` and `TimeoutException`, which are always fail-fast (hardcoded, cannot be overridden by a filter). Configure which exceptions retry with one of these modes (whitelist and blacklist **cannot** be mixed: doing so throws `InvalidOperationException`):
 
 ```csharp
 .Handle<DbException>().Handle<HttpRequestException>()        // whitelist: retry ONLY these (+ derived)

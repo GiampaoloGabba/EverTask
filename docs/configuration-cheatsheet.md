@@ -218,7 +218,14 @@ Optional parameters on every `ITaskDispatcher.Dispatch(...)` overload:
 
 → [Reference: Resilience](resilience.md)
 
-`LinearRetryPolicy(int retryCount, TimeSpan retryDelay)` or `LinearRetryPolicy(TimeSpan[] retryDelays)`. Default global policy: `LinearRetryPolicy(3, 500ms)`, retrying everything except `OperationCanceledException`/`TimeoutException`. Fluent filtering (whitelist and blacklist cannot be mixed):
+Built-in policies (both share the same fluent filtering via `RetryPolicyBase<TPolicy>`):
+
+| Policy | Constructors | Delays |
+|--------|--------------|--------|
+| `LinearRetryPolicy` | `(int retryCount, TimeSpan retryDelay)` · `(TimeSpan[] retryDelays)` | Fixed (or explicit per-attempt array) |
+| `ExponentialRetryPolicy` | `(int retryCount, TimeSpan initialDelay, double backoffFactor = 2.0, TimeSpan? maxDelay = null, bool useJitter = false)` | `initialDelay × backoffFactor^(n-1)`, capped at `maxDelay`; `useJitter` adds ±20% per-attempt jitter (still capped). `backoffFactor` >= 1.0; `maxDelay` >= `initialDelay` |
+
+Default global policy: `LinearRetryPolicy(3, 500ms)`, retrying everything except `OperationCanceledException`/`TimeoutException`. Fluent filtering (whitelist and blacklist cannot be mixed):
 
 | Method | Mode | Notes |
 |--------|------|-------|

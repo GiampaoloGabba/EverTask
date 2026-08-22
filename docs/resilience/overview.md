@@ -12,7 +12,7 @@ Resilience features that recover from transient failures automatically and fail 
 ## Key Features
 
 ### Retry Policies
-Automatically retry failed tasks with configurable policies. Choose from built-in linear retry, implement custom exponential backoff, or integrate with Polly for advanced resilience patterns.
+Automatically retry failed tasks with configurable policies. Choose from the built-in linear or exponential backoff policies, implement your own, or integrate with Polly for advanced resilience patterns.
 
 **Learn more**: [Retry Policies](retry-policies.md)
 

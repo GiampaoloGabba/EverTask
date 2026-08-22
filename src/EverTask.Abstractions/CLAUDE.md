@@ -106,9 +106,18 @@ from the pluggable serializer on the backlog (`review/todo/b6-ievertaskserialize
 
 **Gotcha**: terminal rate-limit rejections (horizon exceeded, `Discard`) deliver a typed `RateLimitRejectedException` to `OnError`; plain deferrals invoke NO callback. The rate-limit key is a throttling key — never reuse the dispatch `taskKey` for it.
 
-### LinearRetryPolicy
+### Retry Policies (LinearRetryPolicy / ExponentialRetryPolicy)
 
-**Exception Filtering** (v1.6.0+):
+Both built-ins derive from `RetryPolicyBase<TPolicy>` (self-referencing generic), which owns the
+Execute loop, exception filtering, and OnRetry callbacks — a new delay-based policy only computes
+its delay array (and can override `GetRetryDelay` for runtime adjustments like jitter).
+
+| Policy | Delays |
+|--------|--------|
+| `LinearRetryPolicy(n, delay)` / `(TimeSpan[])` | Fixed / explicit per-attempt |
+| `ExponentialRetryPolicy(n, initialDelay, backoffFactor = 2.0, maxDelay = null, useJitter = false)` | `initialDelay × factor^(n-1)`, capped at `maxDelay`; jitter is ±20% per attempt at execution time, still capped. `backoffFactor` >= 1.0; `maxDelay` >= `initialDelay` |
+
+**Exception Filtering** (v1.6.0+, shared by both policies):
 
 | Pattern | Code | Priority |
 |---------|------|----------|
@@ -153,9 +162,8 @@ Handlers auto-registered as scoped services.
 ## 🔗 Test Coverage
 
 **When modifying retry policies or handlers**:
-- Update: `test/EverTask.Tests/RetryPolicyTests.cs`
-- Verify exception filtering in: `test/EverTask.Tests/ExceptionFilteringTests.cs`
-- Integration test patterns: `test/EverTask.Tests/IntegrationTests/`
+- Update: `test/EverTask.Tests/LinearRetryPolicyTests.cs` and `test/EverTask.Tests/ExponentialRetryPolicyTests.cs` (exception filtering is covered there too)
+- Integration test patterns: `test/EverTask.Tests/IntegrationTests/RetryPolicyIntegrationTests.cs`
 
 **When adding new handler options**:
 - Add test case in `test/EverTask.Tests/HandlerTests.cs`

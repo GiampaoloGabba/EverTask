@@ -4,6 +4,8 @@ namespace EverTask.Abstractions;
 
 /// <summary>
 /// Extension methods for configuring retry policies with common transient error patterns.
+/// Applies to any delay-based policy deriving from <see cref="RetryPolicyBase{TPolicy}"/>
+/// (<see cref="LinearRetryPolicy"/>, <see cref="ExponentialRetryPolicy"/>).
 /// </summary>
 public static class RetryPolicyExtensions
 {
@@ -11,7 +13,7 @@ public static class RetryPolicyExtensions
     /// Configures retry policy to handle common transient database exceptions.
     /// Includes: DbException, SqlException, TimeoutException (database-related)
     /// </summary>
-    /// <param name="policy">The linear retry policy to configure</param>
+    /// <param name="policy">The retry policy to configure</param>
     /// <returns>The policy instance for fluent chaining</returns>
     /// <exception cref="ArgumentNullException">Thrown when policy is null</exception>
     /// <example>
@@ -20,7 +22,8 @@ public static class RetryPolicyExtensions
     ///     .HandleTransientDatabaseErrors();
     /// </code>
     /// </example>
-    public static LinearRetryPolicy HandleTransientDatabaseErrors(this LinearRetryPolicy policy)
+    public static TPolicy HandleTransientDatabaseErrors<TPolicy>(this TPolicy policy)
+        where TPolicy : RetryPolicyBase<TPolicy>
     {
         if (policy == null)
             throw new ArgumentNullException(nameof(policy));
@@ -35,16 +38,17 @@ public static class RetryPolicyExtensions
     /// Configures retry policy to handle common transient network exceptions.
     /// Includes: HttpRequestException, SocketException, WebException, TaskCanceledException
     /// </summary>
-    /// <param name="policy">The linear retry policy to configure</param>
+    /// <param name="policy">The retry policy to configure</param>
     /// <returns>The policy instance for fluent chaining</returns>
     /// <exception cref="ArgumentNullException">Thrown when policy is null</exception>
     /// <example>
     /// <code>
-    /// RetryPolicy = new LinearRetryPolicy(3, TimeSpan.FromSeconds(1))
+    /// RetryPolicy = new ExponentialRetryPolicy(3, TimeSpan.FromSeconds(1))
     ///     .HandleTransientNetworkErrors();
     /// </code>
     /// </example>
-    public static LinearRetryPolicy HandleTransientNetworkErrors(this LinearRetryPolicy policy)
+    public static TPolicy HandleTransientNetworkErrors<TPolicy>(this TPolicy policy)
+        where TPolicy : RetryPolicyBase<TPolicy>
     {
         if (policy == null)
             throw new ArgumentNullException(nameof(policy));
@@ -61,7 +65,7 @@ public static class RetryPolicyExtensions
     /// Configures retry policy to handle all common transient errors (Database + Network).
     /// Combines HandleTransientDatabaseErrors() and HandleTransientNetworkErrors().
     /// </summary>
-    /// <param name="policy">The linear retry policy to configure</param>
+    /// <param name="policy">The retry policy to configure</param>
     /// <returns>The policy instance for fluent chaining</returns>
     /// <exception cref="ArgumentNullException">Thrown when policy is null</exception>
     /// <example>
@@ -70,7 +74,8 @@ public static class RetryPolicyExtensions
     ///     .HandleAllTransientErrors();
     /// </code>
     /// </example>
-    public static LinearRetryPolicy HandleAllTransientErrors(this LinearRetryPolicy policy)
+    public static TPolicy HandleAllTransientErrors<TPolicy>(this TPolicy policy)
+        where TPolicy : RetryPolicyBase<TPolicy>
     {
         if (policy == null)
             throw new ArgumentNullException(nameof(policy));

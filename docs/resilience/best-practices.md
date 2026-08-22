@@ -14,7 +14,7 @@ Best practices for retry policies, exception filtering, timeouts, cancellation, 
 1. **Use retries for transient failures** - Things like network errors, database timeouts, or temporary service unavailability are good candidates for retry logic
 2. **Don't retry permanent failures** - Validation errors, 404s, or authentication failures won't fix themselves on retry
 3. **Use exception filtering to fail-fast** - Configure `Handle<T>()` to only retry transient errors, saving resources and improving error visibility
-4. **Implement exponential backoff** - Give failing services breathing room instead of hammering them with requests
+4. **Use exponential backoff** - Give failing services breathing room instead of hammering them with requests (`ExponentialRetryPolicy`, ideally with `useJitter: true` so concurrent tasks don't retry in lockstep)
 5. **Set reasonable retry limits** - Usually 3-5 attempts is enough; more than that and you're probably dealing with a non-transient issue
 6. **Log retry attempts** - Use `OnRetry` callback to track patterns in retry behavior that reveal systemic problems
 

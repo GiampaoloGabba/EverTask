@@ -68,7 +68,7 @@ Code follows [David Fowl's AsyncGuidance.md](https://github.com/davidfowl/AspNet
 
 **When modifying worker executor**:
 - Update: `test/EverTask.Tests/IntegrationTests/WorkerServiceIntegrationTests.cs`
-- Verify retry integration: `test/EverTask.Tests/IntegrationTests/RetryPolicyIntegrationTests.cs`, `LinearRetryPolicyTests.cs`
+- Verify retry integration: `test/EverTask.Tests/IntegrationTests/RetryPolicyIntegrationTests.cs`, `LinearRetryPolicyTests.cs`, `ExponentialRetryPolicyTests.cs`
 - Check lazy/eager lifecycle: `test/EverTask.Tests/IntegrationTests/LazyModeIntegrationTests.cs`, `MemoryLeakRegressionTests.cs`
 
 **When modifying the rate-limit gate or limiter**:
