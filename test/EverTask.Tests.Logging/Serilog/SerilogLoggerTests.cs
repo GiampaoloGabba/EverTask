@@ -136,14 +136,45 @@ public class SerilogLoggerTests
     }
 
     [Fact]
-    public void Should_return_a_scope_when_beginning_a_string_scope()
+    public void Should_attach_the_scope_text_to_the_events_logged_inside_a_string_scope()
     {
-        var (logger, _) = CreateLogger();
+        var (logger, events) = CreateLogger();
 
-        using var scope = logger.BeginScope("Test scope");
+        // A non-KVP scope state is no longer dropped (the hand-written adapter silently ignored it):
+        // the bridge appends it to the event's `Scope` sequence.
+        using (var scope = logger.BeginScope("Test scope"))
+        {
+            scope.ShouldNotBeNull();
+            logger.LogInformation("inside");
+        }
 
-        scope.ShouldNotBeNull();
+        logger.LogInformation("outside");
+
+        events.Count.ShouldBe(2);
+        events[0].Properties["Scope"].ShouldBeOfType<SequenceValue>()
+                 .Elements.ShouldHaveSingleItem()
+                 .ShouldBeOfType<ScalarValue>().Value.ShouldBe("Test scope");
+        events[1].Properties.ContainsKey("Scope").ShouldBeFalse();
     }
+
+    [Fact]
+    public void Should_render_the_formatter_output_when_the_state_is_a_custom_type()
+    {
+        var (logger, events) = CreateLogger();
+
+        // A state that is NOT an IReadOnlyList<KeyValuePair<string, object?>> yields no template, so the
+        // formatter's output — not the state's own ToString() — is what must reach the sink.
+        logger.Log(LogLevel.Warning, new EventId(17, "CustomState"), new CustomState("import", 2), null,
+            static (state, _) => $"Task {state.Name} on attempt {state.Attempt}");
+
+        var logEvent = events.ShouldHaveSingleItem();
+        logEvent.Level.ShouldBe(LogEventLevel.Warning);
+        logEvent.RenderMessage().ShouldBe("Task import on attempt 2");
+        logEvent.MessageTemplate.Text.ShouldBe("{State:l}");
+        logEvent.Properties["State"].ShouldBeOfType<ScalarValue>().Value.ShouldBe("Task import on attempt 2");
+    }
+
+    private sealed record CustomState(string Name, int Attempt);
 }
 
 internal static partial class TestLog

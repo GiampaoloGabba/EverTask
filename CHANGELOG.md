@@ -46,11 +46,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Internal logs are source-generated (`[LoggerMessage]`) with stable, named, non-zero `EventId`s
   and PascalCase structured properties.** Every logging call in the library goes through a
   per-component `<Component>Log` class (no `object[]`, no boxing, `IsEnabled` guard before any
-  argument work). Placeholder names that were camelCase (`{taskId}`, `{status}`, `{taskKey}`,
-  `{name}`) are now `{TaskId}`, `{Status}`, `{TaskKey}`, `{TaskType}`: a structured sink treats
-  the two casings as different properties, so saved queries on the old names must be updated.
-  EventIds are allocated per component (core 1000–1999, EF Core storage 2000–2199, monitoring
-  3000–3299) and a test asserts solution-wide uniqueness; previously every internal log had
+  rendering; the few sites whose arguments are themselves expensive are guarded explicitly).
+  Placeholder names that were camelCase (`{taskId}`, `{status}`, `{taskKey}`, `{name}`) are now
+  `{TaskId}`, `{Status}`, `{TaskKey}`, `{TaskType}`: a structured sink treats the two casings as
+  different properties, so saved queries on the old names must be updated. The dispatcher's
+  recurring-recovery lines now carry `{TaskId}` too. EventIds are allocated in disjoint
+  per-component ranges (core 1000–1999, EF Core storage 2000–2199, monitoring 3000–3299) and
+  tests assert uniqueness within each range family; previously every internal log had
   `EventId = 0`.
 - **Worker lifecycle events reach the log as real templates.** `WorkerExecutor` used to render
   the monitoring message with `string.Format` and log the *rendered string as the template*, so a
@@ -91,6 +93,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged: consumer templates are still forwarded with their own placeholders and persisted as
   before.
 - `CA1848`, `CA1873`, `CA2254` and `CA1727` are now build errors in `src/`.
+
+### Performance (logging, #32)
+
+- **−11…−21% allocated bytes per task on the worker path.** LoadHarness `A4W` (worker-only,
+  500k tasks, 7 measured iterations, alternating base/patched on the same machine): 3,06–3,33 kB/task →
+  2,73–2,75 kB/task with the `EverTask` category at `Warning` (the call-site `object[]` + boxing
+  that happened before the level check is gone), 3,43–3,73 kB/task → 2,72–2,98 kB/task at
+  `Information` with a rendering sink. Throughput is equal or better (steady-state runs 0,96–1,05M
+  tasks/s → 1,13–1,35M tasks/s; the harness shows a pre-existing bimodal slow mode on both
+  trees). `A4S --storage postgres` (3 storage writes per task) stays DB-bound at ~4,8k tasks/s
+  with −0,1…−0,8 kB/task. The harness gained `--log <level>` and `--sink none|render|enumerate`
+  to make this kind of A/B repeatable (`benchmarks/EverTask.LoadHarness/README.md`).
 
 ### Added
 

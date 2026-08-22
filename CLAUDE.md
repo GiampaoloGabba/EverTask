@@ -37,7 +37,10 @@ applied while writing:
   `suggestion`; do not "fix" those sites.
 - **Internal logs are source-generated**: every log in `src/` is a `[LoggerMessage]` method on the component's
   `internal static partial class <Component>Log` (extension form, `this ILogger`, explicit EventId from the
-  component's range — a test asserts solution-wide uniqueness). Never call `logger.LogX(...)` directly in
+  component's range: core 1000–1999, EF Core storage 2000–2199, monitoring 3000–3299 — ranges are disjoint
+  by allocation and `LoggerMessageEventIdAssert` checks uniqueness per test domain). An argument that is
+  itself expensive (`GetType().Name`, `string.Join`, LINQ) goes behind an explicit `IsEnabled` check with
+  `SkipEnabledCheck = true` on the method. Never call `logger.LogX(...)` directly in
   `src/` (CA1848/CA1873/CA2254/CA1727 are build errors); the one exception is the `TaskLogCapture` forward of
   consumer-supplied templates. Per-task lifecycle and storage status-transition lines log at `Debug`; in
   `WorkerExecutor` the log level is independent of the monitoring event's `Severity`.

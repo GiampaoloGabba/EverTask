@@ -251,7 +251,11 @@ public class WorkerExecutor(
                 {
                     handler = task.GetOrResolveHandler(scope.ServiceProvider);
 
-                    logger.LazyHandlerResolved(handler.GetType(), task.PersistenceId);
+                    // Explicit guard: GetType().Name would otherwise run on every lazy execution —
+                    // the generated method's own IsEnabled check happens only AFTER the arguments
+                    // are evaluated (hence its SkipEnabledCheck).
+                    if (logger.IsEnabled(LogLevel.Debug))
+                        logger.LazyHandlerResolved(handler.GetType().Name, task.PersistenceId);
                 }
                 catch (Exception ex)
                 {
@@ -758,11 +762,16 @@ public class WorkerExecutor(
             try
             {
                 await asyncDisposable.DisposeAsync().ConfigureAwait(false);
-                logger.HandlerDisposed(handler.GetType());
+
+                // Same explicit guard as the lazy-resolution site: the handler's simple name is
+                // only worth computing once the level is known to be enabled.
+                if (logger.IsEnabled(LogLevel.Debug))
+                    logger.HandlerDisposed(handler.GetType().Name);
             }
             catch (Exception e)
             {
-                logger.HandlerDisposeFailed(e, handler.GetType());
+                if (logger.IsEnabled(LogLevel.Error))
+                    logger.HandlerDisposeFailed(e, handler.GetType().Name);
             }
         }
     }

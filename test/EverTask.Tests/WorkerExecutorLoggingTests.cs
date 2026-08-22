@@ -4,6 +4,7 @@ using EverTask.Logger;
 using EverTask.Monitoring;
 using EverTask.RateLimiting;
 using EverTask.Scheduler;
+using EverTask.Storage;
 using EverTask.Tests.TestHelpers;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -58,23 +59,53 @@ public class WorkerExecutorLoggingTests
         public Guid NewDatabaseFriendly() => Guid.NewGuid();
     }
 
-    private static WorkerExecutor CreateExecutor(RecordingLogger logger, IRateLimitGate? rateLimitGate = null)
+    /// <summary>
+    /// Real handler for the cancellation split: it writes one captured log (so the published event has
+    /// <c>ExecutionLogs</c> to carry), lets the test trigger whatever is cancelling it, then throws the
+    /// <see cref="OperationCanceledException"/> that <c>WorkerExecutor.HandleExceptionAsync</c> must classify.
+    /// </summary>
+    private sealed class CancellingProbeHandler(Action onExecuting) : EverTaskHandler<LoggingProbeTask>
     {
-        // A real container: CreateLogCapture resolves IGuidGenerator per task, and no ITaskStorage is
-        // registered so the run stays storage-free.
-        var services = new ServiceCollection()
-                       .AddSingleton<IGuidGenerator, TestGuidGenerator>()
-                       .BuildServiceProvider();
+        public const string LoggedLine = "probe handler is about to be cancelled";
+
+        public override Task Handle(LoggingProbeTask backgroundTask, CancellationToken cancellationToken)
+        {
+            Logger.LogInformation(LoggedLine);
+            onExecuting();
+            throw new OperationCanceledException();
+        }
+    }
+
+    private static WorkerExecutor CreateExecutor(RecordingLogger logger, IRateLimitGate? rateLimitGate = null,
+                                                 IWorkerBlacklist? workerBlacklist = null,
+                                                 ITaskStorage? taskStorage = null,
+                                                 EverTaskServiceConfiguration? configuration = null)
+    {
+        // A real container: CreateLogCapture resolves IGuidGenerator per task. ITaskStorage is registered
+        // only when a test asserts on the persisted outcome; otherwise the run stays storage-free.
+        var services = new ServiceCollection().AddSingleton<IGuidGenerator, TestGuidGenerator>();
+
+        if (taskStorage != null)
+            services.AddSingleton(taskStorage);
+
+        var provider = services.BuildServiceProvider();
 
         return new WorkerExecutor(
-            new Mock<IWorkerBlacklist>().Object,
-            new EverTaskServiceConfiguration(),
-            services.GetRequiredService<IServiceScopeFactory>(),
+            workerBlacklist ?? new Mock<IWorkerBlacklist>().Object,
+            configuration ?? new EverTaskServiceConfiguration(),
+            provider.GetRequiredService<IServiceScopeFactory>(),
             new Mock<IScheduler>().Object,
             new Mock<ICancellationSourceProvider>().Object,
             logger,
             NullLoggerFactory.Instance,
             rateLimitGate);
+    }
+
+    private static EverTaskServiceConfiguration CapturingConfiguration()
+    {
+        var configuration = new EverTaskServiceConfiguration();
+        configuration.PersistentLogger.Enable();
+        return configuration;
     }
 
     // Eager executor whose handler callback completes immediately: DoWork runs start → execute → complete.
@@ -92,10 +123,25 @@ public class WorkerExecutorLoggingTests
             rateLimitPolicy,
             rateLimitKey);
 
+    // Eager executor over a REAL handler: the worker injects the log capture through
+    // IEverTaskHandler<T>.SetLogCapture, so what the handler logs reaches the published event.
+    private static TaskHandlerExecutor HandlerExecutor(EverTaskHandler<LoggingProbeTask> handler,
+                                                       Guid persistenceId) =>
+        new(new LoggingProbeTask(),
+            handler,
+            null, null, null,
+            (task, token) => handler.Handle((LoggingProbeTask)task, token),
+            null, null, null,
+            persistenceId,
+            "default",
+            null,
+            AuditLevel.Full);
+
     private static (WorkerExecutor Executor, List<EverTaskEventData> Events) CreateSubscribedExecutor(
-        RecordingLogger logger, IRateLimitGate? rateLimitGate = null)
+        RecordingLogger logger, IRateLimitGate? rateLimitGate = null, IWorkerBlacklist? workerBlacklist = null,
+        ITaskStorage? taskStorage = null, EverTaskServiceConfiguration? configuration = null)
     {
-        var executor = CreateExecutor(logger, rateLimitGate);
+        var executor = CreateExecutor(logger, rateLimitGate, workerBlacklist, taskStorage, configuration);
         var events   = new List<EverTaskEventData>();
 
         executor.TaskEventOccurredAsync += data =>
@@ -174,25 +220,102 @@ public class WorkerExecutorLoggingTests
             var (executor, events) = CreateSubscribedExecutor(logger);
             var task = SampleExecutor();
 
+            // A measured elapsed time can land on a whole number of milliseconds, and a whole number
+            // renders identically in every culture — the assertion would then pass vacuously. Drive the
+            // seam with a FIXED fractional value, using the completion site's own delegates. The id is
+            // its own so this event can never be confused with the real completion below.
+            var seamTaskId = Guid.NewGuid();
+            executor.RegisterEvent(LogLevel.Debug, SeverityLevel.Information, task, null, null,
+                (TaskId: seamTaskId, ElapsedMs: 12.5),
+                static (l, a, _) => l.TaskCompleted(a.TaskId, a.ElapsedMs),
+                static a => string.Create(CultureInfo.InvariantCulture,
+                    $"Task with id {a.TaskId} was completed in {a.ElapsedMs} ms"));
+
+            var expected = $"Task with id {seamTaskId} was completed in 12.5 ms";
+            var fractional = await WaitForEventAsync(events,
+                e => e.Message.StartsWith($"Task with id {seamTaskId} was completed in ", StringComparison.Ordinal));
+            fractional.Message.ShouldBe(expected,
+                "the event sentence is rendered with InvariantCulture, never the ambient decimal separator");
+
+            // The real call site must produce that same shape: an invariant decimal and no trailing period.
             await executor.DoWork(task, CancellationToken.None);
 
             var prefix = $"Task with id {task.PersistenceId} was completed in ";
             var published = await WaitForEventAsync(events,
                 e => e.Message.StartsWith(prefix, StringComparison.Ordinal));
 
-            const string suffix = " ms";
-            var elapsed = published.Message[prefix.Length..^suffix.Length];
-
-            elapsed.Contains(',', StringComparison.Ordinal).ShouldBeFalse(
-                "the event sentence is rendered with InvariantCulture, never the ambient decimal separator");
-            double.TryParse(elapsed, NumberStyles.Float, CultureInfo.InvariantCulture, out _)
-                  .ShouldBeTrue($"'{elapsed}' must parse as an invariant double");
+            published.Message.ShouldMatch("^Task with id [0-9a-f-]{36} was completed in [0-9]+(\\.[0-9]+)? ms$");
             published.Message.ShouldNotEndWith(".", "event messages are fragments, with no trailing period");
         }
         finally
         {
             CultureInfo.CurrentCulture = original;
         }
+    }
+
+    [Fact]
+    public async Task Should_report_a_user_cancel_as_a_warning_when_the_task_id_is_blacklisted()
+    {
+        var logger    = new RecordingLogger();
+        var blacklist = new WorkerBlacklist();
+        var storage   = new Mock<ITaskStorage>();
+        var taskId    = Guid.NewGuid();
+
+        // The user cancels WHILE the handler runs: blacklisting up front would drop the delivery at the
+        // entry check instead of reaching the classification under test.
+        var task = HandlerExecutor(new CancellingProbeHandler(() => blacklist.Add(taskId)), taskId);
+        var (executor, events) = CreateSubscribedExecutor(logger, workerBlacklist: blacklist,
+            taskStorage: storage.Object, configuration: CapturingConfiguration());
+
+        await executor.DoWork(task, CancellationToken.None);
+
+        storage.Verify(s => s.SetCancelledByUser(taskId, AuditLevel.Full), Times.Once);
+        storage.Verify(s => s.SetCancelledByService(It.IsAny<Guid>(), It.IsAny<Exception>(), It.IsAny<AuditLevel>()),
+            Times.Never);
+
+        var expected = $"Task with id {taskId} was cancelled by the user";
+
+        var logEntry = SingleEntry(logger, e => e.Message == expected);
+        logEntry.Level.ShouldBe(LogLevel.Warning);
+        logEntry.Properties["TaskId"].ShouldBe(taskId);
+
+        var published = await WaitForEventAsync(events, e => e.Message == expected);
+        published.Severity.ShouldBe(nameof(SeverityLevel.Warning));
+        published.ExecutionLogs.ShouldNotBeNull();
+        published.ExecutionLogs.ShouldContain(l => l.Message == CancellingProbeHandler.LoggedLine,
+            "with log capture on, the cancellation event must carry the handler's own logs");
+    }
+
+    [Fact]
+    public async Task Should_report_a_service_stop_as_a_warning_when_the_task_id_is_not_blacklisted()
+    {
+        var logger    = new RecordingLogger();
+        var blacklist = new WorkerBlacklist();
+        var storage   = new Mock<ITaskStorage>();
+        var taskId    = Guid.NewGuid();
+
+        using var serviceCts = new CancellationTokenSource();
+
+        // The service stops WHILE the handler runs, and nobody cancelled this task: the same
+        // OperationCanceledException must classify as ServiceStopped, not as a user cancel.
+        var task = HandlerExecutor(new CancellingProbeHandler(serviceCts.Cancel), taskId);
+        var (executor, events) = CreateSubscribedExecutor(logger, workerBlacklist: blacklist,
+            taskStorage: storage.Object, configuration: CapturingConfiguration());
+
+        await executor.DoWork(task, serviceCts.Token);
+
+        storage.Verify(s => s.SetCancelledByService(taskId, It.IsAny<OperationCanceledException>(), AuditLevel.Full),
+            Times.Once);
+        storage.Verify(s => s.SetCancelledByUser(It.IsAny<Guid>(), It.IsAny<AuditLevel>()), Times.Never);
+
+        var expected = $"Task with id {taskId} was cancelled by service while stopping";
+
+        var logEntry = SingleEntry(logger, e => e.Message == expected);
+        logEntry.Level.ShouldBe(LogLevel.Warning);
+        logEntry.Properties["TaskId"].ShouldBe(taskId);
+
+        var published = await WaitForEventAsync(events, e => e.Message == expected);
+        published.Severity.ShouldBe(nameof(SeverityLevel.Warning));
     }
 
     [Fact]

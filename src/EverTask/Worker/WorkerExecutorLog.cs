@@ -5,12 +5,17 @@ namespace EverTask.Worker;
 /// (ranges are allocated per component in the #32 plan).
 /// </summary>
 /// <remarks>
-/// Two groups. The first one is called directly and keeps the generator's own <c>IsEnabled</c> guard.
-/// The second one (<c>SkipEnabledCheck = true</c>) is reached ONLY through
+/// Three groups. The first one is called directly and keeps the generator's own <c>IsEnabled</c> guard.
+/// <para>
+/// The second one (<c>SkipEnabledCheck = true</c>) is called directly too, but only from inside an
+/// explicit <c>if (logger.IsEnabled(...))</c> at the call site: its <c>HandlerType</c> argument costs a
+/// <c>GetType().Name</c>, and the generator's own guard would run AFTER the arguments are evaluated.
+/// </para>
+/// <para>
+/// The third one (<c>SkipEnabledCheck = true</c>) is reached ONLY through
 /// <c>WorkerExecutor.RegisterEvent</c>, whose L30 gate has already tested <c>IsEnabled</c> for exactly
 /// that level: calling one of those methods from anywhere else would log unconditionally.
-/// A <see cref="Type"/> argument renders as its full name — the simple name is not worth an eager
-/// <c>GetType().Name</c> before the level guard.
+/// </para>
 /// </remarks>
 internal static partial class WorkerExecutorLog
 {
@@ -19,10 +24,6 @@ internal static partial class WorkerExecutorLog
     [LoggerMessage(EventId = 1200, Level = LogLevel.Warning,
         Message = "Task {TaskId} is already executing in this process, skipping duplicate delivery")]
     public static partial void DuplicateDeliverySkipped(this ILogger logger, Guid taskId);
-
-    [LoggerMessage(EventId = 1201, Level = LogLevel.Debug,
-        Message = "Resolved handler {HandlerType} for lazy task {TaskId}")]
-    public static partial void LazyHandlerResolved(this ILogger logger, Type handlerType, Guid taskId);
 
     [LoggerMessage(EventId = 1202, Level = LogLevel.Error,
         Message = "Failed to resolve handler for task {TaskId}")]
@@ -35,12 +36,6 @@ internal static partial class WorkerExecutorLog
     [LoggerMessage(EventId = 1204, Level = LogLevel.Warning,
         Message = "Unable to resolve handler for rejected task {TaskId}: OnError will not be invoked")]
     public static partial void RejectedTaskHandlerUnresolved(this ILogger logger, Exception exception, Guid taskId);
-
-    [LoggerMessage(EventId = 1205, Level = LogLevel.Debug, Message = "Disposed handler {HandlerType}")]
-    public static partial void HandlerDisposed(this ILogger logger, Type handlerType);
-
-    [LoggerMessage(EventId = 1206, Level = LogLevel.Error, Message = "Error disposing handler {HandlerType}")]
-    public static partial void HandlerDisposeFailed(this ILogger logger, Exception exception, Type handlerType);
 
     [LoggerMessage(EventId = 1207, Level = LogLevel.Error, Message = "Error disposing eager handler scope")]
     public static partial void HandlerScopeDisposeFailed(this ILogger logger, Exception exception);
@@ -63,6 +58,20 @@ internal static partial class WorkerExecutorLog
 
     [LoggerMessage(EventId = 1212, Level = LogLevel.Error, Message = "Event handler failed for task {TaskId}")]
     public static partial void MonitoringSubscriberFailed(this ILogger logger, Exception exception, Guid taskId);
+
+    // ---- Handler-type sites: call them ONLY inside an explicit logger.IsEnabled(...) block ----
+
+    [LoggerMessage(EventId = 1201, Level = LogLevel.Debug, SkipEnabledCheck = true,
+        Message = "Resolved handler {HandlerType} for lazy task {TaskId}")]
+    public static partial void LazyHandlerResolved(this ILogger logger, string handlerType, Guid taskId);
+
+    [LoggerMessage(EventId = 1205, Level = LogLevel.Debug, SkipEnabledCheck = true,
+        Message = "Disposed handler {HandlerType}")]
+    public static partial void HandlerDisposed(this ILogger logger, string handlerType);
+
+    [LoggerMessage(EventId = 1206, Level = LogLevel.Error, SkipEnabledCheck = true,
+        Message = "Error disposing handler {HandlerType}")]
+    public static partial void HandlerDisposeFailed(this ILogger logger, Exception exception, string handlerType);
 
     // ---- Monitoring-event sites: gated by WorkerExecutor.RegisterEvent, never call them directly ----
 
