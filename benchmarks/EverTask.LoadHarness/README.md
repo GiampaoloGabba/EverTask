@@ -39,7 +39,19 @@ Common knobs (defaults in `Infra/RunConfig.cs`):
 --warmup 3          discarded iterations (JIT/PGO + thread-pool ramp-up)
 --measured 7        measured iterations
 --out benchmarks/results   JSON report directory
+--log Warning       minimum level for EverTask's OWN logging: Trace | Debug | Information | Warning |
+                    Error | Critical | None. Warning is what the harness always pinned, so numbers taken
+                    before this knob existed stay comparable
+--sink none         what consumes the log records: none (no provider — MEL drops them, the historical
+                    wiring) | render (calls the formatter and discards the string: a console/file sink
+                    minus the I/O) | enumerate (reads the event id and walks the state's key/value pairs:
+                    a structured sink — Serilog/Seq — minus the I/O). The fake sink allocates nothing of
+                    its own; what it does allocate is what the real sink would (`Infra/NullSinkLoggerProvider.cs`)
 ```
+
+Both apply to the engine scenarios (`HostFactory`) and the storage-only ones (`StorageMatrix`), and both are
+echoed in the run header, the result block and the JSON report — an A/B output says which logging it ran with.
+A typo in either value aborts the run instead of silently falling back to the default.
 
 Examples:
 
@@ -51,6 +63,45 @@ dotnet run -c Release --project benchmarks/EverTask.LoadHarness -- A4S --storage
 # anti-polling reference at a 1s interval
 dotnet run -c Release --project benchmarks/EverTask.LoadHarness -- A3 --storage sqlite --count 20k --poll-interval 1000
 ```
+
+### A/B recipe for issue #32 (cost of EverTask's own logging)
+
+`--log`/`--sink` exist to A/B the `[LoggerMessage]` migration. The classic `logger.LogX(...)` extensions
+build a `FormattedLogValues` and box every argument into an `object[]` **before** the level is checked, so
+they cost something even at a level that is off; the generated methods check `IsEnabled` first. Three cells
+cover the range:
+
+| Cell | Knobs | What it isolates |
+|------|-------|------------------|
+| level off | `--log Warning` | today's default — what a *disabled* call site still costs (`--sink none` is implied) |
+| rendering sink | `--log Information --sink render` | level on, message rendered: a console/file sink |
+| structured sink | `--log Debug --sink enumerate` | a Serilog/Seq sink at the noisiest level |
+
+Two scenarios: **A4W** (engine logging — dispatcher/worker/executor, no DB) and **A4S `--storage postgres`**
+(storage logging — the per-write `SetStatus` line; **needs Docker**).
+
+```bash
+# one cell = one command; run all six per checkout
+dotnet run -c Release --project benchmarks/EverTask.LoadHarness -- A4W --count 500k --warmup 3 --measured 7 --log Warning
+dotnet run -c Release --project benchmarks/EverTask.LoadHarness -- A4W --count 500k --warmup 3 --measured 7 --log Information --sink render
+dotnet run -c Release --project benchmarks/EverTask.LoadHarness -- A4W --count 500k --warmup 3 --measured 7 --log Debug --sink enumerate
+dotnet run -c Release --project benchmarks/EverTask.LoadHarness -- A4S --storage postgres --parallelism 16 --count 20k --warmup 3 --measured 7 --log Warning
+dotnet run -c Release --project benchmarks/EverTask.LoadHarness -- A4S --storage postgres --parallelism 16 --count 20k --warmup 3 --measured 7 --log Information --sink render
+dotnet run -c Release --project benchmarks/EverTask.LoadHarness -- A4S --storage postgres --parallelism 16 --count 20k --warmup 3 --measured 7 --log Debug --sink enumerate
+```
+
+How to run and read it:
+
+- **Alternate the checkouts** — base, patched, base, patched — three runs of each cell per checkout, on an
+  **idle machine**. A whole base block followed by a whole patched block bakes thermal and background drift
+  into the delta.
+- Compare the **median tasks/s** and the **median bytes/task** of each cell's three runs, and **report the CV**
+  the harness prints: above 5% the cell isn't steady-state and its delta isn't citable.
+- `BytesPerTask` is comparable **only within the same `--log`/`--sink` pair** — the sink's own rendering and
+  state boxing are part of the number by design (they are what a real sink costs). Never compare a
+  `--sink render` run against a `--sink none` one.
+- Everything else must match between checkouts, GC mode included (`DOTNET_gcServer`), and the two checkouts
+  must be built with the same SDK.
 
 ### Usage notes / gotchas
 - **SQLite is single-writer.** Run `A4S --storage sqlite` with `--parallelism 1` for a clean per-write

@@ -14,7 +14,7 @@ public static class Runner
     {
         Console.WriteLine($"=== {scenario.Id} — {scenario.Description} ===");
         Console.WriteLine($"count={cfg.Count:N0} parallelism={cfg.Parallelism} capacity={cfg.Capacity:N0} " +
-                          $"warmup={cfg.Warmup} measured={cfg.Measured}");
+                          $"warmup={cfg.Warmup} measured={cfg.Measured} log={cfg.Log} sink={cfg.Sink}");
 
         var latency = new LatencyRecorder();
 
@@ -64,7 +64,7 @@ public static class Runner
         var bytesPerTask = totalTasks > 0 ? (double)(allocAfter - allocBefore) / totalTasks : 0;
         var snap = latency.Snapshot();
 
-        PrintSummary(stats, snap, bytesPerTask);
+        PrintSummary(cfg, stats, snap, bytesPerTask);
 
         var report = new RunReport(
             Scenario: scenario.Id,
@@ -80,7 +80,7 @@ public static class Runner
         Console.WriteLine();
     }
 
-    private static void PrintSummary(ThroughputStats t, LatencySnapshot l, double bytesPerTask)
+    private static void PrintSummary(RunConfig cfg, ThroughputStats t, LatencySnapshot l, double bytesPerTask)
     {
         Console.WriteLine($"  Throughput      : {t.MeanPerSecond:N0} tasks/s  (stdev {t.StdDevPerSecond:N0}, CV {t.Cv:P1})");
         if (t.Cv > 0.05)
@@ -89,6 +89,8 @@ public static class Runner
                           $"p999={Us(l.P999Ns)} max={Us(l.MaxNs)}");
         Console.WriteLine($"  p999/p50        : {(l.P50Ns > 0 ? (double)l.P999Ns / l.P50Ns : 0):F1}x   (tail-divergence signal)");
         Console.WriteLine($"  Allocated       : {bytesPerTask:F1} bytes/task");
+        // Logging changes both numbers above — an A/B is only meaningful between runs with the same pair.
+        Console.WriteLine($"  Logging         : level={cfg.Log}, sink={cfg.Sink}");
     }
 
     private static string Us(long ns) => (ns / 1000.0).ToString("F2");

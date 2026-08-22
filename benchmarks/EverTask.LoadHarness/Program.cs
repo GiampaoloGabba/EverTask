@@ -10,10 +10,21 @@ using EverTask.LoadHarness.Scenarios;
 //   tier0  run A1, A2, A4W (no DB)      anchors  run all Tier-0 (A4S/A3 honour --storage)
 // Common knobs: --count 1m --parallelism 16 --producers 4 --capacity 2000 --warmup 3 --measured 7
 //               --storage inmemory|sqlite|sqlserver|postgres   --poll-interval 1000   --out benchmarks/results
+//               --log Warning|Information|Debug|…   --sink none|render|enumerate   (EverTask's own logging)
 
 var scenarioId = args.Length > 0 && !args[0].StartsWith("--") ? args[0].ToUpperInvariant() : "TIER0";
 var configStart = args.Length > 0 && !args[0].StartsWith("--") ? 1 : 0;
-var cfg = RunConfig.Parse(args, configStart);
+
+RunConfig cfg;
+try
+{
+    cfg = RunConfig.Parse(args, configStart);
+}
+catch (ArgumentException ex)
+{
+    Console.Error.WriteLine(ex.Message);
+    return 1;
+}
 
 var registry = new Dictionary<string, IScenario>(StringComparer.OrdinalIgnoreCase)
 {

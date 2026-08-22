@@ -4,7 +4,6 @@ using EverTask.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 
 namespace EverTask.LoadHarness.Infra;
 
@@ -27,7 +26,7 @@ public static class HostFactory
         var host = new HostBuilder()
             .ConfigureServices(services =>
             {
-                services.AddLogging(b => b.SetMinimumLevel(LogLevel.Warning));
+                services.AddLogging(b => NullSinkLoggerProvider.Configure(b, cfg));
                 services.AddSingleton<RunContext>();
 
                 var builder = services.AddEverTask(o =>

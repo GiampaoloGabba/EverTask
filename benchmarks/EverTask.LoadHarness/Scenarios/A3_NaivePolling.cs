@@ -31,7 +31,7 @@ public sealed class A3NaivePolling : IScenario
 
     public async Task SetupAsync(RunConfig cfg, CancellationToken ct)
     {
-        _handle = await StorageMatrix.CreateAsync(cfg.Storage, ct);
+        _handle = await StorageMatrix.CreateAsync(cfg, ct);
         Console.WriteLine($"  storage: {_handle.Description}  poll-interval={cfg.PollIntervalMs}ms");
     }
 

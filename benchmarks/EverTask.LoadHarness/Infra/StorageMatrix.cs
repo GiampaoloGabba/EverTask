@@ -4,24 +4,24 @@ using EverTask.Storage.Postgres;
 using EverTask.Storage.Sqlite;
 using EverTask.Storage.SqlServer;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 
 namespace EverTask.LoadHarness.Infra;
 
 /// <summary>
 /// Builds a standalone <see cref="ITaskStorage"/> for each backend (A4-storage / A3). Provisioning of
 /// the external resource (SQLite temp file, Docker container) is delegated to
-/// <see cref="StorageProvisioner"/>; this just wires the storage into a minimal DI graph. Logging is
-/// pinned to Warning so the per-write Info logs don't pollute the measurement (BENCHMARK_PLAN §5).
+/// <see cref="StorageProvisioner"/>; this just wires the storage into a minimal DI graph. Logging defaults
+/// to Warning with no sink so the per-write Info logs don't pollute the measurement (BENCHMARK_PLAN §5);
+/// <c>--log</c>/<c>--sink</c> raise it when the logging cost is what's being measured.
 /// </summary>
 public static class StorageMatrix
 {
-    public static async Task<StorageHandle> CreateAsync(string storage, CancellationToken ct = default)
+    public static async Task<StorageHandle> CreateAsync(RunConfig cfg, CancellationToken ct = default)
     {
-        var prov = await StorageProvisioner.ProvisionAsync(storage, ct);
+        var prov = await StorageProvisioner.ProvisionAsync(cfg.Storage, ct);
 
         var services = new ServiceCollection();
-        services.AddLogging(b => b.SetMinimumLevel(LogLevel.Warning));
+        services.AddLogging(b => NullSinkLoggerProvider.Configure(b, cfg));
         var builder = services.AddEverTask(o => o.RegisterTasksFromAssembly(typeof(CountingTask).Assembly));
         Register(builder, prov);
 

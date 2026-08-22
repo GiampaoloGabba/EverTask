@@ -28,7 +28,7 @@ public sealed class A4StorageOnly : IScenario
 
     public async Task SetupAsync(RunConfig cfg, CancellationToken ct)
     {
-        _handle = await StorageMatrix.CreateAsync(cfg.Storage, ct);
+        _handle = await StorageMatrix.CreateAsync(cfg, ct);
         Console.WriteLine($"  storage: {_handle.Description}  (3 round-trips/task)");
     }
 

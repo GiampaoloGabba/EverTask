@@ -1,3 +1,6 @@
+using System.Text.Json.Serialization;
+using Microsoft.Extensions.Logging;
+
 namespace EverTask.LoadHarness.Infra;
 
 /// <summary>
@@ -47,6 +50,18 @@ public sealed record RunConfig
     /// durable path (a tiny task is dominated by the DB layer, a real payload by serialization).</summary>
     public string Payload { get; init; } = "none";
 
+    /// <summary>Minimum level for EverTask's own logging: Trace | Debug | Information | Warning | Error |
+    /// Critical | None. Warning is the harness's historical setting — the per-write Info logs stay off, so
+    /// numbers captured before this knob existed remain comparable.</summary>
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public LogLevel Log { get; init; } = LogLevel.Warning;
+
+    /// <summary>What consumes the log records: none (no provider, historical) | render | enumerate. See
+    /// <see cref="NullSinkLoggerProvider"/> — with <c>none</c>, an enabled level costs only what the call
+    /// site itself allocates; a sink is what makes formatting and state-reading show up in bytes/task.</summary>
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public LogSinkMode Sink { get; init; } = LogSinkMode.None;
+
     public static RunConfig Parse(IReadOnlyList<string> args, int startIndex)
     {
         var cfg = new RunConfig();
@@ -67,6 +82,8 @@ public sealed record RunConfig
                 "--measured"    => cfg with { Measured = int.Parse(val) },
                 "--out"         => cfg with { OutputDir = val },
                 "--payload"     => cfg with { Payload = val.ToLowerInvariant() },
+                "--log"         => cfg with { Log = ParseEnum<LogLevel>("--log", val) },
+                "--sink"        => cfg with { Sink = ParseEnum<LogSinkMode>("--sink", val) },
                 _               => cfg
             };
         }
@@ -83,6 +100,12 @@ public sealed record RunConfig
         var chars = suffix == 'k' ? int.Parse(spec[..^1]) * 1024 : int.Parse(spec);
         return chars <= 0 ? null : new string('x', chars);
     }
+
+    // Reject a typo loudly: silently falling back to the default would mislabel an A/B result.
+    private static T ParseEnum<T>(string option, string raw) where T : struct, Enum =>
+        Enum.TryParse<T>(raw, ignoreCase: true, out var value) && Enum.IsDefined(value)
+            ? value
+            : throw new ArgumentException($"Unknown value '{raw}' for {option}. Expected: {string.Join(" | ", Enum.GetNames<T>())}.");
 
     // Accept human-friendly counts: 1_000_000, 1000000, 1m, 100k.
     private static long ParseLong(string raw)
