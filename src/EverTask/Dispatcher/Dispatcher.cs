@@ -173,8 +173,7 @@ public class Dispatcher(
 
             if (existingTask != null)
             {
-                logger.LogInformation("Found existing task with key {TaskKey}, ID {TaskId}, Status {Status}",
-                    taskKey, existingTask.Id, existingTask.Status);
+                logger.FoundExistingTaskByKey(taskKey, existingTask.Id, existingTask.Status);
 
                 // An IMMEDIATE one-shot re-dispatch of a row whose delivery is already in flight (in a
                 // channel or executing) would either lose the new payload (the in-flight delivery already
@@ -183,10 +182,7 @@ public class Dispatcher(
                 // recurring re-dispatch parks a fresh occurrence in the scheduler, so it is left to proceed.
                 if (executionTime == null && recurring == null && DeliveryRegistry?.IsDelivering(existingTask.Id) == true)
                 {
-                    logger.LogWarning(
-                        "Dispatch with task key {TaskKey} discarded: task {TaskId} has a delivery in flight; " +
-                        "the new dispatch is rejected to avoid losing the payload or double-executing.",
-                        taskKey, existingTask.Id);
+                    logger.DispatchDiscardedDeliveryInFlight(taskKey, existingTask.Id);
                     return existingTask.Id;
                 }
 
@@ -194,9 +190,7 @@ public class Dispatcher(
                 // no recurring config — that would silently destroy its schedule and history (G16).
                 if (existingTask.IsRecurring && recurring == null)
                 {
-                    logger.LogWarning(
-                        "Dispatch with task key {TaskKey} discarded: task {TaskId} is recurring and cannot be " +
-                        "converted to a one-shot via taskKey.", taskKey, existingTask.Id);
+                    logger.DispatchDiscardedRecurringToOneShot(taskKey, existingTask.Id);
                     return existingTask.Id;
                 }
 
@@ -207,15 +201,12 @@ public class Dispatcher(
                     // If task is in progress, return existing ID (cannot modify running task)
                     if (existingTask.Status is QueuedTaskStatus.InProgress)
                     {
-                        logger.LogWarning(
-                            "Dispatch with task key {TaskKey} discarded: recurring task {TaskId} is in progress and nothing was scheduled. " +
-                            "Self-redispatch from inside a handler must use a null or per-attempt task key.",
-                            taskKey, existingTask.Id);
+                        logger.DispatchDiscardedRecurringInProgress(taskKey, existingTask.Id);
                         return existingTask.Id;
                     }
 
                     // For all other statuses (including Completed/Failed): update, don't remove
-                    logger.LogInformation("Updating recurring task {TaskId} (preserving history)", existingTask.Id);
+                    logger.UpdatingRecurringTask(existingTask.Id);
                     existingTaskId = existingTask.Id;
 
                     // Preserve existing NextRunUtc (even if in the past) to maintain schedule rhythm
@@ -224,8 +215,7 @@ public class Dispatcher(
                     {
                         existingNextRunUtc = existingTask.NextRunUtc;
                         existingCurrentRunCount = existingTask.CurrentRunCount;
-                        logger.LogDebug("Preserving existing NextRunUtc {NextRunUtc} and CurrentRunCount {CurrentRunCount} for recurring task {TaskId}",
-                            existingNextRunUtc, existingCurrentRunCount, existingTask.Id);
+                        logger.PreservingRecurringSchedule(existingNextRunUtc, existingCurrentRunCount, existingTask.Id);
                     }
                 }
                 // For NON-RECURRING tasks: original behavior
@@ -237,22 +227,19 @@ public class Dispatcher(
                         or QueuedTaskStatus.Cancelled
                         or QueuedTaskStatus.ServiceStopped)
                     {
-                        logger.LogInformation("Removing terminated task {TaskId} to create new one", existingTask.Id);
+                        logger.RemovingTerminatedTask(existingTask.Id);
                         await taskStorage.Remove(existingTask.Id, ct).ConfigureAwait(false);
                     }
                     // If task is in progress, return existing ID (cannot modify running task)
                     else if (existingTask.Status is QueuedTaskStatus.InProgress)
                     {
-                        logger.LogWarning(
-                            "Dispatch with task key {TaskKey} discarded: task {TaskId} is in progress and nothing was scheduled. " +
-                            "Self-redispatch from inside a handler must use a null or per-attempt task key.",
-                            taskKey, existingTask.Id);
+                        logger.DispatchDiscardedTaskInProgress(taskKey, existingTask.Id);
                         return existingTask.Id;
                     }
                     // If task is pending (Queued/WaitingQueue/Pending), update it
                     else
                     {
-                        logger.LogInformation("Updating pending task {TaskId}", existingTask.Id);
+                        logger.UpdatingPendingTask(existingTask.Id);
                         existingTaskId = existingTask.Id;
                     }
                 }
@@ -282,7 +269,7 @@ public class Dispatcher(
                 {
                     nextRun = existingNextRunUtc;
                     executionTime = nextRun;
-                    logger.LogInformation("Using preserved NextRunUtc {NextRun} for recurring task (still in future)", nextRun);
+                    logger.UsingPreservedNextRun(nextRun, existingTaskId);
                 }
                 // L16: on recovery, if the pending occurrence slipped into the past but is still the CURRENT
                 // one (the next occurrence is not due yet), execute IT now instead of skipping it — a short
@@ -294,9 +281,7 @@ public class Dispatcher(
                 {
                     nextRun       = existingNextRunUtc;
                     executionTime = nextRun;
-                    logger.LogInformation(
-                        "Recovery: executing pending occurrence {NextRun} that slipped into the recent past (grace window)",
-                        nextRun);
+                    logger.RecoveryExecutingSlippedOccurrence(nextRun, existingTaskId);
                 }
                 else
                 {
@@ -315,9 +300,7 @@ public class Dispatcher(
                         // would turn a normal end-of-series into a recovery error — and, combined with a
                         // stale NextRunUtc, a per-restart poison (the row keeps coming back recoverable).
                         // Fail-fast on a genuinely malformed expression stays on the new-task path below.
-                        logger.LogInformation(
-                            "Recovery: recurring task {TaskId} has no occurrence left before RunUntil; finalizing the series as completed.",
-                            existingTaskId);
+                        logger.RecoverySeriesExhausted(existingTaskId);
 
                         if (taskStorage != null && existingTaskId.HasValue)
                             await taskStorage.SetRecurringSeriesCompleted(
@@ -329,8 +312,7 @@ public class Dispatcher(
 
                     nextRun = result.NextRun;
                     executionTime = nextRun;
-                    logger.LogInformation("Calculated NextRunUtc {NextRun} from past NextRunUtc {PastNextRun} (skipped {SkippedCount})",
-                        nextRun, existingNextRunUtc, result.SkippedCount);
+                    logger.CalculatedNextRunFromPast(nextRun, existingTaskId, existingNextRunUtc, result.SkippedCount);
                 }
             }
             else
@@ -379,13 +361,13 @@ public class Dispatcher(
                 if (existingTaskId == null)
                 {
                     // New task - persist it
-                    logger.LogDebug("Persisting Task: {Type}", taskEntity.Type);
+                    logger.PersistingTask(taskEntity.Type);
                     await taskStorage.Persist(taskEntity, ct).ConfigureAwait(false);
                 }
                 else
                 {
                     // Existing task - update it
-                    logger.LogDebug("Updating Task: {Type}", taskEntity.Type);
+                    logger.UpdatingTask(taskEntity.Type);
                     await taskStorage.UpdateTask(taskEntity, ct).ConfigureAwait(false);
                 }
             }
@@ -399,15 +381,12 @@ public class Dispatcher(
                     var winner = await taskStorage.GetByTaskKey(taskKey, ct).ConfigureAwait(false);
                     if (winner != null && winner.Id != taskEntity.Id)
                     {
-                        logger.LogWarning(
-                            "Task key {TaskKey} was won by a concurrent dispatch ({WinnerId}); returning the winner id.",
-                            taskKey, winner.Id);
+                        logger.TaskKeyWonByConcurrentDispatch(taskKey, winner.Id);
                         return winner.Id;
                     }
                 }
 
-                logger.LogError(e, "Unable to {Action} the task {FullType}",
-                    existingTaskId == null ? "persist" : "update", task);
+                logger.UnableToPersistTask(e, existingTaskId == null ? "persist" : "update", task.GetType());
                 if (serviceConfiguration.ThrowIfUnableToPersist)
                     throw;
             }
@@ -512,7 +491,7 @@ public class Dispatcher(
         // Feature disabled globally
         if (!serviceConfiguration.UseLazyHandlerResolution)
         {
-            logger.LogDebug("Lazy handler resolution disabled globally (UseLazyHandlerResolution = false)");
+            logger.LazyResolutionDisabledGlobally();
             return false;
         }
 

@@ -148,10 +148,8 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
             var minInterval      = recurring.GetMinimumInterval();
             if (minInterval < emissionInterval)
             {
-                serviceFactory.GetService<IEverTaskLogger<TaskHandlerWrapperImp<TTask>>>()?.LogWarning(
-                    "Recurring task {TaskType} runs every {MinInterval} but its rate-limit policy refills one " +
-                    "permit every {EmissionInterval}: occurrences will steadily accumulate behind the limiter",
-                    typeof(TTask).Name, minInterval, emissionInterval);
+                serviceFactory.GetService<IEverTaskLogger<TaskHandlerWrapperImp<TTask>>>()
+                              ?.RecurringFasterThanRateLimit(typeof(TTask).Name, minInterval, emissionInterval);
             }
         }
 
@@ -162,9 +160,8 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
         catch (Exception ex)
         {
             // Fail-safe: a broken key selector must not lose the task; it executes ungated
-            serviceFactory.GetService<IEverTaskLogger<TaskHandlerWrapperImp<TTask>>>()?.LogWarning(ex,
-                "GetRateLimitKey failed for task type {TaskType}: the task will execute WITHOUT rate limiting",
-                typeof(TTask).Name);
+            serviceFactory.GetService<IEverTaskLogger<TaskHandlerWrapperImp<TTask>>>()
+                          ?.RateLimitKeySelectorFailed(ex, typeof(TTask).Name);
             return (policy, null);
         }
     }
