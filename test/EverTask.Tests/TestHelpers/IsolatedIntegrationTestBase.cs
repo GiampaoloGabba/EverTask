@@ -169,6 +169,16 @@ public abstract class IsolatedIntegrationTestBase : IAsyncDisposable
     }
 
     /// <summary>
+    /// Helper: Waits for a task to be accepted by the dispatch pipeline. Use this for tasks whose
+    /// first occurrence is due immediately, where waiting for the transient WaitingQueue status is a
+    /// race against the scheduler (see <see cref="TaskWaitHelper.WaitForTaskAcceptedAsync"/>).
+    /// </summary>
+    protected async Task<QueuedTask> WaitForTaskAcceptedAsync(Guid taskId, int timeoutMs = 5000)
+    {
+        return await TaskWaitHelper.WaitForTaskAcceptedAsync(Storage, taskId, timeoutMs);
+    }
+
+    /// <summary>
     /// Helper: Waits for a specific number of tasks in storage
     /// </summary>
     protected async Task<QueuedTask[]> WaitForTaskCountAsync(int expectedCount, int timeoutMs = 5000)

@@ -118,8 +118,9 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
         // Every 2 seconds, max 3 runs
         var taskId = await Dispatcher.Dispatch(task, builder => builder.Schedule().Every(2).Seconds().MaxRuns(3));
 
-        // Wait for task to be scheduled
-        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.WaitingQueue, timeoutMs: 1000);
+        // Wait for task to be parked: the first occurrence is 2s away, so WaitingQueue is observable
+        // for that whole window (timeout sized on the window, not on a 1s default)
+        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.WaitingQueue, timeoutMs: 2000);
 
         var pt = await Storage.GetAll();
         pt.Length.ShouldBe(1);
@@ -187,8 +188,9 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
                    .Every(2).Seconds()
                    .MaxRuns(3));
 
-        // Wait for task to be scheduled and start executing
-        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.WaitingQueue, timeoutMs: 1000);
+        // RunNow: the first occurrence is due immediately, so the task can leave WaitingQueue before
+        // the first poll and never come back to it. Wait for it to be accepted by the pipeline instead.
+        await WaitForTaskAcceptedAsync(taskId, timeoutMs: 2000);
 
         var pt = await Storage.GetAll();
         pt.Length.ShouldBe(1);
@@ -218,8 +220,8 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
         // Every 2 seconds, max 3 runs - first run will retry internally due to LinearRetryPolicy(3, 50ms)
         var taskId = await Dispatcher.Dispatch(task, builder => builder.Schedule().Every(2).Seconds().MaxRuns(3));
 
-        // Wait for task to be scheduled
-        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.WaitingQueue, timeoutMs: 1000);
+        // Wait for task to be parked: the first occurrence is 2s away (timeout sized on that window)
+        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.WaitingQueue, timeoutMs: 2000);
 
         // Wait for recurring task to complete 3 runs
         // First run: fails twice (retry), succeeds on 3rd attempt
@@ -255,10 +257,14 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
         var task3 = new TestTaskDelayed2();
         var task3Id = await Dispatcher.Dispatch(task3, builder => builder.RunNow().Then().Every(2).Seconds().MaxRuns(2));
 
-        // Wait for all tasks to be scheduled
-        await WaitForTaskStatusAsync(task1Id, QueuedTaskStatus.WaitingQueue, timeoutMs: 1000);
-        await WaitForTaskStatusAsync(task2Id, QueuedTaskStatus.WaitingQueue, timeoutMs: 1000);
-        await WaitForTaskStatusAsync(task3Id, QueuedTaskStatus.WaitingQueue, timeoutMs: 1000);
+        // Wait for all tasks to be scheduled. task1/task2 have their first occurrence 2s/3s away, so
+        // they are observably parked in WaitingQueue for that window. task3 is a RunNow: its
+        // occurrence is due immediately and the scheduler can flip it to Queued before the first poll
+        // (after which a recurring run ends in Completed and never returns to WaitingQueue), so
+        // waiting for WaitingQueue there is a race — wait for it to be accepted by the pipeline.
+        await WaitForTaskStatusAsync(task1Id, QueuedTaskStatus.WaitingQueue, timeoutMs: 2000);
+        await WaitForTaskStatusAsync(task2Id, QueuedTaskStatus.WaitingQueue, timeoutMs: 2000);
+        await WaitForTaskAcceptedAsync(task3Id, timeoutMs: 2000);
 
         // Verify all 3 tasks are in storage
         var allTasks = await Storage.GetAll();

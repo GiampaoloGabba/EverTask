@@ -169,6 +169,39 @@ public static class TaskWaitHelper
     }
 
     /// <summary>
+    /// Waits until a task has been accepted by the dispatch pipeline: persisted and in one of the
+    /// statuses the pipeline legitimately produces (WaitingQueue, Queued, InProgress, Completed).
+    /// <para>
+    /// Use this INSTEAD of <see cref="WaitForTaskStatusAsync"/> with
+    /// <see cref="QueuedTaskStatus.WaitingQueue"/> whenever the task's first occurrence is due
+    /// immediately (RunNow, or a delay short enough to elapse during the wait). WaitingQueue only
+    /// means "persisted, not yet delivered": the dispatcher persists the row and then hands the
+    /// occurrence to the scheduler, whose loop flips it to Queued as soon as it wakes up — possibly
+    /// before the test's first poll. A recurring occurrence then ends in Completed and never returns
+    /// to WaitingQueue, so a missed window makes the wait time out with no chance of recovery.
+    /// </para>
+    /// </summary>
+    public static async Task<QueuedTask> WaitForTaskAcceptedAsync(
+        ITaskStorage storage,
+        Guid taskId,
+        int timeoutMs = DefaultTimeoutMs)
+    {
+        return await WaitUntilAsync(
+            async () =>
+            {
+                var tasks = await storage.GetAll();
+                return tasks.FirstOrDefault(t => t.Id == taskId);
+            },
+            task => task is
+            {
+                Status: QueuedTaskStatus.WaitingQueue or QueuedTaskStatus.Queued
+                     or QueuedTaskStatus.InProgress or QueuedTaskStatus.Completed
+            },
+            timeoutMs
+        ) ?? throw new InvalidOperationException($"Task {taskId} not found in storage");
+    }
+
+    /// <summary>
     /// Waits until a storage query returns the expected number of items
     /// </summary>
     public static async Task<QueuedTask[]> WaitForTaskCountAsync(
