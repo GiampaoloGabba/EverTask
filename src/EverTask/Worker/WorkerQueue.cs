@@ -88,9 +88,7 @@ public class WorkerQueue : IWorkerQueue
         }
         catch (Exception e)
         {
-            _logger.LogWarning(e,
-                "Failed to revert dropped task {TaskId} to WaitingQueue after a Drop* eviction on queue '{QueueName}'",
-                dropped.PersistenceId, Name);
+            _logger.DroppedTaskRevertFailed(e, dropped.PersistenceId, Name);
         }
     }
 
@@ -142,8 +140,7 @@ public class WorkerQueue : IWorkerQueue
         // recovery-vs-live-dispatch double delivery.
         if (!_deliveryRegistry.TryBegin(task.PersistenceId))
         {
-            _logger.LogDebug("Task {TaskId} already has a delivery in flight, skipping duplicate enqueue to queue '{QueueName}'",
-                task.PersistenceId, Name);
+            _logger.DuplicateEnqueueSkipped(task.PersistenceId, Name);
             return;
         }
 
@@ -158,7 +155,7 @@ public class WorkerQueue : IWorkerQueue
                     if (!await _taskStorage.TrySetQueuedIfRecoverable(task.PersistenceId, task.AuditLevel, cancellationToken).ConfigureAwait(false))
                     {
                         _deliveryRegistry.End(task.PersistenceId);
-                        _logger.LogDebug("Task {TaskId} is no longer recoverable, recovery enqueue skipped", task.PersistenceId);
+                        _logger.RecoveryEnqueueSkipped(task.PersistenceId);
                         return;
                     }
                 }
@@ -178,7 +175,7 @@ public class WorkerQueue : IWorkerQueue
 
         try
         {
-            _logger.LogDebug("Queuing task with id {TaskId} to queue '{QueueName}'", task.PersistenceId, Name);
+            _logger.QueuingTask(task.PersistenceId, Name);
             await _queue.Writer.WriteAsync(task, cancellationToken).ConfigureAwait(false);
             ParkingLot?.OnTaskEnqueued(task.PersistenceId);
         }
@@ -188,15 +185,13 @@ public class WorkerQueue : IWorkerQueue
             // The task is persisted with status Queued and is re-enqueued by startup recovery,
             // so it must NOT be marked as failed here.
             _deliveryRegistry.End(task.PersistenceId);
-            _logger.LogWarning(
-                "Enqueue of task {TaskId} to queue '{QueueName}' was cancelled while waiting for space. " +
-                "The task remains persisted and will be recovered at startup", task.PersistenceId, Name);
+            _logger.EnqueueCancelled(task.PersistenceId, Name);
             throw;
         }
         catch (Exception e)
         {
             _deliveryRegistry.End(task.PersistenceId);
-            _logger.LogError(e, "Unable to queue task with id {TaskId} to queue '{QueueName}'", task.PersistenceId, Name);
+            _logger.UnableToQueueTask(e, task.PersistenceId, Name);
             if (_taskStorage != null)
                 await _taskStorage.SetStatus(task.PersistenceId, QueuedTaskStatus.Failed, e, task.AuditLevel).ConfigureAwait(false);
             throw;
@@ -229,7 +224,7 @@ public class WorkerQueue : IWorkerQueue
         if (Configuration.ChannelOptions.FullMode == BoundedChannelFullMode.Wait
             && _queue.Reader.CanCount && _queue.Reader.Count >= Capacity)
         {
-            _logger.LogDebug("Queue '{QueueName}' is full, cannot enqueue task {TaskId}", Name, task.PersistenceId);
+            _logger.QueueFull(Name, task.PersistenceId);
             return EnqueueResult.QueueFull;
         }
 
@@ -239,8 +234,7 @@ public class WorkerQueue : IWorkerQueue
         // treats it as idempotent success).
         if (!_deliveryRegistry.TryBegin(task.PersistenceId))
         {
-            _logger.LogDebug("Task {TaskId} already has a delivery in flight, not enqueued to queue '{QueueName}'",
-                task.PersistenceId, Name);
+            _logger.DuplicateDeliveryNotEnqueued(task.PersistenceId, Name);
             return EnqueueResult.DuplicateInProcess;
         }
 
@@ -259,7 +253,7 @@ public class WorkerQueue : IWorkerQueue
                     if (!await _taskStorage.TrySetQueuedIfRecoverable(task.PersistenceId, task.AuditLevel, cancellationToken).ConfigureAwait(false))
                     {
                         _deliveryRegistry.End(task.PersistenceId);
-                        _logger.LogDebug("Task {TaskId} is no longer recoverable, scheduler enqueue skipped", task.PersistenceId);
+                        _logger.SchedulerEnqueueSkipped(task.PersistenceId);
                         return EnqueueResult.Discarded;
                     }
                 }
@@ -278,7 +272,7 @@ public class WorkerQueue : IWorkerQueue
 
         if (_queue.Writer.TryWrite(task))
         {
-            _logger.LogDebug("Task {TaskId} successfully enqueued to queue '{QueueName}'", task.PersistenceId, Name);
+            _logger.TaskEnqueued(task.PersistenceId, Name);
             ParkingLot?.OnTaskEnqueued(task.PersistenceId);
             return EnqueueResult.Enqueued;
         }
@@ -288,7 +282,7 @@ public class WorkerQueue : IWorkerQueue
         // CONDITIONAL (compare-and-set: only if the row is still Queued) and the delivery registration
         // is released ONLY AFTER it — so a successor delivery in this window is rejected as a duplicate
         // instead of racing the revert and being clobbered back to WaitingQueue (CU1/L21).
-        _logger.LogDebug("Queue '{QueueName}' is full, cannot enqueue task {TaskId}", Name, task.PersistenceId);
+        _logger.QueueFull(Name, task.PersistenceId);
 
         if (_taskStorage != null)
         {
@@ -298,9 +292,7 @@ public class WorkerQueue : IWorkerQueue
             }
             catch (Exception e)
             {
-                _logger.LogWarning(e,
-                    "Failed to revert status for task {TaskId} after full-queue write failure (status remains Queued, " +
-                    "the task will still be recovered at startup)", task.PersistenceId);
+                _logger.RevertStatusFailed(e, task.PersistenceId);
             }
         }
 

@@ -13,30 +13,29 @@ public class WorkerService(
 {
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
-        logger.LogTrace("EverTask BackgroundService is running");
+        logger.BackgroundServiceRunning();
 
         // Surface handler-registration diagnostics collected during assembly scanning (duplicate
         // closed handlers, unsupported open-generic handlers) — see HandlerRegistrar (G1/G2).
         foreach (var warning in configuration.HandlerRegistrationWarnings)
         {
-            logger.LogWarning("Handler registration: {Warning}", warning);
+            logger.HandlerRegistrationWarning(warning);
         }
 
         // Warn if using suboptimal MaxDegreeOfParallelism configuration
         if (configuration.MaxDegreeOfParallelism == 1)
         {
             var recommendedParallelism = Math.Max(4, Environment.ProcessorCount * 2);
-            logger.LogWarning(
-                "MaxDegreeOfParallelism is set to 1, which severely limits throughput. " +
-                "For production workloads, consider increasing to {RecommendedParallelism} (ProcessorCount * 2) or higher. " +
-                "Use SetMaxDegreeOfParallelism() in AddEverTask configuration",
-                recommendedParallelism);
+            logger.SingleDegreeOfParallelism(recommendedParallelism);
         }
 
         // Get all configured queues
         var queues = queueManager.GetAllQueues().ToList();
-        logger.LogInformation("Starting consumption of {QueueCount} queue(s): {QueueNames}",
-            queues.Count, string.Join(", ", queues.Select(q => q.Name)));
+
+        // Guarded explicitly: the queue-name join is eager, and the generated method's own level check
+        // would run only after it.
+        if (logger.IsEnabled(LogLevel.Information))
+            logger.StartingQueueConsumption(queues.Count, string.Join(", ", queues.Select(q => q.Name)));
 
         // Create N dedicated consumers for each queue using the official Microsoft pattern
         // This is the recommended approach for channel-based background workers
@@ -66,12 +65,11 @@ public class WorkerService(
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            logger.LogInformation("Pending task recovery cancelled by host shutdown");
+            logger.RecoveryCancelled();
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Pending task recovery failed. Queue consumers keep running; " +
-                                "unrecovered tasks will be retried at the next startup");
+            logger.RecoveryFailed(ex);
         }
     }
 
@@ -103,14 +101,11 @@ public class WorkerService(
         var consumerCount = queueConfig.MaxDegreeOfParallelism;
         if (consumerCount < 1)
         {
-            logger.LogWarning(
-                "Queue '{QueueName}' is configured with MaxDegreeOfParallelism={Configured} (< 1): " +
-                "clamped to 1 consumer to avoid a startup deadlock", queueName, consumerCount);
+            logger.QueueParallelismClamped(queueName, consumerCount);
             consumerCount = 1;
         }
 
-        logger.LogTrace("Starting {ConsumerCount} dedicated consumer(s) for queue '{QueueName}'",
-            consumerCount, queueName);
+        logger.StartingConsumers(consumerCount, queueName);
 
         // Spawn N long-lived consumers that compete for items from the channel
         for (var i = 0; i < consumerCount; i++)
@@ -118,8 +113,7 @@ public class WorkerService(
             var consumerId = i; // Capture for logging
             yield return Task.Run(async () =>
             {
-                logger.LogTrace("Consumer #{ConsumerId} for queue '{QueueName}' started",
-                    consumerId, queueName);
+                logger.ConsumerStarted(consumerId, queueName);
 
                 try
                 {
@@ -127,19 +121,16 @@ public class WorkerService(
                 }
                 catch (OperationCanceledException)
                 {
-                    logger.LogInformation("Consumer #{ConsumerId} for queue '{QueueName}' cancelled",
-                        consumerId, queueName);
+                    logger.ConsumerCancelled(consumerId, queueName);
                 }
                 catch (Exception ex)
                 {
-                    logger.LogError(ex, "Consumer #{ConsumerId} for queue '{QueueName}' faulted",
-                        consumerId, queueName);
+                    logger.ConsumerFaulted(ex, consumerId, queueName);
                     throw;
                 }
                 finally
                 {
-                    logger.LogTrace("Consumer #{ConsumerId} for queue '{QueueName}' stopped",
-                        consumerId, queueName);
+                    logger.ConsumerStopped(consumerId, queueName);
                 }
             }, ct);
         }
@@ -164,22 +155,19 @@ public class WorkerService(
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 // Graceful shutdown - service is stopping
-                logger.LogTrace("Consumer #{ConsumerId} for queue '{QueueName}' received cancellation during task execution",
-                    consumerId, queueName);
+                logger.ConsumerCancelledDuringExecution(consumerId, queueName);
                 return;
             }
             catch (Exception ex)
             {
                 // DoWork should handle errors internally, but catch defensively
                 // Don't let one task failure kill the entire consumer
-                logger.LogError(ex, "Consumer #{ConsumerId} for queue '{QueueName}' error processing task {TaskId}",
-                    consumerId, queueName, task.PersistenceId);
+                logger.ConsumerTaskProcessingError(ex, consumerId, queueName, task.PersistenceId);
                 // Continue consuming next item
             }
         }
 
-        logger.LogTrace("Consumer #{ConsumerId} for queue '{QueueName}' exited (channel completed)",
-            consumerId, queueName);
+        logger.ConsumerExited(consumerId, queueName);
     }
 
     /// <summary>
@@ -196,8 +184,7 @@ public class WorkerService(
 
         if (taskStorage == null)
         {
-            logger.LogWarning(
-                "Persistence is not active. In your DI, use .AddSqlStorage() for persistent tasks or .AddMemoryStorage() for tests");
+            logger.PersistenceNotActive();
             return;
         }
 
@@ -235,8 +222,7 @@ public class WorkerService(
             // and the conditional SetQueued refuses a row that terminally finished since the page read.
             var pendingTasks = page.Where(t => t.CreatedAtUtc < recoveryCutoff).ToArray();
 
-            logger.LogInformation("Processing batch with {Count} pending tasks (lastCreatedAt={LastCreatedAt}, lastId={LastId})",
-                pendingTasks.Length, lastCreatedAt, lastId);
+            logger.ProcessingPendingBatch(pendingTasks.Length, lastCreatedAt, lastId);
 
             // Process pending tasks with bounded parallelism to improve startup time
             // Use configured MaxDegreeOfParallelism to respect user settings
@@ -274,12 +260,9 @@ public class WorkerService(
 
         // L18: the summary must reflect failures, never report plain success when re-dispatches failed.
         if (transientFailures > 0 || permanentFailures > 0)
-            logger.LogWarning(
-                "Recovery processed {Total} pending task(s): {Recovered} re-dispatched, {Transient} failed " +
-                "(still recoverable, will retry at the next startup), {Permanent} marked Failed (poisoned/unprocessable)",
-                totalProcessed, recovered, transientFailures, permanentFailures);
+            logger.RecoverySummaryWithFailures(totalProcessed, recovered, transientFailures, permanentFailures);
         else
-            logger.LogInformation("Completed processing {TotalCount} pending tasks", totalProcessed);
+            logger.RecoveryCompleted(totalProcessed);
 
         return;
 
@@ -306,7 +289,7 @@ public class WorkerService(
             catch (Exception e)
             {
                 payloadError = e;
-                logger.LogError(e, "Unable to deserialize task with id {TaskId}", taskInfo.Id);
+                logger.TaskDeserializationFailed(e, taskInfo.Id);
             }
 
             Exception? recurringMetadataError = null;
@@ -328,7 +311,7 @@ public class WorkerService(
             {
                 recurringMetadataError = e;
                 scheduledTask          = null; // ensure the IsRecurring && scheduledTask == null poison guard fires
-                logger.LogError(e, "Unable to deserialize or validate recurring task info with id {TaskId}", taskInfo.Id);
+                logger.RecurringMetadataDeserializationFailed(e, taskInfo.Id);
             }
 
             // Get audit level from task info (null means Full for backward compatibility)
@@ -360,10 +343,7 @@ public class WorkerService(
                                 "Recurring task metadata is missing or could not be deserialized");
                 await Poison(taskStorage, error).ConfigureAwait(false);
                 Interlocked.Increment(ref permanentFailures);
-                logger.LogError(error,
-                    "Recurring task {TaskId} has missing or corrupt recurring metadata and was poisoned " +
-                    "terminally (marked Failed, NextRunUtc cleared) so it is not revived or re-executed as a " +
-                    "one-shot at every restart", taskInfo.Id);
+                logger.RecurringMetadataPoisoned(error, taskInfo.Id);
                 return;
             }
 
@@ -414,16 +394,12 @@ public class WorkerService(
                     {
                         await Poison(taskStorage, ex).ConfigureAwait(false);
                         Interlocked.Increment(ref permanentFailures);
-                        logger.LogError(ex,
-                            "Pending task {TaskId} failed re-dispatch {Attempts} time(s) and is poisoned (marked Failed); " +
-                            "it will no longer be retried", taskInfo.Id, attempts);
+                        logger.RecoveryDispatchPoisoned(ex, taskInfo.Id, attempts);
                     }
                     else
                     {
                         Interlocked.Increment(ref transientFailures);
-                        logger.LogWarning(ex,
-                            "Error re-dispatching pending task {TaskId} (attempt {Attempts}/{Max}); the task remains " +
-                            "recoverable and will be retried at the next startup", taskInfo.Id, attempts, MaxRecoveryDispatchAttempts);
+                        logger.RecoveryDispatchFailed(ex, taskInfo.Id, attempts, MaxRecoveryDispatchAttempts);
                     }
                 }
             }
@@ -447,17 +423,12 @@ public class WorkerService(
                 {
                     await Poison(taskStorage, error).ConfigureAwait(false);
                     Interlocked.Increment(ref permanentFailures);
-                    logger.LogError(error,
-                        "Pending task {TaskId} has a loadable type but an unusable payload after {Attempts} attempt(s) " +
-                        "and is poisoned (marked Failed); it will no longer be retried", taskInfo.Id, attempts);
+                    logger.UnusablePayloadPoisoned(error, taskInfo.Id, attempts);
                 }
                 else
                 {
                     Interlocked.Increment(ref transientFailures);
-                    logger.LogWarning(error,
-                        "Pending task {TaskId} has a loadable type but its payload could not be deserialized " +
-                        "(attempt {Attempts}/{Max}); the task stays recoverable and will be retried at the next startup",
-                        taskInfo.Id, attempts, MaxRecoveryDispatchAttempts);
+                    logger.UnusablePayloadRetry(error, taskInfo.Id, attempts, MaxRecoveryDispatchAttempts);
                 }
             }
             else
@@ -481,7 +452,7 @@ public class WorkerService(
 
     public override async Task StopAsync(CancellationToken stoppingToken)
     {
-        logger.LogInformation("EverTask BackgroundService is stopping");
+        logger.BackgroundServiceStopping();
         await base.StopAsync(stoppingToken).ConfigureAwait(false);
     }
 }

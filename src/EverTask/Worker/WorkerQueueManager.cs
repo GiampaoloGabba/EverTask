@@ -117,17 +117,13 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
                     // Queue is full - fallback to default queue if not already default
                     if (targetQueueName != QueueNames.Default)
                     {
-                        _logger.LogWarning(
-                            "Queue '{QueueName}' is full, falling back to 'default' queue for task {TaskId}",
-                            targetQueueName,
-                            task.PersistenceId);
+                        _logger.QueueFullFallingBackToDefault(targetQueueName, task.PersistenceId);
 
                         if (TryGetQueue(QueueNames.Default, out var defaultQueue) && defaultQueue != null)
                         {
                             // Use Wait behavior for default queue to ensure task is eventually queued
                             await defaultQueue.Queue(task, cancellationToken).ConfigureAwait(false);
-                            _logger.LogInformation("Task {TaskId} enqueued to 'default' queue as fallback",
-                                task.PersistenceId);
+                            _logger.EnqueuedToDefaultFallback(task.PersistenceId);
                             return true;
                         }
 
@@ -155,8 +151,7 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to enqueue task {TaskId} to queue '{QueueName}'", task.PersistenceId,
-                targetQueueName);
+            _logger.EnqueueFailed(ex, task.PersistenceId, targetQueueName);
             throw;
         }
     }
@@ -203,7 +198,7 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
         // Single dictionary lookup with fallback
         if (!_queues.TryGetValue(targetQueueName, out var targetQueue))
         {
-            _logger.LogWarning("Queue '{QueueName}' not found, falling back to 'default' queue", targetQueueName);
+            _logger.QueueNotFoundFallingBackToDefault(targetQueueName);
             targetQueueName = QueueNames.Default;
             targetQueue     = GetQueue(QueueNames.Default);
         }

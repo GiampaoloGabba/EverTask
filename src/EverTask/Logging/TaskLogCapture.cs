@@ -109,7 +109,7 @@ internal sealed class TaskLogCapture : ITaskLogCaptureInternal
                 Id             = _guidGenerator.NewDatabaseFriendly(),
                 TaskId         = _taskId,
                 TimestampUtc   = DateTimeOffset.UtcNow,
-                Level          = LogLevel.Warning.ToString(),
+                Level          = nameof(LogLevel.Warning),
                 Message        = $"[EverTask] {_truncatedLogCount} log " +
                                  $"entr{(_truncatedLogCount == 1 ? "y" : "ies")} truncated: " +
                                  $"MaxLogsPerTask ({_maxPersistedLogs}) reached",
@@ -127,9 +127,18 @@ internal sealed class TaskLogCapture : ITaskLogCaptureInternal
         try
         {
             if (args is { Length: > 0 })
+            {
+                // Logging façade: the template, its args and the level are all consumer-supplied at runtime, so
+                // the params overload is the only one that preserves the consumer's structured placeholders
+                // (a [LoggerMessage] needs a compile-time template and level, and would flatten them).
+#pragma warning disable CA1848, CA2254
                 _logger.Log(level, exception, message, args); // structured logging with parameters
+#pragma warning restore CA1848, CA2254
+            }
             else
+            {
                 _logger.Log(level, new EventId(0), message, exception, s_messageFormatter);
+            }
         }
         catch
         {
@@ -299,6 +308,21 @@ internal sealed class TaskLogCapture : ITaskLogCaptureInternal
         return value.ToString() ?? "null";
     }
 
+    /// <summary>
+    /// Interned name of a <see cref="LogLevel"/>: <c>Enum.ToString()</c> allocates a fresh string on every
+    /// persisted log, which is per handler log call once persistence is on.
+    /// </summary>
+    private static string LevelName(LogLevel level) => level switch
+    {
+        LogLevel.Trace       => nameof(LogLevel.Trace),
+        LogLevel.Debug       => nameof(LogLevel.Debug),
+        LogLevel.Information => nameof(LogLevel.Information),
+        LogLevel.Warning     => nameof(LogLevel.Warning),
+        LogLevel.Error       => nameof(LogLevel.Error),
+        LogLevel.Critical    => nameof(LogLevel.Critical),
+        _                    => level.ToString()
+    };
+
     private void PersistLog(LogLevel level, string template, object?[]? args, Exception? exception)
     {
         // Filter by minimum persistence level
@@ -335,7 +359,7 @@ internal sealed class TaskLogCapture : ITaskLogCaptureInternal
                 Id               = _guidGenerator.NewDatabaseFriendly(),
                 TaskId           = _taskId,
                 TimestampUtc     = DateTimeOffset.UtcNow,
-                Level            = level.ToString(),
+                Level            = LevelName(level),
                 Message          = message,
                 ExceptionDetails = exception?.ToString(),
                 SequenceNumber   = _sequenceNumber++
