@@ -26,8 +26,6 @@ public class CancelPipelineIntegrationTests : IsolatedIntegrationTestBase
         var id = await Dispatcher.Dispatch(new CancelBlockingTask());
         (await _state.Entered.WaitAsync(TimeSpan.FromSeconds(5))).ShouldBeTrue();
 
-        var registry = Host!.Services.GetRequiredService<TaskDeliveryRegistry>();
-
         WorkerBlacklist.Add(id);   // the user cancel's blacklist
         await StopHostAsync();      // shutdown cancels the service token → the handler's OCE
 
@@ -35,7 +33,7 @@ public class CancelPipelineIntegrationTests : IsolatedIntegrationTestBase
         // while the handler's OCE unwinds, and the registry's End is the LAST act of DoWork, so once
         // the id is gone the outcome is final. Asserting the status separately keeps a wrong
         // classification (the F17 bug wrote ServiceStopped) a failed assertion, not a timeout.
-        await WaitForDeliveryToEndAsync(registry, id);
+        await WaitForDeliveryToEndAsync(id);
 
         var status = (await Storage.GetAll()).Single(t => t.Id == id).Status;
         status.ShouldBe(QueuedTaskStatus.Cancelled);
@@ -51,8 +49,6 @@ public class CancelPipelineIntegrationTests : IsolatedIntegrationTestBase
         // running handler's token stays uncancelled) and then letting the handler complete.
         await CreateIsolatedHostAsync(configureServices: s => s.AddSingleton(_state));
 
-        var registry = Host!.Services.GetRequiredService<TaskDeliveryRegistry>();
-
         var id = await Dispatcher.Dispatch(new CancelBlockingTask());
         (await _state.Entered.WaitAsync(TimeSpan.FromSeconds(5))).ShouldBeTrue();
 
@@ -65,7 +61,7 @@ public class CancelPipelineIntegrationTests : IsolatedIntegrationTestBase
         // outcome the bug would write (Completed over Cancelled) is written inside the delivery, and
         // the registry's End is the last act of DoWork, so once the id is gone nothing can still
         // clobber the row. The old fixed 800ms only hoped the handler had got that far.
-        await WaitForDeliveryToEndAsync(registry, id);
+        await WaitForDeliveryToEndAsync(id);
 
         var status = (await Storage.GetAll()).Single(t => t.Id == id).Status;
         status.ShouldBe(QueuedTaskStatus.Cancelled,
@@ -102,8 +98,6 @@ public class CancelPipelineIntegrationTests : IsolatedIntegrationTestBase
         // scheduled (durable, independent of the in-memory blacklist's ~1h TTL).
         await CreateIsolatedHostAsync(configureServices: s => s.AddSingleton(_state));
 
-        var registry = Host!.Services.GetRequiredService<TaskDeliveryRegistry>();
-
         var id = await Dispatcher.Dispatch(new CancelRecurringBlockingTask(),
             r => r.RunNow().Then().Every(30).Seconds());
         (await _state.Entered.WaitAsync(TimeSpan.FromSeconds(5))).ShouldBeTrue();
@@ -117,7 +111,7 @@ public class CancelPipelineIntegrationTests : IsolatedIntegrationTestBase
         // window instead of a fixed margin: QueueNextOccourrence is the last statement of the worker's
         // finally and the registry's End is the last act of DoWork, so an id no longer in flight means
         // that finally has already run.
-        await WaitForDeliveryToEndAsync(registry, id);
+        await WaitForDeliveryToEndAsync(id);
 
         // The next occurrence must NOT be scheduled: QueueNextOccourrence must not advance the run
         // counter for a cancelled series (deterministic, unlike the racy scheduler registration).
@@ -125,20 +119,6 @@ public class CancelPipelineIntegrationTests : IsolatedIntegrationTestBase
         row.CurrentRunCount.ShouldBe(0,
             "a user-cancelled recurring series must not advance to / schedule its next occurrence");
     }
-
-    /// <summary>
-    /// Waits until the delivery of <paramref name="id"/> is no longer in flight.
-    /// <para>
-    /// The negative assertions here (nothing overwrites the status, no next occurrence is scheduled)
-    /// have no event of their own to poll: a non-event cannot be waited for. What CAN be waited for is
-    /// the end of the window in which the forbidden write would happen - and
-    /// <c>TaskDeliveryRegistry.End</c> is exactly that boundary: the LAST act of
-    /// <c>WorkerExecutor.DoWork</c>, after the outcome is persisted and after the finally's
-    /// QueueNextOccourrence.
-    /// </para>
-    /// </summary>
-    private static Task WaitForDeliveryToEndAsync(TaskDeliveryRegistry registry, Guid id) =>
-        TaskWaitHelper.WaitForConditionAsync(() => !registry.IsDelivering(id), timeoutMs: 10000);
 
     /// <summary>
     /// <see cref="ITaskStorage"/> decorator that records whether the id was already blacklisted when its

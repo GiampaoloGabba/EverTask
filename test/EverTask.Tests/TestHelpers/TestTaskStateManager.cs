@@ -57,6 +57,36 @@ public class TestTaskStateManager
     }
 
     /// <summary>
+    /// Appends a lifecycle callback to the task's ordered log. Taken under the state's lock like the
+    /// counters: a handler's callbacks can fire from the worker's scope and from a dispatch-time
+    /// metadata instance at the same time.
+    /// </summary>
+    public void RecordCallback(string taskKey, string callback)
+    {
+        var state = _states.GetOrAdd(taskKey, _ => new TaskExecutionState());
+
+        lock (state)
+        {
+            state.Callbacks.Add(callback);
+        }
+    }
+
+    /// <summary>
+    /// Ordered SNAPSHOT of the callbacks recorded for the task (empty when the task never ran). A copy,
+    /// so an assertion never enumerates the live list while a disposal is still appending to it.
+    /// </summary>
+    public List<string> GetCallbacks(string taskKey)
+    {
+        if (!_states.TryGetValue(taskKey, out var state))
+            return [];
+
+        lock (state)
+        {
+            return [..state.Callbacks];
+        }
+    }
+
+    /// <summary>
     /// Gets the execution count for a specific task
     /// </summary>
     public int GetCounter(string taskKey)
@@ -131,5 +161,6 @@ public class TaskExecutionState
     public DateTimeOffset? StartTime { get; set; }
     public DateTimeOffset? EndTime { get; set; }
     public int ExecutionCount { get; set; }
+    public List<string> Callbacks { get; } = [];
     public Dictionary<string, object> CustomData { get; set; } = new();
 }

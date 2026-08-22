@@ -18,11 +18,14 @@ public class TestTaskLifecycleWithError() : IEverTask
     public static Exception? LastException { get; set; }
 }
 
-public class TestTaskLifecycleWithAsyncDispose() : IEverTask
-{
-    public static List<string> CallbackOrder { get; set; } = new();
-    public static bool WasDisposed { get; set; }
-}
+/// <summary>
+/// Task whose handler records its lifecycle callbacks ("Handle", "DisposeAsyncCore") in the per-host
+/// <see cref="TestTaskStateManager"/>. As process-wide statics that log was reset and asserted by TWO
+/// test classes xUnit runs in parallel - WorkerServiceIntegrationTests (collection
+/// "TimingSensitiveTests") and LazyModeIntegrationTests (no collection) - so whichever reset first
+/// erased the entries the other was about to assert on.
+/// </summary>
+public class TestTaskLifecycleWithAsyncDispose : IEverTask;
 
 public class TestTaskLazyModeRecurringWithAsyncDispose() : IEverTask
 {
@@ -119,26 +122,21 @@ public class TestTaskLifecycleWithErrorHandler : EverTaskHandler<TestTaskLifecyc
     }
 }
 
-public class TestTaskLifecycleWithAsyncDisposeHandler : EverTaskHandler<TestTaskLifecycleWithAsyncDispose>
+// The state manager is REQUIRED here (not the optional injection the other handlers use): the callback
+// log IS the assertion, so a host that forgot to register it must fail loudly instead of silently
+// recording nothing.
+public class TestTaskLifecycleWithAsyncDisposeHandler(TestTaskStateManager stateManager)
+    : EverTaskHandler<TestTaskLifecycleWithAsyncDispose>
 {
-    private readonly TestTaskStateManager? _stateManager;
-
-    public TestTaskLifecycleWithAsyncDisposeHandler(TestTaskStateManager? stateManager = null)
-    {
-        _stateManager = stateManager;
-    }
-
     public override async Task Handle(TestTaskLifecycleWithAsyncDispose backgroundTask, CancellationToken cancellationToken)
     {
         await Task.Delay(100, cancellationToken);
-        TestTaskLifecycleWithAsyncDispose.CallbackOrder.Add("Handle");
-        _stateManager?.IncrementCounter(nameof(TestTaskLifecycleWithAsyncDispose));
+        stateManager.RecordCallback(nameof(TestTaskLifecycleWithAsyncDispose), "Handle");
     }
 
     protected override ValueTask DisposeAsyncCore()
     {
-        TestTaskLifecycleWithAsyncDispose.CallbackOrder.Add("DisposeAsyncCore");
-        TestTaskLifecycleWithAsyncDispose.WasDisposed = true;
+        stateManager.RecordCallback(nameof(TestTaskLifecycleWithAsyncDispose), "DisposeAsyncCore");
         return ValueTask.CompletedTask;
     }
 }

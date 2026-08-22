@@ -116,6 +116,10 @@ public class TaskKeyIntegrationTests : IsolatedIntegrationTestBase
         var taskId1 = await Dispatcher.Dispatch(new TestTaskRequest("first"), taskKey: "replace-key");
         await WaitForTaskStatusAsync(taskId1, QueuedTaskStatus.Completed);
 
+        // The terminal status is written before the delivery unregisters; re-dispatching the key in
+        // that window is discarded by the dispatcher's in-flight guard (see WaitForDeliveryToEndAsync).
+        await WaitForDeliveryToEndAsync(taskId1);
+
         // Verify first task completed
         var completedTasks = await Storage.GetAll();
         completedTasks.Length.ShouldBe(1);
@@ -148,6 +152,10 @@ public class TaskKeyIntegrationTests : IsolatedIntegrationTestBase
         // Act - Dispatch task that will fail
         var taskId1 = await Dispatcher.Dispatch(new TestTaskRequestError(), taskKey: "failed-key");
         await WaitForTaskStatusAsync(taskId1, QueuedTaskStatus.Failed, timeoutMs: 3000);
+
+        // The terminal status is written before the delivery unregisters; re-dispatching the key in
+        // that window is discarded by the dispatcher's in-flight guard (see WaitForDeliveryToEndAsync).
+        await WaitForDeliveryToEndAsync(taskId1);
 
         // Dispatch again with same taskKey
         var taskId2 = await Dispatcher.Dispatch(new TestTaskRequest("retry"), taskKey: "failed-key");
@@ -554,6 +562,10 @@ public class TaskKeyIntegrationTests : IsolatedIntegrationTestBase
 
         await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed);
 
+        // The terminal status is written before the delivery unregisters; re-dispatching the key in
+        // that window is discarded by the dispatcher's in-flight guard (see WaitForDeliveryToEndAsync).
+        await WaitForDeliveryToEndAsync(taskId);
+
         // Assert - filter by TaskKey to avoid interference from other tests
         var tasks = await Storage.Get(t => t.TaskKey == taskKey);
         tasks.Length.ShouldBe(1);
@@ -794,6 +806,10 @@ public class TaskKeyIntegrationTests : IsolatedIntegrationTestBase
         // Act - Dispatch NON-recurring task and wait for completion
         var taskId1 = await Dispatcher.Dispatch(new TestTaskRequest("first"), taskKey: taskKey);
         await WaitForTaskStatusAsync(taskId1, QueuedTaskStatus.Completed);
+
+        // The terminal status is written before the delivery unregisters; re-dispatching the key in
+        // that window is discarded by the dispatcher's in-flight guard (see WaitForDeliveryToEndAsync).
+        await WaitForDeliveryToEndAsync(taskId1);
 
         var tasksAfterFirstRun = await Storage.Get(t => t.Id == taskId1);
         var taskAfterFirstRun = tasksAfterFirstRun.FirstOrDefault();
