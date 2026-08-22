@@ -104,8 +104,15 @@ public class ShardedSchedulerIntegrationTests : IsolatedIntegrationTestBase
             recurring => recurring.Schedule().Every(1).Seconds().MaxRuns(5)
         );
 
-        // Assert - Wait for 5 executions
-        await TaskWaitHelper.WaitForRecurringRunsAsync(Storage, taskId, expectedRuns: 5, timeoutMs: 15000);
+        // Assert - Wait for 5 executions AND for the series to end: CompleteRecurringRun writes the run
+        // counter, while the terminal Completed lands later, when QueueNextOccourrence sees MaxRuns
+        // exhausted. Waiting on the counter alone reads the row between the two writes.
+        await TaskWaitHelper.WaitUntilAsync(
+            async () => await Storage.GetAll(),
+            tasks => tasks.Length == 1 && tasks[0].CurrentRunCount == 5 &&
+                     tasks[0].Status == QueuedTaskStatus.Completed,
+            timeoutMs: 15000
+        );
 
         var tasks = await Storage.GetAll();
         tasks[0].CurrentRunCount.ShouldBe(5);
