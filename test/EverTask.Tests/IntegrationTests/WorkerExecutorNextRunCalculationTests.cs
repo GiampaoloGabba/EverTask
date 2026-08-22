@@ -115,16 +115,17 @@ public class WorkerExecutorNextRunCalculationTests : IsolatedIntegrationTestBase
             new TestTaskRecurringSeconds(),
             recurring => recurring.Schedule().Every(1).Seconds());
 
-        // Wait for first execution
-        await TaskWaitHelper.WaitForConditionAsync(
-            () => StateManager.GetCounter(nameof(TestTaskRecurringSeconds)) >= 1,
-            timeoutMs: 3000);
+        // Wait for the first execution to be PERSISTED: the handler counter is raised inside Handle,
+        // while the run counter and NextRunUtc asserted below are written after the handler returns.
+        await TaskWaitHelper.WaitForRecurringRunsAsync(preservedStorage, taskId, expectedRuns: 1, timeoutMs: 5000);
 
-        // Simulate downtime by stopping the host
+        // Simulate downtime by stopping the host. The delay IS the downtime (~5 missed occurrences),
+        // not a wait for something to observe: the host is stopped, so there is nothing to poll.
+        const int downtimeMs = 5000;
+        var downtimeStart = DateTimeOffset.UtcNow;
         await StopHostAsync();
-
-        // Wait 5 seconds (simulating system downtime - should miss ~5 occurrences)
-        await Task.Delay(5000);
+        await Task.Delay(downtimeMs);
+        var downtimeEnd = downtimeStart.AddMilliseconds(downtimeMs);
 
         // Restart host with same storage instance (simulating system recovery)
         await CreateIsolatedHostAsync(
@@ -139,12 +140,13 @@ public class WorkerExecutorNextRunCalculationTests : IsolatedIntegrationTestBase
                 services.AddSingleton(preservedStorage);
             });
 
-        // Wait for task to be rescheduled and executed
-        await Task.Delay(3000);
-
-        // Assert: Task should have skipped past occurrences
-        var tasks = await preservedStorage.GetAll();
-        var task = tasks.FirstOrDefault(t => t.Id == taskId);
+        // Wait for the recovery to actually run the series again: LastExecutionUtc is stamped when a
+        // run completes, so a value past the downtime window proves the restarted host took over -
+        // a fixed delay only hoped it had.
+        var task = await TaskWaitHelper.WaitUntilAsync(
+            async () => (await preservedStorage.GetAll()).FirstOrDefault(t => t.Id == taskId),
+            t => t?.LastExecutionUtc > downtimeEnd,
+            timeoutMs: 10000);
 
         task.ShouldNotBeNull();
 
@@ -153,9 +155,14 @@ public class WorkerExecutorNextRunCalculationTests : IsolatedIntegrationTestBase
 
         // var skippedAudits = // FIXME: SkippedOccurrencesAudits property does not exist - task.task.SkippedOccurrencesAudits;
 
-        // Next run should be in the future, not in the past
+        // Assert: the series resumed on an occurrence AFTER the downtime instead of catching up on the
+        // ~5 it missed. Anchored on the test-owned downtime window, not on UtcNow at assertion time:
+        // with a 1s cadence the next run is only 1s ahead, so any hiccup between the last execution
+        // and the assertion let the wall clock overtake it - the exact form removed by 77a227a from
+        // the sibling test.
         task.NextRunUtc.ShouldNotBeNull();
-        task.NextRunUtc.Value.ShouldBeGreaterThanOrEqualTo(DateTimeOffset.UtcNow.AddSeconds(-1));
+        task.NextRunUtc.Value.ShouldBeGreaterThan(downtimeEnd);
+        task.CurrentRunCount?.ShouldBeGreaterThanOrEqualTo(2);
     }
 
     [Fact]
@@ -192,18 +199,19 @@ public class WorkerExecutorNextRunCalculationTests : IsolatedIntegrationTestBase
         await CreateIsolatedHostAsync();
 
         // Dispatch recurring task every 2 seconds
+        var interval = TimeSpan.FromSeconds(2);
         var taskId = await Dispatcher.Dispatch(
             new TestTaskRecurringSeconds(),
             recurring => recurring.Schedule().Every(2).Seconds());
 
+        // The Dispatcher persists the row with the slot it picked for the first occurrence, a full
+        // interval away: this read cannot see a NextRunUtc already advanced by the WorkerExecutor.
+        var firstSlot = (await TaskWaitHelper.WaitForTaskExistsAsync(Storage, taskId)).NextRunUtc;
+        firstSlot.ShouldNotBeNull();
+
         // Wait for 3 executions
-        await TaskWaitHelper.WaitForRecurringRunsAsync(Storage, taskId, expectedRuns: 3, timeoutMs: 10000);
+        var task = await TaskWaitHelper.WaitForRecurringRunsAsync(Storage, taskId, expectedRuns: 3, timeoutMs: 10000);
 
-        // Get task state
-        var tasks = await Storage.GetAll();
-        var task = tasks.FirstOrDefault(t => t.Id == taskId);
-
-        task.ShouldNotBeNull();
         task.CurrentRunCount.HasValue.ShouldBeTrue();
         task.CurrentRunCount?.ShouldBeGreaterThanOrEqualTo(3);
 
@@ -216,20 +224,25 @@ public class WorkerExecutorNextRunCalculationTests : IsolatedIntegrationTestBase
 
         completedRuns.Count.ShouldBe(3);
 
-        // Assert: All intervals should be approximately 2 seconds
+        // Assert: the schedule is still the one the Dispatcher anchored. NextRunUtc is the SCHEDULED
+        // slot, so this holds exactly - a whole number of cadences past the first slot, more than 3
+        // only when occurrences were lost, which realigns onto the SAME grid. A re-schedule computed
+        // from the wall clock would sit off it by the accumulated execution latency.
+        task.NextRunUtc.ShouldNotBeNull();
+        var advance = task.NextRunUtc.Value - firstSlot.Value;
+        advance.ShouldBeGreaterThanOrEqualTo(interval * 3);
+        (advance.Ticks % interval.Ticks).ShouldBe(0L);
+
+        // The executions themselves are checked against the same grid, each measured from the FIRST
+        // run: this bounds the observed cadence (nothing runs off-grid or ahead of its slot) while a
+        // lost slot only moves a gap to a bigger multiple. The old form pinned every consecutive gap
+        // to 1.5s-3s and the total to 3.5s-5s: one lost slot makes a gap an exact 4s and the total 6s,
+        // with no drift whatsoever.
         for (var i = 1; i < completedRuns.Count; i++)
         {
-            var interval = (completedRuns[i].ExecutedAt - completedRuns[i - 1].ExecutedAt).TotalSeconds;
-
-            // Allow 1 second tolerance for processing
-            interval.ShouldBeGreaterThan(1.5);
-            interval.ShouldBeLessThan(3);
+            (completedRuns[i].ExecutedAt - completedRuns[0].ExecutedAt)
+                .ShouldBeOnOccurrenceGrid(interval, minSlots: i);
         }
-
-        // Verify no cumulative drift: total time should be approximately 4 seconds (2 intervals * 2 seconds)
-        var totalTime = (completedRuns[2].ExecutedAt - completedRuns[0].ExecutedAt).TotalSeconds;
-        totalTime.ShouldBeGreaterThan(3.5);
-        totalTime.ShouldBeLessThan(5);
     }
 
     [Fact]

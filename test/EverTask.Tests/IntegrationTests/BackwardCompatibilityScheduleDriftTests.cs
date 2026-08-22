@@ -159,14 +159,13 @@ public class BackwardCompatibilityScheduleDriftTests : IsolatedIntegrationTestBa
             .Take(2)
             .ToList();
 
-        if (completedRuns.Count >= 2)
-        {
-            var interval = (completedRuns[1].ExecutedAt - completedRuns[0].ExecutedAt).TotalSeconds;
+        completedRuns.Count.ShouldBe(2);
 
-            // Should maintain 2-second interval
-            interval.ShouldBeGreaterThan(1.5);
-            interval.ShouldBeLessThan(3);
-        }
+        // The gap must stay on the 2s occurrence grid. It used to be pinned to 1.5s-3s, i.e. 1s of
+        // slack on the difference between two completion stamps: a single lost slot realigns the
+        // series to the next occurrence, an exact 4s away, with no drift at all.
+        (completedRuns[1].ExecutedAt - completedRuns[0].ExecutedAt)
+            .ShouldBeOnOccurrenceGrid(TimeSpan.FromSeconds(2));
     }
 
     [Fact]

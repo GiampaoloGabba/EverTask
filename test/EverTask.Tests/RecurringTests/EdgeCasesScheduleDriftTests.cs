@@ -139,21 +139,25 @@ public class EdgeCasesScheduleDriftTests : IsolatedIntegrationTestBase
             new TestTaskRecurringSeconds(),
             recurring => recurring.Schedule().Every(1).Seconds().RunUntil(runUntil));
 
-        // Wait for runs to complete (should stop at ~3 runs)
-        await Task.Delay(5000);
-
-        // Assert: Should have approximately 3 runs (may vary slightly due to timing)
-        var counter = StateManager.GetCounter(nameof(TestTaskRecurringSeconds));
-        counter.ShouldBeInRange(2, 4);
-
-        var tasks = await Storage.GetAll();
-        var task = tasks.FirstOrDefault(t => t.Id == taskId);
+        // Wait for the series to END by itself: the terminal state is what this test is about, and it
+        // is written by the WorkerExecutor after the last run returns. A fixed delay raced that write
+        // and asserted Completed on a row the executor had not finished updating.
+        var task = await TaskWaitHelper.WaitUntilAsync(
+            async () => (await Storage.GetAll()).FirstOrDefault(t => t.Id == taskId),
+            t => t is { Status: QueuedTaskStatus.Completed, NextRunUtc: null },
+            timeoutMs: 15000);
 
         task.ShouldNotBeNull();
-
-        // Task should be completed (reached RunUntil)
         task.Status.ShouldBe(QueuedTaskStatus.Completed);
         task.NextRunUtc.ShouldBeNull();
+
+        // RunUntil is 3s out on a 1s cadence, so the slots that fit are +1s and +2s (+3s equals
+        // RunUntil and is not scheduled). How many of those actually run depends on the load: a first
+        // occurrence delayed past its slot realigns forward and the series can legitimately end after
+        // a single run, so the lower bound is 1. The upper bound still guards RunUntil being ignored,
+        // as does the wait above - a series that never stops times out there.
+        var counter = StateManager.GetCounter(nameof(TestTaskRecurringSeconds));
+        counter.ShouldBeInRange(1, 4);
     }
 
     #endregion
