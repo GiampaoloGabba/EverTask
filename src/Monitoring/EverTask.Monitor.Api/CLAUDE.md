@@ -1,121 +1,43 @@
-# CLAUDE.md - EverTask.Monitor.Api
+# EverTask.Monitor.Api
 
-REST API + embedded React dashboard for EverTask monitoring. Read-only endpoints for task query, statistics, real-time SignalR events.
+Refer to the root CLAUDE.md for project-wide rules.
 
-## Quick Facts
+REST API + embedded React dashboard, all under the fixed `/evertask-monitoring` prefix. Options live in
+`Options/EverTaskApiOptions.cs` (XML-documented), exhaustively tabled in `docs/configuration-cheatsheet.md`.
 
-- **Package**: `EverTask.Monitor.Api` (multi-target: net8.0, net9.0, net10.0 from `Directory.Build.props`)
-- **Type**: Class library (embedded resources: `wwwroot/`)
-- **Auth**: JWT only (no Basic Auth)
-- **UI**: Optional React SPA (see `UI/CLAUDE.md`)
-- **Entry points**: `.AddMonitoringApi()`, `.MapEverTaskApi()`
-- **OpenAPI**: built-in ASP.NET Core generator (net9+ only, NO Swashbuckle), isolated document
-  `/evertask-monitoring/openapi/evertask-monitoring.json`; controllers carry ApiExplorer group
-  `evertask-monitoring` via `RoutePrefixConvention` (which touches ONLY this assembly's controllers)
-- **Scalar**: sibling package `EverTask.Monitor.Api.Scalar` plugs in via `IMonitoringApiEndpointExtension`
-  (resolved in `MapEverTaskApi`); `AddMonitoringApiScalar()` must follow `AddMonitoringApi()` and
-  force-enables `EnableOpenApiDocument`
+## Entry points
 
-## Build
+- `AddMonitoringApi()` + `MapEverTaskApi()`. `AddMonitoringApi()` auto-calls `AddSignalRMonitoring()` unless
+  a `SignalRTaskMonitor` is already registered as `ITaskMonitor`; `AddEverTaskMonitoringApiStandalone()`
+  (no EverTask host) deliberately does NOT.
+- OpenAPI: built-in ASP.NET Core generator, **net9+ only**, no Swashbuckle; isolated document at
+  `/evertask-monitoring/openapi/evertask-monitoring.json`. Analyzer ET0008 warns when
+  `EnableOpenApiDocument` is set on net8.0; `EnableSwagger` is an `[Obsolete]` no-op (#20).
+- Scalar: `EverTask.Monitor.Api.Scalar` plugs in via `IMonitoringApiEndpointExtension` resolved in
+  `MapEverTaskApi`; `AddMonitoringApiScalar()` throws unless it follows `AddMonitoringApi()`.
 
-```bash
-dotnet build -c Release
-dotnet pack -o ../../nupkg
+## Invariants and gotchas
 
-# UI build (separate)
-cd UI && npm run build  # → ../wwwroot/
-```
-
-## Critical Configuration
-
-**EverTaskApiOptions.cs**:
-- `EnableOpenApiDocument` (bool, default: false) - OpenAPI doc, net9+ only (net8 no-op, analyzer ET0008 warns)
-- `EnableSwagger` - OBSOLETE no-op since 3.12 (Swashbuckle removed, issue #20)
-- `EnableAuthentication` (bool, default: true) - JWT auth on/off
-- `EnableUI` (bool, default: true) - Serve embedded React dashboard
-- `Username/Password` (string, default: "admin"/"admin") - JWT login credentials
-- `JwtSecret` (string?, auto-generated if null) - Signing key (256-bit min recommended)
-- `JwtExpirationHours` (int, default: 8) - Token TTL
-- `SignalRHubPath` (readonly: "/evertask-monitoring/hub") - Fixed, cannot change
-- `AllowedIpAddresses` (string[], default: empty = allow all) - IP whitelist (CIDR supported)
-- `MagicLinkToken` (string?, default: null) - Static token for instant auth. UI URL `/magic#token=...` (fragment,
-  never sent to the server) → `POST /api/auth/magic` with the token in the body. `GET ?token=` is `[Obsolete]`
-  (kept for compat, deprecated in OpenAPI) because the query lands in request logs (#22). Both share the login
-  rate-limit policy; comparison is `CryptographicOperations.FixedTimeEquals`; responses are `no-store`
-
-## Architecture
-
-### Controllers → Services → ITaskStorage
-- **Controllers**: Map to `/api/*` (derived from BasePath)
-- **Services**: `ITaskQueryService`, `IDashboardService`, `IStatisticsService`
-- **Storage**: Depends on `ITaskStorage` (injected via DI)
-
-### Middleware Chain
-0. Scoped CORS branch (`UseWhen` path under BasePath → `UseCors(EverTaskApiOptions.CorsPolicyName)`) when `EnableCors` — host pipeline untouched (#21)
-1. IP whitelist check (if configured) → 403 if blocked
-2. JWT authentication (if `EnableAuthentication = true`)
-   - Skips: `/api/config`, `/api/auth/login`, `/api/auth/validate`, `/api/auth/magic`
-   - Validates: `Authorization: Bearer <token>`
-   - Returns 401 + WWW-Authenticate challenge if invalid
-
-### JSON Serialization
-- camelCase properties (`JsonNamingPolicy.CamelCase`)
-- Null values omitted (`JsonIgnoreCondition.WhenWritingNull`)
-- Enums as strings (`JsonStringEnumConverter`)
-- Applied ONLY to this package's controllers via `MonitoringJsonResultFilter` (scoped
-  `SystemTextJsonOutputFormatter` attached per-controller by `RoutePrefixConvention`) — never via
-  `AddJsonOptions`, which would rewrite the host's shared MVC JsonOptions (#21)
-
-## Key Gotchas
-
-1. **JWT Only**: No Basic Auth. Deleted `BasicAuthenticationMiddleware` in favor of `JwtAuthenticationMiddleware`.
-2. **Fixed Paths**: `SignalRHubPath` is readonly `/evertask-monitoring/hub` (cannot be changed).
-3. **UI Embed**: `wwwroot/` files are `<EmbeddedResource>` in `.csproj`, served via `ManifestEmbeddedFileProvider`.
-4. **Auto SignalR**: `.AddEverTaskApi()` auto-registers SignalR monitoring if not already added.
-5. **Type Names**: Backend stores full assembly-qualified names. DTOs use short names (`Type.GetType()?.Name`).
-6. **Recurring Tasks**: Check `IsRecurring` field, populate `RecurringInfo` (human-readable schedule).
-7. **Audit Tables**: `StatusAudits` (Oldest→Newest), `RunsAudits` (Newest→Oldest).
-
-## Operational Checklist
-
-### Adding New API Endpoint
-1. Add method to service interface + implementation
-2. Add controller endpoint with `[HttpGet]` / `[HttpPost]`
-3. Add DTO in `DTOs/` (camelCase JSON)
-4. Update `UI/src/services/api.ts` if UI needs it
-5. Update XML docs on controller methods
-
-### Modifying Authentication
-- **Auth logic**: `Middleware/JwtAuthenticationMiddleware.cs`
-- **Token generation**: `Controllers/AuthController.cs`
-- **Options**: `Options/EverTaskApiOptions.cs`
-- **Service registration**: `Extensions/ServiceCollectionExtensions.cs`
-
-### Testing
-- **Test project**: `test/EverTask.Tests.Monitoring/`
-- **Auth tests**: `API/Middleware/JwtAuthenticationMiddlewareTests.cs`
-- **Controller tests**: Use `WebApplicationFactory<T>`
-
-## Service Implementation Notes
-
-### ITaskQueryService
-- Use `ITaskStorage.Get()` with LINQ expressions
-- Apply filters → pagination (Skip/Take) → project to DTOs
-- Sort by `SortBy` property (default: `CreatedAtUtc`)
-
-### IDashboardService
-- Convert `DateRange` enum to DateTime filters
-- Success rate: `(Completed / (Completed + Failed)) * 100`
-- Avg execution time: `Avg(LastExecutionUtc - CreatedAtUtc)` for completed tasks
-- Group by hour for `TasksOverTime`, by queue+status for `QueueSummaries`
-
-### IStatisticsService
-- Convert `TimePeriod` to date range + interval (daily/weekly buckets)
-- Calculate success rate per bucket/queue
-- Use `GroupBy` for aggregations
-
-## Related Files
-
-- **UI Code**: `UI/` (see `UI/CLAUDE.md`)
-- **User Docs**: `README.md`, `docs/monitoring-dashboard.md`
-- **Tests**: `test/EverTask.Tests.Monitoring/`
+- **Never mutate the host pipeline (#21)**: the JSON contract (camelCase, nulls omitted, enums as strings)
+  is attached per-controller by `MonitoringJsonResultFilter` through `RoutePrefixConvention`, NEVER via
+  `AddJsonOptions`, which rewrites the host's shared MVC `JsonOptions`. CORS likewise runs inside a
+  `UseWhen` branch under `BasePath` (`Infrastructure/EverTaskApiStartupFilter.cs`).
+- Middleware order: CORS branch, then `JwtAuthenticationMiddleware` — IP whitelist (403) BEFORE JWT (401 +
+  `WWW-Authenticate`). Anonymous skips: `{ApiBasePath}/config|auth/login|auth/validate|auth/magic`.
+- JWT only — no Basic Auth, and deliberately not `AddAuthentication().AddJwtBearer()`: the custom
+  middleware must cover API + hub + UI and accept `?access_token=` for the SignalR handshake.
+- `MagicLinkToken`: the UI reads the `/magic#token=` fragment (never sent to the server) and posts it to
+  `POST /api/auth/magic`; `GET ?token=` is `[Obsolete]` and OpenAPI-deprecated because the query lands in
+  request logs (#22). Both share the login rate-limit policy, use `FixedTimeEquals`, answer `no-store`.
+- **`wwwroot/` is gitignored** (`.gitignore:292`) and shipped as `<EmbeddedResource>`: pack without first
+  running the UI build (`pnpm run build` in `UI/`, never npm) and the dashboard answers "Dashboard UI not
+  found". Served by `ManifestEmbeddedFileProvider`, falling back to `EmbeddedFileProvider` without a
+  manifest, as in tests (`Extensions/EndpointRouteBuilderExtensions.cs`).
+- `SignalRHubPath` is readonly `/evertask-monitoring/hub`; it cannot be reconfigured.
+- Storage holds assembly-qualified type names; DTOs shorten them with `GetShortTypeName` EXCEPT
+  `TaskDetailDto`, which returns `task.Type` as stored.
+- `StatusAudits` and `RunsAudits` both come back **newest-first** (`OrderByDescending`).
+- Average execution time is `Completed/Failed − InProgress` read from `StatusAudits`, over completed AND
+  failed tasks (`Services/DashboardService.cs`) — not `LastExecutionUtc − CreatedAtUtc`.
+- Tests: `test/EverTask.Tests.Monitoring/` — `WebApplicationFactory<TestProgram>` via
+  `TestHelpers/MonitoringTestWebAppFactory.cs`; `API/HostIsolationTests.cs` pins the #21 invariants above.
