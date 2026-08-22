@@ -7,6 +7,9 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
     <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <!-- Direct reference so the [LoggerMessage] source generator runs here: analyzer assets are private by
+         default and do not flow in from the EverTask.Logging.Serilog project reference. -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
 
     <PackageReference Include="Moq" />
     <PackageReference Include="xunit" />

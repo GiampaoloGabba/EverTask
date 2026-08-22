@@ -2,111 +2,64 @@
 
 ## Purpose
 
-Integration tests for EverTask logging integrations. Currently: Serilog. Future: NLog, etc.
-
-## Test Organization
+Integration tests for EverTask logging integrations. Currently Serilog; future providers mirror the layout.
 
 ```
 test/EverTask.Tests.Logging/
-├── Serilog/
-│   ├── ServiceRegistrationTests.cs  # DI registration and resolution
-│   └── SerilogLoggerTests.cs        # Logger behavior and functionality
-└── GlobalUsings.cs
+└── Serilog/
+    ├── ServiceRegistrationTests.cs   # DI registration and resolution
+    └── SerilogLoggerTests.cs         # Adapter behavior + the DelegateSink helper
 ```
 
-**IMPORTANT**: This project uses **xUnit** (NOT MSTest) with Shouldly assertions.
+xUnit + Shouldly (NOT MSTest). Multi-targets net8.0/net9.0/net10.0, so every assertion must hold on all
+three Serilog / `Serilog.Extensions.Logging` versions (8.0.0 / 9.0.0 / 10.0.0).
 
-## Quick Commands
-
-**Run all logging tests**:
 ```bash
-dotnet test test/EverTask.Tests.Logging/EverTask.Tests.Logging.csproj
+dotnet test test/EverTask.Tests.Logging/EverTask.Tests.Logging.csproj -c Release
 ```
 
-**Run Serilog tests only**:
-```bash
-dotnet test test/EverTask.Tests.Logging/ --filter "FullyQualifiedName~Serilog"
-```
-
-## Key Test Patterns
-
-### DelegateSink Pattern
-
-Custom `ILogEventSink` for inline assertions without external output:
+## DelegateSink: capture, then assert AFTER the call
 
 ```csharp
-var logger = new LoggerConfiguration()
-    .WriteTo.Sink(new DelegateSink(logEvent => {
-        logEvent.MessageTemplate.Text.ShouldBe("Expected message");
-        logEvent.Level.ShouldBe(LogEventLevel.Error);
-    }))
-    .CreateLogger();
+var events = new List<LogEvent>();
+var serilog = new LoggerConfiguration()
+              .MinimumLevel.Is(minimumLevel)
+              .WriteTo.Sink(new DelegateSink(events.Add))
+              .CreateLogger();
 
-logger.Error("Expected message");
+var logger = new EverTaskSerilogLogger<MyClass>(serilog);
+logger.LogInformation("Task {TaskId} done", id);
+
+var logEvent = events.ShouldHaveSingleItem();
+logEvent.MessageTemplate.Text.ShouldBe("Task {TaskId} done");
 ```
 
-**Purpose**: Capture and assert on `LogEvent` properties (level, message, properties, exceptions) without file/console output.
+**Never assert inside the sink delegate.** The assertions then only run if an event is emitted, so the test
+passes vacuously when the adapter logs nothing — exactly how the structural-property loss went unnoticed.
+`SerilogLoggerTests.CreateLogger` is the helper; reuse it.
 
-### LogLevel Verification
+## What to assert on a `LogEvent`
 
-```csharp
-var everTaskLogger = new EverTaskSerilogLogger<MyClass>(logger);
+| Concern | Assertion |
+|---------|-----------|
+| Level | `logEvent.Level.ShouldBe(LogEventLevel.Error)` |
+| Template (**not** the rendered text) | `logEvent.MessageTemplate.Text.ShouldBe("Task {TaskId} started")` |
+| Bound property | `logEvent.Properties["TaskId"].ShouldBeOfType<ScalarValue>().Value.ShouldBe(id)` |
+| Absent property | `logEvent.Properties.ContainsKey("X").ShouldBeFalse()` — `Properties` is an `IReadOnlyDictionary`, so Shouldly's `ShouldNotContainKey` does not bind |
+| Rendered output | `logEvent.RenderMessage().ShouldBe("Task 42 started")` |
+| Exception | `logEvent.Exception.ShouldBeSameAs(expected)` |
+| `EventId` | `Properties["EventId"]` is a `StructureValue` with `Id` / `Name` sub-properties |
+| Source context | `Properties[Constants.SourceContextPropertyName]` == `typeof(T).FullName` |
+| `IsEnabled` | `logger.IsEnabled(LogLevel.None).ShouldBeFalse()` |
 
-everTaskLogger.IsEnabled(LogLevel.Information).ShouldBeTrue();
-everTaskLogger.IsEnabled(LogLevel.None).ShouldBeFalse();
-```
+## `[LoggerMessage]` coverage
 
-### Scope Enrichment Testing
+`TestLog` (in `SerilogLoggerTests.cs`) is a source-generated logging class used to prove the adapter handles
+the generator's state struct, not just `FormattedLogValues`. The generator needs a **direct**
+`Microsoft.Extensions.Logging.Abstractions` PackageReference in this csproj — analyzer assets are private by
+default and do not flow in through the project reference.
 
-```csharp
-using (logger.BeginScope(new Dictionary<string, object> { ["Key"] = "Value" }))
-{
-    logger.LogInformation("Message");
-    // Assert enricher properties via DelegateSink
-}
-```
+## Adding a new logger integration
 
-## Adding New Logger Integration
-
-**When adding new logger provider** (e.g., NLog):
-
-- [ ] Create folder: `test/EverTask.Tests.Logging/NLog/`
-- [ ] Add: `NLog/ServiceRegistrationTests.cs` (verify DI registration)
-- [ ] Add: `NLog/NLogLoggerTests.cs` (verify logger behavior)
-- [ ] Follow Serilog test patterns (DelegateSink equivalent, LogLevel mapping, scope enrichment)
-
-**Folder structure should mirror Serilog**:
-```
-test/EverTask.Tests.Logging/
-├── Serilog/
-│   ├── ServiceRegistrationTests.cs
-│   └── SerilogLoggerTests.cs
-├── NLog/
-│   ├── ServiceRegistrationTests.cs
-│   └── NLogLoggerTests.cs
-```
-
-## Test Configuration
-
-**Disabling noisy console output** (optional, for cleaner test runs):
-```csharp
-// In test class constructor or setup
-var logger = new LoggerConfiguration()
-    .MinimumLevel.Fatal()  // Suppress all output below Fatal
-    .CreateLogger();
-```
-
-**When testing specific log levels**, configure minimum level accordingly:
-```csharp
-.MinimumLevel.Verbose()  // Capture all levels for testing
-```
-
-## Key Assertions
-
-| Assertion | Example |
-|-----------|---------|
-| **LogLevel mapping** | `logEvent.Level.ShouldBe(LogEventLevel.Error)` |
-| **Message template** | `logEvent.MessageTemplate.Text.ShouldBe("Task {TaskId} started")` |
-| **Message properties** | `logEvent.Properties["TaskId"].ToString().ShouldBe(taskId.ToString())` |
-| **Exception** | `logEvent.Exception.ShouldBeOfType<InvalidOperationException>()` |
-| **IsEnabled** | `logger.IsEnabled(LogLevel.Information).ShouldBeTrue()` |
+Create `test/EverTask.Tests.Logging/<Provider>/` with `ServiceRegistrationTests.cs` (DI resolves
+`IEverTaskLogger<T>` to the provider's type) and `<Provider>LoggerTests.cs` covering the same matrix above.
