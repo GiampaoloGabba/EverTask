@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { apiService } from '@/services/api';
 import type { ExecutionLogDto } from '@/types/task.types';
 import { Button } from '@/components/ui/button';
@@ -12,6 +12,8 @@ interface ExecutionLogsTabProps {
   taskId: string;
 }
 
+const take = 100;
+
 export function ExecutionLogsTab({ taskId }: ExecutionLogsTabProps) {
   const [logs, setLogs] = useState<ExecutionLogDto[]>([]);
   const [totalCount, setTotalCount] = useState(0);
@@ -21,19 +23,8 @@ export function ExecutionLogsTab({ taskId }: ExecutionLogsTabProps) {
   const [skip, setSkip] = useState(0);
   const [autoScroll, setAutoScroll] = useState(true);
   const logsEndRef = useRef<HTMLDivElement>(null);
-  const take = 100;
 
-  useEffect(() => {
-    fetchLogs();
-  }, [taskId, levelFilter, skip]);
-
-  useEffect(() => {
-    if (autoScroll && logs.length > 0) {
-      logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [logs, autoScroll]);
-
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
     try {
       setIsLoading(true);
       setError(null);
@@ -45,12 +36,22 @@ export function ExecutionLogsTab({ taskId }: ExecutionLogsTabProps) {
       );
       setLogs(response.data.logs);
       setTotalCount(response.data.totalCount);
-    } catch (err: any) {
-      setError(err.message || 'Failed to load execution logs');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load execution logs');
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [taskId, levelFilter, skip]);
+
+  useEffect(() => {
+    fetchLogs();
+  }, [fetchLogs]);
+
+  useEffect(() => {
+    if (autoScroll && logs.length > 0) {
+      logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [logs, autoScroll]);
 
   const handleExportJSON = () => {
     const dataStr = JSON.stringify(logs, null, 2);

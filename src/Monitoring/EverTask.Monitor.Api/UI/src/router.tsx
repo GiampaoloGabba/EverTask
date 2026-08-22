@@ -1,5 +1,5 @@
-import { createBrowserRouter, Navigate } from 'react-router-dom';
-import { useAuthStore } from '@/stores/authStore';
+import { createBrowserRouter } from 'react-router-dom';
+import { ProtectedRoute } from '@/components/common/ProtectedRoute';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { LoginPage } from '@/pages/LoginPage';
 import { MagicLinkPage } from '@/pages/MagicLinkPage';
@@ -10,17 +10,6 @@ import { QueuesPage } from '@/pages/QueuesPage';
 import { LiveMonitoringPage } from '@/pages/LiveMonitoringPage';
 import { StatisticsPage } from '@/pages/StatisticsPage';
 import { RateLimitsPage } from '@/pages/RateLimitsPage';
-
-// Protected route wrapper
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
-
-  if (!isAuthenticated) {
-    return <Navigate to="/login" replace />;
-  }
-
-  return <>{children}</>;
-}
 
 const router = createBrowserRouter([
   {

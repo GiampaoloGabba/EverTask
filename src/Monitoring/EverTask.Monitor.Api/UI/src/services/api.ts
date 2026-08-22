@@ -77,8 +77,8 @@ class ApiService {
     );
   }
 
-  private convertStatusStringsToNumbers(obj: any): void {
-    if (!obj || typeof obj !== 'object') return;
+  private convertStatusStringsToNumbers(value: unknown): void {
+    if (!value || typeof value !== 'object') return;
 
     const statusMap: Record<string, number> = {
       'WaitingQueue': 0,
@@ -92,17 +92,19 @@ class ApiService {
     };
 
     // Handle arrays
-    if (Array.isArray(obj)) {
-      obj.forEach(item => this.convertStatusStringsToNumbers(item));
+    if (Array.isArray(value)) {
+      value.forEach(item => this.convertStatusStringsToNumbers(item));
       return;
     }
 
+    const obj = value as Record<string, unknown>;
+
     // Convert statusDistribution object (keys are status strings)
-    if ('statusDistribution' in obj && typeof obj.statusDistribution === 'object') {
+    if ('statusDistribution' in obj && typeof obj.statusDistribution === 'object' && obj.statusDistribution !== null) {
       const converted: Record<number, number> = {};
-      Object.entries(obj.statusDistribution).forEach(([key, value]) => {
+      Object.entries(obj.statusDistribution).forEach(([key, count]) => {
         const numKey = statusMap[key] ?? parseInt(key);
-        converted[numKey] = value as number;
+        converted[numKey] = count as number;
       });
       obj.statusDistribution = converted;
     }

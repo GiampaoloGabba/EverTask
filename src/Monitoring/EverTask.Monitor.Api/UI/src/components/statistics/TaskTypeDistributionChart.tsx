@@ -72,7 +72,7 @@ export function TaskTypeDistributionChart({ data }: TaskTypeDistributionChartPro
             <Tooltip
               formatter={(value, _name, props) => [
                 value as number,
-                (props as any).payload.fullName,
+                (props as unknown as { payload: { fullName: string } }).payload.fullName,
               ]}
             />
             <Legend />
