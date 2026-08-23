@@ -1,3 +1,5 @@
+﻿using System.Data;
+using System.Globalization;
 using EverTask.Abstractions;
 using EverTask.Logger;
 using Microsoft.Data.SqlClient;
@@ -134,5 +136,155 @@ public class SqlServerTaskStorage(
             logger.RecurringRunCompletionFailed(e, taskId);
             throw;
         }
+    }
+
+    // ---- Durable occurrences (stored procedures) --------------------------------------------------
+    // Materialization runs once per occurrence and the versioned advances once per run, so they get the
+    // same treatment as the three pre-existing hot writes: one procedure, one round-trip, one transaction.
+    // The rarer administrative operations (requeue, halt, reschedule, conditional finalize) inherit the EF
+    // base, exactly like the other once-per-series writes already do.
+
+    /// <summary>
+    /// Materializes one occurrence and advances the schedule cursor through
+    /// <c>usp_MaterializeOccurrence</c>. The compare-and-swap on version and cursor lives inside the
+    /// procedure, under an UPDLOCK on the schedule row, so two hosts reading the same cursor cannot both
+    /// advance it — the outcome tells the loser which race it lost.
+    /// </summary>
+    public override async Task<OccurrenceMaterializationOutcome> MaterializeOccurrence(
+        Guid parentId, int expectedScheduleVersion, DateTimeOffset? expectedCursorUtc, QueuedTask occurrence,
+        DateTimeOffset? newCursorUtc, AuditLevel auditLevel, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(occurrence);
+
+        if (occurrence.ScheduledExecutionUtc is not { } slotUtc)
+            throw new ArgumentException("An occurrence must carry its nominal slot.", nameof(occurrence));
+
+        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+
+        // The INSERT below writes the canonical occurrence shape; stamping it on the caller's entity too
+        // keeps the object it goes on using (scheduling the child) identical to the row that was stored.
+        occurrence.ApplyOccurrenceContract(parentId, expectedScheduleVersion);
+
+        var outcome = new SqlParameter("@Outcome", SqlDbType.Int) { Direction = ParameterDirection.Output };
+
+        var sql = $"EXEC [{_schema}].[usp_MaterializeOccurrence] @ParentId, @ExpectedScheduleVersion, " +
+                  "@ExpectedCursorUtc, @NewCursorUtc, @AuditLevel, @OccurrenceId, @SlotUtc, @CreatedAtUtc, " +
+                  "@Type, @Request, @Handler, @QueueName, @OccurrenceAuditLevel, @RuntimeInfo, @Outcome OUTPUT";
+
+        await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(
+            sql,
+            [
+                new SqlParameter("@ParentId", parentId),
+                new SqlParameter("@ExpectedScheduleVersion", expectedScheduleVersion),
+                new SqlParameter("@ExpectedCursorUtc", (object?)expectedCursorUtc ?? DBNull.Value),
+                new SqlParameter("@NewCursorUtc", (object?)newCursorUtc ?? DBNull.Value),
+                new SqlParameter("@AuditLevel", (int)auditLevel),
+                new SqlParameter("@OccurrenceId", occurrence.Id),
+                new SqlParameter("@SlotUtc", slotUtc),
+                new SqlParameter("@CreatedAtUtc", occurrence.CreatedAtUtc),
+                new SqlParameter("@Type", occurrence.Type),
+                new SqlParameter("@Request", occurrence.Request),
+                new SqlParameter("@Handler", occurrence.Handler),
+                new SqlParameter("@QueueName", (object?)occurrence.QueueName ?? DBNull.Value),
+                new SqlParameter("@OccurrenceAuditLevel", (object?)occurrence.AuditLevel ?? DBNull.Value),
+                new SqlParameter("@RuntimeInfo", (object?)occurrence.RuntimeInfo ?? DBNull.Value),
+                outcome
+            ],
+            ct).ConfigureAwait(false);
+
+        return (OccurrenceMaterializationOutcome)Convert.ToInt32(outcome.Value, CultureInfo.InvariantCulture);
+    }
+
+    /// <inheritdoc />
+    public override async Task CancelSchedule(Guid parentId, AuditLevel auditLevel, CancellationToken ct = default)
+    {
+        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+
+        var sql = $"EXEC [{_schema}].[usp_CancelSchedule] @ParentId, @AuditLevel";
+
+        await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(
+            sql,
+            [
+                new SqlParameter("@ParentId", parentId),
+                new SqlParameter("@AuditLevel", (int)auditLevel)
+            ],
+            ct).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public override async Task<ScheduleCasResult> UpdateCurrentRun(Guid taskId, double executionTimeMs,
+                                                                   DateTimeOffset? nextRun, AuditLevel auditLevel,
+                                                                   int expectedScheduleVersion)
+    {
+        logger.UpdatingCurrentRun(taskId);
+
+        await using var dbContext = await _contextFactory.CreateDbContextAsync().ConfigureAwait(false);
+
+        var applied = new SqlParameter("@Applied", SqlDbType.Bit) { Direction = ParameterDirection.Output };
+
+        try
+        {
+            var sql = $"EXEC [{_schema}].[usp_UpdateCurrentRunCas] @TaskId, @ExecutionTimeMs, @NextRunUtc, " +
+                      "@AuditLevel, @ExpectedScheduleVersion, @Applied OUTPUT";
+
+            await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(
+                sql,
+                [
+                    new SqlParameter("@TaskId", taskId),
+                    new SqlParameter("@ExecutionTimeMs", executionTimeMs),
+                    new SqlParameter("@NextRunUtc", (object?)nextRun ?? DBNull.Value),
+                    new SqlParameter("@AuditLevel", (int)auditLevel),
+                    new SqlParameter("@ExpectedScheduleVersion", expectedScheduleVersion),
+                    applied
+                ]).ConfigureAwait(false);
+        }
+        catch (Exception e)
+        {
+            // Residual D: propagate, exactly like the unversioned overload.
+            logger.CurrentRunUpdateFailed(e, taskId);
+            throw;
+        }
+
+        return Convert.ToBoolean(applied.Value, CultureInfo.InvariantCulture)
+                   ? ScheduleCasResult.Applied
+                   : ScheduleCasResult.VersionMismatch;
+    }
+
+    /// <inheritdoc />
+    public override async Task<ScheduleCasResult> CompleteRecurringRun(Guid taskId, double executionTimeMs,
+                                                                       DateTimeOffset? nextRun, AuditLevel auditLevel,
+                                                                       int expectedScheduleVersion)
+    {
+        logger.CompletingRecurringRun(taskId);
+
+        await using var dbContext = await _contextFactory.CreateDbContextAsync().ConfigureAwait(false);
+
+        var applied = new SqlParameter("@Applied", SqlDbType.Bit) { Direction = ParameterDirection.Output };
+
+        try
+        {
+            var sql = $"EXEC [{_schema}].[usp_CompleteRecurringRunCas] @TaskId, @ExecutionTimeMs, @NextRunUtc, " +
+                      "@AuditLevel, @ExpectedScheduleVersion, @Applied OUTPUT";
+
+            await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(
+                sql,
+                [
+                    new SqlParameter("@TaskId", taskId),
+                    new SqlParameter("@ExecutionTimeMs", executionTimeMs),
+                    new SqlParameter("@NextRunUtc", (object?)nextRun ?? DBNull.Value),
+                    new SqlParameter("@AuditLevel", (int)auditLevel),
+                    new SqlParameter("@ExpectedScheduleVersion", expectedScheduleVersion),
+                    applied
+                ]).ConfigureAwait(false);
+        }
+        catch (Exception e)
+        {
+            logger.RecurringRunCompletionFailed(e, taskId);
+            throw;
+        }
+
+        return Convert.ToBoolean(applied.Value, CultureInfo.InvariantCulture)
+                   ? ScheduleCasResult.Applied
+                   : ScheduleCasResult.VersionMismatch;
     }
 }

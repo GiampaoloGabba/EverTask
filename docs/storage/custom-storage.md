@@ -54,6 +54,113 @@ writes: `TrySetQueuedIfRecoverable`, `CompleteRecurringRun`, `SetRecurringSeries
 if your backend can make the check-and-set atomic. See `src/EverTask/Storage/ITaskStorage.cs` for the
 full contract and the per-member rationale.
 
+## The Scheduling Clock
+
+Every scheduling decision in EverTask resolves "now" from one `TimeProvider`, so a test can drive the whole
+pipeline deterministically and a clock skew between the host and the database cannot make recovery disagree
+with the scheduler. Two members carry that instant into storage:
+
+```csharp
+Task<QueuedTask[]> RetrievePending(DateTimeOffset nowUtc, DateTimeOffset? lastCreatedAt, Guid? lastId,
+                                   int take, CancellationToken ct = default);
+
+Task<bool> TrySetQueuedIfRecoverable(DateTimeOffset nowUtc, Guid taskId, AuditLevel auditLevel,
+                                     CancellationToken ct = default);
+```
+
+Both are default members that delegate to the signatures above them, so a store written before they existed
+keeps working and keeps its own implementation. It simply resolves the clock itself, so the deterministic
+guarantee does not extend to it. Override them to honour `nowUtc` and you get that guarantee too.
+
+The same holds for a provider that inherits `EfCoreTaskStorage`. Override only the older signatures and the
+base hands the clock-carrying calls straight back to them instead of answering with its own query. Override
+the `nowUtc` ones, as the in-box providers do, and yours win.
+
+## Recovery Returns Two Kinds of Row
+
+A recovery page is the union of two categories, and the distinction matters because they lead to opposite
+actions:
+
+- **Rows to execute**: `QueuedTask.IsRecoverableForExecution(now)`. Note the grouping of the temporal term:
+  a recurring series whose `RunUntil` elapsed *during* the downtime still has the occurrence it had already
+  scheduled before that boundary, and dropping it silently loses that run.
+- **Series to finalize**: `QueuedTask.IsRecurringSeriesToFinalize()`. Its remaining slots all fall past
+  `RunUntil`, or its run budget is spent. Nothing runs: the row is marked `Completed` with its cursor cleared.
+  `Cancelled` is excluded, because a cancelled series is already terminal.
+
+Both predicates live on `QueuedTask` and are the canonical, client-side definition. `RetrievePending` must
+return their union; `TrySetQueuedIfRecoverable` must apply only the first, so a spent series is never handed
+back to a worker queue.
+
+Finalizing is conditional wherever the store can make it so. On a store that advertises
+`SupportsScheduleVersioning` the recovery calls `TrySetRecurringSeriesCompleted`, compare-and-swapped on the
+cursor, status and version of the row the page read. A `Cancel` that linearized in between therefore wins,
+and the finalization reports the loss instead of overwriting it. A store without that capability keeps the
+unconditional `SetRecurringSeriesCompleted`: refusing it there would turn a normal end of series into a
+recovery failure, and after a few restarts into a poisoned task.
+
+Finalizing a series writes `LastExecutionUtc` even though nothing ran. It is the same write every terminal
+transition makes, and it has two consequences. The audit trail shows a `Queued → Completed` transition with no
+`RunsAudit` row next to it, because there was no run. And the completed-task retention window is measured from
+`LastExecutionUtc`, so it restarts at the finalization instead of at the series' last real run: a schedule
+whose boundary elapsed during a long downtime is pruned relative to the restart that closed it.
+
+## Durable Occurrences (optional)
+
+A durable recurring schedule turns each due slot into its own child row, which needs operations no
+non-atomic emulation can provide. They are default members that **throw `NotSupportedException`**, and two
+capabilities say whether a store really has them:
+
+```csharp
+bool SupportsDurableOccurrences => false;
+bool SupportsScheduleVersioning => false;
+```
+
+Capability and implementation are inseparable. A "best effort" version built from two separate writes is
+exactly the crash window these operations exist to close (an occurrence inserted without its cursor advance,
+or a cursor advanced with no occurrence), so a store either implements them atomically and advertises them,
+or dispatching a durable schedule against it fails fast.
+
+| Operation | What must be atomic |
+|-----------|---------------------|
+| `MaterializeOccurrence` | Insert the child AND advance the schedule cursor, guarded by a compare-and-swap on version + cursor. A null new cursor ends the series in the same commit. |
+| `TrySetRecurringSeriesCompleted` | Finalize only while the expected cursor, status and version still hold |
+| `CancelSchedule` | Cancel the schedule and its still-waiting occurrences together |
+| `RequeueTerminal` | Put a `Failed`/`Cancelled` row back to `Queued`, keeping its identity and audits |
+| `TryRequeueStaleOccurrence` | Compare-and-swap requeue of an occurrence stranded in a known status |
+| `UpdateSchedule` | Replace the definition and bump the version, from the expected version only |
+| `TryHaltSchedule` | Write the halted marker, guarded by version + cursor + status |
+| `UpdateCurrentRun` / `CompleteRecurringRun` (version overloads) | Advance only while the schedule version matches |
+
+`MaterializeOccurrence` must also classify what it finds the way every built-in store does, in this order:
+
+1. the schedule row is gone, cancelled, or already has no cursor: `ParentInactive`;
+2. its version differs from the expected one: `VersionMismatch`;
+3. its cursor differs from the expected one: `CursorMoved`. An expected cursor of `null` lands here too,
+   since a live schedule always has one;
+4. the slot is already materialized: `AlreadyExists`.
+
+Only `Created` writes anything. Miss the `null` case and a caller that retried with the cursor it just read
+back inserts an occurrence on a finished series and hands it a cursor again.
+
+The child row has one shape, whatever the backend, and `QueuedTask.ApplyOccurrenceContract(scheduleId,
+scheduleVersion)` is that shape. It writes a fresh one-shot: `WaitingQueue`, run count 0, at the version it
+was materialized against, with the definition, the cursor, the bounds and the task key cleared. What the
+caller supplies survives untouched: id, creation time, slot, type, payload, handler, queue, audit level,
+runtime info. The in-box providers that build the `INSERT` by hand write those columns and nothing else; a
+store that persists the entity it was handed calls the method first. Skip it and the same
+`MaterializeOccurrence(...)` call stores a different row on your backend than on every other one.
+
+`CancelSchedule` touches only rows that exist. Cancelling a schedule someone else has already removed is a
+no-op, not an error, and it leaves no audit row for a task that is gone.
+
+The two read helpers (`GetOccurrences`, `CountActiveOccurrences`) carry no atomicity contract, so their
+defaults are a correct query over `Get`. Override them for an indexed one.
+
+Three columns back all of this: `ParentTaskId` (with a restrict self-foreign-key, a unique index on
+`(ParentTaskId, ScheduledExecutionUtc)` named `UX_QueuedTasks_Occurrence`, and a check constraint that an
+occurrence always names its slot), `RuntimeInfo` (opaque JSON) and `ScheduleVersion` (int, default 0).
+
 ## Example: Redis Storage
 
 ```csharp

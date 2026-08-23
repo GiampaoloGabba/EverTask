@@ -12,8 +12,12 @@ internal sealed class RateLimitGate(
     IGateInvalidationRegistry invalidationRegistry,
     RateLimitParkingLot parkingLot,
     EverTaskServiceConfiguration configuration,
-    IEverTaskLogger<RateLimitGate> logger) : IRateLimitGate
+    IEverTaskLogger<RateLimitGate> logger,
+    TimeProvider? timeProvider = null) : IRateLimitGate
 {
+    // The gate hands slots to the scheduler, so it must read the SAME clock the scheduler sleeps on (P9).
+    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+
     private long _lastSeenFailOpenCount;
     private long _lastFailOpenEventTicks;
     private long _lastAggregationSweepTicks;
@@ -130,7 +134,7 @@ internal sealed class RateLimitGate(
         // Same set-then-check discipline as Defer: capture the epoch BEFORE Schedule so a
         // Cancel / re-dispatch racing this re-park is observed afterwards
         var epoch = invalidationRegistry.GetEpoch(task.PersistenceId);
-        var slot  = DateTimeOffset.UtcNow + InFlightRedeliveryDelay;
+        var slot  = _timeProvider.GetUtcNow() + InFlightRedeliveryDelay;
 
         var parked = task.ToLazy();
 
@@ -232,7 +236,7 @@ internal sealed class RateLimitGate(
 
             if (total > Interlocked.Read(ref _lastSeenFailOpenCount))
             {
-                var nowTicks  = DateTimeOffset.UtcNow.UtcTicks;
+                var nowTicks  = _timeProvider.GetUtcNow().UtcTicks;
                 var lastEvent = Interlocked.Read(ref _lastFailOpenEventTicks);
 
                 // Window CAS first, count consumed only on the emitting path: consuming the
@@ -280,7 +284,7 @@ internal sealed class RateLimitGate(
     private RateLimitGateResult Defer(TaskHandlerExecutor task, Type taskType, string key,
                                       DateTimeOffset slot, long epoch)
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = _timeProvider.GetUtcNow();
 
         // L3 horizon: far-future slots are never parked (the limiter did not book them either).
         // The caller applies the terminal outcome: one-shot → persisted Failed + OnError with

@@ -62,7 +62,8 @@ them before touching the dispatcher, the worker or a recovery filter.
 ## Ops Quick Facts
 
 - **Central Package Management**: versions go in `Directory.Packages.props`, never in a `.csproj`
-- **Version**: `Directory.Build.props`, lockstep across all packages (current 3.11.0)
+- **Version**: `Directory.Build.props`, lockstep across all packages (current 4.0.0, unreleased — bumped early
+  so the consumer-compatibility fixture really loads a 3.11-compiled assembly against a 4.0 one)
 - **MediatR attribution**: `Dispatcher.cs`, `TaskHandlerExecutor.cs`, `TaskHandlerWrapper.cs`,
   `HandlerRegistrar.cs` are adapted from MediatR (Apache 2.0) — keep the attribution comments
 

@@ -171,4 +171,84 @@ public class MemoryStorageRecoveryFilterTests
         (await _storage.TrySetQueuedIfRecoverable(task.Id, AuditLevel.Full)).ShouldBeTrue();
         (await _storage.Get(t => t.Id == task.Id))[0].Status.ShouldBe(QueuedTaskStatus.Queued);
     }
+
+    // ---- X3: execution vs finalization -------------------------------------------------------------
+    // A recovery page is the UNION of two categories, and the second one is new: a recurring series with a
+    // cursor but nothing left to run. Such a row used to match no predicate at all and stayed Queued for
+    // ever — a zombie no restart could clear.
+
+    [Fact]
+    public async Task Should_retrieve_a_series_whose_pending_slot_precedes_an_elapsed_RunUntil()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var task = CreateTask(QueuedTaskStatus.Queued, isRecurring: true,
+            nextRunUtc: now.AddMinutes(-30), runUntil: now.AddMinutes(-10));
+        await _storage.Persist(task);
+
+        var pending = await _storage.RetrievePending(now, null, null, 10);
+
+        pending.ShouldContain(t => t.Id == task.Id,
+            "the occurrence was already scheduled before the boundary the downtime crossed");
+        task.IsRecurringSeriesToFinalize().ShouldBeFalse();
+        (await _storage.TrySetQueuedIfRecoverable(now, task.Id, AuditLevel.Full))
+            .ShouldBeTrue("it still has a slot to run, so it may go back to a worker queue");
+    }
+
+    [Fact]
+    public async Task Should_retrieve_a_series_to_finalize_when_its_slot_is_past_RunUntil()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var task = CreateTask(QueuedTaskStatus.Queued, isRecurring: true,
+            nextRunUtc: now.AddMinutes(-5), runUntil: now.AddMinutes(-30));
+        await _storage.Persist(task);
+
+        var pending = await _storage.RetrievePending(now, null, null, 10);
+
+        pending.ShouldContain(t => t.Id == task.Id);
+        task.IsRecurringSeriesToFinalize().ShouldBeTrue();
+        (await _storage.TrySetQueuedIfRecoverable(now, task.Id, AuditLevel.Full))
+            .ShouldBeFalse("a spent series must be finalized, never handed back to a worker queue");
+    }
+
+    [Fact]
+    public async Task Should_retrieve_a_series_to_finalize_when_its_run_budget_is_spent()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var task = CreateTask(QueuedTaskStatus.Completed, isRecurring: true,
+            nextRunUtc: now.AddMinutes(5), maxRuns: 3, currentRunCount: 3);
+        await _storage.Persist(task);
+
+        var pending = await _storage.RetrievePending(now, null, null, 10);
+
+        pending.ShouldContain(t => t.Id == task.Id);
+        task.IsRecurringSeriesToFinalize().ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Should_never_retrieve_a_cancelled_series_to_finalize()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var task = CreateTask(QueuedTaskStatus.Cancelled, isRecurring: true,
+            nextRunUtc: now.AddMinutes(-5), runUntil: now.AddMinutes(-30));
+        await _storage.Persist(task);
+
+        var pending = await _storage.RetrievePending(now, null, null, 10);
+
+        pending.ShouldNotContain(t => t.Id == task.Id);
+    }
+
+    [Fact]
+    public async Task Should_judge_the_recovery_filter_on_the_clock_it_is_given()
+    {
+        // The storage never resolves "now" on its own: the same row is judged against whatever instant the
+        // caller supplies, which is what makes the whole pipeline testable on one deterministic clock.
+        var boundary = DateTimeOffset.UtcNow.AddHours(5);
+        var task     = CreateTask(QueuedTaskStatus.Queued, runUntil: boundary);
+        await _storage.Persist(task);
+
+        (await _storage.RetrievePending(boundary.AddHours(-1), null, null, 10))
+            .ShouldContain(t => t.Id == task.Id);
+        (await _storage.RetrievePending(boundary.AddHours(1), null, null, 10))
+            .ShouldNotContain(t => t.Id == task.Id);
+    }
 }

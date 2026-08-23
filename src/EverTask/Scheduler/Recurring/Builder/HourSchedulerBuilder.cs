@@ -1,7 +1,10 @@
-﻿namespace EverTask.Scheduler.Recurring.Builder;
+namespace EverTask.Scheduler.Recurring.Builder;
 
-public class HourSchedulerBuilder(RecurringTask task) : IHourSchedulerBuilder
+public class HourSchedulerBuilder(RecurringTask task, TimeProvider? timeProvider) : IHourSchedulerBuilder
 {
+    /// <summary>The pre-P9 constructor, kept for binary compatibility (P6/X6).</summary>
+    public HourSchedulerBuilder(RecurringTask task) : this(task, null) { }
+
     public IMinuteSchedulerBuilder AtMinute(int minute)
     {
         ArgumentNullException.ThrowIfNull(task.HourInterval);
@@ -10,17 +13,17 @@ public class HourSchedulerBuilder(RecurringTask task) : IHourSchedulerBuilder
             throw new ArgumentOutOfRangeException(nameof(minute));
 
         task.HourInterval.OnMinute = minute;
-        return new MinuteSchedulerBuilder(task);
+        return new MinuteSchedulerBuilder(task, timeProvider);
     }
 
     public IBuildableSchedulerBuilder RunUntil(DateTimeOffset runUntil)
     {
         var runUntilUtc = runUntil.ToUniversalTime();
-        if (runUntilUtc < DateTimeOffset.UtcNow)
+        if (runUntilUtc < (timeProvider ?? TimeProvider.System).GetUtcNow())
             throw new InvalidOperationException("RunUntil cannot be in the past");
 
         task.RunUntil = runUntilUtc;
-        return new BuildableSchedulerBuilder(task);
+        return new BuildableSchedulerBuilder(task, timeProvider);
     }
 
     public void MaxRuns(int maxRuns) =>task.MaxRuns = maxRuns;

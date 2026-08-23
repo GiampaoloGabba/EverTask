@@ -106,6 +106,13 @@ See `06-rate-limiting-queues.md`.
 // + storage / logging / monitoring extension methods (see their reference files)
 ```
 
+**The scheduling clock is a seam.** `AddEverTask` registers `TimeProvider.System` with `TryAddSingleton`, and
+one `TimeProvider` governs every scheduling decision: dispatch delays, the occurrence grid, both schedulers,
+startup recovery and the rate limiter. Register your own (`services.AddSingleton<TimeProvider>(fake)` before
+`AddEverTask`, or on `.Services` after it) and the whole pipeline follows it — that is what makes an
+end-to-end schedule test deterministic instead of a race against the wall clock. Retry delays, audit and
+logging deliberately stay on the real clock.
+
 Well-known names: `QueueNames.Default = "default"` (always created), `QueueNames.Recurring = "recurring"`
 (both auto-created during service registration, via `RegisterQueueManager`, if not configured). Full
 queue semantics in `06-rate-limiting-queues.md`.

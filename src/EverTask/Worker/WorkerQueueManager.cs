@@ -19,7 +19,8 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
         ILoggerFactory loggerFactory,
         ITaskStorage? taskStorage = null,
         RateLimitParkingLot? parkingLot = null,
-        TaskDeliveryRegistry? deliveryRegistry = null)
+        TaskDeliveryRegistry? deliveryRegistry = null,
+        TimeProvider? timeProvider = null)
     {
         _configurations = configurations ?? throw new ArgumentNullException(nameof(configurations));
         _logger         = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -37,7 +38,7 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
         foreach (var (name, config) in configurations)
         {
             var queueLogger = loggerFactory1.CreateLogger($"EverTask.Worker.WorkerQueue.{name}");
-            var queue       = new WorkerQueue(config, queueLogger, blacklist1, taskStorage, registry) { ParkingLot = parkingLot };
+            var queue       = new WorkerQueue(config, queueLogger, blacklist1, taskStorage, registry, timeProvider) { ParkingLot = parkingLot };
             _queues[name] = queue;
         }
 
@@ -54,7 +55,7 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
                 }
             };
             var queueLogger = loggerFactory1.CreateLogger("EverTask.Worker.WorkerQueue.default");
-            _queues[QueueNames.Default] = new WorkerQueue(defaultConfig, queueLogger, blacklist1, taskStorage, registry)
+            _queues[QueueNames.Default] = new WorkerQueue(defaultConfig, queueLogger, blacklist1, taskStorage, registry, timeProvider)
             {
                 ParkingLot = parkingLot
             };

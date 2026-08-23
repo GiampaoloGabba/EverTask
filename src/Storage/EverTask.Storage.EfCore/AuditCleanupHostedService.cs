@@ -113,10 +113,10 @@ public sealed class AuditCleanupHostedService : BackgroundService
         WarnOnDisabledKnobs(_retentionPolicy);
 
         // One UtcNow per cycle so every pass shares the same age cutoffs.
-        var (status, runs, logs, tasks) =
+        var (status, runs, logs, tasks, occurrences) =
             await RunCleanupAsync(_storage, _retentionPolicy, DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
 
-        _logger.CleanupComplete(status, runs, logs, tasks);
+        _logger.CleanupComplete(status, runs, logs, tasks, occurrences);
     }
 
     /// <summary>
@@ -124,7 +124,8 @@ public sealed class AuditCleanupHostedService : BackgroundService
     /// takes the storage, policy and a caller-supplied <paramref name="now"/> so age cutoffs are
     /// deterministic. Returns the rows deleted by each pass.
     /// </summary>
-    internal static async Task<(int StatusAudits, int RunsAudits, int ExecutionLogs, int CompletedTasks)> RunCleanupAsync(
+    internal static async Task<(int StatusAudits, int RunsAudits, int ExecutionLogs, int CompletedTasks,
+        int TerminalOccurrences)> RunCleanupAsync(
         EfCoreTaskStorage storage, AuditRetentionPolicy policy, DateTimeOffset now, CancellationToken ct)
     {
         // A 0 or negative retention knob is treated as DISABLED (no-op), never as a `now`/future cutoff
@@ -149,6 +150,20 @@ public sealed class AuditCleanupHostedService : BackgroundService
         if (policy.MaxExecutionLogsPerTask is > 0)
             logsDeleted += await storage.CleanupExecutionLogsByCount(policy.MaxExecutionLogsPerTask.Value, ct).ConfigureAwait(false);
 
+        // P0 (Cluster A): when a log retention is actually ACTIVE, the log passes above have already run, so
+        // any log still present is one the policy chose to keep — and deleting the task it belongs to would
+        // cascade-delete it. Both row-deleting passes below honour the same guard. "Active" means > 0 (a
+        // 0/negative knob is disabled and must not silently freeze every purge).
+        var logRetentionActive = policy.ExecutionLogRetentionDays is > 0 || policy.MaxExecutionLogsPerTask is > 0;
+
+        // Occurrences of a durable schedule, in ANY terminal state. Runs BEFORE the completed-task purge
+        // so the two never contend for the same rows, and independently of it: a failed or cancelled
+        // occurrence is never eligible for that purge, yet must not accumulate forever.
+        var occurrencesDeleted = 0;
+        if (policy.OccurrenceRetentionDays is > 0)
+            occurrencesDeleted = await storage.CleanupTerminalOccurrences(
+                now.AddDays(-policy.OccurrenceRetentionDays.Value), logRetentionActive, ct).ConfigureAwait(false);
+
         var tasksDeleted = 0;
         if (policy.DeleteCompletedTasksAfterRetention)
         {
@@ -168,19 +183,11 @@ public sealed class AuditCleanupHostedService : BackgroundService
                 .DefaultIfEmpty(-1)
                 .Max();
 
-            // P0 (Cluster A): when a log retention is actually ACTIVE, the log-age/count passes above have
-            // already run, so any log still present is one the policy chose to keep. Purging the task would
-            // cascade-delete those logs, violating ExecutionLogRetentionDays / MaxExecutionLogsPerTask, so a
-            // task that still owns logs is preserved. With no active log retention the historic
-            // cascade-on-purge behavior is unchanged. "Active" means > 0 (a 0/negative knob is disabled, so
-            // it must not silently freeze every completed-task purge).
-            var logRetentionActive = policy.ExecutionLogRetentionDays is > 0 || policy.MaxExecutionLogsPerTask is > 0;
-
             if (maxRetentionDays >= 0)
                 tasksDeleted = await storage.CleanupCompletedTasks(now.AddDays(-maxRetentionDays), logRetentionActive, ct).ConfigureAwait(false);
         }
 
-        return (statusDeleted, runsDeleted, logsDeleted, tasksDeleted);
+        return (statusDeleted, runsDeleted, logsDeleted, tasksDeleted, occurrencesDeleted);
     }
 
     /// <summary>
@@ -196,6 +203,7 @@ public sealed class AuditCleanupHostedService : BackgroundService
         Warn(nameof(policy.ErrorAuditRetentionDays),   policy.ErrorAuditRetentionDays);
         Warn(nameof(policy.ExecutionLogRetentionDays), policy.ExecutionLogRetentionDays);
         Warn(nameof(policy.MaxExecutionLogsPerTask),   policy.MaxExecutionLogsPerTask);
+        Warn(nameof(policy.OccurrenceRetentionDays),   policy.OccurrenceRetentionDays);
         return;
 
         void Warn(string knob, int? value)

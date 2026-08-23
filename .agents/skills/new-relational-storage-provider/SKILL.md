@@ -1,4 +1,4 @@
----
+﻿---
 name: new-relational-storage-provider
 version: 1.0.0
 description: |
@@ -53,6 +53,10 @@ row is a landmine.**
 | **Identifier casing / quoting** | folds unquoted to lowercase, EF quotes → default lowercase to avoid permanent case-sensitivity | Casing rules + any server setting (MySQL `lower_case_table_names` is OS-dependent — a real trap). |
 | **GUID generator (`UUIDNext.Database.X`)** | `.PostgreSql` (v7) — byte-wise uuid sort | Which UUIDNext value matches this DB's PK ordering? NEVER copy `.SqlServer` (v8) unless the DB sorts like SQL Server. |
 | **Phase-2 hot-write mechanism** | **writable CTE** (single statement, atomic) | Does the DB support **data-modifying CTEs**? **MySQL CTEs are READ-ONLY** → use **stored procedures** (SqlServer template), not CTEs. Oracle: PL/SQL. |
+| **Unique index NULL semantics** | NULLs distinct, so the occurrence index needs no filter | Does a UNIQUE index treat two NULLs as EQUAL? **SQL Server does**, and every ordinary row has a null `ParentTaskId`, so the `(ParentTaskId, ScheduledExecutionUtc)` index must be FILTERED there (EF's convention adds it). Postgres/MySQL/SQLite treat them as distinct. |
+| **Check-constraint identifier quoting** | folds unquoted identifiers to lowercase, so the body must QUOTE the columns | `CK_QueuedTasks_OccurrenceSlot` is written once in the shared model. Override `TaskStoreEfDbContext.OccurrenceSlotCheckSql` when the DB cannot resolve unquoted mixed-case column names. |
+| **Self-referencing FK on an existing table** | `ALTER TABLE ... ADD FOREIGN KEY` works | Can the FK and the check constraint be added to an existing table? SQLite cannot, so EF rebuilds the table in the migration. The FK is **Restrict**, never cascade, and `Remove(schedule)` deletes the occurrences in the SAME transaction. |
+| **Durable-occurrence mechanism** | writable CTE whose `decision` branch RETURNS the outcome | Same answer as the hot-write row, applied to `MaterializeOccurrence` / `CancelSchedule` / the compare-and-swap advances. Can the mechanism return a value? Postgres: a scalar from the CTE. SQL Server: an OUTPUT parameter. MySQL: an OUT parameter, which needs `CommandType.StoredProcedure` — `ExecuteSqlRaw` cannot set it, so call through ADO. |
 | **Column type mapping** | uuid/timestamptz/text/varchar(n)/boolean/bigint IDENTITY | Confirm the scaffolded types are sane; the model uses only `HasMaxLength`/`HasConversion<string>` (portable) — check no `HasColumnType` surprises. |
 | **Testcontainers module + Respawn adapter** | `Testcontainers.PostgreSql` + `DbAdapter.Postgres` (+ `SchemasToInclude`) | Which Testcontainers module + `Respawn.DbAdapter`? Schema/db inclusion rules for Respawn. |
 
@@ -69,6 +73,13 @@ override ONLY the methods the matrix flagged), `TaskStoreEfDbContextFactory.cs` 
 and (if runtime schema needed) a copied `DbSchemaAwareMigrationAssembly.cs` + hand-edited `Initial`.
 
 Then wire: `Directory.Packages.props` (per-TFM provider version), `*.slnx`, the test `.csproj`.
+
+`QueuedTasks` carries three durable-occurrence columns on top of the ordinary ones: `ParentTaskId`
+(nullable id), `RuntimeInfo` (nullable text) and `ScheduleVersion` (int, default 0), plus the restrict
+self-referencing FK, the unique index `UX_QueuedTasks_Occurrence` on `(ParentTaskId, ScheduledExecutionUtc)`
+and the check constraint `CK_QueuedTasks_OccurrenceSlot`. They all come from the shared model, so the
+generated migration already contains them — check the matrix rows above for what the DB needs done
+differently (index filter, quoted check body, table rebuild).
 
 Generate the migration with `dotnet ef migrations add Initial` (DEBUG factory), inspect the types/recovery
 index, hand-edit for schema if Option B, then **the GATE** — do NOT call Phase 1 done until all pass:
@@ -101,6 +112,75 @@ procedure OR PL/SQL). **Invariants that MUST hold (verify with tests):**
   mid-statement failure persists nothing.
 - **NextRunUtc assigned unconditionally** in the recurring completion (a null makes the series terminal).
 
+### Durable occurrences: not optional if you advertise them
+
+`ITaskStorage` exposes the durable-occurrence operations as default members that **throw
+`NotSupportedException`**, plus two capabilities that default to `false`:
+
+```csharp
+bool SupportsDurableOccurrences => false;   // MaterializeOccurrence, CancelSchedule, RequeueTerminal,
+                                            // TryRequeueStaleOccurrence, TryHaltSchedule,
+                                            // TrySetRecurringSeriesCompleted
+bool SupportsScheduleVersioning => false;   // UpdateSchedule + the CAS overloads of
+                                            // UpdateCurrentRun / CompleteRecurringRun
+```
+
+Inheriting `EfCoreTaskStorage` turns both on for a **relational** provider, because the base implements every
+one of them as a conditional UPDATE inside a transaction. It answers both flags from the provider itself, so a
+non-relational EF one (InMemory) gets `false` rather than a promise it would break at the first
+materialization — which is the shape of the rule below. Capability and implementation are
+inseparable: never flip a flag without a real atomic implementation, and never "almost" implement one with
+two separate writes, which is exactly the crash window they exist to close.
+
+The two operations that run once per occurrence — `MaterializeOccurrence` and the CAS advances — belong at
+the same optimization tier as the three hot writes, so override them with the mechanism from the matrix
+(SQL Server / MySQL: procedures; Postgres: writable CTEs). The rarer administrative ones (requeue, halt,
+reschedule, conditional finalize) stay on the base, like the other once-per-series writes already do.
+
+Whichever mechanism you pick, `MaterializeOccurrence` decides its outcome in THIS order — get it wrong and
+the contract suite still passes while your provider silently disagrees with the other four:
+
+1. row gone, `Cancelled`, or `NextRunUtc IS NULL` → `ParentInactive` (a finished or poisoned series must
+   never grow one more occurrence);
+2. version differs → `VersionMismatch`;
+3. cursor differs from the expected one — **a NULL expected cursor included**, since a live schedule always
+   has one → `CursorMoved`. This is the trap: written as a plain `NextRunUtc = @cursor`, a null parameter is
+   rewritten to `IS NULL` and matches exactly the rows step 1 excludes, so the caller that retried with the
+   cursor it read back resurrects the finished series;
+4. `(ParentTaskId, ScheduledExecutionUtc)` already taken → `AlreadyExists`;
+5. otherwise insert the occurrence, advance the cursor and — when the new cursor is null — finalize the
+   schedule, all in the same commit.
+
+The inserted row has ONE shape on every backend: `QueuedTask.ApplyOccurrenceContract(scheduleId,
+scheduleVersion)`. A fresh one-shot at the version it was materialized against, `WaitingQueue`, run count 0,
+with the definition, the cursor, the bounds and the task key cleared; the caller's id, creation time, slot,
+type, payload, handler, queue, audit level and runtime info survive. Spell exactly those columns in your
+`INSERT`, and call the method on the entity as well so the object the caller goes on using matches the row
+you stored. A provider that persists the entity verbatim instead stores a materially different row — a
+different `ScheduleVersion` for the same call, and whatever schedule-only fields the entity happened to
+carry.
+
+`CancelSchedule` audits only the rows its UPDATE really changed, the schedule row included: cancelling a
+schedule a concurrent `Remove` already deleted is a silent no-op everywhere, and an audit row for a task
+that no longer exists violates the `StatusAudit` foreign key and takes the whole call down. "Really changed"
+is not the id list a preceding SELECT returned — an occurrence that reached `InProgress` in between is
+skipped by the conditional UPDATE and must not get a `Cancelled` audit row for a status it never took. Read
+the set back from the UPDATE itself (`OUTPUT`, `RETURNING`) or re-read the candidates inside the same
+transaction.
+
+**Verify how your engine treats an error inside a multi-statement procedure.** SQL Server, by default, aborts
+only the failing statement: the procedure runs on to the writes that follow and COMMITs half the operation,
+so every procedure that owns a transaction needs `SET XACT_ABORT ON`. MySQL/MariaDB need an
+`EXIT HANDLER FOR SQLEXCEPTION` that rolls back and re-signals. A single-statement mechanism (a Postgres
+writable CTE) is atomic for free. Pin it with a fault-injection test — give the occurrence the primary key of
+an existing row and assert the cursor did not move; nothing else surfaces this.
+
+Also override `CleanupTerminalOccurrences(cutoff, preserveTasksWithLogs, ct)` if the DB cannot translate the
+`DateTimeOffset` age cutoff (the SQLite pattern) — or if it cannot be trusted with a correlated `EXISTS`
+inside a `DELETE … LIMIT`, which is the MySQL trap: the guard is silently dropped and every occurrence is
+purged, cascade-deleting the `TaskExecutionLog` rows the log window kept. It shares that `preserveTasksWithLogs`
+guard with `CleanupCompletedTasks`, so whichever shape you pick, pick it for both.
+
 ## STEP 3 — Packaging & docs checklist (do NOT skip — "in every form")
 
 - `Directory.Packages.props`: provider version in EACH per-TFM ItemGroup + `Testcontainers.X` in the test group.
@@ -122,8 +202,32 @@ procedure OR PL/SQL). **Invariants that MUST hold (verify with tests):**
 
 ## Invariants that must never break (all providers)
 
-- **`RetrievePending` recoverable-status filter** is duplicated in `EfCoreTaskStorage`, `SqliteTaskStorage`
-  (override), and `MemoryTaskStorage` — keep all in sync (covered by `EfCoreTaskStorageTestsBase`).
+- **The recovery filter returns TWO categories**, and its expression is duplicated in `EfCoreTaskStorage`,
+  `SqliteTaskStorage` (override), `MemoryTaskStorage` and the Postgres partial index — keep all in sync
+  (covered by `EfCoreTaskStorageTestsBase`). Rows to EXECUTE come from
+  `QueuedTask.IsRecoverableForExecution(now)` (note the grouped temporal term: a series whose `RunUntil`
+  elapsed during a downtime keeps the occurrence it had already scheduled before that boundary); series to
+  FINALIZE come from `QueuedTask.IsRecurringSeriesToFinalize()`. `RetrievePending` returns their union;
+  `TrySetQueuedIfRecoverable` applies only the first.
+- **An untranslatable predicate moves the CONDITION, never the check-and-set.** If the DB cannot translate
+  part of the recoverable predicate, evaluate that part in memory on a row read first — but the write must
+  still be a conditional UPDATE, with the translatable half (`EfCoreTaskStorage.RecoverableStatusAndBudget`)
+  and a by-value re-assertion of the columns the in-memory half was decided from in its WHERE clause. A
+  tracked read-then-`SaveChanges` is a read-then-write: a `Cancel` that linearizes in between is overwritten
+  with `Queued` and the cancelled task runs at the next restart. SQLite is the worked example
+  (`SqliteTaskStorage.TrySetQueuedIfRecoverable`), and it also shows the two traps — re-assert the temporal
+  columns VERBATIM (a store that keeps a `DateTimeOffset` as text compares the text), and read OUTSIDE the
+  write transaction if the engine locks on `BEGIN`.
+- **The clock travels with the call**: the core always uses the `nowUtc` overloads of `RetrievePending` and
+  `TrySetQueuedIfRecoverable`, so the storage never resolves "now" itself. Override them, or the provider
+  silently opts out of the deterministic scheduling clock. Overriding only the older four/three-argument
+  signatures still works — `EfCoreTaskStorage` detects that and hands the clock-carrying calls back to them —
+  but then the clock is the real one, not the injected `TimeProvider`.
+- **Finalizing a series is conditional where the storage can be**: with `SupportsScheduleVersioning` the
+  recovery uses `TrySetRecurringSeriesCompleted`, compare-and-swapped on the cursor, status and version the
+  decision was computed from, so a `Cancel` that linearized in between wins. Without the capability the
+  historical unconditional `SetRecurringSeriesCompleted` stands — never let the CAS member's
+  `NotSupportedException` reach the recovery, which counts it as a failure and poisons the row.
 - **`IGuidGenerator`** picks a DB-appropriate UUIDNext layout so PK order matches insert order (recovery index).
 - **No silent coverage gaps**: if a base test can't run on the DB, say so; if you add an override, document
   the reason. Never let "tests pass" hide a skipped axis.

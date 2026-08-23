@@ -37,6 +37,18 @@ public class Dispatcher(
     private bool _parkingLotResolved;
     private TaskDeliveryRegistry? _deliveryRegistry;
     private bool _deliveryRegistryResolved;
+    private IScheduleEvaluator? _evaluator;
+    private TimeProvider? _timeProvider;
+
+    /// <summary>
+    /// The single seam for every question about the occurrence grid. Falls back to the built-in evaluator
+    /// for hand-wired providers that never registered one.
+    /// </summary>
+    private IScheduleEvaluator Evaluator =>
+        _evaluator ??= serviceProvider.GetService<IScheduleEvaluator>() ?? ScheduleEvaluator.Default;
+
+    /// <summary>The scheduling clock (P9). Falls back to the real clock outside a configured container.</summary>
+    private TimeProvider Clock => _timeProvider ??= serviceProvider.GetService<TimeProvider>() ?? TimeProvider.System;
 
     private TaskDeliveryRegistry? DeliveryRegistry
     {
@@ -95,7 +107,8 @@ public class Dispatcher(
     /// <inheritdoc />
     public async Task<Guid> Dispatch(IEverTask task, Action<IRecurringTaskBuilder> recurring, AuditLevel? auditLevel = null, string? taskKey = null, CancellationToken cancellationToken = default)
     {
-        var builder = new RecurringTaskBuilder();
+        // The builder resolves RunNow and validates RunUntil on the scheduling clock, not the wall clock.
+        var builder = new RecurringTaskBuilder(Clock);
         recurring(builder);
 
         return await ExecuteDispatch(task, null, builder.RecurringTask, null, cancellationToken, null, taskKey, auditLevel).ConfigureAwait(false);
@@ -144,27 +157,70 @@ public class Dispatcher(
         ArgumentNullException.ThrowIfNull(task);
 
         var executionTime = executionDelay != null
-                                ? DateTimeOffset.UtcNow.Add(executionDelay.Value)
+                                ? Clock.GetUtcNow().Add(executionDelay.Value)
                                 : (DateTimeOffset?)null;
 
         return await ExecuteDispatch(task, executionTime, null, null, ct, existingTaskId, taskKey, auditLevel).ConfigureAwait(false);
     }
 
-    public async Task<Guid> ExecuteDispatch(IEverTask task, DateTimeOffset? executionTime = null,
-                                            RecurringTask? recurring = null, int? currentRun = null,
-                                            CancellationToken ct = default, Guid? existingTaskId = null, string? taskKey = null, AuditLevel? auditLevel = null,
-                                            bool isRecovery = false)
+    /// <summary>
+    /// The dispatch entry point as the previous release shipped it, kept BYTE-FOR-BYTE (P6/X6). Row metadata
+    /// travels through the explicit <see cref="ITaskDispatcherInternal"/> implementation below instead of
+    /// being appended here, where a new parameter would have replaced this method's IL signature.
+    /// </summary>
+    public Task<Guid> ExecuteDispatch(IEverTask task, DateTimeOffset? executionTime = null,
+                                      RecurringTask? recurring = null, int? currentRun = null,
+                                      CancellationToken ct = default, Guid? existingTaskId = null,
+                                      string? taskKey = null, AuditLevel? auditLevel = null,
+                                      bool isRecovery = false) =>
+        ExecuteDispatchCore(task, executionTime, recurring, currentRun, ct, existingTaskId, taskKey, auditLevel,
+            isRecovery, DispatchRowMetadata.None);
+
+    Task<Guid> ITaskDispatcherInternal.ExecuteDispatch(IEverTask task, DateTimeOffset? executionTime,
+                                                       RecurringTask? recurring, int? currentRun,
+                                                       CancellationToken ct, Guid? existingTaskId, string? taskKey,
+                                                       AuditLevel? auditLevel, bool isRecovery,
+                                                       DispatchRowMetadata rowMetadata) =>
+        ExecuteDispatchCore(task, executionTime, recurring, currentRun, ct, existingTaskId, taskKey, auditLevel,
+            isRecovery, rowMetadata);
+
+    private async Task<Guid> ExecuteDispatchCore(IEverTask task, DateTimeOffset? executionTime,
+                                                 RecurringTask? recurring, int? currentRun,
+                                                 CancellationToken ct, Guid? existingTaskId, string? taskKey,
+                                                 AuditLevel? auditLevel, bool isRecovery,
+                                                 DispatchRowMetadata rowMetadata)
     {
         ArgumentNullException.ThrowIfNull(task);
+
+        // T10: every path that accepts a schedule validates it, and this is the one the fluent builder does
+        // not go through — a definition handed to the public dispatch entry point directly. Recovery has
+        // already validated its own through RecoveredTaskFactory, so this only ever re-checks a clean one
+        // there. Without it a corrupt interval, or an OccurrenceMode outside the defined values, is read as
+        // valid all the way down to IsScheduleOnly, which only ever compares against Durable.
+        recurring?.Validate();
 
         // Serialize the read-decide-write of this taskKey against concurrent dispatches (held for the
         // whole dispatch, including the enqueue). No-op when there is no taskKey, no storage, or the id
         // is already known (recovery / internal re-dispatch).
         using var taskKeyLock = await AcquireTaskKeyLockAsync(taskKey, existingTaskId, ct).ConfigureAwait(false);
 
+        // ONE reading of the scheduling clock for the whole dispatch, taken AFTER the wait for the lock so
+        // it reflects the moment the decision is actually made: everything below (preserved cursor, grace
+        // window, skip-forward, immediate-vs-parked) must judge against the same instant, or a slow dispatch
+        // can classify the same occurrence two different ways.
+        var nowUtc = Clock.GetUtcNow();
+
         // Track existing task's NextRunUtc and CurrentRunCount for recurring tasks to preserve schedule across restarts
         DateTimeOffset? existingNextRunUtc = null;
         int? existingCurrentRunCount = null;
+
+        // Read in the SAME breath as the cursor above, and never re-read: they are the compare-and-swap
+        // expectations of the exhausted-series finalization below, and that write must be conditional on the
+        // values its decision was computed from. Reading them back after deciding would fold a Cancel (or a
+        // reschedule) that linearized in between into the expectation, so the CAS would confirm the concurrent
+        // state instead of losing to it.
+        QueuedTaskStatus? existingStatus = null;
+        int existingScheduleVersion = 0;
 
         // Handle taskKey resolution if provided
         if (!string.IsNullOrWhiteSpace(taskKey) && taskStorage != null && existingTaskId == null)
@@ -215,6 +271,8 @@ public class Dispatcher(
                     {
                         existingNextRunUtc = existingTask.NextRunUtc;
                         existingCurrentRunCount = existingTask.CurrentRunCount;
+                        existingStatus = existingTask.Status;
+                        existingScheduleVersion = existingTask.ScheduleVersion;
                         logger.PreservingRecurringSchedule(existingNextRunUtc, existingCurrentRunCount, existingTask.Id);
                     }
                 }
@@ -257,6 +315,11 @@ public class Dispatcher(
         {
             existingNextRunUtc      = executionTime;
             existingCurrentRunCount = currentRun;
+            // The recovery page IS the read this decision is computed from, so its status and version are the
+            // finalization's expectations. A row metadata without them (a hand-wired internal re-dispatch)
+            // leaves the status null, and the finalization below falls back to the unconditional write.
+            existingStatus          = rowMetadata.Status;
+            existingScheduleVersion = rowMetadata.ScheduleVersion;
         }
 
         if (recurring != null)
@@ -265,7 +328,7 @@ public class Dispatcher(
             if (existingNextRunUtc.HasValue)
             {
                 // If NextRunUtc is still in the future, use it directly
-                if (existingNextRunUtc.Value > DateTimeOffset.UtcNow)
+                if (existingNextRunUtc.Value > nowUtc)
                 {
                     nextRun = existingNextRunUtc;
                     executionTime = nextRun;
@@ -276,8 +339,15 @@ public class Dispatcher(
                 // downtime across a scheduled occurrence must not silently lose it. Calendar-exact: uses the
                 // real next occurrence, not the flat GetMinimumInterval heuristic, which is wrong for
                 // OnDays/Month/Week (too narrow drops a just-due slot; too wide runs a stale one) — U4/U5.
+                //
+                // X3: the successor is the NATURAL one — computed ignoring RunUntil/MaxRuns. The bounded
+                // successor returns null both when the slot is still current AND when the series has simply
+                // ended, and reading that null as "current forever" is what used to execute a months-old
+                // slot at restart. Ignoring the bounds separates the two: "no successor yet" now really means
+                // the grid produced none, which grants no grace at all.
                 else if (isRecovery &&
-                         recurring.IsOccurrenceStillCurrent(existingNextRunUtc.Value, DateTimeOffset.UtcNow))
+                         await IsSlipedOccurrenceStillCurrentAsync(recurring, existingNextRunUtc.Value, nowUtc, ct)
+                             .ConfigureAwait(false))
                 {
                     nextRun       = existingNextRunUtc;
                     executionTime = nextRun;
@@ -287,10 +357,13 @@ public class Dispatcher(
                 {
                     // NextRunUtc is (well) in the past - skip forward while preserving rhythm. On the
                     // recovery path the initial-run config must NOT be re-applied (L25-firstrun).
-                    var result = recurring.CalculateNextValidRun(
+                    var result = await Evaluator.CalculateNextValidRunAsync(
+                        recurring,
                         existingNextRunUtc.Value,
                         existingCurrentRunCount ?? 0,
-                        isRecovery: isRecovery);
+                        nowUtc,
+                        isRecovery: isRecovery,
+                        ct: ct).ConfigureAwait(false);
 
                     if (result.NextRun == null)
                     {
@@ -303,8 +376,9 @@ public class Dispatcher(
                         logger.RecoverySeriesExhausted(existingTaskId);
 
                         if (taskStorage != null && existingTaskId.HasValue)
-                            await taskStorage.SetRecurringSeriesCompleted(
-                                existingTaskId.Value, 0, auditLevel ?? serviceConfiguration.DefaultAuditLevel)
+                            await FinalizeExhaustedSeriesAsync(taskStorage, existingTaskId.Value,
+                                existingNextRunUtc.Value, existingStatus, existingScheduleVersion,
+                                auditLevel ?? serviceConfiguration.DefaultAuditLevel, ct)
                                 .ConfigureAwait(false);
 
                         return existingTaskId ?? Guid.Empty;
@@ -320,9 +394,11 @@ public class Dispatcher(
                 // New task - calculate from current time
                 var scheduledTime = (existingTaskId != null && executionTime.HasValue)
                     ? executionTime.Value
-                    : DateTimeOffset.UtcNow;
+                    : nowUtc;
 
-                var result = recurring.CalculateNextValidRun(scheduledTime, currentRun ?? 0);
+                var result = await Evaluator
+                                   .CalculateNextValidRunAsync(recurring, scheduledTime, currentRun ?? 0, nowUtc, ct: ct)
+                                   .ConfigureAwait(false);
 
                 if (result.NextRun == null)
                     throw new ArgumentException("Invalid scheduler recurring expression", nameof(recurring));
@@ -342,10 +418,10 @@ public class Dispatcher(
         // Lazy executors never carry a handler instance: the wrapper resolves one in a
         // short-lived scope for metadata extraction only, and the worker resolves a fresh
         // instance in its per-task scope at execution time
-        var useLazyExecutor = ShouldUseLazyResolution(executionTime, recurring);
+        var useLazyExecutor = ShouldUseLazyResolution(executionTime, recurring, nowUtc);
 
         var executor = await handler.Handle(task, executionTime, recurring, serviceProvider, effectiveAuditLevel,
-            existingTaskId, taskKey, useLazyExecutor).ConfigureAwait(false);
+            existingTaskId, taskKey, useLazyExecutor, rowMetadata).ConfigureAwait(false);
 
         // Persist or update task (lazy serialize only if storage exists).
         // Recovery dispatches skip the update entirely: the definition was just read from storage
@@ -354,7 +430,7 @@ public class Dispatcher(
         // restart and persisted by UpdateCurrentRun after each run.
         if (taskStorage != null && !(isRecovery && existingTaskId != null))
         {
-            var taskEntity = executor.ToQueuedTask();
+            var taskEntity = executor.ToQueuedTask(nowUtc);
 
             try
             {
@@ -396,7 +472,7 @@ public class Dispatcher(
         // without a handler instance), eager otherwise
         var executorToSchedule = executor;
 
-        if (executorToSchedule.ExecutionTime > DateTimeOffset.UtcNow || recurring != null)
+        if (executorToSchedule.ExecutionTime > nowUtc || recurring != null)
         {
             scheduler.Schedule(executorToSchedule, nextRun);
         }
@@ -430,7 +506,7 @@ public class Dispatcher(
                     // ThrowException queue, or a cancelled Wait that threw). Its parked occurrence was
                     // just dropped above, so re-schedule it for retry instead of losing it / leaking its
                     // parking-lot reservation, then propagate the failure (CU15).
-                    scheduler.Schedule(executorToSchedule with { ExecutionTime = DateTimeOffset.UtcNow });
+                    scheduler.Schedule(executorToSchedule with { ExecutionTime = Clock.GetUtcNow() });
                     throw;
                 }
             }
@@ -485,8 +561,9 @@ public class Dispatcher(
     /// </summary>
     /// <param name="executionTime">Scheduled execution time (null for immediate)</param>
     /// <param name="recurring">Recurring task configuration (null for one-time)</param>
+    /// <param name="nowUtc">The dispatch's reading of the scheduling clock</param>
     /// <returns>True if task should use lazy mode, false for eager mode</returns>
-    private bool ShouldUseLazyResolution(DateTimeOffset? executionTime, RecurringTask? recurring)
+    private bool ShouldUseLazyResolution(DateTimeOffset? executionTime, RecurringTask? recurring, DateTimeOffset nowUtc)
     {
         // Feature disabled globally
         if (!serviceConfiguration.UseLazyHandlerResolution)
@@ -498,14 +575,14 @@ public class Dispatcher(
         // Recurring tasks: adaptive based on interval
         if (recurring != null)
         {
-            var minInterval = recurring.GetMinimumInterval();
+            var minInterval = recurring.GetMinimumInterval(nowUtc);
             return minInterval >= TimeSpan.FromMinutes(5);
         }
 
         // Delayed tasks: lazy if delay >= 30 minutes
         if (executionTime.HasValue)
         {
-            var delay = executionTime.Value - DateTimeOffset.UtcNow;
+            var delay = executionTime.Value - nowUtc;
             return delay >= TimeSpan.FromMinutes(30);
         }
 
@@ -516,10 +593,62 @@ public class Dispatcher(
     }
 
     /// <summary>
+    /// Recovery grace window: true when the stored, already-past slot is still the one to run.
+    /// </summary>
+    /// <remarks>
+    /// Decided on the NATURAL successor (termination bounds ignored), so the window is exactly one period —
+    /// a minute for a per-minute schedule, a month for a monthly one — and never the unbounded "current
+    /// forever" the bounded successor's null used to imply. A grid that cannot produce a successor at all
+    /// grants no grace: the slot goes through the ordinary skip-forward, which finalizes an exhausted series.
+    /// </remarks>
+    private async ValueTask<bool> IsSlipedOccurrenceStillCurrentAsync(
+        RecurringTask recurring, DateTimeOffset slot, DateTimeOffset nowUtc, CancellationToken ct)
+    {
+        var successor = await Evaluator.NextGridOccurrenceAfterAsync(recurring, slot, ct).ConfigureAwait(false);
+        return successor.HasValue && successor.Value > nowUtc;
+    }
+
+    /// <summary>
+    /// Ends a recovered series whose every remaining occurrence falls past its bounds: Completed, cursor
+    /// cleared, no run counted.
+    /// </summary>
+    /// <remarks>
+    /// X3: CONDITIONAL wherever the storage can be, exactly like the recovery finalization in
+    /// <c>WorkerService</c>. The unconditional write would replace a <c>Cancelled</c> (or a fresh cursor from
+    /// a reschedule) that linearized between the evaluation above and this line with <c>Completed</c>.
+    /// <para>
+    /// Every expectation comes from the row the decision was COMPUTED FROM and is never read back here: a
+    /// fresh read after deciding would see the concurrent write and hand it to the compare-and-swap as the
+    /// expected value, turning the guard into a confirmation of whatever state it finds — the cancellation
+    /// would be silently replaced. Losing the compare-and-swap simply means someone else owns the row now.
+    /// </para>
+    /// <para>
+    /// A storage without the compare-and-swap keeps the historical unconditional write rather than being
+    /// refused a normal end-of-series, and so does a caller that supplied no expected status (a hand-wired
+    /// re-dispatch outside recovery, which carries no row metadata).
+    /// </para>
+    /// </remarks>
+    private static async Task FinalizeExhaustedSeriesAsync(ITaskStorage storage, Guid taskId,
+                                                           DateTimeOffset expectedCursorUtc,
+                                                           QueuedTaskStatus? expectedStatus,
+                                                           int expectedScheduleVersion, AuditLevel auditLevel,
+                                                           CancellationToken ct)
+    {
+        if (!storage.SupportsScheduleVersioning || expectedStatus is not { } status)
+        {
+            await storage.SetRecurringSeriesCompleted(taskId, 0, auditLevel).ConfigureAwait(false);
+            return;
+        }
+
+        await storage.TrySetRecurringSeriesCompleted(taskId, expectedCursorUtc, status, expectedScheduleVersion,
+            0, auditLevel, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Creates or retrieves a cached TaskHandlerWrapper instance for the specified task type.
     /// Uses compiled Expression trees to avoid reflection overhead on repeated calls.
     /// </summary>
-    private static TaskHandlerWrapper CreateCachedWrapper(Type taskType)
+    internal static TaskHandlerWrapper CreateCachedWrapper(Type taskType)
     {
         var factory = WrapperFactoryCache.GetOrAdd(taskType, type =>
         {

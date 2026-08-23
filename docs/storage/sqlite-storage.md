@@ -65,6 +65,27 @@ var dbPath = Path.Combine(
 - Single server only (no clustering)
 - Provider limitation: EF Core cannot translate `DateTimeOffset` comparison operators for SQLite. EverTask falls back to in-memory keyset filtering during recovery (`ProcessPendingAsync`), so avoid very large backlogs on SQLite or switch to SQL Server for heavy workloads.
 
+## Durable-Occurrence Columns
+
+A recurring schedule can materialize each due slot as its own child row, so `QueuedTasks` carries three
+extra columns:
+
+| Column | Type | Purpose |
+|--------|------|---------|
+| `ParentTaskId` | nullable TEXT | The schedule an occurrence belongs to; null on every ordinary row |
+| `RuntimeInfo` | nullable TEXT | Opaque JSON: occurrence metadata on a child, schedule runtime state on a schedule row |
+| `ScheduleVersion` | INTEGER, default 0 | Bumped by a runtime reschedule; advances compare-and-swap against it |
+
+They come with a **restrict** self-referencing foreign key `ParentTaskId → Id`, a unique index
+`UX_QueuedTasks_Occurrence` on `(ParentTaskId, ScheduledExecutionUtc)` and the check constraint
+`CK_QueuedTasks_OccurrenceSlot`. SQLite cannot add a foreign key or a check constraint to an existing table,
+so the `AddDurableOccurrences` migration rebuilds the table — EF Core generates that rebuild, but it is worth
+knowing when you look at the migration SQL. No index filter is needed: SQLite treats NULLs as distinct in a
+unique index.
+
+The occurrence operations inherit the EF Core base, where each is a conditional UPDATE inside a transaction —
+which SQLite executes atomically like any other write.
+
 ## Use Cases
 
 - Small to medium applications

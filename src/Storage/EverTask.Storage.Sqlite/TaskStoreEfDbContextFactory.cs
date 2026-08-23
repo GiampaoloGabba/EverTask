@@ -9,7 +9,11 @@ public class TaskStoreEfDbContextFactory : IDesignTimeDbContextFactory<SqliteTas
 {
     public SqliteTaskStoreContext CreateDbContext(string[] args)
     {
-        var schema           = new SqliteTaskStoreOptions().SchemaName;
+        // SQLite has no schema concept, so SqliteTaskStoreOptions.SchemaName is "" — and the EF tooling
+        // rejects an EMPTY schema argument (null is the way to say "no schema").
+        var schema           = string.IsNullOrEmpty(new SqliteTaskStoreOptions().SchemaName)
+                                   ? null
+                                   : new SqliteTaskStoreOptions().SchemaName;
         var builder          = new DbContextOptionsBuilder<SqliteTaskStoreContext>();
         var connectionString = "dbcontext";
         builder.UseSqlite(connectionString,

@@ -15,7 +15,7 @@ namespace EverTask.Storage.Sqlite.Migrations
         protected override void BuildModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
-            modelBuilder.HasAnnotation("ProductVersion", "9.0.17");
+            modelBuilder.HasAnnotation("ProductVersion", "9.0.19");
 
             modelBuilder.Entity("EverTask.Storage.QueuedTask", b =>
                 {
@@ -55,6 +55,9 @@ namespace EverTask.Storage.Sqlite.Migrations
                     b.Property<DateTimeOffset?>("NextRunUtc")
                         .HasColumnType("TEXT");
 
+                    b.Property<Guid?>("ParentTaskId")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("QueueName")
                         .HasColumnType("TEXT");
 
@@ -73,6 +76,13 @@ namespace EverTask.Storage.Sqlite.Migrations
 
                     b.Property<DateTimeOffset?>("RunUntil")
                         .HasColumnType("TEXT");
+
+                    b.Property<string>("RuntimeInfo")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("ScheduleVersion")
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(0);
 
                     b.Property<DateTimeOffset?>("ScheduledExecutionUtc")
                         .HasColumnType("TEXT");
@@ -93,12 +103,22 @@ namespace EverTask.Storage.Sqlite.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("ParentTaskId")
+                        .HasDatabaseName("IX_QueuedTasks_ParentTaskId");
+
                     b.HasIndex("Status");
 
                     b.HasIndex("TaskKey")
                         .IsUnique();
 
-                    b.ToTable("QueuedTasks");
+                    b.HasIndex("ParentTaskId", "ScheduledExecutionUtc")
+                        .IsUnique()
+                        .HasDatabaseName("UX_QueuedTasks_Occurrence");
+
+                    b.ToTable("QueuedTasks", t =>
+                        {
+                            t.HasCheckConstraint("CK_QueuedTasks_OccurrenceSlot", "ParentTaskId IS NULL OR ScheduledExecutionUtc IS NOT NULL");
+                        });
                 });
 
             modelBuilder.Entity("EverTask.Storage.RunsAudit", b =>
@@ -194,6 +214,16 @@ namespace EverTask.Storage.Sqlite.Migrations
                     b.ToTable("TaskExecutionLogs");
                 });
 
+            modelBuilder.Entity("EverTask.Storage.QueuedTask", b =>
+                {
+                    b.HasOne("EverTask.Storage.QueuedTask", "Parent")
+                        .WithMany("Occurrences")
+                        .HasForeignKey("ParentTaskId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("Parent");
+                });
+
             modelBuilder.Entity("EverTask.Storage.RunsAudit", b =>
                 {
                     b.HasOne("EverTask.Storage.QueuedTask", "QueuedTask")
@@ -230,6 +260,8 @@ namespace EverTask.Storage.Sqlite.Migrations
             modelBuilder.Entity("EverTask.Storage.QueuedTask", b =>
                 {
                     b.Navigation("ExecutionLogs");
+
+                    b.Navigation("Occurrences");
 
                     b.Navigation("RunsAudits");
 

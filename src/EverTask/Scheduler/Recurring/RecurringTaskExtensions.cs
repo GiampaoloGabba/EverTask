@@ -34,8 +34,13 @@ public static class RecurringTaskExtensions
     /// Realignment is calendar-aware via the single <see cref="RecurringTask.NextOccurrenceStrictlyAfter"/>
     /// primitive: O(1) for cron (Cronos) and for uniform arithmetic grids (every N seconds/minutes/…), and a
     /// bounded calendar walk for non-uniform schedules (OnDays, OnHours, Month, multi-OnTimes, combinations),
-    /// which are coarse by nature. It never uses the approximate flat <see cref="RecurringTask.GetMinimumInterval"/>,
+    /// which are coarse by nature. It never uses the approximate flat <see cref="RecurringTask.GetMinimumInterval()"/>,
     /// which diverges on uneven schedules (F8).
+    /// <para>
+    /// The parameter list is frozen at the shape the previous release shipped (P6/X6): the scheduling clock
+    /// travels through the overload below, because appending an optional parameter here would have replaced
+    /// this method's IL signature and broken every already-compiled caller.
+    /// </para>
     /// </remarks>
     public static NextRunResult CalculateNextValidRun(
         this RecurringTask recurringTask,
@@ -43,15 +48,41 @@ public static class RecurringTaskExtensions
         int currentRun,
         DateTimeOffset? referenceTime = null,
         bool isRecovery = false,
-        bool computeSkippedCount = true)
+        bool computeSkippedCount = true) =>
+        recurringTask.CalculateNextValidRun(scheduledTime, currentRun, referenceTime, isRecovery,
+            computeSkippedCount, null);
+
+    /// <summary>
+    /// <see cref="CalculateNextValidRun(RecurringTask,DateTimeOffset,int,DateTimeOffset?,bool,bool)"/>
+    /// evaluated against the scheduling clock (P9).
+    /// </summary>
+    /// <param name="recurringTask">The recurring task configuration</param>
+    /// <param name="scheduledTime">The scheduled time to calculate from (usually the last scheduled execution time)</param>
+    /// <param name="currentRun">The current run count</param>
+    /// <param name="referenceTime">Optional reference time for "now" comparison. If null, <paramref name="nowUtc"/> is used</param>
+    /// <param name="isRecovery">See the six-parameter overload.</param>
+    /// <param name="computeSkippedCount">See the six-parameter overload.</param>
+    /// <param name="nowUtc">
+    /// The scheduling clock's "now". Used as the fallback reference when <paramref name="referenceTime"/> is
+    /// absent, and handed to the first-run computation so <c>RunNow</c> resolves on the same clock. Null
+    /// falls back to the real clock, for callers outside the deterministic scheduling path.
+    /// </param>
+    public static NextRunResult CalculateNextValidRun(
+        this RecurringTask recurringTask,
+        DateTimeOffset scheduledTime,
+        int currentRun,
+        DateTimeOffset? referenceTime,
+        bool isRecovery,
+        bool computeSkippedCount,
+        DateTimeOffset? nowUtc)
     {
         ArgumentNullException.ThrowIfNull(recurringTask);
 
         // isRecovery: on the recovery path the first run's time was already decided at dispatch, so the
         // initial-run configuration (InitialDelay/RunNow/SpecificRunTime) must not be re-applied while
         // skipping forward (L25-firstrun).
-        var nextRun = recurringTask.CalculateNextRun(scheduledTime, currentRun, isRecovery);
-        var now     = referenceTime ?? DateTimeOffset.UtcNow;
+        var nextRun = recurringTask.CalculateNextRun(scheduledTime, currentRun, isRecovery, nowUtc);
+        var now     = referenceTime ?? nowUtc ?? DateTimeOffset.UtcNow;
 
         // If nextRun is not significantly in the past, return as-is
         if (!nextRun.HasValue || nextRun.Value >= now.AddSeconds(-ToleranceSeconds))

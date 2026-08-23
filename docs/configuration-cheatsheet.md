@@ -28,7 +28,9 @@ Every EverTask configuration option at a glance: one row per option with its def
 | `RegisterTasksFromAssembly` | `Assembly` | n/a | Scan one assembly for handlers (required) |
 | `RegisterTasksFromAssemblies` | `params Assembly[]` | n/a | Scan multiple assemblies |
 
-> **Audit / execution-log retention** is not a builder method: register it with `services.AddAuditCleanup(policy, cleanupIntervalHours: 24)` (IServiceCollection extension, EF Core storage package). Trims audits and execution logs (`ExecutionLogRetentionDays` / `MaxExecutionLogsPerTask`); any knob `<= 0` is treated as disabled. See [Configuration Reference](configuration-reference.md).
+> **The scheduling clock** is not a builder method either. `AddEverTask` registers `TimeProvider.System` with `TryAddSingleton`, and that one `TimeProvider` answers "now" for dispatch delays, the occurrence grid, both schedulers, startup recovery and the rate limiter with its gate and parking lot. Register your own (`services.AddSingleton<TimeProvider>(clock)`) and the whole pipeline follows it, which is what makes a schedule testable without waiting for real time. Retry delays, audit timestamps and log timestamps stay on the real clock. See [Configuration Reference](configuration-reference.md#the-scheduling-clock-timeprovider).
+
+> **Audit / execution-log retention** is not a builder method: register it with `services.AddAuditCleanup(policy, cleanupIntervalHours: 24)` (IServiceCollection extension, EF Core storage package). Trims audits, execution logs (`ExecutionLogRetentionDays` / `MaxExecutionLogsPerTask`) and the finished occurrences of durable schedules (`OccurrenceRetentionDays`); any knob `<= 0` is treated as disabled. See [Configuration Reference](configuration-reference.md).
 
 ## Rate Limiting (v3.7+)
 
@@ -84,6 +86,7 @@ Not a builder method; register on `IServiceCollection` (EF Core storage provider
 | `ErrorAuditRetentionDays` | `null` | Overrides the two above for error rows (keep errors longer) |
 | `ExecutionLogRetentionDays` | `null` | Days to keep TaskExecutionLog rows |
 | `MaxExecutionLogsPerTask` | `null` | Cross-run cap per task; oldest deleted first |
+| `OccurrenceRetentionDays` | `null` | Days to keep the finished occurrences of a durable recurring schedule. Prunes **every** terminal state (Completed, Failed and Cancelled), unlike `DeleteCompletedTasksAfterRetention`, which only removes completed rows with no audit trail left. If a log-retention window/cap is active, an occurrence that still owns execution logs is **preserved** (same guard as the completed-task purge). The schedule row itself is recurring and is never deleted here. |
 | `DeleteCompletedTasksAfterRetention` | `false` | Hard-delete completed non-recurring tasks older than the **longest** configured audit window **and** with no remaining StatusAudit/RunsAudit rows. If a log-retention window/cap is active, a task that still owns execution logs is **preserved** (the purge only cascades once logs age out on their own). No audit window configured → nothing deleted. Recurring/Failed/Cancelled never auto-deleted. |
 
 | `AddAuditCleanup` / `AuditCleanupOptions` | Default | Notes |

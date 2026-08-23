@@ -1,0 +1,73 @@
+namespace EverTask.Scheduler.Recurring;
+
+/// <summary>
+/// The single seam every component asks about a schedule's occurrence grid: the dispatcher, the worker and
+/// the recovery all go through it instead of calling the occurrence math directly.
+/// </summary>
+/// <remarks>
+/// The built-in implementation is a synchronous wrapper over the pure primitives on
+/// <see cref="RecurringTask"/> — every method completes without ever yielding. The asynchronous shape exists
+/// because a later phase resolves occurrences through a user-supplied provider, which may do real I/O; adding
+/// that branch here then costs nothing at the call sites, which are already written against a
+/// <see cref="ValueTask{TResult}"/>.
+/// </remarks>
+internal interface IScheduleEvaluator
+{
+    /// <summary>
+    /// Next run for <paramref name="definition"/>, realigned past a downtime when the computed occurrence is
+    /// already well in the past. Mirrors <see cref="RecurringTaskExtensions.CalculateNextValidRun"/>.
+    /// </summary>
+    ValueTask<NextRunResult> CalculateNextValidRunAsync(
+        RecurringTask definition, DateTimeOffset scheduledTime, int currentRun, DateTimeOffset nowUtc,
+        DateTimeOffset? referenceTime = null, bool isRecovery = false, bool computeSkippedCount = true,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// First real occurrence strictly after <paramref name="after"/>, anchored on the known occurrence
+    /// <paramref name="anchor"/>. Honours the termination bounds: null once the series has ended.
+    /// </summary>
+    ValueTask<DateTimeOffset?> NextAfterAsync(
+        RecurringTask definition, DateTimeOffset anchor, DateTimeOffset after, CancellationToken ct = default);
+
+    /// <summary>
+    /// Number of occurrences in <c>[anchor, after]</c>, bounded at <paramref name="cap"/><c> + 1</c>. Reported
+    /// for diagnostics only — it never consumes the run budget.
+    /// </summary>
+    ValueTask<int> CountMissedAsync(
+        RecurringTask definition, DateTimeOffset anchor, DateTimeOffset after, int cap,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// True while <paramref name="occurrence"/> is still the current slot, i.e. its bounded successor has not
+    /// come due at <paramref name="nowUtc"/>.
+    /// </summary>
+    ValueTask<bool> IsOccurrenceStillCurrentAsync(
+        RecurringTask definition, DateTimeOffset occurrence, DateTimeOffset nowUtc, CancellationToken ct = default);
+
+    /// <summary>
+    /// The natural successor of <paramref name="occurrence"/> on the grid, IGNORING <c>RunUntil</c> and
+    /// <c>MaxRuns</c>. The recovery grace window needs this to tell "still the current slot" from "the series
+    /// simply ended", which the bounded successor collapses into the same null.
+    /// </summary>
+    ValueTask<DateTimeOffset?> NextGridOccurrenceAfterAsync(
+        RecurringTask definition, DateTimeOffset occurrence, CancellationToken ct = default);
+
+    /// <summary>
+    /// The slots that have already come due at <paramref name="nowUtc"/>, oldest first: the schedule's own
+    /// pending slot <paramref name="cursor"/> and every grid occurrence after it that is not later than
+    /// <paramref name="nowUtc"/>, stopping at <c>RunUntil</c>.
+    /// </summary>
+    /// <param name="cap">
+    /// Hard upper bound on the number of slots returned — never unbounded. A one-second grid left behind by a
+    /// three-month downtime has millions of due slots, and the answer has to stay bounded whether the caller
+    /// remembers to bound it or not. Ask for one more than the number needed to tell "exactly n" from "at
+    /// least n".
+    /// </param>
+    /// <remarks>
+    /// The run budget (<c>MaxRuns</c>) and the misfire policy are NOT applied here: this reports what the grid
+    /// owes, and deciding which of those slots become occurrences belongs to the caller.
+    /// </remarks>
+    ValueTask<IReadOnlyList<DateTimeOffset>> EnumerateDueSlotsAsync(
+        RecurringTask definition, DateTimeOffset cursor, DateTimeOffset nowUtc, int cap,
+        CancellationToken ct = default);
+}

@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (durable-occurrence foundations, #24)
+
+- **A deterministic scheduling clock.** One `TimeProvider` now governs every scheduling decision:
+  dispatcher, schedule evaluator, builders, both schedulers, startup recovery and the rate limiter,
+  gate and parking lot. Register a `TimeProvider` before `AddEverTask` and the whole pipeline follows
+  it, which makes an end-to-end schedule test deterministic instead of a race against the wall clock.
+  Retry policies, audit and logging deliberately stay on the real clock. Storage no longer resolves
+  "now" on its own either: `RetrievePending` and `TrySetQueuedIfRecoverable` gained `nowUtc` overloads
+  that the core always calls, with defaults delegating to the intact legacy signatures so a custom
+  storage keeps working (and keeps its own atomicity). A provider that inherits `EfCoreTaskStorage` and
+  overrides only the older signatures keeps its own implementation too: the base hands the
+  clock-carrying calls back to it instead of answering with its own query.
+- **`QueuedTasks` gained `ParentTaskId`, `RuntimeInfo` and `ScheduleVersion`** (one migration per
+  provider), with a restrict self-referencing foreign key, the unique index
+  `UX_QueuedTasks_Occurrence` on `(ParentTaskId, ScheduledExecutionUtc)` and the check constraint
+  `CK_QueuedTasks_OccurrenceSlot`. `ITaskStorage` gained the atomic operations a durable schedule
+  needs, as default members that throw `NotSupportedException`, behind the capabilities
+  `SupportsDurableOccurrences` and `SupportsScheduleVersioning`. The built-in providers implement
+  them at their own optimization tier: stored procedures on SQL Server and MySQL, writable CTEs on
+  PostgreSQL, one conditional UPDATE inside one transaction on the EF Core base. That base answers
+  both capabilities from the EF provider it was given: a conditional UPDATE inside a transaction
+  needs a relational one, so on EF Core InMemory it reports false and the feature is refused at
+  dispatch instead of failing later, when an occurrence is materialized. `ScheduleVersion`
+  carries its `DEFAULT 0` in the shared model, so it survives the table rebuild SQLite performs to
+  add the foreign key and the check constraint.
+- **`QueuedTask.ApplyOccurrenceContract(scheduleId, scheduleVersion)`** is the one shape a
+  materialized occurrence has on every backend: a fresh one-shot at that version, with the
+  definition, the cursor, the bounds and the task key cleared. The providers that build the `INSERT`
+  by hand write exactly those columns; the ones that persist the entity apply the method first.
+- **`AuditRetentionPolicy.OccurrenceRetentionDays`** prunes the finished occurrences of a durable
+  schedule in any terminal state — Completed, Failed and Cancelled alike, which
+  `DeleteCompletedTasksAfterRetention` does not do. It honours the same execution-log guard: with a
+  log-retention window or cap active, an occurrence that still owns logs is kept, so a short
+  occurrence window never cascade-deletes logs a longer log window meant to keep.
+- `EverTaskEventData` and `TaskHandlerExecutor` carry the schedule/occurrence context in new `init`
+  properties. Their primary constructors and `Deconstruct` are unchanged, so existing code that
+  builds or deconstructs them keeps compiling.
+
+### Fixed (startup recovery, #24)
+
+- **A recurring series whose `RunUntil` elapsed during a downtime no longer stays `Queued` forever.**
+  Once the boundary passed, such a row matched no recovery predicate at all: it was never executed
+  and never finalized. Recovery now separates rows that still have work to execute from series that
+  only need finalizing, and ends the latter (Completed, cursor cleared, no run counted).
+- **The occurrence a series had already scheduled before that boundary is no longer lost.** The
+  temporal term of the recovery filter is grouped so a pending slot that precedes an elapsed
+  `RunUntil` still recovers and runs.
+- **A months-old slot can no longer be executed at restart.** The recovery grace window used to read
+  "no successor before `RunUntil`" as "still the current slot"; it now asks the natural successor,
+  computed while ignoring the termination bounds, so the window is exactly one period.
+- **Ending a series never overwrites a cancellation.** Both finalization sites compare-and-swap on the
+  cursor, status and version of the row the decision was computed from, so a `Cancel` (or a reschedule)
+  that linearized in between wins and the finalization reports the loss. A storage without that
+  compare-and-swap keeps the historical unconditional write instead of being refused a normal end of
+  series.
+- **Neither does re-queueing one on SQLite.** `TrySetQueuedIfRecoverable` read the row and then saved it
+  back, so a `Cancel` that landed between the two was replaced with `Queued` and the cancelled task ran at
+  the next restart. Only the term SQLite cannot translate is still decided in memory; the write itself is a
+  conditional UPDATE that re-asserts the status, the run budget and the two temporal columns the decision
+  was made from, so the recovery loses that race instead of silently winning it. The other three providers
+  were already compare-and-swapping.
+
 ### Changed (breaking — retry policies moved to the `EverTask.Abstractions` namespace)
 
 - **`LinearRetryPolicy` now lives in `EverTask.Abstractions`** (together with the new

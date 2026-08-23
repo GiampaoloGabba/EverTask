@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace EverTask.Scheduler.Recurring;
 
 public class RecurringTask
@@ -15,17 +17,40 @@ public class RecurringTask
     public int?            MaxRuns         { get; set; }
     public DateTimeOffset? RunUntil        { get; set; }
 
+    /// <summary>
+    /// How this schedule produces its occurrences. <see cref="Abstractions.OccurrenceMode.Inline"/> (the
+    /// default) is the legacy behaviour: the schedule row runs the handler itself.
+    /// </summary>
+    /// <remarks>
+    /// Omitted from the JSON while it holds the default, so the serialized form of every schedule written
+    /// before durable occurrences existed stays byte-identical (the EverTask serializer writes nulls and
+    /// defaults by design, so the attribute — not a convention — is what preserves those bytes).
+    /// </remarks>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public OccurrenceMode OccurrenceMode { get; set; }
+
     //used for serialization/deserialization
     public RecurringTask() { }
 
     /// <summary>
     /// Validates every interval present on this schedule, throwing on corrupt-but-deserializable metadata: an
-    /// unparseable cron, an out-of-range OnDays/OnHours/OnMonths selector, or a negative Interval. Invoked right
+    /// unparseable cron, an out-of-range OnDays/OnHours/OnMonths selector, a negative Interval, or an
+    /// <see cref="Abstractions.OccurrenceMode"/> outside the defined values. Invoked right
     /// after a recovery deserialize so corrupt schedule metadata is routed to the TERMINAL poison path (B1)
     /// instead of throwing downstream at next-run (a bounded per-restart failure) or producing a wrong schedule.
     /// </summary>
     public void Validate()
     {
+        // The tolerant enum converter maps an unknown numeric value through verbatim rather than failing the
+        // whole payload; enforcing the defined set is this method's job (B2). Without it an out-of-range mode
+        // is not Durable, so the row silently degrades to the inline path and the schedule row runs the
+        // handler itself — the wrong semantics, where every other corrupt schedule value is poisoned.
+        // The generic overload, not the Type-based one: Validate runs on every recurring dispatch, and the
+        // non-generic form boxes the value and walks the enum's names through reflection.
+        if (!Enum.IsDefined(OccurrenceMode))
+            throw new ArgumentException(
+                $"Invalid OccurrenceMode '{(int)OccurrenceMode}': not a defined value.", nameof(OccurrenceMode));
+
         CronInterval?.Validate();
         SecondInterval?.Validate();
         MinuteInterval?.Validate();
@@ -36,7 +61,20 @@ public class RecurringTask
     }
 
 
-    public DateTimeOffset? CalculateNextRun(DateTimeOffset current, int currentRun, bool isRecovery = false)
+    /// <summary>
+    /// The historical signature, kept BYTE-FOR-BYTE so an assembly compiled against the previous release
+    /// still binds (P6/X6): appending an optional parameter would have replaced this method's IL signature
+    /// and greeted every such consumer with a <c>MissingMethodException</c>. It resolves the clock itself.
+    /// </summary>
+    public DateTimeOffset? CalculateNextRun(DateTimeOffset current, int currentRun, bool isRecovery = false) =>
+        CalculateNextRun(current, currentRun, isRecovery, null);
+
+    /// <param name="nowUtc">
+    /// The scheduling clock's "now", used only by the <see cref="RunNow"/> first-run branch. Null falls back
+    /// to the real clock, for callers outside the deterministic scheduling path.
+    /// </param>
+    public DateTimeOffset? CalculateNextRun(DateTimeOffset current, int currentRun, bool isRecovery,
+                                            DateTimeOffset? nowUtc)
     {
         if (currentRun >= MaxRuns) return null;
 
@@ -60,7 +98,7 @@ public class RecurringTask
         {
             if (RunNow)
             {
-                runtime = DateTimeOffset.UtcNow;
+                runtime = nowUtc ?? DateTimeOffset.UtcNow;
             }
             else if (SpecificRunTime.HasValue)
             {
@@ -116,12 +154,24 @@ public class RecurringTask
     /// For interval-based tasks, returns the configured interval.
     /// </summary>
     /// <returns>Minimum interval between executions</returns>
-    public TimeSpan GetMinimumInterval()
+    /// <remarks>
+    /// Kept as its own zero-argument method rather than an optional parameter on the overload below: the
+    /// original IL signature is what an assembly compiled against the previous release calls (P6/X6).
+    /// </remarks>
+    public TimeSpan GetMinimumInterval() => GetMinimumInterval(null);
+
+    /// <summary>
+    /// <see cref="GetMinimumInterval()"/> anchored on the scheduling clock.
+    /// </summary>
+    /// <param name="nowUtc">
+    /// The scheduling clock's "now" used as the cron probe anchor. Null falls back to the real clock.
+    /// </param>
+    public TimeSpan GetMinimumInterval(DateTimeOffset? nowUtc)
     {
         // Cron: calculate interval between next two occurrences
         if (CronInterval != null && !string.IsNullOrEmpty(CronInterval.CronExpression))
         {
-            var now = DateTimeOffset.UtcNow;
+            var now = nowUtc ?? DateTimeOffset.UtcNow;
             var first = CronInterval.GetNextOccurrence(now);
             if (!first.HasValue)
             {
@@ -270,12 +320,44 @@ public class RecurringTask
     }
 
     /// <summary>
+    /// The NATURAL successor of <paramref name="occurrence"/> on the occurrence grid, computed while
+    /// IGNORING the termination bounds (<see cref="RunUntil"/> / <see cref="MaxRuns"/>). Returns
+    /// <c>null</c> only when the grid itself cannot produce one.
+    /// </summary>
+    /// <remarks>
+    /// This is what the recovery grace window must ask. <see cref="IsOccurrenceStillCurrent"/> reads
+    /// "no successor" as "still current forever", but the bounded successor is also null once the series
+    /// ends — so a slot months old would be executed at restart. Asking the unbounded grid separates the
+    /// two: a successor still in the future means the stored slot is genuinely the current one (a grace
+    /// window as wide as one period, be it a minute or a month), a successor already past means the slot
+    /// is stale and the series must be finalized instead.
+    /// </remarks>
+    internal DateTimeOffset? NextGridOccurrenceAfter(DateTimeOffset occurrence)
+    {
+        // Shallow copy: the interval objects are only read while walking the grid, and clearing the bounds
+        // on the copy is what makes the walk unbounded without mutating the live definition.
+        var unbounded = (RecurringTask)MemberwiseClone();
+        unbounded.RunUntil = null;
+        unbounded.MaxRuns  = null;
+
+        return unbounded.NextOccurrenceStrictlyAfter(occurrence, occurrence);
+    }
+
+    /// <summary>
     /// Number of occurrences missed in <c>(anchor, after]</c>, reported for LOGGING ONLY (Option B: it
     /// never consumes the <see cref="MaxRuns"/> budget). Uniform grids count in O(1) by division;
     /// calendar/cron schedules walk the real schedule, bounded.
     /// </summary>
-    internal int CountMissedOccurrences(DateTimeOffset anchor, DateTimeOffset after)
+    /// <param name="cap">
+    /// Upper bound on the returned count: the walk stops at <c>cap + 1</c> and the arithmetic result is
+    /// clamped there, so a one-second grid over a long window never enumerates millions of slots just to
+    /// report a number. The default keeps the historical unbounded count.
+    /// </param>
+    internal int CountMissedOccurrences(DateTimeOffset anchor, DateTimeOffset after, int cap = int.MaxValue)
     {
+        // cap + 1 in long arithmetic: cap == int.MaxValue must not wrap to a negative ceiling.
+        var ceiling = Math.Min((long)cap + 1, int.MaxValue);
+
         // Uniform grid: O(1) division (mirrors the historical simple-interval skip count, and keeps a
         // 1-second interval over a year-long downtime O(1) instead of tens of millions of walk steps).
         if (string.IsNullOrEmpty(CronInterval?.CronExpression) && IsUniformGrid())
@@ -297,13 +379,13 @@ public class RecurringTask
                 spanTicks = 0;
 
             var count = spanTicks / stepTicks + 1;
-            return (int)Math.Min(count, int.MaxValue);
+            return (int)Math.Min(count, ceiling);
         }
 
         // Calendar / cron: walk the real schedule (the anchor itself is the first missed occurrence).
         var skipped    = 1;
         var occurrence = anchor;
-        for (var i = 0; i < MaxSkipCountIterations; i++)
+        for (var i = 0; i < MaxSkipCountIterations && skipped < ceiling; i++)
         {
             var following = GetNextOccurrence(occurrence);
             if (following == null || following.Value > after)

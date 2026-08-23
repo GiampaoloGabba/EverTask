@@ -71,6 +71,30 @@ The schema contains:
 - **RunsAudit**: Recurring run execution history
 - **__EFMigrationsHistory**: EF Core migrations table (also in the custom schema)
 
+### Durable-Occurrence Columns
+
+A recurring schedule can materialize each due slot as its own child row, so `QueuedTasks` carries three
+extra columns:
+
+| Column | Type | Purpose |
+|--------|------|---------|
+| `ParentTaskId` | nullable id | The schedule an occurrence belongs to; null on every ordinary row |
+| `RuntimeInfo` | nullable text | Opaque JSON: occurrence metadata on a child, schedule runtime state on a schedule row |
+| `ScheduleVersion` | int, default 0 | Bumped by a runtime reschedule; advances compare-and-swap against it |
+
+They come with three constraints that make "one row per slot" a database guarantee rather than an
+application convention: a **restrict** self-referencing foreign key `ParentTaskId → Id` (never cascade —
+deleting a schedule deletes its occurrences explicitly, in the same transaction), a unique index
+`UX_QueuedTasks_Occurrence` on `(ParentTaskId, ScheduledExecutionUtc)`, and the check constraint
+`CK_QueuedTasks_OccurrenceSlot` (an occurrence always names its slot).
+
+No index filter is needed here: PostgreSQL treats NULLs as distinct in a unique index, so the ordinary
+rows never collide with each other.
+
+The operations that run once per occurrence are single writable CTEs in `PostgresTaskStorage`, exactly like
+the three hot writes: one statement, hence atomic by construction. No stored object and no extra
+migration beyond the columns above.
+
 ## Schema-Aware Migrations
 
 The schema is **runtime-configurable**, with full parity with the SQL Server provider. EverTask injects the configured schema into the migration at runtime, so the same migration applies cleanly to any schema you select via `SchemaName`. The migrations history table is created inside the same schema (not in `public`).

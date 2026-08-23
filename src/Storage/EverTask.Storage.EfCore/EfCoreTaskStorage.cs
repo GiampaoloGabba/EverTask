@@ -1,6 +1,9 @@
-﻿using System.Linq.Expressions;
+﻿using System.Collections.Concurrent;
+using System.Linq.Expressions;
+using System.Reflection;
 using EverTask.Abstractions;
 using EverTask.Logger;
+using Microsoft.EntityFrameworkCore.Storage;
 
 namespace EverTask.Storage.EfCore;
 
@@ -14,17 +17,19 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     private static DateTimeOffset UtcNowNormalized => new(DateTime.UtcNow, TimeSpan.Zero);
 
     /// <summary>
-    /// Canonical recoverable predicate as an EF-translatable expression: the server-side mirror of
-    /// <see cref="QueuedTask.IsRecoverable"/>, shared by <see cref="RetrievePending"/> and
-    /// <see cref="TrySetQueuedIfRecoverable"/> so the two queries can never drift. SQLite cannot
-    /// translate the <c>RunUntil</c> DateTimeOffset comparison and overrides both methods to
-    /// evaluate the predicate client-side.
+    /// The half of category (i) EVERY relational provider can translate: the recoverable status set and the
+    /// run budget. Split out of <see cref="RecoverableForExecutionQuery"/> so a provider that has to decide
+    /// the temporal half in memory — SQLite — can still put this half in the WHERE clause of its conditional
+    /// UPDATE, instead of trusting a preceding SELECT for the whole predicate.
     /// </summary>
-    private static Expression<Func<QueuedTask, bool>> RecoverableQuery(DateTimeOffset now) =>
+    /// <remarks>
+    /// Status and <see cref="QueuedTask.MaxRuns"/> are ANDed in FRONT of the temporal term (X3) and are never
+    /// bypassed, which is exactly what makes this half safe to assert on its own.
+    /// </remarks>
+    protected static readonly Expression<Func<QueuedTask, bool>> RecoverableStatusAndBudget =
         // < MaxRuns (not <=): a series at CurrentRunCount == MaxRuns is exhausted (CU11/L27); null
-        // CurrentRunCount counts as 0 (L34). Mirrors QueuedTask.IsRecoverable.
+        // CurrentRunCount counts as 0 (L34). Mirrors QueuedTask.IsRecoverableForExecution.
         t => (t.MaxRuns == null || (t.CurrentRunCount ?? 0) < t.MaxRuns)
-             && (t.RunUntil == null || t.RunUntil >= now)
              && (t.Status == QueuedTaskStatus.WaitingQueue ||
                  t.Status == QueuedTaskStatus.Queued ||
                  t.Status == QueuedTaskStatus.Pending ||
@@ -33,6 +38,64 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                  (t.IsRecurring && t.NextRunUtc != null &&
                   (t.Status == QueuedTaskStatus.Completed ||
                    t.Status == QueuedTaskStatus.Failed)));
+
+    /// <summary>
+    /// Category (i) of the recovery filter as an EF-translatable expression: the server-side mirror of
+    /// <see cref="QueuedTask.IsRecoverableForExecution"/>, shared by <see cref="RetrievePending"/> and
+    /// <see cref="TrySetQueuedIfRecoverable"/> so the two queries can never drift. SQLite cannot translate
+    /// the <c>RunUntil</c> DateTimeOffset comparison and overrides both methods to evaluate it client-side.
+    /// </summary>
+    /// <remarks>
+    /// The temporal term is GROUPED (X3): status and <see cref="QueuedTask.MaxRuns"/> stay ANDed in front,
+    /// while <c>RunUntil</c> gains the branch that keeps a recurring series recoverable when the slot it had
+    /// already scheduled (<c>NextRunUtc</c>) precedes the boundary that elapsed during the downtime. The
+    /// column-to-column comparison translates on SQL Server, PostgreSQL and MySQL (same type on both sides).
+    /// </remarks>
+    private static Expression<Func<QueuedTask, bool>> RecoverableForExecutionQuery(DateTimeOffset now) =>
+        Compose(RecoverableStatusAndBudget,
+            t => t.RunUntil == null
+                 || t.RunUntil >= now
+                 || (t.IsRecurring && t.NextRunUtc != null && t.RunUntil != null && t.NextRunUtc < t.RunUntil),
+            Expression.AndAlso);
+
+    /// <summary>
+    /// Category (ii) of the recovery filter: a recurring series with a cursor but nothing left to run, which
+    /// recovery must FINALIZE rather than execute. Mirrors <see cref="QueuedTask.IsRecurringSeriesToFinalize"/>.
+    /// </summary>
+    private static readonly Expression<Func<QueuedTask, bool>> SeriesToFinalizeQuery =
+        t => t.IsRecurring
+             && t.NextRunUtc != null
+             && t.Status != QueuedTaskStatus.Cancelled
+             && ((t.RunUntil != null && t.NextRunUtc >= t.RunUntil)
+                 || (t.MaxRuns != null && (t.CurrentRunCount ?? 0) >= t.MaxRuns));
+
+    /// <summary>
+    /// What a recovery page returns: the union of the two categories. Composed from the two expressions
+    /// above rather than re-spelled, so neither copy can drift from the other.
+    /// </summary>
+    protected static Expression<Func<QueuedTask, bool>> RecoveryPageQuery(DateTimeOffset now) =>
+        Compose(RecoverableForExecutionQuery(now), SeriesToFinalizeQuery, Expression.OrElse);
+
+    /// <summary>
+    /// Combines two single-parameter predicates by rebinding the right-hand parameter onto the left-hand one,
+    /// producing a plain expression tree EF translates like a hand-written predicate (unlike
+    /// <c>Expression.Invoke</c>, which it cannot).
+    /// </summary>
+    private static Expression<Func<QueuedTask, bool>> Compose(
+        Expression<Func<QueuedTask, bool>> left, Expression<Func<QueuedTask, bool>> right,
+        Func<Expression, Expression, BinaryExpression> combine)
+    {
+        var parameter = left.Parameters[0];
+        var rebound   = new ParameterRebinder(right.Parameters[0], parameter).Visit(right.Body);
+
+        return Expression.Lambda<Func<QueuedTask, bool>>(combine(left.Body, rebound), parameter);
+    }
+
+    private sealed class ParameterRebinder(ParameterExpression from, ParameterExpression to) : ExpressionVisitor
+    {
+        protected override Expression VisitParameter(ParameterExpression node) =>
+            node == from ? to : base.VisitParameter(node);
+    }
 
     public virtual async Task<QueuedTask[]> Get(Expression<Func<QueuedTask, bool>> where,
                                                 CancellationToken ct = default)
@@ -67,16 +130,63 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         logger.TaskPersisted(taskEntity.Type);
     }
 
-    public virtual async Task<QueuedTask[]> RetrievePending(DateTimeOffset? lastCreatedAt, Guid? lastId, int take,
-                                                            CancellationToken ct = default)
+    /// <summary>
+    /// Which pre-4.0 signatures the CONCRETE storage type overrides, computed once per type.
+    /// </summary>
+    /// <remarks>
+    /// A provider written before the clock-carrying overloads existed overrides only the legacy signatures —
+    /// that is where its query-translation workaround and its own atomicity live. The core now calls the
+    /// <c>nowUtc</c> overloads exclusively (P9), and a base-class virtual resolves statically to the base
+    /// body, so without this probe the base would answer them itself and the derived override would silently
+    /// become dead code. The promise is the same the <see cref="ITaskStorage"/> defaults make: the legacy
+    /// override keeps being called, at the cost of resolving the clock itself.
+    /// </remarks>
+    private readonly record struct LegacyOverrides(bool RetrievePending, bool TrySetQueuedIfRecoverable);
+
+    private static readonly ConcurrentDictionary<Type, LegacyOverrides> LegacyOverridesByType = new();
+
+    // Cached per instance too (the storage is a singleton): the dictionary is the per-TYPE memo, this field
+    // keeps the recovery path from hashing a Type on every page and every re-queue. A benign race recomputes
+    // the same value.
+    private LegacyOverrides? _legacyOverrides;
+
+    private LegacyOverrides Legacy =>
+        _legacyOverrides ??= LegacyOverridesByType.GetOrAdd(GetType(), static type => new LegacyOverrides(
+            OverridesBaseMethod(type, nameof(RetrievePending),
+                [typeof(DateTimeOffset?), typeof(Guid?), typeof(int), typeof(CancellationToken)]),
+            OverridesBaseMethod(type, nameof(TrySetQueuedIfRecoverable),
+                [typeof(Guid), typeof(AuditLevel), typeof(CancellationToken)])));
+
+    private static bool OverridesBaseMethod(Type storageType, string name, Type[] parameterTypes) =>
+        storageType.GetMethod(name, BindingFlags.Public | BindingFlags.Instance, null, parameterTypes, null)
+            is { } method && method.DeclaringType != typeof(EfCoreTaskStorage);
+
+    /// <inheritdoc />
+    public virtual Task<QueuedTask[]> RetrievePending(DateTimeOffset? lastCreatedAt, Guid? lastId, int take,
+                                                      CancellationToken ct = default) =>
+        // Straight to the implementation, never back through the nowUtc overload: a derived class that
+        // overrides only this signature and calls base would otherwise bounce between the two forever.
+        RetrievePendingCore(UtcNowNormalized, lastCreatedAt, lastId, take, ct);
+
+    /// <inheritdoc />
+    public virtual Task<QueuedTask[]> RetrievePending(DateTimeOffset nowUtc, DateTimeOffset? lastCreatedAt,
+                                                      Guid? lastId, int take, CancellationToken ct = default) =>
+        Legacy.RetrievePending
+            ? RetrievePending(lastCreatedAt, lastId, take, ct)
+            : RetrievePendingCore(nowUtc, lastCreatedAt, lastId, take, ct);
+
+    private async Task<QueuedTask[]> RetrievePendingCore(DateTimeOffset nowUtc, DateTimeOffset? lastCreatedAt,
+                                                         Guid? lastId, int take, CancellationToken ct)
     {
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         logger.RetrievingPendingTasks(lastCreatedAt, lastId, take);
 
-        var now = UtcNowNormalized;
+        // Offset 0 required by Npgsql's timestamptz mapping; a no-op for the other providers and for a
+        // caller already on UTC (DateTimeOffset comparison is instant-based).
+        var now = nowUtc.ToUniversalTime();
 
-        // Recoverable statuses (see QueuedTask.IsRecoverable for the canonical definition):
+        // Recoverable statuses (see QueuedTask.IsRecoverableForExecution for the canonical definition):
         // - WaitingQueue: persisted but never delivered to a worker queue (parked in the in-memory
         //   scheduler at shutdown, or dropped by a full queue) - without it delayed tasks are lost on restart
         // - Queued: written to the in-memory channel but not executed before shutdown
@@ -84,9 +194,10 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         // - Pending: legacy status, kept for backward compatibility
         // - Recurring tasks between two runs (Completed/Failed with a future NextRunUtc): without
         //   them a recurring task not re-registered at startup dies after the first restart
+        // Plus category (ii): recurring series that only need finalizing (X3).
         var query = dbContext.QueuedTasks
                              .AsNoTracking()
-                             .Where(RecoverableQuery(now));
+                             .Where(RecoveryPageQuery(now));
 
         if (lastCreatedAt.HasValue)
         {
@@ -110,16 +221,28 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         await SetStatus(taskId, QueuedTaskStatus.Queued, null, auditLevel, null, ct).ConfigureAwait(false);
 
     /// <inheritdoc />
-    public virtual async Task<bool> TrySetQueuedIfRecoverable(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default)
+    public virtual Task<bool> TrySetQueuedIfRecoverable(Guid taskId, AuditLevel auditLevel,
+                                                        CancellationToken ct = default) =>
+        TrySetQueuedIfRecoverableCore(UtcNowNormalized, taskId, auditLevel, ct);
+
+    /// <inheritdoc />
+    public virtual Task<bool> TrySetQueuedIfRecoverable(DateTimeOffset nowUtc, Guid taskId, AuditLevel auditLevel,
+                                                        CancellationToken ct = default) =>
+        Legacy.TrySetQueuedIfRecoverable
+            ? TrySetQueuedIfRecoverable(taskId, auditLevel, ct)
+            : TrySetQueuedIfRecoverableCore(nowUtc, taskId, auditLevel, ct);
+
+    private async Task<bool> TrySetQueuedIfRecoverableCore(DateTimeOffset nowUtc, Guid taskId, AuditLevel auditLevel,
+                                                           CancellationToken ct)
     {
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
-        var now = UtcNowNormalized;
+        var now = nowUtc.ToUniversalTime();
 
         // Non-relational providers (EF Core InMemory) can translate neither the conditional UPDATE nor
         // an explicit transaction: run the transition and its audit as ONE tracked SaveChanges, which
-        // the provider applies atomically. SQLite overrides this method (its client-side path is the
-        // same single-SaveChanges shape).
+        // the provider applies atomically. SQLite overrides this method: it is relational, so it keeps
+        // the conditional UPDATE and only moves the untranslatable temporal term out of it.
         if (dbContext is not DbContext efContext || !efContext.Database.IsRelational())
         {
             var transitionedClientSide = await TrySetQueuedClientSideAsync(dbContext, taskId, now, auditLevel, ct).ConfigureAwait(false);
@@ -137,7 +260,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
         var rowsAffected = await dbContext.QueuedTasks
             .Where(t => t.Id == taskId)
-            .Where(RecoverableQuery(now))
+            .Where(RecoverableForExecutionQuery(now))
             .ExecuteUpdateAsync(s => s.SetProperty(t => t.Status, QueuedTaskStatus.Queued), ct)
             .ConfigureAwait(false);
 
@@ -148,26 +271,39 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             return false;
         }
 
-        AddQueuedTransitionAudit(dbContext, taskId, auditLevel);
-        await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
-        await transaction.CommitAsync(ct).ConfigureAwait(false);
+        await CommitQueuedTransitionAsync(dbContext, transaction, taskId, auditLevel, ct).ConfigureAwait(false);
         return true;
     }
 
     /// <summary>
-    /// Non-atomic-UPDATE recoverable transition evaluated client-side, for providers that cannot
-    /// translate the conditional UPDATE (EF Core InMemory, SQLite). Loads the task, applies the
-    /// canonical <see cref="QueuedTask.IsRecoverable"/> predicate and, only if recoverable, sets it
-    /// Queued AND stages its audit in the SAME SaveChanges, so the transition and its audit are
-    /// written atomically (L20).
+    /// Commits a recovery transition the conditional UPDATE has already applied, together with its Queued
+    /// status audit, so the pair lands or is rolled back as one (L20) and a refused transition leaves no
+    /// trace. The shape a provider overriding the transition has to reuse.
     /// </summary>
+    protected static Task CommitQueuedTransitionAsync(ITaskStoreDbContext dbContext,
+                                                      IDbContextTransaction transaction, Guid taskId,
+                                                      AuditLevel auditLevel, CancellationToken ct) =>
+        CommitWithStatusAuditAsync(dbContext, transaction, taskId, QueuedTaskStatus.Queued, null, auditLevel,
+            UtcNowNormalized, ct);
+
+    /// <summary>
+    /// Recoverable transition evaluated client-side, for the providers that can express NO conditional
+    /// UPDATE at all (EF Core InMemory). Loads the task, applies the canonical
+    /// <see cref="QueuedTask.IsRecoverable"/> predicate and, only if recoverable, sets it Queued AND stages
+    /// its audit in the SAME SaveChanges, so the transition and its audit are written atomically (L20).
+    /// </summary>
+    /// <remarks>
+    /// The read and the write are two steps, so this is NOT a compare-and-swap: a transition that
+    /// linearizes in between is overwritten. Every relational provider — SQLite included, whichever half of
+    /// the predicate it can translate — must put its condition in the WHERE clause instead.
+    /// </remarks>
     protected static async Task<bool> TrySetQueuedClientSideAsync(ITaskStoreDbContext dbContext, Guid taskId,
                                                                   DateTimeOffset now, AuditLevel auditLevel, CancellationToken ct)
     {
         var tracked = await dbContext.QueuedTasks
             .FirstOrDefaultAsync(t => t.Id == taskId, ct).ConfigureAwait(false);
 
-        if (tracked == null || !tracked.IsRecoverable(now))
+        if (tracked == null || !tracked.IsRecoverableForExecution(now))
             return false;
 
         tracked.Status = QueuedTaskStatus.Queued;
@@ -713,10 +849,23 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
         try
         {
+            // Occurrences go first and in the SAME transaction: the self-referencing foreign key is
+            // Restrict, so a schedule with children cannot be deleted on its own, and deleting the children
+            // in a separate transaction would leave them orphaned if the second delete never ran.
+            await using var transaction = await BeginTransactionOrNullAsync(dbContext, ct).ConfigureAwait(false);
+
+            await dbContext.QueuedTasks
+                           .Where(t => t.ParentTaskId == taskId)
+                           .ExecuteDeleteAsync(ct)
+                           .ConfigureAwait(false);
+
             var rowsAffected = await dbContext.QueuedTasks
                                               .Where(t => t.Id == taskId)
                                               .ExecuteDeleteAsync(ct)
                                               .ConfigureAwait(false);
+
+            if (transaction != null)
+                await transaction.CommitAsync(ct).ConfigureAwait(false);
 
             if (rowsAffected == 0)
             {
@@ -729,6 +878,652 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             throw;
         }
     }
+
+    // ---- Durable occurrences and schedule versioning ----------------------------------------------
+    // Each operation is ONE conditional UPDATE (the compare-and-swap) plus, where an audit or an insert
+    // belongs to it, a single transaction around the pair. The condition lives in the WHERE clause, never in
+    // a preceding SELECT: a read-then-write would let two writers both pass the check.
+
+    /// <inheritdoc />
+    public virtual bool SupportsDurableOccurrences => IsRelationalProvider;
+
+    /// <inheritdoc />
+    public virtual bool SupportsScheduleVersioning => IsRelationalProvider;
+
+    /// <summary>
+    /// Whether the configured EF Core provider is a relational one, resolved once and cached.
+    /// </summary>
+    /// <remarks>
+    /// The capability and the implementation are inseparable (X2): every operation the two capabilities
+    /// advertise opens with <see cref="RequireRelational"/>, which refuses a provider that can express
+    /// neither a conditional UPDATE nor a transaction — and this class deliberately still supports one, EF
+    /// Core InMemory, with the client-side fallbacks in <c>TrySetQueuedIfRecoverable</c> and
+    /// <c>SetStatus</c>. Answering an unconditional <c>true</c> there would let a caller's
+    /// <c>SupportsDurableOccurrences</c> guard pass and turn a clean refusal at dispatch into a
+    /// <see cref="NotSupportedException"/> later, at materialization.
+    /// Resolving it needs a context, which the pooled factory hands out without opening a connection; the
+    /// answer cannot change for the lifetime of this storage (a singleton), so it is computed at most once.
+    /// </remarks>
+    private bool IsRelationalProvider => _isRelationalProvider.Value;
+
+    private readonly Lazy<bool> _isRelationalProvider = new(() =>
+    {
+        var dbContext = contextFactory.CreateDbContext();
+        try
+        {
+            return dbContext is DbContext efContext && efContext.Database.IsRelational();
+        }
+        finally
+        {
+            (dbContext as IDisposable)?.Dispose();
+        }
+    });
+
+    /// <inheritdoc />
+    public virtual async Task<OccurrenceMaterializationOutcome> MaterializeOccurrence(
+        Guid parentId, int expectedScheduleVersion, DateTimeOffset? expectedCursorUtc, QueuedTask occurrence,
+        DateTimeOffset? newCursorUtc, AuditLevel auditLevel, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(occurrence);
+
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        var             efContext = RequireRelational(dbContext);
+
+        var newCursor = newCursorUtc?.ToUniversalTime();
+        var now       = UtcNowNormalized;
+
+        // The row this base INSERTS is the caller's entity, so the contract shape has to be stamped on it
+        // explicitly — the procedures and the writable CTE spell the same shape out in their column list.
+        occurrence.ApplyOccurrenceContract(parentId, expectedScheduleVersion);
+
+        // A schedule with no cursor is over — finalized, or poisoned — so a NULL expected cursor can never
+        // describe a live one. Left to EF, the compare-and-swap would be rewritten to "NextRunUtc IS NULL"
+        // and match exactly those rows, inserting an occurrence on a finished series and giving it a cursor
+        // back. The stored procedures, the Postgres decision CTE and the memory store all refuse this
+        // server-side; here it is refused before the write and classified like any other lost race.
+        if (expectedCursorUtc?.ToUniversalTime() is not { } expectedCursor)
+            return await ClassifyMaterializationLossAsync(dbContext, parentId, expectedScheduleVersion, ct)
+                .ConfigureAwait(false);
+
+        await using var transaction = await efContext.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+
+        // A null new cursor ENDS the series, and it must end in the same commit that creates its last
+        // occurrence: a separate finalization would leave a window where a crash resurrects a finished series.
+        var advanced = newCursor == null
+            ? await CursorCas(dbContext, parentId, expectedScheduleVersion, expectedCursor)
+                    .ExecuteUpdateAsync(s => s
+                                             .SetProperty(t => t.NextRunUtc, (DateTimeOffset?)null)
+                                             .SetProperty(t => t.Status, QueuedTaskStatus.Completed)
+                                             .SetProperty(t => t.Exception, (string?)null)
+                                             .SetProperty(t => t.LastExecutionUtc, now)
+                                             .SetProperty(t => t.CurrentRunCount, t => t.CurrentRunCount >= int.MaxValue ? int.MaxValue : (t.CurrentRunCount ?? 0) + 1), ct)
+                    .ConfigureAwait(false)
+            : await CursorCas(dbContext, parentId, expectedScheduleVersion, expectedCursor)
+                    .ExecuteUpdateAsync(s => s
+                                             .SetProperty(t => t.NextRunUtc, newCursor)
+                                             .SetProperty(t => t.CurrentRunCount, t => t.CurrentRunCount >= int.MaxValue ? int.MaxValue : (t.CurrentRunCount ?? 0) + 1), ct)
+                    .ConfigureAwait(false);
+
+        if (advanced == 0)
+        {
+            await transaction.RollbackAsync(ct).ConfigureAwait(false);
+            return await ClassifyMaterializationLossAsync(dbContext, parentId, expectedScheduleVersion, ct)
+                .ConfigureAwait(false);
+        }
+
+        if (newCursor == null && AuditPolicy.ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Completed, null))
+        {
+            dbContext.StatusAudit.Add(new StatusAudit
+            {
+                QueuedTaskId = parentId,
+                UpdatedAtUtc = now,
+                NewStatus    = QueuedTaskStatus.Completed,
+                Exception    = null
+            });
+        }
+
+        dbContext.QueuedTasks.Add(occurrence);
+
+        try
+        {
+            await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
+        }
+        catch (DbUpdateException e) when (IsOccurrenceUniqueViolation(e))
+        {
+            // Someone materialized this exact slot already: the whole transaction, cursor advance included,
+            // rolls back, so the caller can simply re-read and decide again.
+            await transaction.RollbackAsync(ct).ConfigureAwait(false);
+            return OccurrenceMaterializationOutcome.AlreadyExists;
+        }
+
+        await transaction.CommitAsync(ct).ConfigureAwait(false);
+        return OccurrenceMaterializationOutcome.Created;
+    }
+
+    /// <inheritdoc />
+    public virtual async Task<bool> TrySetRecurringSeriesCompleted(
+        Guid taskId, DateTimeOffset? expectedCursorUtc, QueuedTaskStatus expectedStatus,
+        int expectedScheduleVersion, double executionTimeMs, AuditLevel auditLevel, CancellationToken ct = default)
+    {
+        logger.FinalizingRecurringSeries(taskId);
+
+        // A schedule with no cursor is already over, so no live series can be described by a null expectation.
+        // Left to EF the comparison becomes "NextRunUtc IS NULL", which matches exactly the rows that are
+        // already finalized or poisoned: the guard MaterializeOccurrence spells out, applied to its siblings.
+        if (expectedCursorUtc is not { } expected)
+            return false;
+
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        var             efContext = RequireRelational(dbContext);
+
+        var cursor = expected.ToUniversalTime();
+        var now    = UtcNowNormalized;
+
+        await using var transaction = await efContext.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+
+        var rows = await dbContext.QueuedTasks
+                                  .Where(t => t.Id == taskId
+                                              && t.Status == expectedStatus
+                                              && t.NextRunUtc == cursor
+                                              && t.ScheduleVersion == expectedScheduleVersion)
+                                  .ExecuteUpdateAsync(s => s
+                                                           .SetProperty(t => t.Status, QueuedTaskStatus.Completed)
+                                                           .SetProperty(t => t.Exception, (string?)null)
+                                                           .SetProperty(t => t.LastExecutionUtc, now)
+                                                           .SetProperty(t => t.ExecutionTimeMs, executionTimeMs)
+                                                           .SetProperty(t => t.NextRunUtc, (DateTimeOffset?)null), ct)
+                                  .ConfigureAwait(false);
+
+        if (rows == 0)
+        {
+            await transaction.RollbackAsync(ct).ConfigureAwait(false);
+            return false;
+        }
+
+        // No runs audit and no counter advance: the remaining slots were never executed (Option B).
+        await CommitWithStatusAuditAsync(dbContext, transaction, taskId, QueuedTaskStatus.Completed, null,
+            auditLevel, now, ct).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <inheritdoc />
+    public virtual async Task CancelSchedule(Guid parentId, AuditLevel auditLevel, CancellationToken ct = default)
+    {
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        var             efContext = RequireRelational(dbContext);
+
+        var now = UtcNowNormalized;
+
+        await using var transaction = await efContext.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+
+        var parentCancelled = await dbContext.QueuedTasks
+                                             .Where(t => t.Id == parentId)
+                                             .ExecuteUpdateAsync(
+                                                 s => s.SetProperty(t => t.Status, QueuedTaskStatus.Cancelled), ct)
+                                             .ConfigureAwait(false);
+
+        // Occurrences already InProgress own a live delivery and are left to finish on their own; only the
+        // ones still waiting are cancelled, so a materializer racing this cancel can only see an inactive
+        // schedule and never adds one more.
+        var candidateChildren = await dbContext.QueuedTasks
+                                               .Where(t => t.ParentTaskId == parentId
+                                                           && (t.Status == QueuedTaskStatus.WaitingQueue
+                                                               || t.Status == QueuedTaskStatus.Queued
+                                                               || t.Status == QueuedTaskStatus.Pending))
+                                               .Select(t => t.Id)
+                                               .ToListAsync(ct)
+                                               .ConfigureAwait(false);
+
+        if (candidateChildren.Count > 0)
+        {
+            // The status predicate is repeated on the UPDATE, not just on the id lookup: an occurrence that
+            // starts executing between the two must still be left alone.
+            await dbContext.QueuedTasks
+                           .Where(t => candidateChildren.Contains(t.Id)
+                                       && (t.Status == QueuedTaskStatus.WaitingQueue
+                                           || t.Status == QueuedTaskStatus.Queued
+                                           || t.Status == QueuedTaskStatus.Pending))
+                           .ExecuteUpdateAsync(s => s.SetProperty(t => t.Status, QueuedTaskStatus.Cancelled), ct)
+                           .ConfigureAwait(false);
+        }
+
+        if (AuditPolicy.ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Cancelled, null))
+        {
+            // Audit what the UPDATE really changed, not what the lookup found. ExecuteUpdate reports a count
+            // and no ids, and the two statements are not one: an occurrence that reached InProgress in
+            // between is skipped by the UPDATE and would otherwise get a Cancelled audit row for a status it
+            // never took. Reading the candidates back inside the same transaction is what turns the id list
+            // into the set that actually moved — the procedures and the Postgres CTE get it from OUTPUT /
+            // RETURNING on the UPDATE itself, which EF cannot express. None of the candidates was Cancelled
+            // when the lookup ran, so "Cancelled now" means this transaction is the one that cancelled it.
+            List<Guid> cancelledChildren = [];
+            if (candidateChildren.Count > 0)
+            {
+                cancelledChildren = await dbContext.QueuedTasks
+                                                   .Where(t => candidateChildren.Contains(t.Id)
+                                                               && t.Status == QueuedTaskStatus.Cancelled)
+                                                   .Select(t => t.Id)
+                                                   .ToListAsync(ct)
+                                                   .ConfigureAwait(false);
+            }
+
+            // Only audit the schedule row if it actually exists: an audit for a missing row would violate
+            // the foreign key and take the whole transaction down.
+            var audited = parentCancelled > 0 ? cancelledChildren.Append(parentId) : cancelledChildren;
+
+            foreach (var id in audited)
+            {
+                dbContext.StatusAudit.Add(new StatusAudit
+                {
+                    QueuedTaskId = id,
+                    UpdatedAtUtc = now,
+                    NewStatus    = QueuedTaskStatus.Cancelled,
+                    Exception    = null
+                });
+            }
+
+            await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public virtual async Task<bool> RequeueTerminal(Guid taskId, AuditLevel auditLevel,
+                                                    CancellationToken ct = default)
+    {
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        var             efContext = RequireRelational(dbContext);
+
+        var now = UtcNowNormalized;
+
+        await using var transaction = await efContext.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+
+        // Identity, history and audit trail survive: only the status and the recorded error are reset.
+        var rows = await dbContext.QueuedTasks
+                                  .Where(t => t.Id == taskId
+                                              && (t.Status == QueuedTaskStatus.Failed
+                                                  || t.Status == QueuedTaskStatus.Cancelled))
+                                  .ExecuteUpdateAsync(s => s
+                                                           .SetProperty(t => t.Status, QueuedTaskStatus.Queued)
+                                                           .SetProperty(t => t.Exception, (string?)null), ct)
+                                  .ConfigureAwait(false);
+
+        if (rows == 0)
+        {
+            await transaction.RollbackAsync(ct).ConfigureAwait(false);
+            return false;
+        }
+
+        await CommitWithStatusAuditAsync(dbContext, transaction, taskId, QueuedTaskStatus.Queued, null,
+            auditLevel, now, ct).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <inheritdoc />
+    public virtual async Task<bool> TryRequeueStaleOccurrence(Guid childId, QueuedTaskStatus expectedStatus,
+                                                              AuditLevel auditLevel, CancellationToken ct = default)
+    {
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        var             efContext = RequireRelational(dbContext);
+
+        var now = UtcNowNormalized;
+
+        await using var transaction = await efContext.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+
+        // The expected status IS the claim: a cancel, or a delivery that picked the occurrence up between
+        // the caller's read and this write, changes it and this caller correctly loses.
+        var rows = await dbContext.QueuedTasks
+                                  .Where(t => t.Id == childId && t.Status == expectedStatus)
+                                  .ExecuteUpdateAsync(s => s.SetProperty(t => t.Status, QueuedTaskStatus.Queued), ct)
+                                  .ConfigureAwait(false);
+
+        if (rows == 0)
+        {
+            await transaction.RollbackAsync(ct).ConfigureAwait(false);
+            return false;
+        }
+
+        await CommitWithStatusAuditAsync(dbContext, transaction, childId, QueuedTaskStatus.Queued, null,
+            auditLevel, now, ct).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <inheritdoc />
+    public virtual async Task<bool> UpdateSchedule(Guid taskId, int expectedScheduleVersion, string recurringTaskJson,
+                                                   string? recurringInfo, DateTimeOffset? nextRunUtc, int? maxRuns,
+                                                   DateTimeOffset? runUntil, string? runtimeInfo,
+                                                   CancellationToken ct = default)
+    {
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        RequireRelational(dbContext);
+
+        var nextRun = nextRunUtc?.ToUniversalTime();
+        var until   = runUntil?.ToUniversalTime();
+
+        var rows = await dbContext.QueuedTasks
+                                  .Where(t => t.Id == taskId && t.ScheduleVersion == expectedScheduleVersion)
+                                  .ExecuteUpdateAsync(s => s
+                                                           .SetProperty(t => t.RecurringTask, recurringTaskJson)
+                                                           .SetProperty(t => t.RecurringInfo, recurringInfo)
+                                                           .SetProperty(t => t.NextRunUtc, nextRun)
+                                                           .SetProperty(t => t.MaxRuns, maxRuns)
+                                                           .SetProperty(t => t.RunUntil, until)
+                                                           .SetProperty(t => t.RuntimeInfo, runtimeInfo)
+                                                           .SetProperty(t => t.ScheduleVersion,
+                                                               expectedScheduleVersion + 1), ct)
+                                  .ConfigureAwait(false);
+
+        return rows > 0;
+    }
+
+    /// <inheritdoc />
+    public virtual async Task<bool> TryHaltSchedule(Guid parentId, int expectedScheduleVersion,
+                                                    DateTimeOffset? expectedCursorUtc, QueuedTaskStatus expectedStatus,
+                                                    string runtimeInfo, CancellationToken ct = default)
+    {
+        // Same refusal as the finalization above: a null expectation would translate to "NextRunUtc IS NULL"
+        // and halt a series that has already ended, instead of losing the compare-and-swap.
+        if (expectedCursorUtc is not { } expected)
+            return false;
+
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        RequireRelational(dbContext);
+
+        var cursor = expected.ToUniversalTime();
+
+        // Full compare-and-swap: a halt decided against a cursor another writer has since advanced describes
+        // a state that no longer exists, and writing it would freeze a schedule that is in fact progressing.
+        var rows = await dbContext.QueuedTasks
+                                  .Where(t => t.Id == parentId
+                                              && t.ScheduleVersion == expectedScheduleVersion
+                                              && t.NextRunUtc == cursor
+                                              && t.Status == expectedStatus)
+                                  .ExecuteUpdateAsync(s => s.SetProperty(t => t.RuntimeInfo, runtimeInfo), ct)
+                                  .ConfigureAwait(false);
+
+        return rows > 0;
+    }
+
+    /// <inheritdoc />
+    public virtual async Task<ScheduleCasResult> UpdateCurrentRun(Guid taskId, double executionTimeMs,
+                                                                  DateTimeOffset? nextRun, AuditLevel auditLevel,
+                                                                  int expectedScheduleVersion)
+    {
+        logger.UpdatingCurrentRun(taskId);
+
+        await using var dbContext = await contextFactory.CreateDbContextAsync().ConfigureAwait(false);
+        var             efContext = RequireRelational(dbContext);
+
+        var next = nextRun?.ToUniversalTime();
+
+        try
+        {
+            await using var transaction = await efContext.Database.BeginTransactionAsync().ConfigureAwait(false);
+
+            // The ErrorsOnly runs-audit gate depends on the ROW's own status/exception, so they are read
+            // inside the transaction, before the update leaves them untouched.
+            var audited = await dbContext.QueuedTasks
+                                         .AsNoTracking()
+                                         .Where(t => t.Id == taskId)
+                                         .Select(t => new { t.Status, t.Exception })
+                                         .FirstOrDefaultAsync()
+                                         .ConfigureAwait(false);
+
+            var rows = await dbContext.QueuedTasks
+                                      .Where(t => t.Id == taskId && t.ScheduleVersion == expectedScheduleVersion)
+                                      .ExecuteUpdateAsync(s => s
+                                                               .SetProperty(t => t.ExecutionTimeMs, executionTimeMs)
+                                                               .SetProperty(t => t.NextRunUtc, next)
+                                                               .SetProperty(t => t.CurrentRunCount, t => t.CurrentRunCount >= int.MaxValue ? int.MaxValue : (t.CurrentRunCount ?? 0) + 1))
+                                      .ConfigureAwait(false);
+
+            if (rows == 0)
+            {
+                await transaction.RollbackAsync().ConfigureAwait(false);
+                return ScheduleCasResult.VersionMismatch;
+            }
+
+            if (audited != null && AuditPolicy.ShouldCreateRunsAudit(auditLevel, audited.Status, audited.Exception))
+            {
+                dbContext.RunsAudit.Add(new RunsAudit
+                {
+                    QueuedTaskId    = taskId,
+                    ExecutedAt      = UtcNowNormalized,
+                    ExecutionTimeMs = executionTimeMs,
+                    Status          = audited.Status,
+                    Exception       = audited.Exception
+                });
+
+                await dbContext.SaveChangesAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+
+            await transaction.CommitAsync().ConfigureAwait(false);
+            return ScheduleCasResult.Applied;
+        }
+        catch (Exception e)
+        {
+            // Residual D: propagate, exactly like the unversioned overload — a failed counter persist must
+            // not let the scheduler advance on unpersisted state.
+            logger.CurrentRunUpdateFailed(e, taskId);
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public virtual async Task<ScheduleCasResult> CompleteRecurringRun(Guid taskId, double executionTimeMs,
+                                                                      DateTimeOffset? nextRun, AuditLevel auditLevel,
+                                                                      int expectedScheduleVersion)
+    {
+        logger.CompletingRecurringRun(taskId);
+
+        await using var dbContext = await contextFactory.CreateDbContextAsync().ConfigureAwait(false);
+        var             efContext = RequireRelational(dbContext);
+
+        var next = nextRun?.ToUniversalTime();
+        var now  = UtcNowNormalized;
+
+        try
+        {
+            await using var transaction = await efContext.Database.BeginTransactionAsync().ConfigureAwait(false);
+
+            var rows = await dbContext.QueuedTasks
+                                      .Where(t => t.Id == taskId && t.ScheduleVersion == expectedScheduleVersion)
+                                      .ExecuteUpdateAsync(s => s
+                                                               .SetProperty(t => t.Status, QueuedTaskStatus.Completed)
+                                                               .SetProperty(t => t.Exception, (string?)null)
+                                                               .SetProperty(t => t.LastExecutionUtc, now)
+                                                               .SetProperty(t => t.ExecutionTimeMs, executionTimeMs)
+                                                               .SetProperty(t => t.NextRunUtc, next)
+                                                               .SetProperty(t => t.CurrentRunCount, t => t.CurrentRunCount >= int.MaxValue ? int.MaxValue : (t.CurrentRunCount ?? 0) + 1))
+                                      .ConfigureAwait(false);
+
+            if (rows == 0)
+            {
+                await transaction.RollbackAsync().ConfigureAwait(false);
+                return ScheduleCasResult.VersionMismatch;
+            }
+
+            // The audited status and exception are the CONSTANTS Completed/null here, so both gates depend
+            // on the level alone — no pre-update read is needed.
+            var stageStatusAudit = AuditPolicy.ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Completed, null);
+            var stageRunsAudit   = AuditPolicy.ShouldCreateRunsAudit(auditLevel, QueuedTaskStatus.Completed, null);
+
+            if (stageStatusAudit)
+            {
+                dbContext.StatusAudit.Add(new StatusAudit
+                {
+                    QueuedTaskId = taskId,
+                    UpdatedAtUtc = now,
+                    NewStatus    = QueuedTaskStatus.Completed,
+                    Exception    = null
+                });
+            }
+
+            if (stageRunsAudit)
+            {
+                dbContext.RunsAudit.Add(new RunsAudit
+                {
+                    QueuedTaskId    = taskId,
+                    ExecutedAt      = now,
+                    ExecutionTimeMs = executionTimeMs,
+                    Status          = QueuedTaskStatus.Completed,
+                    Exception       = null
+                });
+            }
+
+            if (stageStatusAudit || stageRunsAudit)
+                await dbContext.SaveChangesAsync(CancellationToken.None).ConfigureAwait(false);
+
+            await transaction.CommitAsync().ConfigureAwait(false);
+            return ScheduleCasResult.Applied;
+        }
+        catch (Exception e)
+        {
+            logger.RecurringRunCompletionFailed(e, taskId);
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public virtual async Task<QueuedTask[]> GetOccurrences(Guid parentId, bool nonTerminalOnly = false,
+                                                           CancellationToken ct = default)
+    {
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+
+        var query = dbContext.QueuedTasks.AsNoTracking().Where(t => t.ParentTaskId == parentId);
+
+        if (nonTerminalOnly)
+            query = query.Where(NonTerminalOccurrence);
+
+        return await query.ToArrayAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public virtual async Task<int> CountActiveOccurrences(Guid parentId, CancellationToken ct = default)
+    {
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+
+        return await dbContext.QueuedTasks
+                              .AsNoTracking()
+                              .Where(t => t.ParentTaskId == parentId)
+                              .Where(NonTerminalOccurrence)
+                              .CountAsync(ct)
+                              .ConfigureAwait(false);
+    }
+
+    /// <summary>Server-side mirror of <see cref="QueuedTask.IsNonTerminalStatus"/>.</summary>
+    private static readonly Expression<Func<QueuedTask, bool>> NonTerminalOccurrence =
+        t => t.Status == QueuedTaskStatus.WaitingQueue
+             || t.Status == QueuedTaskStatus.Queued
+             || t.Status == QueuedTaskStatus.Pending
+             || t.Status == QueuedTaskStatus.InProgress
+             || t.Status == QueuedTaskStatus.ServiceStopped;
+
+    /// <summary>
+    /// The compare-and-swap predicate every cursor advance shares. The expected cursor is deliberately NOT
+    /// nullable: a null one would be translated to <c>NextRunUtc IS NULL</c> and match the finalized and
+    /// poisoned rows this predicate exists to exclude, so callers decide that case before they get here.
+    /// </summary>
+    private static IQueryable<QueuedTask> CursorCas(ITaskStoreDbContext dbContext, Guid parentId,
+                                                    int expectedScheduleVersion, DateTimeOffset expectedCursorUtc) =>
+        dbContext.QueuedTasks
+                 .Where(t => t.Id == parentId
+                             && t.ScheduleVersion == expectedScheduleVersion
+                             && t.NextRunUtc == expectedCursorUtc
+                             && t.Status != QueuedTaskStatus.Cancelled);
+
+    /// <summary>
+    /// Reads back a schedule whose cursor compare-and-swap found no row, and reports WHY. Purely
+    /// diagnostic for the caller's next decision — nothing was written either way.
+    /// </summary>
+    private static async Task<OccurrenceMaterializationOutcome> ClassifyMaterializationLossAsync(
+        ITaskStoreDbContext dbContext, Guid parentId, int expectedScheduleVersion, CancellationToken ct)
+    {
+        var current = await dbContext.QueuedTasks
+                                     .AsNoTracking()
+                                     .FirstOrDefaultAsync(t => t.Id == parentId, ct)
+                                     .ConfigureAwait(false);
+
+        // Gone, cancelled, or already finalized (a finished series has no cursor left to advance).
+        if (current == null || current.Status == QueuedTaskStatus.Cancelled || current.NextRunUtc == null)
+            return OccurrenceMaterializationOutcome.ParentInactive;
+
+        return current.ScheduleVersion != expectedScheduleVersion
+                   ? OccurrenceMaterializationOutcome.VersionMismatch
+                   : OccurrenceMaterializationOutcome.CursorMoved;
+    }
+
+    /// <summary>
+    /// Stages the status audit of a transition that already succeeded and commits the pair, so a refused
+    /// transition leaves no audit trace and a failed audit rolls the transition back.
+    /// </summary>
+    private static async Task CommitWithStatusAuditAsync(
+        ITaskStoreDbContext dbContext, IDbContextTransaction transaction, Guid taskId, QueuedTaskStatus status,
+        Exception? exception, AuditLevel auditLevel, DateTimeOffset now, CancellationToken ct)
+    {
+        if (AuditPolicy.ShouldCreateStatusAudit(auditLevel, status, exception))
+        {
+            dbContext.StatusAudit.Add(new StatusAudit
+            {
+                QueuedTaskId = taskId,
+                UpdatedAtUtc = now,
+                NewStatus    = status,
+                Exception    = exception.ToDetailedString()
+            });
+
+            await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Recognises the unique-index violation of (parent, slot) — by CONSTRAINT NAME, or by the columns SQLite
+    /// names instead of the index. Never by a generic duplicate-key code, which would also swallow a
+    /// <c>TaskKey</c> collision and report it as a slot that already exists.
+    /// </summary>
+    protected virtual bool IsOccurrenceUniqueViolation(DbUpdateException exception)
+    {
+        for (Exception? e = exception; e != null; e = e.InnerException)
+        {
+            if (e.Message.Contains("UX_QueuedTasks_Occurrence", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            // SQLite reports "UNIQUE constraint failed: QueuedTasks.ParentTaskId, ..." with no index name.
+            if (e.Message.Contains("UNIQUE constraint failed", StringComparison.OrdinalIgnoreCase)
+                && e.Message.Contains(nameof(QueuedTask.ParentTaskId), StringComparison.Ordinal)
+                && e.Message.Contains(nameof(QueuedTask.ScheduledExecutionUtc), StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Returns the context as a relational one, or refuses. Every caller is a conditional UPDATE inside a
+    /// transaction; a non-relational EF provider can express neither, and emulating one with a
+    /// read-then-write is exactly the race they exist to close.
+    /// </summary>
+    protected static DbContext RequireRelational(ITaskStoreDbContext dbContext)
+    {
+        if (dbContext is DbContext efContext && efContext.Database.IsRelational())
+            return efContext;
+
+        throw new NotSupportedException(
+            "Compare-and-swap storage operations (durable occurrences, schedule versioning, the recovery " +
+            "transition) require a relational EF Core provider.");
+    }
+
+    /// <summary>
+    /// Starts a transaction on a relational provider, or returns null on one that has no transactions (the
+    /// caller's writes are then applied as-is, which is all such a provider can offer).
+    /// </summary>
+    private static async Task<IDbContextTransaction?> BeginTransactionOrNullAsync(ITaskStoreDbContext dbContext,
+                                                                                  CancellationToken ct) =>
+        dbContext is DbContext efContext && efContext.Database.IsRelational()
+            ? await efContext.Database.BeginTransactionAsync(ct).ConfigureAwait(false)
+            : null;
 
     /// <inheritdoc />
     public async Task SaveExecutionLogsAsync(Guid taskId, IReadOnlyList<TaskExecutionLog> logs,
@@ -898,6 +1693,39 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                && !qt.IsRecurring
                && !dbContext.StatusAudit.Any(sa => sa.QueuedTaskId == qt.Id)
                && !dbContext.RunsAudit.Any(ra => ra.QueuedTaskId == qt.Id)
+               && (!preserveTasksWithLogs || !dbContext.TaskExecutionLogs.Any(l => l.TaskId == qt.Id))
+               && (qt.LastExecutionUtc ?? qt.CreatedAtUtc) < cutoff,
+            ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Deletes occurrence rows (those that name a schedule) in ANY terminal state — Completed, Failed or
+    /// Cancelled — older than <paramref name="cutoff"/>. Batched server-side delete.
+    /// </summary>
+    /// <remarks>
+    /// The ordinary completed-task purge only removes <c>Completed</c> rows with no audit trail left, which
+    /// would let a busy schedule's failed and cancelled occurrences accumulate without bound. What drives a
+    /// durable schedule forward is its cursor, never its past occurrence rows, so pruning them loses no
+    /// state. Schedule rows themselves are recurring and are never touched here.
+    /// </remarks>
+    /// <param name="cutoff">Age threshold: only occurrences last executed (or created) strictly before it are purged.</param>
+    /// <param name="preserveTasksWithLogs">
+    /// Same guard as <see cref="CleanupCompletedTasks"/>, for the same reason: deleting a row cascades to its
+    /// <c>TaskExecutionLog</c> rows, and the log passes run earlier in the same cycle, so any log still there
+    /// is one a configured log-retention window chose to keep. Without it a 7-day occurrence window would
+    /// destroy logs a 90-day window was holding.
+    /// </param>
+    /// <param name="ct">Cancellation token.</param>
+    public virtual async Task<int> CleanupTerminalOccurrences(DateTimeOffset cutoff, bool preserveTasksWithLogs,
+                                                              CancellationToken ct = default)
+    {
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+
+        return await BatchDeleteAsync(dbContext.QueuedTasks,
+            qt => qt.ParentTaskId != null
+               && (qt.Status == QueuedTaskStatus.Completed
+                   || qt.Status == QueuedTaskStatus.Failed
+                   || qt.Status == QueuedTaskStatus.Cancelled)
                && (!preserveTasksWithLogs || !dbContext.TaskExecutionLogs.Any(l => l.TaskId == qt.Id))
                && (qt.LastExecutionUtc ?? qt.CreatedAtUtc) < cutoff,
             ct).ConfigureAwait(false);

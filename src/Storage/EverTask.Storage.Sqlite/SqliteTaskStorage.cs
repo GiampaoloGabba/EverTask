@@ -14,37 +14,46 @@ public class SqliteTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 {
     private readonly ITaskStoreDbContextFactory _contextFactory = contextFactory;
 
+    /// <inheritdoc />
+    public override Task<QueuedTask[]> RetrievePending(DateTimeOffset? lastCreatedAt, Guid? lastId, int take,
+                                                       CancellationToken ct = default) =>
+        RetrievePending(DateTimeOffset.UtcNow, lastCreatedAt, lastId, take, ct);
+
     /// <summary>
-    /// Retrieves pending tasks using keyset pagination, applying RunUntil filtering in memory
-    /// to avoid SQLite DateTimeOffset comparison issues.
+    /// Retrieves pending tasks using keyset pagination, applying the temporal half of the recovery filter in
+    /// memory to avoid SQLite's DateTimeOffset comparison limits.
     /// </summary>
-    public override async Task<QueuedTask[]> RetrievePending(DateTimeOffset? lastCreatedAt, Guid? lastId, int take, CancellationToken ct = default)
+    /// <remarks>
+    /// Only the STATUS set is pushed down. The <c>MaxRuns</c> gate stays client-side too, because the second
+    /// recovery category — a series to finalize — is precisely a row whose run budget is spent, and a
+    /// server-side <c>MaxRuns</c> prefilter would drop exactly the rows this page must return.
+    /// </remarks>
+    public override async Task<QueuedTask[]> RetrievePending(DateTimeOffset nowUtc, DateTimeOffset? lastCreatedAt,
+                                                             Guid? lastId, int take, CancellationToken ct = default)
     {
         await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         logger.RetrievingPendingTasks(lastCreatedAt, lastId, take);
 
-        var now = DateTimeOffset.UtcNow;
-
-        // Query database with filters SQLite can handle
-        // Recoverable statuses: same rules as EfCoreTaskStorage.RetrievePending (see comments there)
+        // Recoverable statuses: same rules as EfCoreTaskStorage.RetrievePending (see comments there).
+        // Cancelled is the only status neither category can contain, so it is the one thing pruned here.
         var tasks = await dbContext.QueuedTasks
             .AsNoTracking()
-            .Where(t => (t.MaxRuns == null || (t.CurrentRunCount ?? 0) < t.MaxRuns)
-                        && (t.Status == QueuedTaskStatus.WaitingQueue ||
-                            t.Status == QueuedTaskStatus.Queued ||
-                            t.Status == QueuedTaskStatus.Pending ||
-                            t.Status == QueuedTaskStatus.ServiceStopped ||
-                            t.Status == QueuedTaskStatus.InProgress ||
-                            (t.IsRecurring && t.NextRunUtc != null &&
-                             (t.Status == QueuedTaskStatus.Completed ||
-                              t.Status == QueuedTaskStatus.Failed))))
+            .Where(t => t.Status == QueuedTaskStatus.WaitingQueue ||
+                        t.Status == QueuedTaskStatus.Queued ||
+                        t.Status == QueuedTaskStatus.Pending ||
+                        t.Status == QueuedTaskStatus.ServiceStopped ||
+                        t.Status == QueuedTaskStatus.InProgress ||
+                        (t.IsRecurring && t.NextRunUtc != null &&
+                         (t.Status == QueuedTaskStatus.Completed ||
+                          t.Status == QueuedTaskStatus.Failed)))
             .ToArrayAsync(ct)
             .ConfigureAwait(false);
 
-        // Apply RunUntil filter in memory (SQLite has issues with DateTimeOffset comparisons)
+        // X3, evaluated client-side: rows with work left to execute, plus recurring series that only need
+        // finalizing. Canonical predicates on QueuedTask — the same ones the other providers translate.
         var filtered = tasks
-            .Where(t => (t.RunUntil == null || t.RunUntil >= now)
+            .Where(t => (t.IsRecoverableForExecution(nowUtc) || t.IsRecurringSeriesToFinalize())
                         && (!lastCreatedAt.HasValue ||
                             t.CreatedAtUtc > lastCreatedAt.Value ||
                             (t.CreatedAtUtc == lastCreatedAt.Value && lastId.HasValue && t.Id.CompareTo(lastId.Value) > 0)))
@@ -56,23 +65,93 @@ public class SqliteTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         return filtered;
     }
 
+    /// <inheritdoc />
+    public override Task<bool> TrySetQueuedIfRecoverable(Guid taskId, AuditLevel auditLevel,
+                                                         CancellationToken ct = default) =>
+        TrySetQueuedIfRecoverable(DateTimeOffset.UtcNow, taskId, auditLevel, ct);
+
     /// <summary>
-    /// Evaluates the recoverable predicate client-side. The base conditional UPDATE compares
-    /// <c>RunUntil</c> (DateTimeOffset), which SQLite cannot translate — the same limitation that
-    /// forces the RetrievePending override. Going through the base method would throw and fall back
-    /// on every single recovered task; this override skips the untranslatable query entirely. The
-    /// transition and its audit are written in a single SaveChanges (one implicit SQLite
-    /// transaction), so the pair is atomic (L20).
+    /// Compare-and-swaps the recoverable transition, with only the untranslatable half of the predicate
+    /// decided in memory. The temporal term compares <c>RunUntil</c> (DateTimeOffset), which SQLite cannot
+    /// translate — the same limitation that forces the RetrievePending override — so the row is read first
+    /// and that term is evaluated on it; everything else stays in the WHERE clause of the UPDATE, next to a
+    /// by-value re-assertion of the two columns the in-memory half was decided from. The write is therefore
+    /// a real check-and-set: a Cancel (or any other transition) that linearizes between the read and the
+    /// write leaves no row to update and this caller loses, instead of overwriting it with Queued. The
+    /// transition and its audit commit together (L20).
     /// </summary>
-    public override async Task<bool> TrySetQueuedIfRecoverable(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default)
+    public override async Task<bool> TrySetQueuedIfRecoverable(DateTimeOffset nowUtc, Guid taskId,
+                                                               AuditLevel auditLevel, CancellationToken ct = default)
+    {
+        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        var             efContext = RequireRelational(dbContext);
+
+        // Read OUTSIDE the write transaction: a SELECT inside it would hold SQLite's shared lock until the
+        // commit, and the concurrent writer this compare-and-swap exists to lose against would hit
+        // "database is locked" instead of simply winning.
+        var observed = await dbContext.QueuedTasks
+                                      .AsNoTracking()
+                                      .FirstOrDefaultAsync(t => t.Id == taskId, ct)
+                                      .ConfigureAwait(false);
+
+        if (observed == null || !observed.IsRecoverableForExecution(nowUtc))
+        {
+            logger.TaskNoLongerRecoverable(taskId);
+            return false;
+        }
+
+        // Verbatim, NOT normalized to UTC: SQLite stores a DateTimeOffset as its formatted text, so equality
+        // is a byte comparison against exactly what was read back.
+        var expectedNextRun  = observed.NextRunUtc;
+        var expectedRunUntil = observed.RunUntil;
+
+        await using var transaction = await efContext.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+
+        var transitioned = await dbContext.QueuedTasks
+                                          .Where(t => t.Id == taskId)
+                                          .Where(RecoverableStatusAndBudget)
+                                          .Where(t => t.NextRunUtc == expectedNextRun && t.RunUntil == expectedRunUntil)
+                                          .ExecuteUpdateAsync(
+                                              s => s.SetProperty(t => t.Status, QueuedTaskStatus.Queued), ct)
+                                          .ConfigureAwait(false);
+
+        if (transitioned == 0)
+        {
+            await transaction.RollbackAsync(ct).ConfigureAwait(false);
+            logger.TaskNoLongerRecoverable(taskId);
+            return false;
+        }
+
+        await CommitQueuedTransitionAsync(dbContext, transaction, taskId, auditLevel, ct).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Occurrence cleanup with the age gate in memory: SQLite cannot translate the DateTimeOffset
+    /// comparison, the same limitation behind every other override here. The execution-log guard translates
+    /// and stays server-side, exactly as in <see cref="CleanupCompletedTasks"/>.
+    /// </summary>
+    public override async Task<int> CleanupTerminalOccurrences(DateTimeOffset cutoff, bool preserveTasksWithLogs,
+                                                               CancellationToken ct = default)
     {
         await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
-        var transitioned = await TrySetQueuedClientSideAsync(dbContext, taskId, DateTimeOffset.UtcNow, auditLevel, ct).ConfigureAwait(false);
-        if (!transitioned)
-            logger.TaskNoLongerRecoverable(taskId);
+        var candidates = await dbContext.QueuedTasks
+            .Where(qt => qt.ParentTaskId != null
+                      && (qt.Status == QueuedTaskStatus.Completed
+                          || qt.Status == QueuedTaskStatus.Failed
+                          || qt.Status == QueuedTaskStatus.Cancelled)
+                      && (!preserveTasksWithLogs || !dbContext.TaskExecutionLogs.Any(l => l.TaskId == qt.Id)))
+            .Select(qt => new { qt.Id, qt.LastExecutionUtc, qt.CreatedAtUtc })
+            .ToListAsync(ct).ConfigureAwait(false);
 
-        return transitioned;
+        var ids = candidates
+            .Where(c => (c.LastExecutionUtc ?? c.CreatedAtUtc) < cutoff)
+            .Select(c => c.Id)
+            .ToList();
+
+        return await DeleteByIdsAsync(dbContext.QueuedTasks, ids,
+            (set, batch) => set.Where(qt => batch.Contains(qt.Id)), ct).ConfigureAwait(false);
     }
 
     // ---- Retention cleanup (SQLite overrides) -----------------------------------------------------

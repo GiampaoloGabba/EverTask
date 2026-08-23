@@ -29,6 +29,22 @@ overrides 9).
   together; no stored object, no migration). Audit gates: `SetStatus` decides in C#, `UpdateCurrentRun` decides
   **server-side** from the row's `Status`/`Exception` read via `RETURNING`, `CompleteRecurringRun` audits
   constants. `SetStatus` swallows, the other two rethrow. The run counter saturates at `int.MaxValue`.
+- Durable occurrences: `MaterializeOccurrence` and the CAS advances are single writable CTEs.
+  `MaterializeOccurrence` decides the outcome server-side in a `decision` CTE and returns it, with
+  `FOR UPDATE` on the schedule row serializing two materializers on the same cursor.
+- **`CancelSchedule` is the one that cannot be a single statement**: `SELECT … FOR UPDATE` on the schedule
+  row, then the cancelling CTE, inside one transaction. Under READ COMMITTED a statement runs on a snapshot
+  taken BEFORE it waits on a row lock, so an occurrence a materializer commits while the cancel is blocked is
+  invisible to it — the schedule would end up `Cancelled` with a fresh `WaitingQueue` child free to run.
+  Taking the materializer's own lock first gives the next statement a snapshot that contains the child. The
+  procedure-based providers get this for free (their second UPDATE re-reads under locking read committed). A CTE's outcome is
+  read with `ExecuteScalar` through ADO, not `ExecuteSqlRaw`: that only reports affected rows, and for a
+  data-modifying CTE the count belongs to the outer statement. **Give every nullable parameter an explicit
+  `NpgsqlDbType`** — one appearing only in `CASE` / `IS NULL` positions has no inferable type and PostgreSQL
+  rejects the whole statement (`42P08`).
+- The occurrence unique index needs no filter: PostgreSQL treats NULLs as distinct. The check constraint
+  `CK_QueuedTasks_OccurrenceSlot` is the ONE place the shared model is not portable — `PostgresTaskStoreContext`
+  overrides `OccurrenceSlotCheckSql` with quoted column names, because unquoted ones fold to lowercase.
 - Tests: `test/EverTask.Tests.Storage/PostgresEfCoreTaskStorageTests.cs` (Testcontainers `postgres:16-alpine`,
   Respawn `DbAdapter.Postgres` with `SchemasToInclude=["public","evertask"]` — without `evertask` Respawn
   silently cleans nothing).

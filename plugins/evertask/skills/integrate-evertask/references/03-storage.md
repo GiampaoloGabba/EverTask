@@ -131,8 +131,13 @@ services.AddAuditCleanup(AuditRetentionPolicy retentionPolicy, int cleanupInterv
 Factories: `AuditRetentionPolicy.WithUniformRetention(days)`,
 `AuditRetentionPolicy.WithErrorPriority(successRetentionDays, errorRetentionDays)`. Individually
 settable: `StatusAuditRetentionDays`, `RunsAuditRetentionDays`, `ErrorAuditRetentionDays`,
-`ExecutionLogRetentionDays`, `MaxExecutionLogsPerTask`, `DeleteCompletedTasksAfterRetention` (all
-`null` = unlimited). The cleanup service also exposes `AuditCleanupOptions.CleanupInterval` (default
+`ExecutionLogRetentionDays`, `MaxExecutionLogsPerTask`, `OccurrenceRetentionDays`,
+`DeleteCompletedTasksAfterRetention` (all `null` = unlimited). `OccurrenceRetentionDays` prunes the
+finished occurrences of a durable recurring schedule in ANY terminal state (Completed, Failed and
+Cancelled), which `DeleteCompletedTasksAfterRetention` does not: that one only removes completed rows
+with no audit trail left. Both skip a row that still owns execution logs while a log-retention
+window/cap is active, so a short occurrence window never cascade-deletes logs a long log window kept.
+The cleanup service also exposes `AuditCleanupOptions.CleanupInterval` (default
 24h, from the `cleanupIntervalHours` arg) and `InitialDelay` (default 1 min before the first sweep).
 Requires an EF Core storage; warns + disables itself for custom non-EF storage.
 
@@ -142,7 +147,10 @@ Requires an EF Core storage; warns + disables itself for custom non-EF storage.
 row. Useful public read members for building status/inspection logic without reading source:
 `Status`, `CurrentRunCount`, `MaxRuns`, `NextRunUtc`, `RunUntil`, `TaskKey`, `QueueName`,
 `LastExecutionUtc`, `ExecutionTimeMs`, the `StatusAudits` / `RunsAudits` / `ExecutionLogs`
-collections, and the `IsRecoverable(now)` predicate.
+collections, and the recovery predicates `IsRecoverableForExecution(now)` /
+`IsRecurringSeriesToFinalize()` (`IsRecoverable(now)` is the former under its historical name).
+Durable recurring schedules add `ParentTaskId` (null on every ordinary row), `RuntimeInfo` and
+`ScheduleVersion`.
 
 ## Custom storage
 
@@ -156,9 +164,25 @@ Key surface: `Get/GetAll/Persist/UpdateTask/Remove`, `RetrievePending` (keyset r
 
 Critical: make `TrySetQueuedIfRecoverable` an **atomic conditional UPDATE** (the default fallback
 is non-atomic read-then-write → recovery double-execution); make the recurring helpers
-single-transaction; forward `AuditLevel`; match recoverable statuses to `QueuedTask.IsRecoverable`
-(`WaitingQueue, Queued, Pending, InProgress, ServiceStopped` + recurring tasks with a next run).
-Optionally implement `ITaskStorageStatistics` to avoid O(backlog) reads in the dashboard.
+single-transaction; forward `AuditLevel`; match recoverable statuses to
+`QueuedTask.IsRecoverableForExecution` (`WaitingQueue, Queued, Pending, InProgress, ServiceStopped` +
+recurring tasks with a next run). Optionally implement `ITaskStorageStatistics` to avoid O(backlog)
+reads in the dashboard.
+
+`RetrievePending` must return TWO categories: rows still to EXECUTE
+(`QueuedTask.IsRecoverableForExecution(now)`) and recurring series that only need FINALIZING
+(`QueuedTask.IsRecurringSeriesToFinalize()` — every remaining slot past `RunUntil`, or the run budget
+spent). `TrySetQueuedIfRecoverable` applies only the first, so a spent series is never handed back to a
+worker queue. Both members also have a `nowUtc` overload that the core always calls: the defaults
+delegate to the legacy signatures, so an existing storage keeps working but resolves the clock itself.
+
+Durable recurring schedules need atomic operations that no non-atomic emulation can provide
+(`MaterializeOccurrence`, `CancelSchedule`, `RequeueTerminal`, `TryRequeueStaleOccurrence`,
+`UpdateSchedule`, `TryHaltSchedule`, `TrySetRecurringSeriesCompleted` and the compare-and-swap overloads
+of `UpdateCurrentRun` / `CompleteRecurringRun`). They default to throwing `NotSupportedException`, gated
+by `SupportsDurableOccurrences` / `SupportsScheduleVersioning` (both `false` by default). Implement them
+atomically before flipping either flag — a "best effort" version built from two writes is exactly the
+crash window they exist to close.
 
 > To add a new **EF Core relational** provider package (MySQL, Oracle, …), use the separate
 > `new-relational-storage-provider` skill: it has the mandatory per-DB verification matrix.

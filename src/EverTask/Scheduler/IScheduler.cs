@@ -44,4 +44,17 @@ public interface IScheduler
     /// it with a real lookup.
     /// </remarks>
     bool IsScheduled(Guid persistenceId) => true;
+
+    /// <summary>
+    /// True when <see cref="IsScheduled"/> answers from a real registry lookup rather than the
+    /// conservative "assume scheduled" default.
+    /// </summary>
+    /// <remarks>
+    /// The durable-occurrence reconciliation asks "is this occurrence still parked anywhere?" to tell a lost
+    /// registration from a live one. With the default <see cref="IsScheduled"/> the answer is always yes,
+    /// which is safe for the gate's cleanup but useless as evidence: a scheduler that cannot introspect must
+    /// say so, and reconciliation is then disabled rather than trusting a constant. Defaults to false so an
+    /// external scheduler compiled before this member is never mistaken for one that can.
+    /// </remarks>
+    bool SupportsScheduleInspection => false;
 }

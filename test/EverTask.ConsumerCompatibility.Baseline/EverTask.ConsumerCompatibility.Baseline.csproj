@@ -1,0 +1,31 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    A CONSUMER, compiled against the packages master shipped BEFORE durable occurrences (the issue23-baseline
+    tag, packed into nupkg/issue23-baseline and restored through the local feed in NuGet.config). Nothing in
+    here is run against those packages: EverTask.Tests references this project and hands its methods the
+    CURRENT assemblies instead, so every call site is resolved by the CLR against today's metadata.
+
+    That is what makes it a binary-compatibility proof rather than a source-compatibility one. The C# compiler
+    bakes the resolved signature into each call — including the defaults of optional parameters — so a method
+    or constructor that merely GREW an optional parameter no longer has the signature this assembly asks for,
+    and the call fails at run time with a MissingMethodException. A test project that simply recompiles
+    against the new sources can never see that.
+
+    PrivateAssets="all" keeps the baseline packages from flowing to EverTask.Tests: the fixture DLL travels,
+    the 3.11 assemblies do not, so at run time the only EverTask on disk is the one being validated.
+  -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <IsPackable>false</IsPackable>
+    <!-- The baseline is what it is: its own analyzer warnings are not this repository's business today. -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);NU1701</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="EverTask" Version="3.11.0-issue23baseline" PrivateAssets="all" />
+    <PackageReference Include="EverTask.Abstractions" Version="3.11.0-issue23baseline" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

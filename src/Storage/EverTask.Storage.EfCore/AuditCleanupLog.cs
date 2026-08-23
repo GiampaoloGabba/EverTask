@@ -30,9 +30,9 @@ internal static partial class AuditCleanupLog
     public static partial void CleanupCycleStarting(this ILogger logger);
 
     [LoggerMessage(EventId = 2106, Level = LogLevel.Information,
-        Message = "Cleanup complete. Deleted {StatusCount} status audits, {RunsCount} runs audits, {LogCount} execution logs, {TasksCount} completed tasks")]
+        Message = "Cleanup complete. Deleted {StatusCount} status audits, {RunsCount} runs audits, {LogCount} execution logs, {TasksCount} completed tasks, {OccurrenceCount} terminal occurrences")]
     public static partial void CleanupComplete(this ILogger logger, int statusCount, int runsCount, int logCount,
-                                               int tasksCount);
+                                               int tasksCount, int occurrenceCount);
 
     [LoggerMessage(EventId = 2107, Level = LogLevel.Warning,
         Message = "AuditRetentionPolicy.{Knob} is {Value} (<= 0) and is treated as DISABLED. " +

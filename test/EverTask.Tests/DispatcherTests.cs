@@ -3,6 +3,7 @@ using EverTask.Handler;
 using EverTask.Logger;
 using EverTask.RateLimiting;
 using EverTask.Scheduler;
+using EverTask.Scheduler.Recurring;
 using EverTask.Scheduler.Recurring.Intervals;
 using UUIDNext;
 
@@ -91,6 +92,39 @@ public class DispatcherTests
     {
         var task = new TestTaskRequest("Test request");
         await Assert.ThrowsAsync<ArgumentNullException>(() => _dispatcher.Dispatch(task));
+    }
+
+    [Theory]
+    [InlineData(2)]
+    [InlineData(-1)]
+    public async Task Should_reject_a_schedule_whose_occurrence_mode_is_not_a_defined_value(int raw)
+    {
+        // T10: the dispatch entry point validates the schedule it is handed. The fluent builder cannot produce
+        // this, but ExecuteDispatch is public and takes a RecurringTask directly, and an undefined mode is
+        // read as "not Durable" by every consumer downstream — the inline path, silently, for a schedule
+        // whose metadata says something the library does not understand.
+        var recurring = new RecurringTask
+        {
+            SecondInterval = new SecondInterval(30),
+            OccurrenceMode = (OccurrenceMode)raw
+        };
+
+        await Should.ThrowAsync<ArgumentException>(() =>
+            _dispatcher.ExecuteDispatch(new TestTaskRequest2(), null, recurring));
+
+        _workerQueueMock.Verify(q => q.Queue(It.IsAny<TaskHandlerExecutor>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task Should_reject_a_schedule_with_a_corrupt_interval_at_dispatch()
+    {
+        // Same guard, the ordinary case: corrupt-but-deserializable schedule metadata is refused where it
+        // enters, not several layers down at the first next-run computation.
+        var recurring = new RecurringTask { CronInterval = new CronInterval("not a cron") };
+
+        await Should.ThrowAsync<Exception>(() =>
+            _dispatcher.ExecuteDispatch(new TestTaskRequest2(), null, recurring));
     }
 
     [Fact]

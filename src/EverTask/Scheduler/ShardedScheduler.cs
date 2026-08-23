@@ -44,18 +44,24 @@ public class ShardedScheduler : IScheduler, IDisposable
         private readonly IWorkerQueueManager _queueManager;
         private readonly IEverTaskLogger<ShardedScheduler> _logger;
         private readonly ShardedScheduler _owner;
+        private readonly TimeProvider _timeProvider;
         private readonly int _shardId;
         private int _wakeUpPending;
         private volatile bool _disposed;
+
+        // Kept across loop iterations when the delay wins the race: see WaitForWakeUpAsync.
+        private Task? _pendingSignalWait;
 
         public Shard(
             int shardId,
             ShardedScheduler owner,
             IWorkerQueueManager queueManager,
-            IEverTaskLogger<ShardedScheduler> logger)
+            IEverTaskLogger<ShardedScheduler> logger,
+            TimeProvider timeProvider)
         {
             _shardId        = shardId;
             _owner          = owner;
+            _timeProvider   = timeProvider;
             _queue          = new();
             _scheduledItems = new();
             _wakeUpSignal   = new(0, 1);
@@ -153,12 +159,12 @@ public class ShardedScheduler : IScheduler, IDisposable
                     if (delay == Timeout.InfiniteTimeSpan)
                     {
                         _logger.ShardQueueEmpty(_shardId);
-                        await _wakeUpSignal.WaitAsync(ct).ConfigureAwait(false);
+                        await WaitForWakeUpAsync(null, ct).ConfigureAwait(false);
                         Interlocked.Exchange(ref _wakeUpPending, 0);
                     }
                     else
                     {
-                        var signaled = await _wakeUpSignal.WaitAsync(delay, ct).ConfigureAwait(false);
+                        var signaled = await WaitForWakeUpAsync(delay, ct).ConfigureAwait(false);
                         if (signaled)
                         {
                             Interlocked.Exchange(ref _wakeUpPending, 0);
@@ -185,13 +191,58 @@ public class ShardedScheduler : IScheduler, IDisposable
         }
 
         /// <summary>
+        /// Sleeps until either the wake-up signal arrives or <paramref name="waitTime"/> elapses on the
+        /// scheduling clock (null waits for the signal only). Returns true when the signal won. Mirrors
+        /// <c>PeriodicTimerScheduler.WaitForWakeUpAsync</c> — see it for why this is a race instead of
+        /// <c>SemaphoreSlim.WaitAsync(timeout)</c> and why the signal waiter survives a lost race.
+        /// </summary>
+        private async Task<bool> WaitForWakeUpAsync(TimeSpan? waitTime, CancellationToken ct)
+        {
+            _pendingSignalWait ??= _wakeUpSignal.WaitAsync(ct);
+
+            if (waitTime == null)
+            {
+                await _pendingSignalWait.ConfigureAwait(false);
+                _pendingSignalWait = null;
+                return true;
+            }
+
+            using var delayCts  = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var       delayTask = Task.Delay(waitTime.Value, _timeProvider, delayCts.Token);
+
+            var winner = await Task.WhenAny(_pendingSignalWait, delayTask).ConfigureAwait(false);
+
+            if (ReferenceEquals(winner, delayTask))
+            {
+                await delayTask.ConfigureAwait(false); // surfaces shutdown cancellation to the loop
+                return false;
+            }
+
+            var signalWait = _pendingSignalWait;
+            _pendingSignalWait = null;
+
+            await delayCts.CancelAsync().ConfigureAwait(false);
+            try
+            {
+                await delayTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected: we cancelled it ourselves after the signal won.
+            }
+
+            await signalWait.ConfigureAwait(false); // surfaces shutdown cancellation to the loop
+            return true;
+        }
+
+        /// <summary>
         /// Calculates the delay until the next task needs to be processed.
         /// </summary>
         private TimeSpan CalculateNextDelay()
         {
             if (_queue.TryPeek(out _, out var nextScheduledTime))
             {
-                var delay = nextScheduledTime - DateTimeOffset.UtcNow;
+                var delay = nextScheduledTime - _timeProvider.GetUtcNow();
 
                 if (delay < TimeSpan.Zero)
                     return TimeSpan.Zero;
@@ -211,7 +262,7 @@ public class ShardedScheduler : IScheduler, IDisposable
         /// </summary>
         private async Task ProcessReadyTasks()
         {
-            var now = DateTimeOffset.UtcNow;
+            var now = _timeProvider.GetUtcNow();
 
             while (_queue.TryPeek(out var item, out var scheduledTime) && scheduledTime <= now)
             {
@@ -230,7 +281,7 @@ public class ShardedScheduler : IScheduler, IDisposable
                     // previous delivery of the same task was still unwinding. Retry later without
                     // stalling this shard.
                     _logger.ShardTaskNotEnqueued(_shardId, item.PersistenceId, result, _owner.FullQueueRetryDelay);
-                    _queue.Enqueue(item, DateTimeOffset.UtcNow + _owner.FullQueueRetryDelay);
+                    _queue.Enqueue(item, _timeProvider.GetUtcNow() + _owner.FullQueueRetryDelay);
                 }
                 else
                 {
@@ -309,11 +360,31 @@ public class ShardedScheduler : IScheduler, IDisposable
     /// <param name="logger">Logger instance.</param>
     /// <param name="taskStorage">Optional task storage for persisting task states.</param>
     /// <param name="shardCount">Number of independent shards. 0 = auto-scale to ProcessorCount (minimum 4).</param>
+    /// <remarks>
+    /// The pre-P9 arity, kept as a real overload so an assembly compiled against the previous release still
+    /// binds (P6/X6); the scheduling clock arrives through the overload below.
+    /// </remarks>
     public ShardedScheduler(
         IWorkerQueueManager queueManager,
         IEverTaskLogger<ShardedScheduler> logger,
-        ITaskStorage? taskStorage = null, // kept for signature compatibility (no longer used)
+        ITaskStorage? taskStorage = null,
         int shardCount = 0)
+        : this(queueManager, logger, taskStorage, shardCount, null) { }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ShardedScheduler"/> class on an explicit scheduling clock.
+    /// </summary>
+    /// <param name="queueManager">Worker queue manager for task dispatching.</param>
+    /// <param name="logger">Logger instance.</param>
+    /// <param name="taskStorage">Optional task storage for persisting task states.</param>
+    /// <param name="shardCount">Number of independent shards. 0 = auto-scale to ProcessorCount (minimum 4).</param>
+    /// <param name="timeProvider">The scheduling clock (P9). Null falls back to the real clock.</param>
+    public ShardedScheduler(
+        IWorkerQueueManager queueManager,
+        IEverTaskLogger<ShardedScheduler> logger,
+        ITaskStorage? taskStorage, // kept for signature compatibility (no longer used)
+        int shardCount,
+        TimeProvider? timeProvider)
     {
         _ = taskStorage;
         _logger     = logger;
@@ -321,8 +392,10 @@ public class ShardedScheduler : IScheduler, IDisposable
 
         _logger.InitializingShardedScheduler(_shardCount);
 
+        var clock = timeProvider ?? TimeProvider.System;
+
         _shards = Enumerable.Range(0, _shardCount)
-                            .Select(i => new Shard(i, this, queueManager, logger))
+                            .Select(i => new Shard(i, this, queueManager, logger, clock))
                             .ToArray();
     }
 
@@ -355,6 +428,9 @@ public class ShardedScheduler : IScheduler, IDisposable
 
     /// <inheritdoc />
     public bool IsScheduled(Guid persistenceId) => GetShard(persistenceId).IsScheduled(persistenceId);
+
+    /// <inheritdoc />
+    public bool SupportsScheduleInspection => true;
 
     /// <summary>Test seam (CU19): entries in the priority queue of the shard owning this task id.</summary>
     internal int GetQueueCount(Guid persistenceId) => GetShard(persistenceId).QueueCount;

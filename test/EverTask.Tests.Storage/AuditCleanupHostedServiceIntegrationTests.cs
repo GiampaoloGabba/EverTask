@@ -9,10 +9,11 @@ using Xunit;
 namespace EverTask.Tests.Storage;
 
 /// <summary>
-/// End-to-end integration test: runs the real <see cref="AuditCleanupHostedService"/> against a real
-/// SQLite database and verifies that one cleanup cycle trims aged execution logs AND aged status audits.
-/// SQLite is the provider that cannot translate DateTimeOffset comparisons server-side, so this is the
-/// end-to-end proof that the client-side cleanup path works through the hosted service wiring.
+/// End-to-end integration tests: they run the real <see cref="AuditCleanupHostedService"/> against a real
+/// SQLite database and verify that one cleanup cycle trims aged execution logs, aged status audits and the
+/// aged occurrences of a durable schedule. SQLite is the provider that cannot translate DateTimeOffset
+/// comparisons server-side, so this is the end-to-end proof that the client-side cleanup path works through
+/// the hosted service wiring — and that every knob on the policy the service is given reaches its pass.
 /// </summary>
 public sealed class AuditCleanupHostedServiceIntegrationTests : IDisposable
 {
@@ -32,7 +33,8 @@ public sealed class AuditCleanupHostedServiceIntegrationTests : IDisposable
             o.RetentionPolicy = new AuditRetentionPolicy
             {
                 StatusAuditRetentionDays  = 7,
-                ExecutionLogRetentionDays = 7
+                ExecutionLogRetentionDays = 7,
+                OccurrenceRetentionDays   = 7
             };
             o.InitialDelay    = TimeSpan.Zero;                 // run the first cycle immediately
             o.CleanupInterval = TimeSpan.FromMilliseconds(100);
@@ -94,6 +96,84 @@ public sealed class AuditCleanupHostedServiceIntegrationTests : IDisposable
             await service.StopAsync(CancellationToken.None);
         }
     }
+
+    [Fact]
+    public async Task Should_prune_aged_occurrences_of_a_durable_schedule_through_the_hosted_service()
+    {
+        // The occurrence window is a knob on the SAME policy object the service reads, so nothing but a test
+        // that goes through the real hosted service proves it is wired at all: an unread property compiles,
+        // documents beautifully and prunes nothing. The row set also pins the log guard end to end — the
+        // flag the service derives from ExecutionLogRetentionDays, not a bool a caller passed by hand.
+        var now = DateTimeOffset.UtcNow;
+
+        var schedule = new QueuedTask
+        {
+            Id           = Guid.NewGuid(),
+            CreatedAtUtc = now.AddDays(-365),
+            Type         = "DurableSchedule",
+            Request      = "{}",
+            Handler      = "DurableHandler",
+            Status       = QueuedTaskStatus.Queued,
+            IsRecurring  = true,
+            NextRunUtc   = now.AddMinutes(5)
+        };
+
+        var aged     = Occurrence(schedule.Id, now.AddDays(-30));
+        var recent   = Occurrence(schedule.Id, now.AddDays(-1));
+        var withLogs = Occurrence(schedule.Id, now.AddDays(-31));
+
+        // One day old: inside the 7-day log window, so the log passes keep it and it must keep its occurrence.
+        var keptLog = new TaskExecutionLog
+        {
+            Id             = Guid.NewGuid(),
+            TaskId         = withLogs.Id,
+            TimestampUtc   = now.AddDays(-1),
+            Level          = "Information",
+            Message        = "kept by the log window",
+            SequenceNumber = 0
+        };
+        withLogs.ExecutionLogs.Add(keptLog);
+
+        _ctx.QueuedTasks.AddRange(schedule, aged, recent, withLogs);
+        await _ctx.SaveChangesAsync(CancellationToken.None);
+
+        var service = _provider.GetRequiredService<AuditCleanupHostedService>();
+        using var cts = new CancellationTokenSource();
+        await service.StartAsync(cts.Token);
+
+        try
+        {
+            var agedGone = false;
+            for (var i = 0; i < 100 && !agedGone; i++)
+            {
+                await Task.Delay(100, cts.Token);
+                agedGone = _ctx.QueuedTasks.Count(x => x.Id == aged.Id) == 0;
+            }
+
+            agedGone.ShouldBeTrue("the hosted service should have pruned the 30-day-old occurrence");
+            _ctx.QueuedTasks.Count(x => x.Id == recent.Id).ShouldBe(1, "the 1-day-old occurrence is inside the window");
+            _ctx.QueuedTasks.Count(x => x.Id == withLogs.Id).ShouldBe(1, "an occurrence still owning a kept log survives");
+            _ctx.TaskExecutionLogs.Count(x => x.Id == keptLog.Id).ShouldBe(1, "and so does the log itself");
+            _ctx.QueuedTasks.Count(x => x.Id == schedule.Id).ShouldBe(1, "the schedule row is never pruned");
+        }
+        finally
+        {
+            await service.StopAsync(CancellationToken.None);
+        }
+    }
+
+    private static QueuedTask Occurrence(Guid scheduleId, DateTimeOffset finishedAt) => new()
+    {
+        Id                    = Guid.NewGuid(),
+        CreatedAtUtc          = finishedAt,
+        LastExecutionUtc      = finishedAt,
+        ScheduledExecutionUtc = finishedAt,
+        Type                  = "DurableSchedule",
+        Request               = "{}",
+        Handler               = "DurableHandler",
+        Status                = QueuedTaskStatus.Completed,
+        ParentTaskId          = scheduleId
+    };
 
     public void Dispose()
     {

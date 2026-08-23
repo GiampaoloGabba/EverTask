@@ -19,10 +19,12 @@ Pomelo), which publishes EF Core 9 and 10 but **no EF Core 8 build** — hence t
 - **GUID generator: `UUIDNext.Database.PostgreSql`, NEVER `.SqlServer`.** `Guid` maps to `char(36)`
   (`ascii_general_ci`); a UUIDv7 canonical string sorts temporally, keeping the `(CreatedAtUtc, Id)` keyset and
   the recovery index efficient. `.SqlServer` (v8) reorders bytes and breaks that string ordering.
-- `CleanupCompletedTasks` is the one cleanup-path override: a `DELETE … LIMIT` does not reliably honor a
-  correlated `EXISTS` in its `WHERE`, so the `preserveTasksWithLogs` guard was dropped and completed tasks that
-  still owned logs got purged. The override resolves the ids with a `SELECT` and deletes by primary key in
-  `CleanupBatchSize` batches (`DeleteByIdsAsync`). The other `Cleanup*` methods inherit the base.
+- `CleanupCompletedTasks` and `CleanupTerminalOccurrences` are the cleanup-path overrides — the two that carry
+  the `preserveTasksWithLogs` guard: a `DELETE … LIMIT` does not reliably honor a correlated `EXISTS` in its
+  `WHERE`, so the guard was dropped and rows that still owned logs got purged, cascade-deleting them. Both
+  overrides resolve the ids with a `SELECT` and delete by primary key in `CleanupBatchSize` batches
+  (`DeleteByIdsAsync`). Any future cleanup with an `EXISTS` guard needs the same shape; the ones without one
+  inherit the base.
 - Phase 2 (`Migrations/20260629214027_AddHotWriteStoredProcedures.cs`): MySQL has read-only CTEs and no
   `UPDATE … RETURNING`, so the three hot writes are stored procedures, each a single
   `START TRANSACTION … COMMIT` with an `EXIT HANDLER FOR SQLEXCEPTION` that rolls back and `RESIGNAL`s.
@@ -30,6 +32,14 @@ Pomelo), which publishes EF Core 9 and 10 but **no EF Core 8 build** — hence t
   `taskId.ToString()`); `DROP` and `CREATE PROCEDURE` are separate `Sql(…, suppressTransaction: true)` calls
   (MySQL DDL implicitly commits); no `DELIMITER` is needed — that is a CLI-only construct, the driver sends
   the whole `CREATE PROCEDURE` as one statement.
+- Durable occurrences add four more procs (`Migrations/…_AddDurableOccurrences.cs`):
+  `usp_MaterializeOccurrence`, `usp_CancelSchedule`, `usp_UpdateCurrentRunCas`, `usp_CompleteRecurringRunCas`.
+  They report their outcome through an **OUT parameter**, which the driver only binds with
+  `CommandType.StoredProcedure` — raw SQL cannot set it, so `MySqlTaskStorage.CallProcedureAsync` goes through
+  ADO with EF-managed `OpenConnectionAsync` / `CloseConnectionAsync`. The schedule row is read `FOR UPDATE`
+  (a `ROW_COUNT()` guess would be wrong anyway: MySQL reports CHANGED rows, not matched ones), and
+  `usp_CancelSchedule` inserts the child audits BEFORE the update that cancels them, since MySQL has no
+  `OUTPUT` clause.
 - `IX_QueuedTasks_Recovery` is a plain composite on `(CreatedAtUtc, Id)`: MySQL/MariaDB support neither
   `INCLUDE` columns nor partial indexes, so the recoverable-status predicate is a runtime filter. It is
   hand-added in the Initial migration via `CreateIndex`, kept out of the model.

@@ -54,4 +54,17 @@ Fluent builder (`Builder/RecurringTaskBuilder.cs`) + occurrence math (`Recurring
      until strictly after `now` — pinned by the `RecurringTests/RecurringCalendarSkipForwardTests.cs` property
      test and `RecurringSkipForwardHardeningTests.cs`.
 
+8. **Ask the grid through `IScheduleEvaluator`.** The dispatcher, the worker and the recovery never call the
+   occurrence math directly. `ScheduleEvaluator` wraps the pure primitives synchronously today; the async
+   shape is for the occurrence provider that arrives later. It also owns the one genuinely new question:
+   `NextGridOccurrenceAfter`, the natural successor computed while IGNORING `RunUntil`/`MaxRuns` (on a
+   shallow copy — the live definition is never mutated). The recovery grace window needs it because the
+   bounded successor returns null both when the slot is still current and when the series simply ended.
+   `EnumerateDueSlotsAsync` (V3) answers the other half: which slots the grid already owes at a given now,
+   oldest first, from the schedule's cursor. Its `cap` is **mandatory**, not a courtesy — a one-second grid
+   left behind by a long downtime owes millions of slots — and it applies neither the run budget nor a
+   misfire policy: it reports what the grid owes, and phase 4 decides which of those become occurrences.
+9. **`CalculateNextRun`, `GetMinimumInterval` and `CalculateNextValidRun` take an optional `nowUtc`** (P9).
+   The scheduling path always passes it; null falls back to the real clock for callers outside it.
+
 Builder and per-interval tests: `test/EverTask.Tests/RecurringTests/Builders/` and `.../Intervals/`.

@@ -31,8 +31,13 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
     private readonly CancellationTokenSource _cts;
     private readonly CancellationToken _shutdownToken;
     private readonly SemaphoreSlim _wakeUpSignal;
+    private readonly TimeProvider _timeProvider;
     private int _wakeUpPending;
     private volatile bool _disposed;
+
+    // The wake-up wait carried across loop iterations. See WaitForWakeUpAsync: when the delay wins the
+    // race the same waiter is reused, so a Release issued meanwhile is never swallowed by an abandoned one.
+    private Task? _pendingSignalWait;
 
     /// <summary>
     /// Delay before retrying the dispatch of a due task whose target queue is full.
@@ -45,15 +50,29 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
     internal TimeSpan LastCalculatedDelay { get; private set; }
 #endif
 
+    /// <summary>
+    /// The pre-P9 constructor, kept as a real overload so an assembly compiled against the previous release
+    /// still binds (P6/X6); the scheduling clock arrives through the overload below, which the container
+    /// picks because it is the longest one it can satisfy.
+    /// </summary>
     public PeriodicTimerScheduler(
         IWorkerQueueManager queueManager,
         IEverTaskLogger<PeriodicTimerScheduler> logger,
         TimeSpan? checkInterval = null,
         ITaskStorage? taskStorage = null) // taskStorage kept for signature compatibility (no longer used)
+        : this(queueManager, logger, checkInterval, taskStorage, null) { }
+
+    public PeriodicTimerScheduler(
+        IWorkerQueueManager queueManager,
+        IEverTaskLogger<PeriodicTimerScheduler> logger,
+        TimeSpan? checkInterval,
+        ITaskStorage? taskStorage, // kept for signature compatibility (no longer used)
+        TimeProvider? timeProvider)
     {
         _queueManager = queueManager;
         _logger = logger;
         _ = taskStorage;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _queue = new ConcurrentPriorityQueue<TaskHandlerExecutor, DateTimeOffset>();
         _scheduledItems = new ConcurrentDictionary<Guid, TaskHandlerExecutor>();
         _cts = new CancellationTokenSource();
@@ -141,6 +160,9 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
     /// <inheritdoc />
     public bool IsScheduled(Guid persistenceId) => _scheduledItems.ContainsKey(persistenceId);
 
+    /// <inheritdoc />
+    public bool SupportsScheduleInspection => true;
+
     private async Task ProcessScheduledTasksAsync(CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
@@ -154,7 +176,7 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
                 {
                     // Coda vuota: dormi fino a quando Schedule() chiama Release()
                     _logger.QueueEmpty();
-                    await _wakeUpSignal.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    await WaitForWakeUpAsync(null, cancellationToken).ConfigureAwait(false);
 
                     // Resetta il flag di wake-up dopo aver consumato il segnale
                     Interlocked.Exchange(ref _wakeUpPending, 0);
@@ -164,8 +186,7 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
                     // Attendi il minore tra: delay calcolato o checkInterval
                     var waitTime = delay < _checkInterval ? delay : _checkInterval;
 
-                    // Usa WaitAsync con timeout invece di Task.Delay per permettere wake-up anticipato
-                    var signaled = await _wakeUpSignal.WaitAsync(waitTime, cancellationToken).ConfigureAwait(false);
+                    var signaled = await WaitForWakeUpAsync(waitTime, cancellationToken).ConfigureAwait(false);
 
                     // Resetta il flag solo se il semaforo è stato effettivamente segnalato
                     if (signaled)
@@ -194,11 +215,62 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
         }
     }
 
+    /// <summary>
+    /// Sleeps until either the wake-up signal arrives or <paramref name="waitTime"/> elapses on the
+    /// scheduling clock (null waits for the signal only). Returns true when the signal won.
+    /// </summary>
+    /// <remarks>
+    /// A race, not <c>SemaphoreSlim.WaitAsync(timeout)</c>: that timeout is hard-wired to the real clock, so
+    /// the loop would keep sleeping in wall time no matter which <see cref="TimeProvider"/> the rest of the
+    /// pipeline follows. The signal waiter is created once and KEPT across iterations when the delay wins —
+    /// abandoning it would let it silently consume the next <c>Release</c> that nobody is watching for, and
+    /// the scheduler would miss a wake-up.
+    /// </remarks>
+    private async Task<bool> WaitForWakeUpAsync(TimeSpan? waitTime, CancellationToken cancellationToken)
+    {
+        _pendingSignalWait ??= _wakeUpSignal.WaitAsync(cancellationToken);
+
+        if (waitTime == null)
+        {
+            await _pendingSignalWait.ConfigureAwait(false);
+            _pendingSignalWait = null;
+            return true;
+        }
+
+        using var delayCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var       delayTask = Task.Delay(waitTime.Value, _timeProvider, delayCts.Token);
+
+        var winner = await Task.WhenAny(_pendingSignalWait, delayTask).ConfigureAwait(false);
+
+        if (ReferenceEquals(winner, delayTask))
+        {
+            await delayTask.ConfigureAwait(false); // surfaces shutdown cancellation to the loop
+            return false;
+        }
+
+        var signalWait = _pendingSignalWait;
+        _pendingSignalWait = null;
+
+        // Stop the losing timer and observe its cancellation, so neither a timer nor a faulted task lingers.
+        await delayCts.CancelAsync().ConfigureAwait(false);
+        try
+        {
+            await delayTask.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected: we cancelled it ourselves after the signal won.
+        }
+
+        await signalWait.ConfigureAwait(false); // surfaces shutdown cancellation to the loop
+        return true;
+    }
+
     private TimeSpan CalculateNextDelay()
     {
         if (_queue.TryPeek(out _, out var nextScheduledTime))
         {
-            var delay = nextScheduledTime - DateTimeOffset.UtcNow;
+            var delay = nextScheduledTime - _timeProvider.GetUtcNow();
 
             // Se delay negativo, esegui subito
             if (delay < TimeSpan.Zero)
@@ -234,7 +306,7 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
 
     private async Task ProcessReadyTasksAsync()
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = _timeProvider.GetUtcNow();
 
         // Dequeue tutti i task pronti
         while (_queue.TryPeek(out var item, out var scheduledTime) && scheduledTime <= now)
@@ -256,7 +328,7 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
                 // yet released). Either way: park the task and retry later WITHOUT blocking the
                 // loop, so tasks targeting other queues keep flowing (no head-of-line blocking).
                 _logger.TaskNotEnqueued(item.PersistenceId, result, FullQueueRetryDelay);
-                _queue.Enqueue(item, DateTimeOffset.UtcNow + FullQueueRetryDelay);
+                _queue.Enqueue(item, _timeProvider.GetUtcNow() + FullQueueRetryDelay);
             }
             else
             {

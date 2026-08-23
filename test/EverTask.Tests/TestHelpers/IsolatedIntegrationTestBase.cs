@@ -18,7 +18,27 @@ public abstract class IsolatedIntegrationTestBase : IAsyncDisposable
     protected TestTaskStateManager StateManager { get; private set; } = null!;
     protected IGuidGenerator GuidGenerator { get; private set; } = null!;
 
+    /// <summary>
+    /// The scheduling clock of the host built by this test: whatever was passed as <c>clock</c>, or
+    /// <see cref="TimeProvider.System"/>. Seed rows and expectations from this instead of
+    /// <c>DateTimeOffset.UtcNow</c> and a test reads the same way on either clock.
+    /// </summary>
+    protected TimeProvider Clock { get; private set; } = TimeProvider.System;
+
     private const int DefaultStopTimeoutMs = 2000;
+
+    /// <summary>
+    /// Registers the test's scheduling clock, if it brought one. It has to land AFTER <c>AddEverTask</c>:
+    /// that call registers <see cref="TimeProvider.System"/> with <c>TryAddSingleton</c>, so an earlier
+    /// registration would win and the fake clock would be silently ignored.
+    /// </summary>
+    private void RegisterClock(IServiceCollection services, TimeProvider? clock)
+    {
+        Clock = clock ?? TimeProvider.System;
+
+        if (clock != null)
+            services.AddSingleton(clock);
+    }
 
     /// <summary>
     /// Creates an ISOLATED host for this test. MUST be called at the start of each test method.
@@ -28,12 +48,14 @@ public abstract class IsolatedIntegrationTestBase : IAsyncDisposable
     /// <param name="maxDegreeOfParallelism">Max parallelism (default: 3)</param>
     /// <param name="configureEverTask">Optional EverTask configuration</param>
     /// <param name="configureServices">Optional additional service configuration</param>
+    /// <param name="clock">Optional scheduling clock; the whole pipeline follows it (see <see cref="Clock"/>)</param>
     /// <returns>Started IHost instance</returns>
     protected async Task<IHost> CreateIsolatedHostAsync(
         int channelCapacity = 3,
         int maxDegreeOfParallelism = 3,
         Action<EverTaskServiceConfiguration>? configureEverTask = null,
-        Action<IServiceCollection>? configureServices = null)
+        Action<IServiceCollection>? configureServices = null,
+        TimeProvider? clock = null)
     {
         // Ensure any previous host is properly disposed before creating new one
         if (Host != null)
@@ -58,6 +80,8 @@ public abstract class IsolatedIntegrationTestBase : IAsyncDisposable
                     configureEverTask?.Invoke(cfg);
                 })
                 .AddMemoryStorage();  // Singleton storage (shared within this test's IHost only)
+
+                RegisterClock(services, clock);
 
                 // TestTaskStateManager as Singleton (shared within this test's IHost only)
                 services.AddSingleton<TestTaskStateManager>();
@@ -86,10 +110,15 @@ public abstract class IsolatedIntegrationTestBase : IAsyncDisposable
     /// <summary>
     /// Creates an isolated host with custom builder configuration
     /// </summary>
+    /// <param name="configureBuilder">Storage and extra registrations on the EverTask builder</param>
+    /// <param name="startHost">Whether to start the host (a stopped host still runs its schedulers)</param>
+    /// <param name="configureEverTask">Optional EverTask configuration</param>
+    /// <param name="clock">Optional scheduling clock; the whole pipeline follows it (see <see cref="Clock"/>)</param>
     protected async Task<IHost> CreateIsolatedHostWithBuilderAsync(
         Action<EverTaskServiceBuilder> configureBuilder,
         bool startHost = true,
-        Action<EverTaskServiceConfiguration>? configureEverTask = null)
+        Action<EverTaskServiceConfiguration>? configureEverTask = null,
+        TimeProvider? clock = null)
     {
         // Ensure any previous host is properly disposed before creating new one
         // (a restart simulation must not leave two live hosts on the same storage)
@@ -112,6 +141,8 @@ public abstract class IsolatedIntegrationTestBase : IAsyncDisposable
                 });
 
                 configureBuilder(builder);
+
+                RegisterClock(services, clock);
 
                 // TestTaskStateManager as Singleton (shared within this test's IHost only)
                 services.AddSingleton<TestTaskStateManager>();

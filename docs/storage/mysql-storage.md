@@ -58,6 +58,31 @@ The tables are:
 
 `UseMySql` needs to know the server it talks to. By default the provider calls `ServerVersion.AutoDetect(connectionString)`, which opens a short connection at startup to detect MySQL vs MariaDB and the exact version. Set `opt.ServerVersion` explicitly (e.g. `new MariaDbServerVersion(new Version(10, 11))` or `new MySqlServerVersion(new Version(8, 0))`) to skip that probe.
 
+### Durable-Occurrence Columns
+
+A recurring schedule can materialize each due slot as its own child row, so `QueuedTasks` carries three
+extra columns:
+
+| Column | Type | Purpose |
+|--------|------|---------|
+| `ParentTaskId` | nullable id | The schedule an occurrence belongs to; null on every ordinary row |
+| `RuntimeInfo` | nullable text | Opaque JSON: occurrence metadata on a child, schedule runtime state on a schedule row |
+| `ScheduleVersion` | int, default 0 | Bumped by a runtime reschedule; advances compare-and-swap against it |
+
+They come with three constraints that make "one row per slot" a database guarantee rather than an
+application convention: a **restrict** self-referencing foreign key `ParentTaskId → Id` (never cascade —
+deleting a schedule deletes its occurrences explicitly, in the same transaction), a unique index
+`UX_QueuedTasks_Occurrence` on `(ParentTaskId, ScheduledExecutionUtc)`, and the check constraint
+`CK_QueuedTasks_OccurrenceSlot` (an occurrence always names its slot).
+
+No index filter is needed here: MySQL and MariaDB treat NULLs as distinct in a unique index, so the
+ordinary rows never collide with each other.
+
+The operations that run once per occurrence are stored procedures, like the three pre-existing hot writes:
+`usp_MaterializeOccurrence`, `usp_CancelSchedule`, `usp_UpdateCurrentRunCas` and
+`usp_CompleteRecurringRunCas`. They are created by the `AddDurableOccurrences` migration — with
+`AutoApplyMigrations = false`, apply it before the app handles tasks, or every one of those calls fails.
+
 ## Migration Management
 
 EverTask applies migrations on startup by default. Disable it to manage them yourself:

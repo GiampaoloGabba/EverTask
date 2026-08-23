@@ -468,6 +468,60 @@ public abstract class EfCoreTaskStorageTestsBase
     }
 
     [Fact]
+    public async Task Finalizing_a_series_should_stamp_LastExecutionUtc_although_nothing_ran()
+    {
+        // X3, and documented in docs/storage/custom-storage.md: finalizing is a terminal transition, so it
+        // writes LastExecutionUtc even though the remaining slots never executed. That column is what the
+        // completed-task retention measures from, so the window of a series whose boundary elapsed during a
+        // downtime restarts at the restart that closed it — an accepted consequence, and one no provider may
+        // quietly opt out of. Both terminal writes are held to it: the unconditional one, kept by a store
+        // without SupportsScheduleVersioning, and the compare-and-swap the recovery prefers.
+        var lastRealRun = FloorToMicroseconds(DateTimeOffset.UtcNow.AddDays(-3));
+        var cursor      = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+
+        async Task<Guid> SeedAsync()
+        {
+            var row = new QueuedTask
+            {
+                Id               = GetGuidForProvider(),
+                Type             = "RecFinalizeStamp", Request = "{}", Handler = "H",
+                CreatedAtUtc     = lastRealRun,
+                Status           = QueuedTaskStatus.Queued,
+                IsRecurring      = true,
+                NextRunUtc       = cursor,
+                CurrentRunCount  = 4,
+                LastExecutionUtc = lastRealRun
+            };
+            await _storage.Persist(row);
+            return row.Id;
+        }
+
+        var unconditional = await SeedAsync();
+        var conditional   = await SeedAsync();
+
+        var before = FloorToMicroseconds(DateTimeOffset.UtcNow);
+
+        await _storage.SetRecurringSeriesCompleted(unconditional, 0, AuditLevel.Full);
+        (await _storage.TrySetRecurringSeriesCompleted(conditional, cursor, QueuedTaskStatus.Queued, 0, 0,
+            AuditLevel.Full)).ShouldBeTrue();
+
+        var after = DateTimeOffset.UtcNow;
+
+        foreach (var id in new[] { unconditional, conditional })
+        {
+            var row = (await _storage.Get(t => t.Id == id))[0];
+
+            row.Status.ShouldBe(QueuedTaskStatus.Completed);
+            row.NextRunUtc.ShouldBeNull();
+            row.CurrentRunCount.ShouldBe(4, "the slots left behind were never executed (Option B)");
+            _mockedDbContext.RunsAudit.Count(a => a.QueuedTaskId == id).ShouldBe(0, "no run, no runs audit");
+
+            row.LastExecutionUtc.ShouldNotBeNull().ShouldBeInRange(before, after,
+                "the finalization instant replaces the last real run's, three days older");
+        }
+    }
+
+    [Fact]
     public async Task SetRecurringTaskPoisoned_should_mark_Failed_and_clear_NextRunUtc_so_it_is_not_recoverable()
     {
         // B1/P0-1: a recurring row poisoned during recovery must be TERMINAL — Failed AND NextRunUtc cleared
@@ -1986,6 +2040,1139 @@ public abstract class EfCoreTaskStorageTestsBase
 
     #endregion
 
+    #region Recovery filter: execution vs finalization (X3)
+
+    private async Task<QueuedTask> PersistRecurringRow(
+        DateTimeOffset? nextRunUtc, DateTimeOffset? runUntil = null, int? maxRuns = null,
+        int? currentRunCount = null, QueuedTaskStatus status = QueuedTaskStatus.Completed)
+    {
+        var task = new QueuedTask
+        {
+            Id              = GetGuidForProvider(),
+            Type            = "X3Task",
+            Request         = "{}",
+            Handler         = "X3Handler",
+            CreatedAtUtc    = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-10)),
+            Status          = status,
+            IsRecurring     = true,
+            NextRunUtc      = nextRunUtc == null ? null : FloorToMicroseconds(nextRunUtc.Value),
+            RunUntil        = runUntil == null ? null : FloorToMicroseconds(runUntil.Value),
+            MaxRuns         = maxRuns,
+            CurrentRunCount = currentRunCount
+        };
+        await _storage.Persist(task);
+        return task;
+    }
+
+    [Fact]
+    public async Task RetrievePending_should_recover_a_series_whose_pending_slot_precedes_an_elapsed_RunUntil()
+    {
+        // The occurrence was already scheduled BEFORE the boundary, and the boundary elapsed during the
+        // downtime. Ungrouped, the RunUntil term alone dropped the row, so that occurrence was lost and the
+        // series stayed Queued forever.
+        var now = DateTimeOffset.UtcNow;
+        var row = await PersistRecurringRow(now.AddMinutes(-30), runUntil: now.AddMinutes(-10),
+            status: QueuedTaskStatus.Queued);
+
+        var pending = await _storage.RetrievePending(now, null, null, 100);
+
+        pending.ShouldContain(t => t.Id == row.Id);
+        pending.First(t => t.Id == row.Id).IsRecurringSeriesToFinalize()
+               .ShouldBeFalse("this row still has a slot to run, so it is not a finalization");
+    }
+
+    [Fact]
+    public async Task RetrievePending_should_recover_a_series_to_finalize_when_its_slot_is_past_RunUntil()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var row = await PersistRecurringRow(now.AddMinutes(-5), runUntil: now.AddMinutes(-30),
+            status: QueuedTaskStatus.Queued);
+
+        var pending = await _storage.RetrievePending(now, null, null, 100);
+
+        pending.ShouldContain(t => t.Id == row.Id,
+            "a series whose remaining slots all fall past RunUntil used to match no predicate at all and " +
+            "stayed Queued forever");
+        pending.First(t => t.Id == row.Id).IsRecurringSeriesToFinalize().ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task RetrievePending_should_recover_a_series_to_finalize_when_its_run_budget_is_spent()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var row = await PersistRecurringRow(now.AddMinutes(5), maxRuns: 3, currentRunCount: 3);
+
+        var pending = await _storage.RetrievePending(now, null, null, 100);
+
+        pending.ShouldContain(t => t.Id == row.Id);
+        pending.First(t => t.Id == row.Id).IsRecurringSeriesToFinalize().ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task RetrievePending_should_never_recover_a_cancelled_series_to_finalize()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var row = await PersistRecurringRow(now.AddMinutes(-5), runUntil: now.AddMinutes(-30),
+            status: QueuedTaskStatus.Cancelled);
+
+        var pending = await _storage.RetrievePending(now, null, null, 100);
+
+        pending.ShouldNotContain(t => t.Id == row.Id,
+            "a cancelled series is already terminal and must never be rewritten to Completed");
+    }
+
+    [Fact]
+    public async Task RetrievePending_should_judge_RunUntil_on_the_clock_it_is_given()
+    {
+        // The storage must never resolve "now" itself: with a clock BEFORE the boundary the series is simply
+        // still running, with one AFTER it the same row becomes a finalization.
+        var boundary = FloorToMicroseconds(DateTimeOffset.UtcNow.AddHours(2));
+        var row      = await PersistRecurringRow(boundary.AddMinutes(-10), runUntil: boundary,
+            status: QueuedTaskStatus.Queued);
+
+        var beforeBoundary = await _storage.RetrievePending(boundary.AddHours(-1), null, null, 100);
+        var afterBoundary  = await _storage.RetrievePending(boundary.AddHours(1), null, null, 100);
+
+        beforeBoundary.ShouldContain(t => t.Id == row.Id);
+        afterBoundary.ShouldContain(t => t.Id == row.Id);
+        afterBoundary.First(t => t.Id == row.Id).IsRecoverableForExecution(boundary.AddHours(1))
+                     .ShouldBeTrue("its pending slot precedes the boundary, so it is still an execution");
+    }
+
+    [Fact]
+    public async Task TrySetQueuedIfRecoverable_should_refuse_a_series_that_only_needs_finalizing()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var row = await PersistRecurringRow(now.AddMinutes(5), maxRuns: 1, currentRunCount: 1);
+
+        var requeued = await _storage.TrySetQueuedIfRecoverable(now, row.Id, AuditLevel.Full);
+
+        requeued.ShouldBeFalse("a spent series must be finalized, never handed back to a worker queue");
+        (await _storage.Get(t => t.Id == row.Id))[0].Status.ShouldBe(QueuedTaskStatus.Completed);
+    }
+
+    [Fact]
+    public async Task The_recovery_predicates_should_follow_the_injected_scheduling_clock()
+    {
+        // P9 on this provider's own translation of the filter. The instant is not a literal the test wrote by
+        // hand: it comes from the SAME FakeTimeProvider the core drives the pipeline with, and moving that
+        // clock — nothing else — is what turns this row from pending into spent. Whether the RunUntil term is
+        // evaluated server-side (SQL Server, PostgreSQL, MySQL) or client-side (SQLite), it must read the
+        // parameter and never the database's or the host's own clock.
+        var clock = new FakeTimeProvider(FloorToMicroseconds(DateTimeOffset.UtcNow));
+
+        var row = new QueuedTask
+        {
+            Id           = GetGuidForProvider(),
+            Type         = "P9Task",
+            Request      = "{}",
+            Handler      = "P9Handler",
+            Status       = QueuedTaskStatus.Queued,
+            CreatedAtUtc = FloorToMicroseconds(clock.GetUtcNow().AddMinutes(-10)),
+            RunUntil     = FloorToMicroseconds(clock.GetUtcNow().AddHours(2))
+        };
+        await _storage.Persist(row);
+
+        (await _storage.RetrievePending(clock.GetUtcNow(), null, null, 100))
+            .ShouldContain(t => t.Id == row.Id, "two hours before its boundary the row is simply pending");
+
+        clock.Advance(TimeSpan.FromHours(3));
+
+        (await _storage.RetrievePending(clock.GetUtcNow(), null, null, 100))
+            .ShouldNotContain(t => t.Id == row.Id,
+                "the boundary elapsed on the injected clock, and that is the only clock that moved");
+
+        (await _storage.TrySetQueuedIfRecoverable(clock.GetUtcNow(), row.Id, AuditLevel.Full))
+            .ShouldBeFalse("the conditional requeue reads the same instant as the page that fed it");
+        (await _storage.Get(t => t.Id == row.Id))[0].Status.ShouldBe(QueuedTaskStatus.Queued);
+    }
+
+    [Fact]
+    public async Task A_failing_recovery_finalization_should_be_counted_and_cleared_by_a_later_success()
+    {
+        // L18 on a real engine, through the real WorkerService: a finalization that throws is counted
+        // durably, the row stays recoverable while the count is under the limit, and the counter is cleared
+        // the moment a later attempt succeeds. The counter, the terminal write and the audit all execute on
+        // this provider — the in-memory sibling of this test cannot say whether the relational
+        // implementations of IncrementRecoveryFailure / ClearRecoveryFailure agree with it.
+        var now = DateTimeOffset.UtcNow;
+        var row = await PersistRecurringRow(now.AddMinutes(-4), runUntil: now.AddMinutes(-5),
+            status: QueuedTaskStatus.Queued);
+
+        row.IsRecurringSeriesToFinalize().ShouldBeTrue("the scenario only holds if this row is a finalization");
+
+        var faulted = new FaultInjectingTaskStorage(_storage);
+        faulted.FailNext(nameof(ITaskStorage.TrySetRecurringSeriesCompleted), times: 1);
+
+        var recovery = RecoveryHarness.CreateRecoveryService(faulted, maxAttempts: 3);
+
+        await recovery.ProcessPendingAsync();
+
+        var afterFailure = (await _storage.Get(t => t.Id == row.Id))[0];
+        afterFailure.RecoveryDispatchFailureCount.ShouldBe(1, "a failing finalization is counted durably");
+        afterFailure.Status.ShouldBe(QueuedTaskStatus.Queued, "one failure is transient: the row stays recoverable");
+        afterFailure.NextRunUtc.ShouldNotBeNull();
+
+        await recovery.ProcessPendingAsync();
+
+        var finalized = (await _storage.Get(t => t.Id == row.Id))[0];
+        finalized.Status.ShouldBe(QueuedTaskStatus.Completed);
+        finalized.NextRunUtc.ShouldBeNull("finalizing clears the cursor in the same write");
+        (finalized.RecoveryDispatchFailureCount ?? 0).ShouldBe(0,
+            "a transient failure must not accumulate toward the poison limit once the attempt succeeded");
+
+        _mockedDbContext.RunsAudit.Count(a => a.QueuedTaskId == row.Id).ShouldBe(0, "finalizing is not a run");
+        _mockedDbContext.StatusAudit.Where(a => a.QueuedTaskId == row.Id).Select(a => a.NewStatus).ToList()
+                        .ShouldBe([QueuedTaskStatus.Completed],
+                            "one transition, Queued → Completed: the row never reached a worker queue");
+    }
+
+    #endregion
+
+    #region Durable occurrences
+
+    private async Task<QueuedTask> PersistSchedule(DateTimeOffset cursorUtc, int scheduleVersion = 0,
+                                                   QueuedTaskStatus status = QueuedTaskStatus.Queued)
+    {
+        var schedule = new QueuedTask
+        {
+            Id              = GetGuidForProvider(),
+            Type            = "DurableSchedule",
+            Request         = "{}",
+            Handler         = "DurableHandler",
+            CreatedAtUtc    = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-10)),
+            Status          = status,
+            IsRecurring     = true,
+            NextRunUtc      = FloorToMicroseconds(cursorUtc),
+            ScheduleVersion = scheduleVersion,
+            QueueName       = "recurring"
+        };
+        await _storage.Persist(schedule);
+        return schedule;
+    }
+
+    private QueuedTask NewOccurrence(Guid parentId, DateTimeOffset slotUtc) => new()
+    {
+        Id                    = GetGuidForProvider(),
+        Type                  = "DurableSchedule",
+        Request               = "{}",
+        Handler               = "DurableHandler",
+        CreatedAtUtc          = FloorToMicroseconds(DateTimeOffset.UtcNow),
+        ScheduledExecutionUtc = FloorToMicroseconds(slotUtc),
+        Status                = QueuedTaskStatus.WaitingQueue,
+        ParentTaskId          = parentId,
+        QueueName             = "recurring",
+        AuditLevel            = (int)AuditLevel.Full,
+        RuntimeInfo           = "{\"SlotUtc\":\"probe\"}"
+    };
+
+    /// <summary>
+    /// DDL that makes every <c>StatusAudit</c> INSERT fail, and the DDL that removes it again. It is the one
+    /// fault point that sits AFTER the occurrence INSERT on all four implementations — the EF base stages the
+    /// audit behind the occurrence in the same <c>SaveChanges</c>, the two procedures write it as their last
+    /// statement, the Postgres CTE as its last branch — which is what makes
+    /// <see cref="MaterializeOccurrence_should_roll_the_inserted_occurrence_back_when_a_later_write_faults"/>
+    /// one shared assertion instead of four provider-specific ones. Every provider expresses it as a trigger:
+    /// a check constraint would be validated against the rows already in the table.
+    /// </summary>
+    protected abstract string InstallStatusAuditInsertFaultSql { get; }
+
+    /// <inheritdoc cref="InstallStatusAuditInsertFaultSql" />
+    protected abstract string RemoveStatusAuditInsertFaultSql { get; }
+
+    /// <summary>
+    /// DDL that makes every <c>QueuedTasks</c> UPDATE fail, and the DDL that removes it again. This is the
+    /// fault window the plan names literally — after the occurrence INSERT, before the schedule advance —
+    /// and it lands there on the three implementations that insert first: the two procedures and the
+    /// Postgres CTE. On the EF base, which stages the advance BEFORE the insert in the same
+    /// <c>SaveChanges</c>, the same fault lands one step earlier; the assertion is the same either way
+    /// (nothing survives the transaction), and the direction the EF base cannot reach here is covered by
+    /// <see cref="MaterializeOccurrence_should_roll_the_inserted_occurrence_back_when_a_later_write_faults"/>.
+    /// </summary>
+    protected abstract string InstallScheduleAdvanceFaultSql { get; }
+
+    /// <inheritdoc cref="InstallScheduleAdvanceFaultSql" />
+    protected abstract string RemoveScheduleAdvanceFaultSql { get; }
+
+    private async Task<IAsyncDisposable> InjectStatusAuditInsertFaultAsync()
+    {
+        var dbContext = (DbContext)_mockedDbContext;
+        await dbContext.Database.ExecuteSqlRawAsync(InstallStatusAuditInsertFaultSql);
+        return new RawSqlCleanup(dbContext, RemoveStatusAuditInsertFaultSql);
+    }
+
+    private async Task<IAsyncDisposable> InjectScheduleAdvanceFaultAsync()
+    {
+        var dbContext = (DbContext)_mockedDbContext;
+        await dbContext.Database.ExecuteSqlRawAsync(InstallScheduleAdvanceFaultSql);
+        return new RawSqlCleanup(dbContext, RemoveScheduleAdvanceFaultSql);
+    }
+
+    private sealed class RawSqlCleanup(DbContext dbContext, string sql) : IAsyncDisposable
+    {
+        public async ValueTask DisposeAsync() => await dbContext.Database.ExecuteSqlRawAsync(sql);
+    }
+
+    [Fact]
+    public void A_relational_provider_advertises_both_durable_occurrence_capabilities()
+    {
+        // The positive half of X2: these four providers really do implement the atomic operations, so they
+        // must say so — the region below is the proof that the claim is honoured. The negative half (EF Core
+        // InMemory, where every one of them refuses) is in EfCoreNonRelationalCapabilityTests.
+        _storage.SupportsDurableOccurrences.ShouldBeTrue();
+        _storage.SupportsScheduleVersioning.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task MaterializeOccurrence_should_insert_the_occurrence_and_advance_the_cursor_together()
+    {
+        var cursor    = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule  = await PersistSchedule(cursor);
+        var nextSlot  = FloorToMicroseconds(cursor.AddMinutes(5));
+        var occurrence = NewOccurrence(schedule.Id, cursor);
+
+        var outcome = await _storage.MaterializeOccurrence(schedule.Id, 0, cursor, occurrence, nextSlot,
+            AuditLevel.Full);
+
+        outcome.ShouldBe(OccurrenceMaterializationOutcome.Created);
+
+        var child = (await _storage.Get(t => t.Id == occurrence.Id)).ShouldHaveSingleItem();
+        child.ParentTaskId.ShouldBe(schedule.Id);
+        child.ScheduledExecutionUtc.ShouldBe(cursor);
+        child.Status.ShouldBe(QueuedTaskStatus.WaitingQueue);
+        child.QueueName.ShouldBe("recurring");
+        child.RuntimeInfo.ShouldBe("{\"SlotUtc\":\"probe\"}");
+
+        var parent = (await _storage.Get(t => t.Id == schedule.Id))[0];
+        parent.NextRunUtc.ShouldBe(nextSlot);
+        parent.CurrentRunCount.ShouldBe(1, "a materialization IS the run of a durable series");
+        parent.Status.ShouldBe(QueuedTaskStatus.Queued, "the series continues");
+    }
+
+    [Fact]
+    public async Task MaterializeOccurrence_should_finalize_the_series_in_the_same_commit_as_its_last_slot()
+    {
+        var cursor     = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule   = await PersistSchedule(cursor);
+        var occurrence = NewOccurrence(schedule.Id, cursor);
+
+        var outcome = await _storage.MaterializeOccurrence(schedule.Id, 0, cursor, occurrence,
+            newCursorUtc: null, AuditLevel.Full);
+
+        outcome.ShouldBe(OccurrenceMaterializationOutcome.Created);
+
+        var parent = (await _storage.Get(t => t.Id == schedule.Id))[0];
+        parent.Status.ShouldBe(QueuedTaskStatus.Completed);
+        parent.NextRunUtc.ShouldBeNull("a finished series must stop matching the recovery filter");
+        (await _storage.Get(t => t.Id == occurrence.Id)).ShouldHaveSingleItem();
+    }
+
+    [Fact]
+    public async Task MaterializeOccurrence_should_report_AlreadyExists_and_leave_the_cursor_untouched()
+    {
+        // This is also the atomicity proof for the EF base path, where the cursor advance is attempted
+        // BEFORE the insert: the duplicate makes the whole transaction roll back, advance included.
+        var cursor     = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule   = await PersistSchedule(cursor);
+        var first      = NewOccurrence(schedule.Id, cursor);
+
+        await _storage.MaterializeOccurrence(schedule.Id, 0, cursor, first, cursor.AddMinutes(5), AuditLevel.Full);
+
+        // Rewind the cursor by hand so the compare-and-swap passes and only the duplicate slot can refuse.
+        var rewind = (await _storage.Get(t => t.Id == schedule.Id))[0];
+        rewind.NextRunUtc = cursor;
+        await _storage.UpdateTask(rewind);
+
+        var duplicate = NewOccurrence(schedule.Id, cursor);
+        var outcome   = await _storage.MaterializeOccurrence(schedule.Id, 0, cursor, duplicate,
+            cursor.AddMinutes(5), AuditLevel.Full);
+
+        outcome.ShouldBe(OccurrenceMaterializationOutcome.AlreadyExists);
+        (await _storage.Get(t => t.Id == duplicate.Id)).ShouldBeEmpty();
+
+        var parent = (await _storage.Get(t => t.Id == schedule.Id))[0];
+        parent.NextRunUtc.ShouldBe(cursor, "a refused materialization must not advance the cursor");
+        parent.CurrentRunCount.ShouldBe(1, "and must not consume a run either");
+    }
+
+    [Fact]
+    public async Task MaterializeOccurrence_should_report_CursorMoved_and_write_nothing()
+    {
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+
+        var occurrence = NewOccurrence(schedule.Id, cursor);
+        var outcome    = await _storage.MaterializeOccurrence(schedule.Id, 0,
+            expectedCursorUtc: cursor.AddMinutes(-30), occurrence, cursor.AddMinutes(5), AuditLevel.Full);
+
+        outcome.ShouldBe(OccurrenceMaterializationOutcome.CursorMoved);
+        (await _storage.Get(t => t.Id == occurrence.Id)).ShouldBeEmpty();
+        (await _storage.Get(t => t.Id == schedule.Id))[0].NextRunUtc.ShouldBe(cursor);
+    }
+
+    [Fact]
+    public async Task MaterializeOccurrence_should_report_VersionMismatch_when_the_schedule_was_rescheduled()
+    {
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor, scheduleVersion: 4);
+
+        var occurrence = NewOccurrence(schedule.Id, cursor);
+        var outcome    = await _storage.MaterializeOccurrence(schedule.Id, expectedScheduleVersion: 3, cursor,
+            occurrence, cursor.AddMinutes(5), AuditLevel.Full);
+
+        outcome.ShouldBe(OccurrenceMaterializationOutcome.VersionMismatch);
+        (await _storage.Get(t => t.Id == occurrence.Id)).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task MaterializeOccurrence_should_report_ParentInactive_for_a_cancelled_schedule()
+    {
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor, status: QueuedTaskStatus.Cancelled);
+
+        var occurrence = NewOccurrence(schedule.Id, cursor);
+        var outcome    = await _storage.MaterializeOccurrence(schedule.Id, 0, cursor, occurrence,
+            cursor.AddMinutes(5), AuditLevel.Full);
+
+        outcome.ShouldBe(OccurrenceMaterializationOutcome.ParentInactive);
+        (await _storage.Get(t => t.Id == occurrence.Id)).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task MaterializeOccurrence_should_report_ParentInactive_for_a_finished_series_with_no_cursor()
+    {
+        // The retry a caller makes after re-reading a schedule it lost a race on: the row it read back has
+        // no cursor left, so it retries with a null one. A finished series must refuse it — an insert here
+        // would put an occurrence on a Completed schedule AND give it a cursor back, and the resurrected
+        // series would match the recovery filter again at the next restart.
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+        (await _storage.TrySetRecurringSeriesCompleted(schedule.Id, cursor, QueuedTaskStatus.Queued, 0, 0,
+            AuditLevel.Full)).ShouldBeTrue();
+
+        var occurrence = NewOccurrence(schedule.Id, cursor);
+        var outcome = await _storage.MaterializeOccurrence(schedule.Id, 0, expectedCursorUtc: null, occurrence,
+            newCursorUtc: cursor.AddMinutes(5), AuditLevel.Full);
+
+        outcome.ShouldBe(OccurrenceMaterializationOutcome.ParentInactive);
+        (await _storage.Get(t => t.Id == occurrence.Id)).ShouldBeEmpty();
+
+        var parent = (await _storage.Get(t => t.Id == schedule.Id))[0];
+        parent.Status.ShouldBe(QueuedTaskStatus.Completed);
+        parent.NextRunUtc.ShouldBeNull("a finished series must never get its cursor back");
+        (parent.CurrentRunCount ?? 0).ShouldBe(0, "and must not consume a run either");
+    }
+
+    [Fact]
+    public async Task MaterializeOccurrence_should_report_CursorMoved_when_a_null_cursor_is_expected()
+    {
+        // Same retry against a schedule that is still live: a null expected cursor cannot match the one the
+        // row carries, so this is an ordinary lost race and nothing is written.
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+
+        var occurrence = NewOccurrence(schedule.Id, cursor);
+        var outcome = await _storage.MaterializeOccurrence(schedule.Id, 0, expectedCursorUtc: null, occurrence,
+            cursor.AddMinutes(5), AuditLevel.Full);
+
+        outcome.ShouldBe(OccurrenceMaterializationOutcome.CursorMoved);
+        (await _storage.Get(t => t.Id == occurrence.Id)).ShouldBeEmpty();
+
+        var parent = (await _storage.Get(t => t.Id == schedule.Id))[0];
+        parent.NextRunUtc.ShouldBe(cursor);
+        (parent.CurrentRunCount ?? 0).ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task MaterializeOccurrence_should_roll_the_whole_transaction_back_on_an_injected_insert_fault()
+    {
+        // Atomicity under a fault that is NOT the natural duplicate-slot one. The duplicate slot is a case
+        // every implementation checks for and classifies; this one is an arbitrary error raised by the
+        // occurrence INSERT itself, with the cursor advance already part of the same transaction, and it must
+        // still leave the store exactly as it was. It is injected by giving the occurrence the primary key of
+        // a row that already exists — a different constraint from UX_QueuedTasks_Occurrence, so nothing
+        // classifies it and the family's rethrow contract applies.
+        //
+        // The four implementations reach the same point by four different routes (EF base advances then
+        // inserts, the SQL Server and MySQL procedures insert then advance inside one procedure, Postgres
+        // does both in one writable CTE), which is exactly why the assertion belongs to the shared suite:
+        // it is the only thing that proves the SQL Server procedure needs SET XACT_ABORT ON, without which
+        // the failed INSERT aborts only its own statement and the procedure happily commits the advance.
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+        var nextSlot = FloorToMicroseconds(cursor.AddMinutes(5));
+
+        var occupied = NewOccurrence(schedule.Id, FloorToMicroseconds(cursor.AddMinutes(-30)));
+        await _storage.Persist(occupied);
+
+        var doomed = NewOccurrence(schedule.Id, cursor);
+        doomed.Id = occupied.Id; // primary-key collision: the insert cannot succeed
+
+        await Should.ThrowAsync<Exception>(() =>
+            _storage.MaterializeOccurrence(schedule.Id, 0, cursor, doomed, nextSlot, AuditLevel.Full));
+
+        var parent = (await _storage.Get(t => t.Id == schedule.Id))[0];
+        parent.NextRunUtc.ShouldBe(cursor, "a materialization that threw must not leave the cursor advanced");
+        (parent.CurrentRunCount ?? 0).ShouldBe(0, "nor consume a run");
+        parent.Status.ShouldBe(QueuedTaskStatus.Queued);
+
+        var children = await _storage.GetOccurrences(schedule.Id);
+        children.ShouldHaveSingleItem().Id.ShouldBe(occupied.Id,
+            "only the pre-existing occurrence survives: the failed one was never written");
+    }
+
+    [Fact]
+    public async Task MaterializeOccurrence_should_roll_back_the_final_advance_too_when_the_insert_faults()
+    {
+        // Same injected fault on the series-ENDING materialization (newCursor == null), which additionally
+        // flips the schedule to Completed and stages its audit row in the same commit. A partial commit here
+        // would end a series that never produced its last occurrence.
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+
+        var occupied = NewOccurrence(schedule.Id, FloorToMicroseconds(cursor.AddMinutes(-30)));
+        await _storage.Persist(occupied);
+
+        var doomed = NewOccurrence(schedule.Id, cursor);
+        doomed.Id = occupied.Id;
+
+        await Should.ThrowAsync<Exception>(() =>
+            _storage.MaterializeOccurrence(schedule.Id, 0, cursor, doomed, null, AuditLevel.Full));
+
+        var parent = (await _storage.Get(t => t.Id == schedule.Id))[0];
+        parent.Status.ShouldBe(QueuedTaskStatus.Queued, "the series must not be finalized by a failed commit");
+        parent.NextRunUtc.ShouldBe(cursor);
+
+        _mockedDbContext.StatusAudit.Count(a => a.QueuedTaskId == schedule.Id).ShouldBe(0,
+            "the Completed audit is staged in the same transaction and must roll back with it");
+    }
+
+    [Fact]
+    public async Task MaterializeOccurrence_should_roll_the_inserted_occurrence_back_when_a_later_write_faults()
+    {
+        // The direction the two tests above cannot reach. There the INSERT is what fails, so on the EF base —
+        // which advances the cursor first and inserts last — nothing was ever written for the occurrence, and
+        // on the two procedures the advance simply never runs. This one lets the occurrence INSERT SUCCEED and
+        // fails a write that comes after it on every implementation, which is the only way to show that a row
+        // already in the table goes away again with the transaction.
+        //
+        // The series-ending materialization is the shape that has such a write: a null new cursor also flips
+        // the schedule to Completed and records that transition, and the injected fault refuses exactly that
+        // record.
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+        var doomed   = NewOccurrence(schedule.Id, cursor);
+
+        await using (await InjectStatusAuditInsertFaultAsync())
+        {
+            await Should.ThrowAsync<Exception>(() =>
+                _storage.MaterializeOccurrence(schedule.Id, 0, cursor, doomed, null, AuditLevel.Full));
+        }
+
+        (await _storage.Get(t => t.Id == doomed.Id)).ShouldBeEmpty(
+            "the occurrence row was inserted and must not survive the transaction that inserted it");
+        (await _storage.GetOccurrences(schedule.Id)).ShouldBeEmpty();
+
+        var parent = (await _storage.Get(t => t.Id == schedule.Id))[0];
+        parent.Status.ShouldBe(QueuedTaskStatus.Queued, "the series must not be finalized by a failed commit");
+        parent.NextRunUtc.ShouldBe(cursor, "nor the cursor cleared");
+        (parent.CurrentRunCount ?? 0).ShouldBe(0, "nor a run consumed");
+        _mockedDbContext.StatusAudit.Count(a => a.QueuedTaskId == schedule.Id).ShouldBe(0);
+
+        // And the fault is gone with the trigger: the very same materialization now succeeds, which is what
+        // proves the assertions above came from the injected failure and not from a schedule that was never
+        // eligible in the first place.
+        var retried = NewOccurrence(schedule.Id, cursor);
+        (await _storage.MaterializeOccurrence(schedule.Id, 0, cursor, retried, null, AuditLevel.Full))
+            .ShouldBe(OccurrenceMaterializationOutcome.Created);
+    }
+
+    [Fact]
+    public async Task MaterializeOccurrence_should_roll_everything_back_when_the_schedule_advance_faults()
+    {
+        // The window the plan names: the occurrence INSERT has happened and the schedule has not advanced
+        // yet. On the two procedures and the Postgres CTE the fault lands exactly there — they insert the
+        // child and then update the schedule — so this is the interleaving under test; on the EF base, which
+        // stages the advance first, it lands just before the insert. Either way the pair is one transaction
+        // and neither half may survive alone: a child without its advance is a slot that will be materialized
+        // twice, an advance without its child is a slot silently skipped.
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+        var nextSlot = FloorToMicroseconds(cursor.AddMinutes(5));
+        var doomed   = NewOccurrence(schedule.Id, cursor);
+
+        await using (await InjectScheduleAdvanceFaultAsync())
+        {
+            await Should.ThrowAsync<Exception>(() =>
+                _storage.MaterializeOccurrence(schedule.Id, 0, cursor, doomed, nextSlot, AuditLevel.Full));
+        }
+
+        (await _storage.Get(t => t.Id == doomed.Id)).ShouldBeEmpty("the occurrence must not outlive the advance");
+        (await _storage.GetOccurrences(schedule.Id)).ShouldBeEmpty();
+
+        var parent = (await _storage.Get(t => t.Id == schedule.Id))[0];
+        parent.NextRunUtc.ShouldBe(cursor, "the cursor is where the failed advance left it");
+        (parent.CurrentRunCount ?? 0).ShouldBe(0, "and no run was consumed");
+        _mockedDbContext.StatusAudit.Count(a => a.QueuedTaskId == schedule.Id).ShouldBe(0);
+
+        // The control: with the trigger gone the very same call goes through, so the assertions above came
+        // from the injected fault and not from a schedule that was never eligible.
+        var retried = NewOccurrence(schedule.Id, cursor);
+        (await _storage.MaterializeOccurrence(schedule.Id, 0, cursor, retried, nextSlot, AuditLevel.Full))
+            .ShouldBe(OccurrenceMaterializationOutcome.Created);
+        (await _storage.Get(t => t.Id == schedule.Id))[0].NextRunUtc.ShouldBe(nextSlot);
+    }
+
+    [Fact]
+    public async Task MaterializeOccurrence_should_report_AlreadyExists_to_both_callers_racing_a_taken_slot()
+    {
+        // The concurrent shape AlreadyExists really has. Two writers that both find the cursor where they
+        // left it cannot both reach the slot check — the winner advances the cursor in the same commit, so
+        // the loser is told CursorMoved (pinned below). AlreadyExists is what a writer is told when the
+        // cursor still points AT a slot that is already materialized: an episode replayed after a rewind, a
+        // peer that inserted the row from outside the materializer, a retry after a lost answer. Racing two
+        // of those is the case the durable-occurrence contract has to survive, and both must be refused
+        // without touching the schedule.
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+        var nextSlot = FloorToMicroseconds(cursor.AddMinutes(5));
+
+        var occupant = NewOccurrence(schedule.Id, cursor);
+        await _storage.Persist(occupant);
+
+        var first  = NewOccurrence(schedule.Id, cursor);
+        var second = NewOccurrence(schedule.Id, cursor);
+
+        var outcomes = await Task.WhenAll(
+            _storage.MaterializeOccurrence(schedule.Id, 0, cursor, first, nextSlot, AuditLevel.Full),
+            _storage.MaterializeOccurrence(schedule.Id, 0, cursor, second, nextSlot, AuditLevel.Full));
+
+        outcomes.ShouldAllBe(o => o == OccurrenceMaterializationOutcome.AlreadyExists,
+            "a taken slot refuses every writer, and the refusal is named for what it is");
+
+        (await _storage.Get(t => t.Id == first.Id)).ShouldBeEmpty();
+        (await _storage.Get(t => t.Id == second.Id)).ShouldBeEmpty();
+        (await _storage.GetOccurrences(schedule.Id)).ShouldHaveSingleItem().Id.ShouldBe(occupant.Id);
+
+        var parent = (await _storage.Get(t => t.Id == schedule.Id))[0];
+        parent.NextRunUtc.ShouldBe(cursor, "a refused materialization must not advance the cursor");
+        (parent.CurrentRunCount ?? 0).ShouldBe(0, "nor consume a run");
+    }
+
+    [Fact]
+    public async Task MaterializeOccurrence_should_be_won_by_exactly_one_of_two_concurrent_callers()
+    {
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+        var nextSlot = FloorToMicroseconds(cursor.AddMinutes(5));
+
+        var first  = NewOccurrence(schedule.Id, cursor);
+        var second = NewOccurrence(schedule.Id, cursor);
+
+        var outcomes = await Task.WhenAll(
+            _storage.MaterializeOccurrence(schedule.Id, 0, cursor, first, nextSlot, AuditLevel.Full),
+            _storage.MaterializeOccurrence(schedule.Id, 0, cursor, second, nextSlot, AuditLevel.Full));
+
+        // The loser's outcome is named, not merely "not Created": the two are not interchangeable to the
+        // caller. CursorMoved says the schedule advanced and the loser must re-read before deciding again;
+        // AlreadyExists would say the slot is taken while the cursor still points AT it, which is a different
+        // situation and cannot arise from this race — the winner advances the cursor in the same commit that
+        // creates the row, and every implementation compares the cursor before it looks for the slot. Where
+        // AlreadyExists really comes from is pinned separately, by rewinding the cursor by hand.
+        outcomes.Order().ToArray().ShouldBe(
+            new[]
+            {
+                OccurrenceMaterializationOutcome.Created,
+                OccurrenceMaterializationOutcome.CursorMoved
+            },
+            "the compare-and-swap on version and cursor admits exactly one writer, and tells the other why");
+
+        var children = await _storage.GetOccurrences(schedule.Id);
+        children.Length.ShouldBe(1, "one slot, one row");
+        (await _storage.Get(t => t.Id == schedule.Id))[0].CurrentRunCount.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task TrySetRecurringSeriesCompleted_should_finalize_only_while_the_expected_state_holds()
+    {
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+
+        var stale = await _storage.TrySetRecurringSeriesCompleted(schedule.Id, cursor.AddMinutes(-5),
+            QueuedTaskStatus.Queued, 0, 0, AuditLevel.Full);
+        stale.ShouldBeFalse("a finalization computed on a cursor that has since moved must not be written");
+        (await _storage.Get(t => t.Id == schedule.Id))[0].Status.ShouldBe(QueuedTaskStatus.Queued);
+
+        var applied = await _storage.TrySetRecurringSeriesCompleted(schedule.Id, cursor,
+            QueuedTaskStatus.Queued, 0, 0, AuditLevel.Full);
+        applied.ShouldBeTrue();
+
+        var row = (await _storage.Get(t => t.Id == schedule.Id))[0];
+        row.Status.ShouldBe(QueuedTaskStatus.Completed);
+        row.NextRunUtc.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task The_conditional_schedule_writes_should_refuse_a_null_expected_cursor()
+    {
+        // Read literally, "the cursor I expect is null" is the shape of every finalized and poisoned row, so
+        // a caller that read a schedule back after losing a race and retried with what it found would finalize
+        // or halt a series that had already ended. MaterializeOccurrence refuses that expectation explicitly;
+        // its two siblings have to refuse it the same way rather than translate it into `NextRunUtc IS NULL`.
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+
+        (await _storage.TrySetRecurringSeriesCompleted(schedule.Id, null, QueuedTaskStatus.Queued, 0, 0,
+            AuditLevel.Full)).ShouldBeFalse();
+        (await _storage.TryHaltSchedule(schedule.Id, 0, null, QueuedTaskStatus.Queued, "{}")).ShouldBeFalse();
+
+        var live = (await _storage.Get(t => t.Id == schedule.Id))[0];
+        live.Status.ShouldBe(QueuedTaskStatus.Queued);
+        live.NextRunUtc.ShouldBe(cursor);
+        live.RuntimeInfo.ShouldBeNull();
+
+        // And on the row the null expectation would otherwise have matched: the series is over, and it stays
+        // over rather than being finalized a second time or halted after the fact.
+        (await _storage.TrySetRecurringSeriesCompleted(schedule.Id, cursor, QueuedTaskStatus.Queued, 0, 0,
+            AuditLevel.Full)).ShouldBeTrue();
+
+        (await _storage.TrySetRecurringSeriesCompleted(schedule.Id, null, QueuedTaskStatus.Completed, 0, 0,
+            AuditLevel.Full)).ShouldBeFalse();
+        (await _storage.TryHaltSchedule(schedule.Id, 0, null, QueuedTaskStatus.Completed, "{\"Halted\":{}}"))
+            .ShouldBeFalse();
+
+        var finished = (await _storage.Get(t => t.Id == schedule.Id))[0];
+        finished.NextRunUtc.ShouldBeNull();
+        finished.RuntimeInfo.ShouldBeNull("a finished series must not acquire a halt marker");
+    }
+
+    [Fact]
+    public async Task TrySetRecurringSeriesCompleted_should_lose_to_a_cancel_that_linearized_first()
+    {
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+
+        await _storage.SetCancelledByUser(schedule.Id, AuditLevel.Full);
+
+        var finalized = await _storage.TrySetRecurringSeriesCompleted(schedule.Id, cursor,
+            QueuedTaskStatus.Queued, 0, 0, AuditLevel.Full);
+
+        finalized.ShouldBeFalse();
+        (await _storage.Get(t => t.Id == schedule.Id))[0].Status
+            .ShouldBe(QueuedTaskStatus.Cancelled, "the user's choice must survive a recovery finalization");
+    }
+
+    [Fact]
+    public async Task CancelSchedule_should_cancel_the_schedule_and_only_its_pending_occurrences()
+    {
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+
+        var waiting = NewOccurrence(schedule.Id, cursor);
+        await _storage.Persist(waiting);
+
+        var running = NewOccurrence(schedule.Id, cursor.AddMinutes(1));
+        running.Status = QueuedTaskStatus.InProgress;
+        await _storage.Persist(running);
+
+        await _storage.CancelSchedule(schedule.Id, AuditLevel.Full);
+
+        (await _storage.Get(t => t.Id == schedule.Id))[0].Status.ShouldBe(QueuedTaskStatus.Cancelled);
+        (await _storage.Get(t => t.Id == waiting.Id))[0].Status.ShouldBe(QueuedTaskStatus.Cancelled);
+        (await _storage.Get(t => t.Id == running.Id))[0].Status
+            .ShouldBe(QueuedTaskStatus.InProgress, "an occurrence already executing owns a live delivery");
+    }
+
+    [Fact]
+    public async Task CancelSchedule_should_be_a_silent_no_op_when_the_schedule_is_already_gone()
+    {
+        // Cancel racing a Remove of the same schedule. Every provider must simply write nothing: an audit
+        // row staged for the vanished schedule would violate the StatusAudit foreign key and surface as a
+        // provider-specific exception out of Dispatcher.Cancel.
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+        await _storage.Remove(schedule.Id);
+
+        await Should.NotThrowAsync(() => _storage.CancelSchedule(schedule.Id, AuditLevel.Full));
+
+        (await _storage.Get(t => t.Id == schedule.Id)).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task RequeueTerminal_should_requeue_a_failed_row_keeping_its_identity_and_its_audit_trail()
+    {
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+        var child    = NewOccurrence(schedule.Id, cursor);
+        await _storage.Persist(child);
+
+        // A real failed attempt, so there is a history worth preserving: the transitions of the run and the
+        // run record itself. Keeping the id is only half the promise — an operator requeues an occurrence to
+        // retry it, not to erase what happened the first time.
+        await _storage.SetQueued(child.Id, AuditLevel.Full);
+        await _storage.SetInProgress(child.Id, AuditLevel.Full);
+        await _storage.SetStatus(child.Id, QueuedTaskStatus.Failed, new InvalidOperationException("boom"),
+            AuditLevel.Full);
+
+        // The run record is seeded rather than produced: only the recurring-advance operations write RunsAudit,
+        // and this row is a one-shot occurrence. It stands for the history a requeued occurrence carries — the
+        // reason RequeueTerminal resets the status in place instead of replacing the row.
+        _mockedDbContext.RunsAudit.Add(new RunsAudit
+        {
+            QueuedTaskId    = child.Id,
+            ExecutedAt      = FloorToMicroseconds(DateTimeOffset.UtcNow),
+            ExecutionTimeMs = 12,
+            Status          = QueuedTaskStatus.Failed,
+            Exception       = "boom"
+        });
+        await _mockedDbContext.SaveChangesAsync(CancellationToken.None);
+
+        var statusAuditsBefore = _mockedDbContext.StatusAudit
+                                                 .Where(a => a.QueuedTaskId == child.Id).Select(a => a.Id)
+                                                 .ToList();
+        var runAuditsBefore = _mockedDbContext.RunsAudit
+                                              .Where(a => a.QueuedTaskId == child.Id).Select(a => a.Id)
+                                              .ToList();
+
+        statusAuditsBefore.Count.ShouldBeGreaterThan(0, "the arrange above must really have written a trail");
+        runAuditsBefore.ShouldHaveSingleItem();
+
+        (await _storage.RequeueTerminal(child.Id, AuditLevel.Full)).ShouldBeTrue();
+
+        var row = (await _storage.Get(t => t.Id == child.Id))[0];
+        row.Id.ShouldBe(child.Id, "a requeue keeps the identity, so history and audits stay attached");
+        row.Status.ShouldBe(QueuedTaskStatus.Queued);
+        row.Exception.ShouldBeNull();
+
+        var statusAuditsAfter = _mockedDbContext.StatusAudit
+                                                .Where(a => a.QueuedTaskId == child.Id).ToList();
+        var runAuditsAfter = _mockedDbContext.RunsAudit
+                                             .Where(a => a.QueuedTaskId == child.Id).ToList();
+
+        statusAuditsBefore.ShouldBeSubsetOf(statusAuditsAfter.Select(a => a.Id),
+            "every transition recorded before the requeue is still there");
+        statusAuditsAfter.Count.ShouldBe(statusAuditsBefore.Count + 1,
+            "and the requeue appends its own Queued transition rather than rewriting the trail");
+        statusAuditsAfter.ShouldContain(a => a.NewStatus == QueuedTaskStatus.Failed,
+            "including the failure the requeue is undoing");
+
+        runAuditsAfter.Select(a => a.Id).ShouldBe(runAuditsBefore,
+            "the failed run itself is history: a requeue adds no run and removes none");
+        runAuditsAfter[0].Status.ShouldBe(QueuedTaskStatus.Failed);
+        runAuditsAfter[0].Exception.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task RequeueTerminal_should_refuse_a_row_that_is_not_terminal()
+    {
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+
+        (await _storage.RequeueTerminal(schedule.Id, AuditLevel.Full)).ShouldBeFalse();
+        (await _storage.Get(t => t.Id == schedule.Id))[0].Status.ShouldBe(QueuedTaskStatus.Queued);
+    }
+
+    [Fact]
+    public async Task TryRequeueStaleOccurrence_should_win_only_while_the_status_still_matches()
+    {
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+        var child    = NewOccurrence(schedule.Id, cursor);
+        await _storage.Persist(child);
+
+        (await _storage.TryRequeueStaleOccurrence(child.Id, QueuedTaskStatus.InProgress, AuditLevel.Full))
+            .ShouldBeFalse("the occurrence is WaitingQueue: whoever expected InProgress lost the race");
+
+        (await _storage.TryRequeueStaleOccurrence(child.Id, QueuedTaskStatus.WaitingQueue, AuditLevel.Full))
+            .ShouldBeTrue();
+        (await _storage.Get(t => t.Id == child.Id))[0].Status.ShouldBe(QueuedTaskStatus.Queued);
+    }
+
+    [Fact]
+    public async Task UpdateSchedule_should_bump_the_version_only_from_the_expected_one()
+    {
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor, scheduleVersion: 2);
+        var newCursor = FloorToMicroseconds(cursor.AddHours(1));
+
+        (await _storage.UpdateSchedule(schedule.Id, 1, "{\"stale\":true}", "stale", newCursor, null, null, null))
+            .ShouldBeFalse("two concurrent reschedules cannot both win");
+
+        (await _storage.UpdateSchedule(schedule.Id, 2, "{\"fresh\":true}", "fresh", newCursor, 7, null, "{}"))
+            .ShouldBeTrue();
+
+        var row = (await _storage.Get(t => t.Id == schedule.Id))[0];
+        row.ScheduleVersion.ShouldBe(3);
+        row.RecurringTask.ShouldBe("{\"fresh\":true}");
+        row.NextRunUtc.ShouldBe(newCursor);
+        row.MaxRuns.ShouldBe(7);
+        row.RuntimeInfo.ShouldBe("{}");
+    }
+
+    [Fact]
+    public async Task TryHaltSchedule_should_refuse_a_halt_computed_on_a_stale_cursor()
+    {
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+
+        (await _storage.TryHaltSchedule(schedule.Id, 0, cursor.AddMinutes(-5), QueuedTaskStatus.Queued, "{}"))
+            .ShouldBeFalse("a halt describing a state that no longer exists must not freeze a live schedule");
+        (await _storage.Get(t => t.Id == schedule.Id))[0].RuntimeInfo.ShouldBeNull();
+
+        (await _storage.TryHaltSchedule(schedule.Id, 0, cursor, QueuedTaskStatus.Queued,
+             "{\"Halted\":{\"Reason\":\"cap\"}}")).ShouldBeTrue();
+        (await _storage.Get(t => t.Id == schedule.Id))[0].RuntimeInfo.ShouldNotBeNull().ShouldContain("Halted");
+    }
+
+    [Fact]
+    public async Task UpdateCurrentRun_with_a_stale_schedule_version_should_report_VersionMismatch()
+    {
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor, scheduleVersion: 5);
+        var nextRun  = FloorToMicroseconds(cursor.AddHours(1));
+
+        (await _storage.UpdateCurrentRun(schedule.Id, 12, nextRun, AuditLevel.Full, 4))
+            .ShouldBe(ScheduleCasResult.VersionMismatch);
+        (await _storage.Get(t => t.Id == schedule.Id))[0].NextRunUtc
+            .ShouldBe(cursor, "a run that finished after a reschedule must not force its stale next run");
+
+        (await _storage.UpdateCurrentRun(schedule.Id, 12, nextRun, AuditLevel.Full, 5))
+            .ShouldBe(ScheduleCasResult.Applied);
+
+        var row = (await _storage.Get(t => t.Id == schedule.Id))[0];
+        row.NextRunUtc.ShouldBe(nextRun);
+        row.CurrentRunCount.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task CompleteRecurringRun_with_a_stale_schedule_version_should_report_VersionMismatch()
+    {
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor, scheduleVersion: 2);
+        var nextRun  = FloorToMicroseconds(cursor.AddHours(1));
+
+        (await _storage.CompleteRecurringRun(schedule.Id, 8, nextRun, AuditLevel.Full, 1))
+            .ShouldBe(ScheduleCasResult.VersionMismatch);
+        (await _storage.Get(t => t.Id == schedule.Id))[0].Status.ShouldBe(QueuedTaskStatus.Queued);
+
+        (await _storage.CompleteRecurringRun(schedule.Id, 8, nextRun, AuditLevel.Full, 2))
+            .ShouldBe(ScheduleCasResult.Applied);
+
+        var row = (await _storage.Get(t => t.Id == schedule.Id))[0];
+        row.Status.ShouldBe(QueuedTaskStatus.Completed);
+        row.NextRunUtc.ShouldBe(nextRun);
+        row.CurrentRunCount.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Remove_should_delete_a_schedule_together_with_its_occurrences()
+    {
+        // The self-referencing foreign key is Restrict, so a schedule with children can only be deleted by
+        // deleting them in the same transaction — which is what keeps a Remove from ever leaving orphans.
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+        var child    = NewOccurrence(schedule.Id, cursor);
+        await _storage.Persist(child);
+
+        await _storage.Remove(schedule.Id);
+
+        (await _storage.Get(t => t.Id == schedule.Id)).ShouldBeEmpty();
+        (await _storage.Get(t => t.Id == child.Id)).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Persist_should_reject_an_occurrence_without_its_slot()
+    {
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+
+        var slotless = NewOccurrence(schedule.Id, cursor);
+        slotless.ScheduledExecutionUtc = null;
+
+        await Should.ThrowAsync<Exception>(() => _storage.Persist(slotless));
+    }
+
+    [Fact]
+    public async Task Persist_should_reject_a_second_row_for_the_same_slot()
+    {
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+
+        await _storage.Persist(NewOccurrence(schedule.Id, cursor));
+
+        await Should.ThrowAsync<Exception>(() => _storage.Persist(NewOccurrence(schedule.Id, cursor)));
+    }
+
+    [Fact]
+    public async Task Persist_should_reject_an_occurrence_whose_schedule_does_not_exist()
+    {
+        // The self-referencing foreign key, from the other side than Remove_should_delete_a_schedule_together
+        // _with_its_occurrences: it is what stops an occurrence from existing without a schedule at all. An
+        // orphan is a row nothing advances, nothing cancels and nothing prunes, because every occurrence query
+        // — GetOccurrences, CountActiveOccurrences, CancelSchedule — starts from a parent id.
+        var cursor = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+
+        var orphan = NewOccurrence(GetGuidForProvider(), cursor);
+
+        await Should.ThrowAsync<Exception>(() => _storage.Persist(orphan));
+        (await _storage.Get(t => t.Id == orphan.Id)).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task GetOccurrences_and_CountActiveOccurrences_should_see_only_this_schedule()
+    {
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+        var other    = await PersistSchedule(cursor);
+
+        var active = NewOccurrence(schedule.Id, cursor);
+        await _storage.Persist(active);
+
+        var finished = NewOccurrence(schedule.Id, cursor.AddMinutes(1));
+        await _storage.Persist(finished);
+        await _storage.SetCompleted(finished.Id, 1, AuditLevel.Full);
+
+        await _storage.Persist(NewOccurrence(other.Id, cursor));
+
+        (await _storage.GetOccurrences(schedule.Id)).Length.ShouldBe(2);
+        (await _storage.GetOccurrences(schedule.Id, nonTerminalOnly: true)).ShouldHaveSingleItem()
+                                                                          .Id.ShouldBe(active.Id);
+        (await _storage.CountActiveOccurrences(schedule.Id)).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task CleanupTerminalOccurrences_should_prune_every_terminal_state_and_keep_the_schedule()
+    {
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddDays(-30));
+        var schedule = await PersistSchedule(cursor);
+
+        var completed = NewOccurrence(schedule.Id, cursor);
+        var failed    = NewOccurrence(schedule.Id, cursor.AddMinutes(1));
+        var cancelled = NewOccurrence(schedule.Id, cursor.AddMinutes(2));
+        var pending   = NewOccurrence(schedule.Id, cursor.AddMinutes(3));
+
+        foreach (var row in new[] { completed, failed, cancelled, pending })
+        {
+            row.CreatedAtUtc = FloorToMicroseconds(DateTimeOffset.UtcNow.AddDays(-30));
+            await _storage.Persist(row);
+        }
+
+        await _storage.SetCompleted(completed.Id, 1, AuditLevel.None);
+        await _storage.SetStatus(failed.Id, QueuedTaskStatus.Failed, new InvalidOperationException("x"),
+            AuditLevel.None);
+        await _storage.SetCancelledByUser(cancelled.Id, AuditLevel.None);
+
+        // The age gate is anchored on LastExecutionUtc, which a terminal transition stamps at that moment, so
+        // the cutoff has to sit just past "now" for occurrences that finished during the test to qualify.
+        var deleted = await ((EfCoreTaskStorage)_storage)
+            .CleanupTerminalOccurrences(DateTimeOffset.UtcNow.AddMinutes(1), preserveTasksWithLogs: false);
+
+        deleted.ShouldBe(3, "the ordinary completed-task purge would have kept the failed and cancelled ones");
+        (await _storage.Get(t => t.Id == pending.Id)).ShouldHaveSingleItem();
+        (await _storage.Get(t => t.Id == schedule.Id)).ShouldHaveSingleItem();
+    }
+
+    [Fact]
+    public async Task CleanupTerminalOccurrences_should_keep_an_occurrence_that_still_owns_execution_logs()
+    {
+        // R15: the occurrence window is usually far shorter than the log window, and deleting the row
+        // cascades its TaskExecutionLog rows. The log passes run earlier in the same cycle, so a log still
+        // there is one the log retention chose to keep — the same guard CleanupCompletedTasks already honours.
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddDays(-30));
+        var schedule = await PersistSchedule(cursor);
+
+        var withLogs = NewOccurrence(schedule.Id, cursor);
+        var noLogs   = NewOccurrence(schedule.Id, cursor.AddMinutes(1));
+
+        foreach (var row in new[] { withLogs, noLogs })
+        {
+            row.CreatedAtUtc = FloorToMicroseconds(DateTimeOffset.UtcNow.AddDays(-30));
+            await _storage.Persist(row);
+            await _storage.SetCompleted(row.Id, 1, AuditLevel.None);
+        }
+
+        await _storage.SaveExecutionLogsAsync(withLogs.Id, [
+            new TaskExecutionLog
+            {
+                TaskId         = withLogs.Id,
+                TimestampUtc   = FloorToMicroseconds(DateTimeOffset.UtcNow),
+                SequenceNumber = 1,
+                Level          = "Information",
+                Message        = "kept by the log retention window"
+            }
+        ], CancellationToken.None);
+
+        var cutoff = DateTimeOffset.UtcNow.AddMinutes(1);
+
+        var preserved = await ((EfCoreTaskStorage)_storage)
+            .CleanupTerminalOccurrences(cutoff, preserveTasksWithLogs: true);
+
+        preserved.ShouldBe(1, "only the occurrence with no surviving logs may be pruned");
+        (await _storage.Get(t => t.Id == withLogs.Id)).ShouldHaveSingleItem();
+        (await _storage.GetExecutionLogsAsync(withLogs.Id, CancellationToken.None)).Count.ShouldBe(1,
+            "the cascade must not destroy a log 82 days before its own window expires");
+        (await _storage.Get(t => t.Id == noLogs.Id)).ShouldBeEmpty();
+
+        // With no log retention active the historic cascade-on-purge behaviour stands.
+        var withGuardOff = await ((EfCoreTaskStorage)_storage)
+            .CleanupTerminalOccurrences(cutoff, preserveTasksWithLogs: false);
+
+        withGuardOff.ShouldBe(1);
+        (await _storage.Get(t => t.Id == withLogs.Id)).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task MaterializeOccurrence_should_persist_the_same_row_shape_on_every_provider()
+    {
+        // The three optimized providers hardcode the occurrence shape in their INSERT column list while the
+        // EF base inserts the caller's entity: without one canonical contract the SAME call stored a
+        // materially different row per backend (schedule version, run count, and every schedule-only field
+        // the entity happened to carry).
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor, scheduleVersion: 5);
+
+        var occurrence = NewOccurrence(schedule.Id, cursor);
+        occurrence.Status          = QueuedTaskStatus.Queued;
+        occurrence.ScheduleVersion = 0;
+        occurrence.CurrentRunCount = 7;
+        occurrence.IsRecurring     = true;
+        occurrence.TaskKey         = "a-key-that-belongs-to-the-schedule";
+        occurrence.RecurringTask   = "{\"copied\":true}";
+        occurrence.RecurringInfo   = "every minute";
+        occurrence.MaxRuns         = 3;
+        occurrence.RunUntil        = FloorToMicroseconds(cursor.AddDays(1));
+        occurrence.NextRunUtc      = FloorToMicroseconds(cursor.AddMinutes(5));
+        occurrence.Exception       = "stale";
+
+        var outcome = await _storage.MaterializeOccurrence(schedule.Id, 5, cursor, occurrence,
+            FloorToMicroseconds(cursor.AddMinutes(5)), AuditLevel.Full);
+
+        outcome.ShouldBe(OccurrenceMaterializationOutcome.Created);
+
+        var child = (await _storage.Get(t => t.Id == occurrence.Id)).ShouldHaveSingleItem();
+        child.ScheduleVersion.ShouldBe(5, "the occurrence belongs to the version it was materialized against");
+        child.Status.ShouldBe(QueuedTaskStatus.WaitingQueue);
+        (child.CurrentRunCount ?? 0).ShouldBe(0);
+        child.IsRecurring.ShouldBeFalse();
+        child.TaskKey.ShouldBeNull("a task key is unique per row and stays on the schedule");
+        child.RecurringTask.ShouldBeNull();
+        child.RecurringInfo.ShouldBeNull();
+        child.MaxRuns.ShouldBeNull();
+        child.RunUntil.ShouldBeNull();
+        child.NextRunUtc.ShouldBeNull("a cursor on a child would make it look like a series to recovery");
+        child.Exception.ShouldBeNull();
+        child.LastExecutionUtc.ShouldBeNull();
+
+        // What the caller legitimately supplies survives untouched.
+        child.ParentTaskId.ShouldBe(schedule.Id);
+        child.ScheduledExecutionUtc.ShouldBe(cursor);
+        child.QueueName.ShouldBe("recurring");
+        child.RuntimeInfo.ShouldBe("{\"SlotUtc\":\"probe\"}");
+        child.AuditLevel.ShouldBe((int)AuditLevel.Full);
+    }
+
+    #endregion
+
     #region Legacy serialization round-trip (B4 — Newtonsoft -> STJ, no data loss / no encoding corruption)
 
     private static readonly JsonSerializerSettings LegacyJsonSettings = new() { TypeNameHandling = TypeNameHandling.None };
@@ -2662,6 +3849,203 @@ public abstract class EfCoreTaskStorageTestsBase
 
         _mockedDbContext.QueuedTasks.Count(x => x.Id == aged.Id)
             .ShouldBe(1, "0 disables the only retention window, so there is no age cutoff and nothing is purged");
+    }
+
+    [Fact]
+    public async Task Should_treat_zero_occurrence_retention_as_disabled()
+    {
+        // B, for the occurrence window: 0 makes the cutoff `now`, so every cycle would prune an occurrence
+        // that finished seconds ago — and, with a schedule running every minute, delete its whole history as
+        // fast as it is written.
+        var now      = DateTimeOffset.UtcNow;
+        var schedule = DurableSchedule();
+        var fresh    = OccurrenceInState(schedule.Id, now.AddMinutes(-1), QueuedTaskStatus.Completed);
+
+        await PersistAndDetach(schedule, fresh);
+
+        var policy = new AuditRetentionPolicy { OccurrenceRetentionDays = 0 };
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        _mockedDbContext.QueuedTasks.Count(x => x.Id == fresh.Id)
+            .ShouldBe(1, "0 disables occurrence retention; nothing is pruned");
+    }
+
+    [Fact]
+    public async Task Should_treat_negative_occurrence_retention_as_disabled()
+    {
+        // B: -1 pushes the cutoff a day into the FUTURE, which would take even an occurrence that has just
+        // finished. Negative is disabled, not a future cutoff.
+        var now      = DateTimeOffset.UtcNow;
+        var schedule = DurableSchedule();
+        var fresh    = OccurrenceInState(schedule.Id, now, QueuedTaskStatus.Completed);
+
+        await PersistAndDetach(schedule, fresh);
+
+        var policy = new AuditRetentionPolicy { OccurrenceRetentionDays = -1 };
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        _mockedDbContext.QueuedTasks.Count(x => x.Id == fresh.Id)
+            .ShouldBe(1, "negative retention is disabled, not a future cutoff");
+    }
+
+    #endregion
+
+    #region Occurrence retention — the knob's plumbing through the cleanup cycle (M16)
+
+    [Fact]
+    public async Task Should_prune_terminal_occurrences_past_the_configured_occurrence_window()
+    {
+        // The knob is what turns the pass on, and the window is what it prunes by: without both, a schedule
+        // that has been running for a year keeps every slot it ever materialized.
+        var now       = DateTimeOffset.UtcNow;
+        var schedule  = DurableSchedule();
+        var completed = OccurrenceInState(schedule.Id, now.AddDays(-30), QueuedTaskStatus.Completed);
+        var failed    = OccurrenceInState(schedule.Id, now.AddDays(-29), QueuedTaskStatus.Failed);
+        var cancelled = OccurrenceInState(schedule.Id, now.AddDays(-28), QueuedTaskStatus.Cancelled);
+        var recent    = OccurrenceInState(schedule.Id, now.AddDays(-1), QueuedTaskStatus.Completed);
+        var running   = OccurrenceInState(schedule.Id, now.AddDays(-27), QueuedTaskStatus.InProgress);
+
+        await PersistAndDetach(schedule, completed, failed, cancelled, recent, running);
+
+        var policy = new AuditRetentionPolicy { OccurrenceRetentionDays = 7 };
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        var survivors = _mockedDbContext.QueuedTasks.Where(x => x.ParentTaskId == schedule.Id)
+                                        .Select(x => x.Id).ToList();
+        survivors.Count.ShouldBe(2);
+        survivors.ShouldContain(recent.Id, "the 1-day-old occurrence is inside the 7-day window");
+        survivors.ShouldContain(running.Id, "an occurrence still running is not terminal and is never pruned");
+
+        _mockedDbContext.QueuedTasks.Count(x => x.Id == schedule.Id)
+            .ShouldBe(1, "the schedule row is recurring: this pass never touches it");
+    }
+
+    [Fact]
+    public async Task Should_not_prune_occurrences_when_no_occurrence_retention_is_configured()
+    {
+        // null is the default, and it must leave the pass out of the cycle entirely — even a cycle that is
+        // otherwise doing real work. Occurrence retention is opt-in, like every other window here.
+        var now      = DateTimeOffset.UtcNow;
+        var schedule = DurableSchedule();
+        var ancient  = OccurrenceInState(schedule.Id, now.AddDays(-365), QueuedTaskStatus.Completed);
+
+        await PersistAndDetach(schedule, ancient);
+
+        var policy = new AuditRetentionPolicy { StatusAuditRetentionDays = 1 }; // an active cycle, no occurrence window
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        _mockedDbContext.QueuedTasks.Count(x => x.Id == ancient.Id)
+            .ShouldBe(1, "a null window keeps occurrences forever, however old");
+    }
+
+    [Fact]
+    public async Task Should_preserve_an_occurrence_whose_logs_the_log_window_kept()
+    {
+        // R15, through the policy rather than through the raw pass: the log-retention flag the cycle hands to
+        // CleanupTerminalOccurrences is DERIVED from the policy, and the occurrence window is typically far
+        // shorter than the log one. Deleting the row cascades its logs, so an occurrence that still owns logs
+        // the log passes deliberately kept must survive its own window.
+        var now      = DateTimeOffset.UtcNow;
+        var schedule = DurableSchedule();
+        var withLogs = OccurrenceInState(schedule.Id, now.AddDays(-30), QueuedTaskStatus.Completed,
+            LogAt(now.AddDays(-10), 0));
+        var noLogs   = OccurrenceInState(schedule.Id, now.AddDays(-29), QueuedTaskStatus.Completed);
+
+        await PersistAndDetach(schedule, withLogs, noLogs);
+
+        var policy = new AuditRetentionPolicy { OccurrenceRetentionDays = 7, ExecutionLogRetentionDays = 90 };
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        _mockedDbContext.QueuedTasks.Count(x => x.Id == withLogs.Id)
+            .ShouldBe(1, "the occurrence still owns a log 80 days short of its own window");
+        _mockedDbContext.TaskExecutionLogs.Count(x => x.TaskId == withLogs.Id).ShouldBe(1);
+        _mockedDbContext.QueuedTasks.Count(x => x.Id == noLogs.Id)
+            .ShouldBe(0, "an occurrence with nothing to protect is pruned by the same cycle");
+    }
+
+    [Fact]
+    public async Task Should_preserve_an_occurrence_whose_logs_the_count_cap_kept()
+    {
+        // Same guard, reached through the other half of the flag: a cap alone, with no time window at all,
+        // still counts as an active log retention.
+        var now      = DateTimeOffset.UtcNow;
+        var schedule = DurableSchedule();
+        var withLogs = OccurrenceInState(schedule.Id, now.AddDays(-30), QueuedTaskStatus.Completed,
+            LogAt(now.AddDays(-10), 0), LogAt(now.AddDays(-9), 1));
+
+        await PersistAndDetach(schedule, withLogs);
+
+        var policy = new AuditRetentionPolicy { OccurrenceRetentionDays = 7, MaxExecutionLogsPerTask = 10 };
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        _mockedDbContext.QueuedTasks.Count(x => x.Id == withLogs.Id)
+            .ShouldBe(1, "both logs are under the cap, so the cap kept them and they protect the row");
+        _mockedDbContext.TaskExecutionLogs.Count(x => x.TaskId == withLogs.Id).ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task Should_prune_an_occurrence_with_logs_when_no_log_retention_is_active()
+    {
+        // The complement that makes the two tests above about the FLAG and not about the rows: identical
+        // seeding, a policy with no log retention, opposite outcome. With nothing configured to keep them,
+        // the historic cascade-on-purge behaviour stands.
+        var now      = DateTimeOffset.UtcNow;
+        var schedule = DurableSchedule();
+        var withLogs = OccurrenceInState(schedule.Id, now.AddDays(-30), QueuedTaskStatus.Completed,
+            LogAt(now.AddDays(-10), 0));
+
+        await PersistAndDetach(schedule, withLogs);
+
+        var policy = new AuditRetentionPolicy { OccurrenceRetentionDays = 7 };
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        _mockedDbContext.QueuedTasks.Count(x => x.Id == withLogs.Id)
+            .ShouldBe(0, "no log retention is active, so no log is protecting the row");
+        _mockedDbContext.TaskExecutionLogs.Count(x => x.TaskId == withLogs.Id)
+            .ShouldBe(0, "the delete cascades to the logs it owned");
+    }
+
+    /// <summary>A durable schedule row: recurring, with a live cursor, and never pruned by the retention pass.</summary>
+    private QueuedTask DurableSchedule() => new()
+    {
+        Id           = GetGuidForProvider(),
+        CreatedAtUtc = FloorToMicroseconds(DateTimeOffset.UtcNow.AddDays(-365)),
+        Type         = "DurableSchedule",
+        Request      = "{}",
+        Handler      = "DurableHandler",
+        Status       = QueuedTaskStatus.Queued,
+        IsRecurring  = true,
+        NextRunUtc   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(5)),
+        QueueName    = "recurring"
+    };
+
+    /// <summary>
+    /// One occurrence of <paramref name="scheduleId"/>, dated by <paramref name="finishedAt"/> — which is both
+    /// its nominal slot and its <c>LastExecutionUtc</c>, the column the age gate reads. Two occurrences of the
+    /// same schedule therefore need two different <paramref name="finishedAt"/> values, or the unique index on
+    /// (parent, slot) refuses the second.
+    /// </summary>
+    private QueuedTask OccurrenceInState(Guid scheduleId, DateTimeOffset finishedAt, QueuedTaskStatus status,
+                                         params TaskExecutionLog[] logs)
+    {
+        var id = GetGuidForProvider();
+        foreach (var log in logs)
+            log.TaskId = id;
+
+        return new QueuedTask
+        {
+            Id                    = id,
+            CreatedAtUtc          = FloorToMicroseconds(finishedAt),
+            LastExecutionUtc      = FloorToMicroseconds(finishedAt),
+            ScheduledExecutionUtc = FloorToMicroseconds(finishedAt),
+            Type                  = "DurableSchedule",
+            Request               = "{}",
+            Handler               = "DurableHandler",
+            Status                = status,
+            ParentTaskId          = scheduleId,
+            QueueName             = "recurring",
+            ExecutionLogs         = [.. logs]
+        };
     }
 
     #endregion

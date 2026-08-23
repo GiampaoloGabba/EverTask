@@ -22,9 +22,47 @@ public class WorkerExecutor(
     ICancellationSourceProvider cancellationSourceProvider,
     IEverTaskLogger<WorkerExecutor> logger,
     ILoggerFactory loggerFactory,
-    IRateLimitGate? rateLimitGate = null,
-    TaskDeliveryRegistry? deliveryRegistry = null) : IEverTaskWorkerExecutor
+    IRateLimitGate? rateLimitGate,
+    TaskDeliveryRegistry? deliveryRegistry,
+    TimeProvider? timeProvider) : IEverTaskWorkerExecutor
 {
+    /// <summary>
+    /// The pre-P9 constructor, kept as a real overload so an assembly compiled against the previous release
+    /// still binds (P6/X6). The container picks the longer one, which is the only one that carries the clock.
+    /// </summary>
+    public WorkerExecutor(
+        IWorkerBlacklist workerBlacklist,
+        EverTaskServiceConfiguration options,
+        IServiceScopeFactory serviceScopeFactory,
+        IScheduler scheduler,
+        ICancellationSourceProvider cancellationSourceProvider,
+        IEverTaskLogger<WorkerExecutor> logger,
+        ILoggerFactory loggerFactory,
+        IRateLimitGate? rateLimitGate = null,
+        TaskDeliveryRegistry? deliveryRegistry = null)
+        : this(workerBlacklist, options, serviceScopeFactory, scheduler, cancellationSourceProvider, logger,
+            loggerFactory, rateLimitGate, deliveryRegistry, null) { }
+
+    // The scheduling clock (P9): every next-occurrence decision below reads it, so a test clock drives the
+    // whole series. Retry delays deliberately stay on the real clock (IRetryPolicy owns its own waits).
+    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+
+    // Resolved once, lazily: the evaluator is a singleton, and the worker only reaches the container
+    // through the scope factory. Racing initializations are harmless — the value is the same instance.
+    private IScheduleEvaluator? _evaluator;
+
+    private IScheduleEvaluator Evaluator
+    {
+        get
+        {
+            if (_evaluator != null)
+                return _evaluator;
+
+            using var scope = serviceScopeFactory.CreateScope();
+            return _evaluator = scope.ServiceProvider.GetService<IScheduleEvaluator>() ?? ScheduleEvaluator.Default;
+        }
+    }
+
     // Performance optimization: Cache for event data to avoid repeated serialization
     private static readonly ConditionalWeakTable<IEverTask, string> TaskJsonCache = new();
     private static readonly ConcurrentDictionary<Type, string> TypeStringCache = new();
@@ -1060,7 +1098,8 @@ public class WorkerExecutor(
         // - For first dispatch: the original scheduled time from the builder
         // - For tasks loaded from storage (after restart): NextRunUtc from the database
         //   (set in WorkerService.cs when loading pending tasks)
-        var scheduledTime = task.ExecutionTime ?? DateTimeOffset.UtcNow;
+        var nowUtc        = _timeProvider.GetUtcNow();
+        var scheduledTime = task.ExecutionTime ?? nowUtc;
 
         // Compute the next occurrence. A real execution (countsAsRun) advances the run number to
         // currentRun + 1 so the MaxRuns gate stops the series once MaxRuns real executions have happened.
@@ -1084,13 +1123,14 @@ public class WorkerExecutor(
         // anchor the skip-ahead reference in the past (a MinValue/past `now` would make every occurrence look
         // "in the future" and defeat the skip). Floor to the real now by dropping it (the built-in gate's
         // PastSlotFloor already guarantees a future slot; this only hardens the public extension point).
-        if (skipAheadTo.HasValue && skipAheadTo.Value <= DateTimeOffset.UtcNow)
+        if (skipAheadTo.HasValue && skipAheadTo.Value <= nowUtc)
             skipAheadTo = null;
 
         var runNumber = countsAsRun ? currentRun + 1 : currentRun;
-        var result = task.RecurringTask.CalculateNextValidRun(
-            scheduledTime, runNumber, referenceTime: countsAsRun ? null : skipAheadTo, isRecovery: !countsAsRun,
-            computeSkippedCount: countsAsRun);
+        var result = await Evaluator.CalculateNextValidRunAsync(
+            task.RecurringTask, scheduledTime, runNumber, nowUtc,
+            referenceTime: countsAsRun ? null : skipAheadTo, isRecovery: !countsAsRun,
+            computeSkippedCount: countsAsRun).ConfigureAwait(false);
 
         // Log skipped occurrences if any
         if (result.SkippedCount > 0)
@@ -1293,23 +1333,8 @@ public class WorkerExecutor(
         var taskJson = TaskJsonCache.GetValue(executor.Task, EverTaskJson.Serialize);
 
         // Cache type strings (permanent cache - types never unload)
-        var taskType = TypeStringCache.GetOrAdd(executor.Task.GetType(), type => type.ToString());
-
-        // Handler type: get from Handler instance (eager) or HandlerTypeName (lazy)
-        string handlerType;
-        if (executor.Handler != null)
-        {
-            handlerType = TypeStringCache.GetOrAdd(executor.Handler.GetType(), type => type.ToString());
-        }
-        else if (!string.IsNullOrEmpty(executor.HandlerTypeName))
-        {
-            // Lazy mode: extract simple type name from AssemblyQualifiedName
-            handlerType = executor.HandlerTypeName.Split(',')[0].Trim();
-        }
-        else
-        {
-            handlerType = "Unknown";
-        }
+        var taskType    = CachedTypeName(executor.Task.GetType());
+        var handlerType = EverTaskEventData.ResolveHandlerTypeName(executor, CachedTypeName);
 
         var severityName = severity switch
         {
@@ -1318,18 +1343,16 @@ public class WorkerExecutor(
             _ => SeverityError
         };
 
-        return new EverTaskEventData(
-            executor.PersistenceId,
-            DateTimeOffset.UtcNow,
-            severityName,
-            taskType,
-            handlerType,
-            taskJson,
-            message,
-            exception?.ToDetailedString(),
-            executionLogs
-        );
+        // Built by the SAME mapper as every other call site: the occurrence context (parent, nominal slot,
+        // schedule version) has one implementation, so what this hot path publishes cannot drift away from
+        // what the tests pin.
+        return EverTaskEventData.FromExecutor(executor, severityName, taskType, handlerType, taskJson, message,
+            exception, executionLogs);
     }
+
+    /// <summary>Type name through the permanent cache; hoisted so the delegate is allocated once.</summary>
+    private static readonly Func<Type, string> CachedTypeName =
+        static type => TypeStringCache.GetOrAdd(type, static t => t.ToString());
 
     #endregion
 

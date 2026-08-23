@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Linq.Expressions;
 
 namespace EverTask.Handler;
@@ -38,6 +38,35 @@ public record TaskHandlerExecutor(
     // dropped by ToLazy(). Never persisted.
     IAsyncDisposable? HandlerScope = null)
 {
+    // Occurrence metadata lives in INIT properties declared in the body, never as appended positional
+    // parameters: appending would change the primary constructor and Deconstruct signatures, breaking every
+    // consumer that constructs or deconstructs an executor (X4). `with` expressions copy them for free.
+
+    /// <summary>
+    /// The recurring schedule row this executor is an occurrence of, or null for a schedule row / plain task.
+    /// </summary>
+    public Guid? ParentTaskId { get; init; }
+
+    /// <summary>Occurrence metadata JSON carried to the persisted row (opaque to the worker).</summary>
+    public string? RuntimeInfo { get; init; }
+
+    /// <summary>1-based number of the run this delivery represents, when it is durably known.</summary>
+    public int? RunNumber { get; init; }
+
+    /// <summary>Version of the schedule definition this executor was built from (0 for unversioned rows).</summary>
+    public int ScheduleVersion { get; init; }
+
+    /// <summary>
+    /// The nominal slot this delivery belongs to, when it differs from <see cref="ExecutionTime"/> (the
+    /// rate-limit gate replaces the latter with its reserved slot).
+    /// </summary>
+    public DateTimeOffset? NominalSlotUtc { get; init; }
+
+    /// <summary>
+    /// True when this executor represents a DURABLE schedule row: it owns the definition and the cursor but
+    /// never runs the handler — its due slots become child rows instead.
+    /// </summary>
+    public bool IsScheduleOnly => RecurringTask?.OccurrenceMode == OccurrenceMode.Durable;
 
     /// <summary>
     /// Indicates whether this executor is in lazy mode (handler not yet resolved).
@@ -174,60 +203,43 @@ public record TaskHandlerExecutor(
     /// container that resolved it. Fresh handler instances are resolved and disposed at
     /// execution time inside the worker's per-task scope.
     /// </remarks>
-    public TaskHandlerExecutor ToLazy()
-    {
-        // ALWAYS create a new instance to ensure Parallel.ForEachAsync can process recurring tasks
-        // Even if already lazy, we need a NEW reference for the channel consumer to pick up
-        if (IsLazy)
+    public TaskHandlerExecutor ToLazy() =>
+        // ALWAYS a new instance, even when already lazy: the channel consumer needs a NEW reference so
+        // Parallel.ForEachAsync can process recurring tasks. `with` copies every member — the positional
+        // ones AND the init-only occurrence metadata — so a new member can never be forgotten here (X4);
+        // only the handler instance, its callbacks and its owned scope are dropped. The handler type name
+        // is reused when stamped at dispatch, else derived from the instance being dropped.
+        this with
         {
-            // Create a NEW instance with the same values
-            return new TaskHandlerExecutor(
-                Task,
-                Handler: null,
-                HandlerTypeName,
-                ExecutionTime,
-                RecurringTask,
-                HandlerCallback: null,
-                HandlerErrorCallback: null,
-                HandlerStartedCallback: null,
-                HandlerCompletedCallback: null,
-                PersistenceId,
-                QueueName,
-                TaskKey,
-                AuditLevel,
-                RateLimitPolicy,
-                RateLimitKey
-            );
-        }
-
-        // Reuse the handler type name stamped at dispatch time when available,
-        // falling back to the shared type-name cache (AQN dedup)
-        var handlerTypeName = HandlerTypeName ?? TypeNameCache.GetAssemblyQualifiedName(Handler!.GetType());
-
-        // Create lazy executor with handler and callbacks set to null
-        return new TaskHandlerExecutor(
-            Task,
-            Handler: null,
-            HandlerTypeName: handlerTypeName,
-            ExecutionTime,
-            RecurringTask,
-            HandlerCallback: null,
-            HandlerErrorCallback: null,
-            HandlerStartedCallback: null,
-            HandlerCompletedCallback: null,
-            PersistenceId,
-            QueueName,
-            TaskKey,
-            AuditLevel,
-            RateLimitPolicy,
-            RateLimitKey
-        );
-    }
+            Handler = null,
+            HandlerTypeName = HandlerTypeName ?? (Handler != null
+                ? TypeNameCache.GetAssemblyQualifiedName(Handler.GetType())
+                : null),
+            HandlerCallback = null,
+            HandlerErrorCallback = null,
+            HandlerStartedCallback = null,
+            HandlerCompletedCallback = null,
+            HandlerScope = null
+        };
 };
 
 public static class TaskHandlerExecutorExtensions
 {
-    public static QueuedTask ToQueuedTask(this TaskHandlerExecutor executor)
+    /// <summary>
+    /// Maps an executor to the row that persists it, stamped from the real clock.
+    /// </summary>
+    /// <remarks>
+    /// The zero-extra-argument shape is preserved exactly (P6/X6): an assembly compiled against the previous
+    /// release calls THIS signature, and turning it into an optional parameter would have removed it.
+    /// </remarks>
+    public static QueuedTask ToQueuedTask(this TaskHandlerExecutor executor) => executor.ToQueuedTask(null);
+
+    /// <param name="createdAtUtc">
+    /// The scheduling clock's "now", stamped as <see cref="QueuedTask.CreatedAtUtc"/>. The recovery cutoff
+    /// compares that column against the same clock, so a host running on an injected one must not stamp its
+    /// rows from the wall clock or recovery would never see them. Null falls back to the real clock.
+    /// </param>
+    public static QueuedTask ToQueuedTask(this TaskHandlerExecutor executor, DateTimeOffset? createdAtUtc)
     {
         ArgumentNullException.ThrowIfNull(executor.Task);
 
@@ -266,16 +278,16 @@ public static class TaskHandlerExecutorExtensions
             scheduleTask = EverTaskJson.Serialize(executor.RecurringTask);
             isRecurring  = true;
 
-            // For a newly dispatched recurring task, NextRunUtc should be the time of the first execution
-            // (same as ScheduledExecutionUtc). If ExecutionTime is null (e.g., immediate execution),
-            // calculate the first occurrence from UtcNow.
+            // The first NextRunUtc is DECIDED BY THE DISPATCHER and arrives here as ExecutionTime: every
+            // persisted dispatch goes through the schedule evaluator first, so this mapping never re-derives
+            // the grid. The fallback below only serves direct callers of this extension that skipped the
+            // dispatcher (it is unreachable from the library's own paths).
             if (executor.ExecutionTime.HasValue)
             {
                 nextRun = executor.ExecutionTime;
             }
             else
             {
-                // Calculate first occurrence for immediate execution
                 var referenceTime = DateTimeOffset.UtcNow;
                 var result =
                     executor.RecurringTask.CalculateNextValidRun(referenceTime, 0, referenceTime: referenceTime);
@@ -302,7 +314,7 @@ public static class TaskHandlerExecutorExtensions
             Request               = request,
             Handler               = handlerType,
             Status                = QueuedTaskStatus.WaitingQueue,
-            CreatedAtUtc          = DateTimeOffset.UtcNow,
+            CreatedAtUtc          = createdAtUtc ?? DateTimeOffset.UtcNow,
             ScheduledExecutionUtc = executor.ExecutionTime,
             IsRecurring           = isRecurring,
             RecurringTask         = scheduleTask,
@@ -313,7 +325,10 @@ public static class TaskHandlerExecutorExtensions
             CurrentRunCount       = 0,
             QueueName             = executor.QueueName,
             TaskKey               = executor.TaskKey,
-            AuditLevel            = (int)executor.AuditLevel
+            AuditLevel            = (int)executor.AuditLevel,
+            ParentTaskId          = executor.ParentTaskId,
+            RuntimeInfo           = executor.RuntimeInfo,
+            ScheduleVersion       = executor.ScheduleVersion
         };
     }
 }

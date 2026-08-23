@@ -35,12 +35,14 @@ per dispatch, fail-safe) and stamped on `TaskHandlerExecutor` (memory-only, pres
   `TryUnschedule` already removed the registration (Cancel or same-taskKey re-dispatch landed mid-re-park):
   clean up the lot entry + reservation or they leak forever. `IsScheduled(id) == true` means a newer
   registration took over and must survive.
-- **No storage schema changes, no recovery-filter changes, no `EverTaskEventData` changes** (positional
-  record, binary compat).
+- **Rate limiting itself changes no storage schema and no recovery filter.** `EverTaskEventData` may only
+  grow `init` properties in its body: appending a positional parameter would change its primary constructor
+  and `Deconstruct`, which every subscriber compiled against them depends on.
 - **Never a general budget rollback**: `ReleaseAsync` is newest-only CAS at most; orphan reservations lapse
   via TTL (waste = exactly one emission interval — under-use, never violation).
-- **Wall-clock UTC only** for slot math (slots are handed to the scheduler); the injectable `TimeProvider` is
-  for unit tests only.
+- **Wall-clock UTC only** for slot math (slots are handed to the scheduler) — never a monotonic clock. The
+  limiter, the gate and the parking lot all read the SAME injected `TimeProvider` the schedulers sleep on
+  (P9), which is what keeps a reserved slot and the scheduler's due check on one clock.
 
 ## Re-park rules
 

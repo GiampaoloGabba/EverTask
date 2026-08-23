@@ -100,6 +100,173 @@ public class PostgresEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsync
         count.ShouldBe(1, "IX_QueuedTasks_Recovery should exist on the evertask.QueuedTasks table");
     }
 
+    private static async Task<T> ScalarAsync<T>(NpgsqlConnection connection, string sql)
+    {
+        await using var command = new NpgsqlCommand(sql, connection);
+        return (T)(await command.ExecuteScalarAsync())!;
+    }
+
+    /// <summary>
+    /// The durable-occurrence schema, read from the CATALOG rather than inferred from behaviour: exercising
+    /// the operations passes just as well on a table whose unique index is missing or whose foreign key
+    /// cascades, right up to the day a real workload hits the difference.
+    /// </summary>
+    [Fact]
+    public async Task Should_have_the_durable_occurrence_schema_on_queued_tasks()
+    {
+        await using var connection = new NpgsqlConnection(_connectionString);
+        await connection.OpenAsync();
+
+        // No filter here, unlike SQL Server: PostgreSQL already treats NULLs as distinct in a unique index.
+        var occurrenceIndex = await ScalarAsync<string>(connection,
+            """
+            SELECT indexdef FROM pg_indexes
+            WHERE schemaname = 'evertask' AND indexname = 'UX_QueuedTasks_Occurrence'
+            """);
+        occurrenceIndex.ShouldContain("UNIQUE");
+        occurrenceIndex.ShouldContain("ParentTaskId");
+        occurrenceIndex.ShouldContain("ScheduledExecutionUtc");
+        occurrenceIndex.Contains("WHERE", StringComparison.Ordinal).ShouldBeFalse(
+            "a filter would be redundant on PostgreSQL and would silently narrow the guarantee");
+
+        var parentIndex = await ScalarAsync<long>(connection,
+            """
+            SELECT COUNT(*) FROM pg_indexes
+            WHERE schemaname = 'evertask' AND indexname = 'IX_QueuedTasks_ParentTaskId'
+            """);
+        parentIndex.ShouldBe(1);
+
+        var checkConstraint = await ScalarAsync<string>(connection,
+            """
+            SELECT pg_get_constraintdef(c.oid)
+            FROM pg_constraint c
+            JOIN pg_class t ON t.oid = c.conrelid
+            JOIN pg_namespace n ON n.oid = t.relnamespace
+            WHERE n.nspname = 'evertask' AND t.relname = 'QueuedTasks'
+              AND c.conname = 'CK_QueuedTasks_OccurrenceSlot'
+            """);
+        checkConstraint.Contains("ParentTaskId", StringComparison.Ordinal).ShouldBeTrue(
+            "the check must be spelled with QUOTED column names or PostgreSQL folds them to lowercase");
+
+        // 'r' = RESTRICT ('a' would be NO ACTION, 'c' CASCADE). Npgsql renders DeleteBehavior.Restrict as a
+        // genuine RESTRICT; what matters is that it is neither of the cascading rules — the key exists to stop
+        // a concurrent Remove of the schedule from orphaning its occurrences, and the storage deletes them
+        // explicitly in the same transaction.
+        var deleteRule = await ScalarAsync<char>(connection,
+            """
+            SELECT c.confdeltype
+            FROM pg_constraint c
+            JOIN pg_class t ON t.oid = c.conrelid
+            JOIN pg_namespace n ON n.oid = t.relnamespace
+            WHERE n.nspname = 'evertask' AND t.relname = 'QueuedTasks'
+              AND c.conname = 'FK_QueuedTasks_QueuedTasks_ParentTaskId'
+            """);
+        deleteRule.ShouldBe('r');
+    }
+
+#if NET10_0
+    // One TFM only: EF Core renders the same migration differently across its own majors, and this
+    // repository builds against three of them. See MigrationSqlSnapshot.
+    [Fact]
+    public void Should_emit_the_expected_sql_for_the_durable_occurrences_migration() =>
+        MigrationSqlSnapshot.Verify((DbContext)_dbContext,
+            "20260616162141_Initial", "20260822182810_AddDurableOccurrences",
+            "Postgres.AddDurableOccurrences");
+#endif
+
+    /// <summary>
+    /// M15 under PostgreSQL's snapshot rules: a cancel that runs while a materializer is inserting an
+    /// occurrence must also cancel that occurrence.
+    /// </summary>
+    /// <remarks>
+    /// The materializer is reproduced here as a second real session doing exactly what
+    /// <c>MaterializeOccurrence</c> does — lock the schedule row <c>FOR UPDATE</c>, insert the child, commit —
+    /// because that lock discipline is the whole point. Under READ COMMITTED a single statement runs on a
+    /// snapshot taken BEFORE it starts waiting on a row lock, so a cancel expressed as one UPDATE never sees
+    /// the child that appears while it waits: the schedule would end up Cancelled with a brand-new
+    /// <c>WaitingQueue</c> occurrence free to run after it.
+    /// </remarks>
+    [Fact]
+    public async Task CancelSchedule_must_also_cancel_an_occurrence_a_materializer_commits_while_it_waits()
+    {
+        var cursor   = DateTimeOffset.UtcNow.AddMinutes(-1);
+        var schedule = new QueuedTask
+        {
+            Id           = GetGuidForProvider(),
+            Type         = "DurableSchedule",
+            Request      = "{}",
+            Handler      = "H",
+            CreatedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-10),
+            Status       = QueuedTaskStatus.Queued,
+            IsRecurring  = true,
+            NextRunUtc   = cursor
+        };
+        await _taskStorage.Persist(schedule);
+
+        var childId = GetGuidForProvider();
+
+        await using var materializer = new NpgsqlConnection(_connectionString);
+        await materializer.OpenAsync();
+
+        await using var transaction = await materializer.BeginTransactionAsync();
+
+        await using (var takeLock = new NpgsqlCommand(
+                         """SELECT "Id" FROM "evertask"."QueuedTasks" WHERE "Id" = @parent FOR UPDATE""",
+                         materializer, transaction))
+        {
+            takeLock.Parameters.AddWithValue("parent", schedule.Id);
+            await takeLock.ExecuteScalarAsync();
+        }
+
+        // The cancel starts now and blocks on the schedule row the materializer holds.
+        var cancel = Task.Run(() => _taskStorage.CancelSchedule(schedule.Id, AuditLevel.Full));
+
+        await WaitForBlockedBackendAsync();
+
+        await using (var insert = new NpgsqlCommand(
+                         """
+                         INSERT INTO "evertask"."QueuedTasks"
+                             ("Id", "CreatedAtUtc", "ExecutionTimeMs", "ScheduledExecutionUtc", "Type", "Request",
+                              "Handler", "IsRecurring", "CurrentRunCount", "Status", "ParentTaskId", "ScheduleVersion")
+                         VALUES (@id, now(), 0, @slot, 'DurableSchedule', '{}', 'H', false, 0, 'WaitingQueue',
+                                 @parent, 0)
+                         """,
+                         materializer, transaction))
+        {
+            insert.Parameters.AddWithValue("id", childId);
+            insert.Parameters.AddWithValue("slot", cursor);
+            insert.Parameters.AddWithValue("parent", schedule.Id);
+            await insert.ExecuteNonQueryAsync();
+        }
+
+        await transaction.CommitAsync();
+        await cancel;
+
+        (await _taskStorage.Get(t => t.Id == schedule.Id))[0].Status.ShouldBe(QueuedTaskStatus.Cancelled);
+        (await _taskStorage.Get(t => t.Id == childId))[0].Status.ShouldBe(QueuedTaskStatus.Cancelled,
+            "an occurrence committed while the cancel was waiting must not survive the cancel and execute");
+    }
+
+    /// <summary>Waits until some backend is blocked on a lock, so the ordering under test is real.</summary>
+    private async Task WaitForBlockedBackendAsync()
+    {
+        await using var observer = new NpgsqlConnection(_connectionString);
+        await observer.OpenAsync();
+
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (DateTime.UtcNow < deadline)
+        {
+            var blocked = await ScalarAsync<long>(observer,
+                "SELECT COUNT(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND state = 'active'");
+            if (blocked > 0)
+                return;
+
+            await Task.Delay(25);
+        }
+
+        throw new TimeoutException("The cancel never reached the schedule row's lock: the race was not set up.");
+    }
+
     [Fact]
     public async Task TaskKey_unique_index_allows_multiple_null_keys()
     {
@@ -342,6 +509,38 @@ public class PostgresEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsync
 
         await _respawner.ResetAsync(connection);
     }
+
+    protected override string InstallStatusAuditInsertFaultSql =>
+        // RAISE aborts the whole statement, and the materialization IS one statement here: the occurrence
+        // insert and the audit insert are two branches of the same writable CTE.
+        $"""
+         CREATE OR REPLACE FUNCTION evertask_audit_fault() RETURNS trigger LANGUAGE plpgsql AS $fault$
+         BEGIN RAISE EXCEPTION 'injected audit fault'; END $fault$;
+         CREATE TRIGGER trg_evertask_audit_fault BEFORE INSERT ON "{_dbContext.Schema}"."StatusAudit"
+         FOR EACH ROW EXECUTE FUNCTION evertask_audit_fault();
+         """;
+
+    protected override string RemoveStatusAuditInsertFaultSql =>
+        $"""
+         DROP TRIGGER IF EXISTS trg_evertask_audit_fault ON "{_dbContext.Schema}"."StatusAudit";
+         DROP FUNCTION IF EXISTS evertask_audit_fault();
+         """;
+
+    protected override string InstallScheduleAdvanceFaultSql =>
+        // The writable CTE inserts the occurrence and updates the schedule in the same statement, so failing
+        // the update aborts the pair — the window the plan names, expressed the only way this shape allows.
+        $"""
+         CREATE OR REPLACE FUNCTION evertask_advance_fault() RETURNS trigger LANGUAGE plpgsql AS $fault$
+         BEGIN RAISE EXCEPTION 'injected advance fault'; END $fault$;
+         CREATE TRIGGER trg_evertask_advance_fault BEFORE UPDATE ON "{_dbContext.Schema}"."QueuedTasks"
+         FOR EACH ROW EXECUTE FUNCTION evertask_advance_fault();
+         """;
+
+    protected override string RemoveScheduleAdvanceFaultSql =>
+        $"""
+         DROP TRIGGER IF EXISTS trg_evertask_advance_fault ON "{_dbContext.Schema}"."QueuedTasks";
+         DROP FUNCTION IF EXISTS evertask_advance_fault();
+         """;
 
     protected override ITaskStoreDbContext CreateDbContext()
     {

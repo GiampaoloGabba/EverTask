@@ -81,6 +81,21 @@ public sealed class AuditRetentionPolicy
     public int? MaxExecutionLogsPerTask { get; set; }
 
     /// <summary>
+    /// Gets or sets the number of days to retain the finished occurrences of a durable recurring schedule
+    /// (the child rows a schedule materializes, one per slot). Set to null for unlimited retention (default).
+    /// </summary>
+    /// <remarks>
+    /// Occurrences in ANY terminal state are pruned — <c>Completed</c>, <c>Failed</c> and <c>Cancelled</c>
+    /// alike — which is what distinguishes this window from
+    /// <see cref="DeleteCompletedTasksAfterRetention"/>: that one only removes completed rows with no audit
+    /// trail left, so a busy schedule's failed and cancelled occurrences would accumulate without bound.
+    /// A durable schedule is driven forward by its cursor, never by its past occurrence rows, so pruning
+    /// them loses no state and never causes a slot to be re-materialized. The schedule row itself is
+    /// recurring and is never deleted by this pass.
+    /// </remarks>
+    public int? OccurrenceRetentionDays { get; set; }
+
+    /// <summary>
     /// Gets or sets whether completed, non-recurring tasks are hard-deleted once their audit trail
     /// has aged out. Disabled by default — task rows are preserved indefinitely.
     /// </summary>
@@ -129,6 +144,7 @@ public sealed class AuditRetentionPolicy
         ErrorAuditRetentionDays = null;
         ExecutionLogRetentionDays = null;
         MaxExecutionLogsPerTask = null;
+        OccurrenceRetentionDays = null;
         DeleteCompletedTasksAfterRetention = false;
     }
 

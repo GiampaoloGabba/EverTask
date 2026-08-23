@@ -272,6 +272,7 @@ var policy = new AuditRetentionPolicy
     ErrorAuditRetentionDays = 90,              // Errors retained for 90 days
     ExecutionLogRetentionDays = 30,            // Captured execution logs trimmed after 30 days
     MaxExecutionLogsPerTask = 1000,            // Keep at most the latest 1000 logs per task
+    OccurrenceRetentionDays = 60,              // Finished occurrences of durable schedules pruned after 60 days
     DeleteCompletedTasksAfterRetention = true  // Purge completed task rows once aged out (see below)
 };
 
@@ -291,11 +292,14 @@ builder.Services.AddAuditCleanup(policy, cleanupIntervalHours: 12);
 | `ErrorAuditRetentionDays` | `int?` | `null` | Days to retain error audit records (overrides above for failures) |
 | `ExecutionLogRetentionDays` | `int?` | `null` | Days to retain captured execution logs (`TaskExecutionLog`), trimmed independently of the parent task (anchored on `TimestampUtc`) |
 | `MaxExecutionLogsPerTask` | `int?` | `null` | Per-task, cross-run cap: keep at most the latest N execution logs per task and delete the oldest beyond N |
+| `OccurrenceRetentionDays` | `int?` | `null` | Days to retain the finished occurrences of a durable recurring schedule (the child rows it materializes, one per slot) |
 | `DeleteCompletedTasksAfterRetention` | `bool` | `false` | Hard-delete a completed non-recurring task once it is older than the longest retention window **and** has no audit rows |
 
 > `DeleteCompletedTasksWithAudits` is **`[Obsolete]`**: a legacy alias that forwards to `DeleteCompletedTasksAfterRetention`. Don't use it in new code; it remains only for source compatibility with pre-rename configs.
 >
 > **When a completed task is deleted:** when it is older than the longest of `StatusAuditRetentionDays`/`RunsAuditRetentionDays`/`ErrorAuditRetentionDays` (measured from `LastExecutionUtc`, falling back to `CreatedAtUtc`) and has no remaining StatusAudit/RunsAudit rows. If no retention window is configured, no completed tasks are deleted (a non-positive window counts as disabled). **When a log-retention window or cap (`ExecutionLogRetentionDays` / `MaxExecutionLogsPerTask`) is active, a task that still has surviving logs is preserved**, so its logs are never cascade-deleted before their own window expires; once those logs age out the task is purged. With no log retention configured, deleting the task cascades to everything it owns, captured execution logs included.
+>
+> **Occurrence retention.** `OccurrenceRetentionDays` prunes the finished occurrences of a durable recurring schedule, whatever terminal state they ended in: Completed, Failed and Cancelled alike. That is where it differs from `DeleteCompletedTasksAfterRetention`, which only removes completed rows with no audit trail left; without a window of its own, a busy schedule's failed and cancelled occurrences would pile up forever. Pruning them loses nothing, because a durable schedule is driven by its cursor and not by its past occurrence rows, so a pruned slot is never materialized again. The schedule row is recurring, and this pass never deletes it. **When a log-retention window or cap is active, an occurrence that still owns execution logs is preserved**, exactly as for completed tasks: the occurrence window is usually much shorter than the log one, and deleting the row would cascade to logs the log retention chose to keep. Default `null` (unlimited); enforced by `AddAuditCleanup(policy, …)`.
 >
 > **Execution-log retention.** `ExecutionLogRetentionDays` and `MaxExecutionLogsPerTask` trim `TaskExecutionLog` rows on their own, without deleting the task, so a long-running service (recurring tasks especially) never accumulates logs without bound. Both default to `null` (unlimited), so enabling persistent logging never starts deleting logs on its own. They are separate from `PersistentLoggerOptions.MaxLogsPerTask`, which caps a single execution's logs at capture time; these two trim logs across all past runs. When both are set, a log is deleted if it breaks either rule. Both are enforced by `AddAuditCleanup(policy, …)`.
 
@@ -508,6 +512,38 @@ Only disable lazy resolution if:
 ### SetRateLimiterOptions
 
 Configures the global infrastructure knobs of the keyed rate limiter (v3.7+). See the dedicated [Rate Limiting Configuration](#rate-limiting-configuration) section below for the full reference (global knobs, per-handler `RateLimitPolicy`, key source).
+
+### The Scheduling Clock (`TimeProvider`)
+
+Not a builder method, but a DI registration. `AddEverTask` registers `TimeProvider.System` with `TryAddSingleton`, and that single instance is what answers "what time is it?" for dispatch delays, the occurrence grid of a recurring schedule, both schedulers, startup recovery, and the rate limiter with its gate and parking lot.
+
+**Signature:**
+```csharp
+services.AddSingleton<TimeProvider>(myProvider);   // before AddEverTask, or on .Services afterwards
+```
+
+**Default:** `TimeProvider.System`
+
+**Examples:**
+```csharp
+// Production: nothing to do. AddEverTask registers the system clock.
+builder.Services.AddEverTask(opt => opt.RegisterTasksFromAssembly(typeof(Program).Assembly));
+
+// Tests: register a controllable clock and the whole pipeline follows it.
+var clock = new FakeTimeProvider(new DateTimeOffset(2026, 5, 1, 12, 0, 0, TimeSpan.Zero));
+services.AddSingleton<TimeProvider>(clock);
+services.AddEverTask(opt => opt.RegisterTasksFromAssembly(typeof(Program).Assembly))
+        .AddMemoryStorage();
+
+// ...dispatch a schedule, then move time forward instead of waiting for it:
+clock.Advance(TimeSpan.FromHours(2));
+```
+
+**Notes:**
+- `TryAddSingleton` is what makes this a seam: register your own provider first and `AddEverTask` leaves it alone. Registering it afterwards works too, as long as it is a plain `AddSingleton` that replaces the entry.
+- The schedulers wait on `Task.Delay(delay, timeProvider)`, not on a wall-clock timeout, so a test clock that stands still keeps an occurrence pending no matter how much real time passes. A fake provider has to drive its timers as well as `GetUtcNow()` for that to hold.
+- Storage never resolves the clock on its own: the core passes the instant into `RetrievePending` and `TrySetQueuedIfRecoverable`, so the recovery filter judges a row against the same "now" the rest of the pipeline sees. A custom store that only implements the older signatures keeps working and reads the real clock (see [Custom Storage](storage/custom-storage.md)).
+- Retry delays, audit timestamps and log timestamps stay on the real clock deliberately. `IRetryPolicy` is a public interface that owns its own waits, and an audit row records when something really happened. Do not expect a fake clock to complete a retry delay.
 
 ## Queue Configuration
 

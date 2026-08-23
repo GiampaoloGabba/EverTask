@@ -10,6 +10,10 @@ public class WorkerQueue : IWorkerQueue
     private readonly IWorkerBlacklist _workerBlacklist;
     private readonly ITaskStorage? _taskStorage;
 
+    // The scheduling clock (P9): the conditional recovery transition must judge RunUntil against the SAME
+    // instant as the recovery filter that selected the row, never the storage's own reading of the clock.
+    private readonly TimeProvider _timeProvider;
+
     // Per-process delivery registry: an id is registered from the channel write until its
     // delivery terminally ends (WorkerExecutor.DoWork outer finally). A second write of the
     // same id is rejected here, which makes in-process double delivery impossible by
@@ -50,12 +54,27 @@ public class WorkerQueue : IWorkerQueue
         IWorkerBlacklist workerBlacklist,
         ITaskStorage? taskStorage = null,
         TaskDeliveryRegistry? deliveryRegistry = null)
+        : this(configuration, logger, workerBlacklist, taskStorage, deliveryRegistry, null) { }
+
+    /// <summary>
+    /// <see cref="WorkerQueue(QueueConfiguration,ILogger,IWorkerBlacklist,ITaskStorage,TaskDeliveryRegistry)"/>
+    /// on an explicit scheduling clock (P9). The pre-P9 arity above is kept as a real overload so an assembly
+    /// compiled against the previous release still binds (P6/X6).
+    /// </summary>
+    public WorkerQueue(
+        QueueConfiguration configuration,
+        ILogger logger,
+        IWorkerBlacklist workerBlacklist,
+        ITaskStorage? taskStorage,
+        TaskDeliveryRegistry? deliveryRegistry,
+        TimeProvider? timeProvider)
     {
         Configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _workerBlacklist = workerBlacklist ?? throw new ArgumentNullException(nameof(workerBlacklist));
         _taskStorage = taskStorage;
         _deliveryRegistry = deliveryRegistry ?? new TaskDeliveryRegistry();
+        _timeProvider = timeProvider ?? TimeProvider.System;
 
         Name = configuration.Name;
         // The itemDropped callback fires for items silently dropped by the Drop* full modes (never
@@ -152,7 +171,7 @@ public class WorkerQueue : IWorkerQueue
                 {
                     // Refused transition = the row terminally finished since the recovery read it:
                     // release the registration and skip (nothing was written anywhere)
-                    if (!await _taskStorage.TrySetQueuedIfRecoverable(task.PersistenceId, task.AuditLevel, cancellationToken).ConfigureAwait(false))
+                    if (!await _taskStorage.TrySetQueuedIfRecoverable(_timeProvider.GetUtcNow(), task.PersistenceId, task.AuditLevel, cancellationToken).ConfigureAwait(false))
                     {
                         _deliveryRegistry.End(task.PersistenceId);
                         _logger.RecoveryEnqueueSkipped(task.PersistenceId);
@@ -250,7 +269,7 @@ public class WorkerQueue : IWorkerQueue
                     // Scheduler slot fired: only transition if the row is still recoverable. Refused =
                     // the row terminally finished since the slot was registered — release the
                     // registration and skip (nothing was written anywhere).
-                    if (!await _taskStorage.TrySetQueuedIfRecoverable(task.PersistenceId, task.AuditLevel, cancellationToken).ConfigureAwait(false))
+                    if (!await _taskStorage.TrySetQueuedIfRecoverable(_timeProvider.GetUtcNow(), task.PersistenceId, task.AuditLevel, cancellationToken).ConfigureAwait(false))
                     {
                         _deliveryRegistry.End(task.PersistenceId);
                         _logger.SchedulerEnqueueSkipped(task.PersistenceId);

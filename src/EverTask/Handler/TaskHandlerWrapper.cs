@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using EverTask.Configuration;
+using EverTask.Dispatcher;
 
 namespace EverTask.Handler;
 
@@ -12,7 +13,8 @@ internal abstract class TaskHandlerWrapper
     public abstract ValueTask<TaskHandlerExecutor> Handle(IEverTask task, DateTimeOffset? executionTime,
                                                           RecurringTask? recurring, IServiceProvider serviceFactory,
                                                           AuditLevel auditLevel, Guid? existingTaskId = null,
-                                                          string? taskKey = null, bool useLazyExecutor = false);
+                                                          string? taskKey = null, bool useLazyExecutor = false,
+                                                          DispatchRowMetadata rowMetadata = default);
 }
 
 internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TTask : IEverTask
@@ -29,7 +31,8 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
                                                                 RecurringTask? recurring,
                                                                 IServiceProvider serviceFactory,
                                                                 AuditLevel auditLevel, Guid? existingTaskId = null,
-                                                                string? taskKey = null, bool useLazyExecutor = false)
+                                                                string? taskKey = null, bool useLazyExecutor = false,
+                                                                DispatchRowMetadata rowMetadata = default)
     {
         var guidGenerator = serviceFactory.GetRequiredService<IGuidGenerator>();
 
@@ -62,12 +65,19 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
                 HandlerStartedCallback: null,
                 HandlerCompletedCallback: null,
                 existingTaskId ?? guidGenerator.NewDatabaseFriendly(),
-                ResolveQueueName(scopedHandler, recurring),
+                // A stored queue wins over the handler attribute: the row was routed there once and the
+                // recovery loop still groups it by that value.
+                rowMetadata.QueueName ?? ResolveQueueName(scopedHandler, recurring),
                 taskKey,
                 auditLevel,
                 policy,
                 rateLimitKey
-            );
+            )
+            {
+                ParentTaskId    = rowMetadata.ParentTaskId,
+                RuntimeInfo     = rowMetadata.RuntimeInfo,
+                ScheduleVersion = rowMetadata.ScheduleVersion
+            };
         }
 
         // Eager executor: the handler instance is carried to execution time inside an EverTask-OWNED
@@ -106,13 +116,18 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
                 persistenceId => handlerService.OnStarted(persistenceId),
                 persistenceId => handlerService.OnCompleted(persistenceId),
                 existingTaskId ?? guidGenerator.NewDatabaseFriendly(),
-                ResolveQueueName(handlerService, recurring),
+                rowMetadata.QueueName ?? ResolveQueueName(handlerService, recurring),
                 taskKey,
                 auditLevel,
                 eagerPolicy,
                 eagerKey,
                 handlerScope
-            );
+            )
+            {
+                ParentTaskId    = rowMetadata.ParentTaskId,
+                RuntimeInfo     = rowMetadata.RuntimeInfo,
+                ScheduleVersion = rowMetadata.ScheduleVersion
+            };
         }
         catch
         {

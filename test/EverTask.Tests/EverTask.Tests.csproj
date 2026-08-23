@@ -27,6 +27,13 @@
     <ProjectReference Include="..\..\src\EverTask\EverTask.csproj" />
     <ProjectReference Include="..\..\src\Storage\EverTask.Storage.EfCore\EverTask.Storage.EfCore.csproj" />
     <ProjectReference Include="..\..\src\Storage\EverTask.Storage.SqlServer\EverTask.Storage.SqlServer.csproj" />
+    <!--
+      The consumer-compatibility fixture: an assembly compiled against the issue23-baseline packages, run
+      here against the project-referenced (current) EverTask. Its own baseline PackageReferences are
+      PrivateAssets="all", so only the fixture DLL crosses over and the 3.11 assemblies never reach this
+      output — which is what makes Serialization/ConsumerCompatibilityTests a binary-compatibility proof.
+    -->
+    <ProjectReference Include="..\EverTask.ConsumerCompatibility.Baseline\EverTask.ConsumerCompatibility.Baseline.csproj" />
   </ItemGroup>
 
   <ItemGroup>

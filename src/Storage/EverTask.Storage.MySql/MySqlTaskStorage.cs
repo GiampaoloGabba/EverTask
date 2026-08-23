@@ -1,5 +1,8 @@
+﻿using System.Data;
+using System.Globalization;
 using EverTask.Abstractions;
 using EverTask.Logger;
+using Microsoft.EntityFrameworkCore.Storage;
 using MySqlConnector;
 
 namespace EverTask.Storage.MySql;
@@ -195,5 +198,204 @@ public class MySqlTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTa
         } while (ids.Count == CleanupBatchSize && !ct.IsCancellationRequested);
 
         return total;
+    }
+
+    /// <summary>
+    /// MySQL/MariaDB override of the occurrence purge, for the same reason as
+    /// <see cref="CleanupCompletedTasks"/>: its <c>preserveTasksWithLogs</c> guard is a correlated
+    /// <c>EXISTS</c>, which a <c>DELETE … LIMIT</c> does not reliably honor here — the guard is dropped and
+    /// occurrences that still own execution logs are purged, cascade-deleting the logs a retention window
+    /// meant to keep. Same shape: resolve a bounded page of ids with a <c>SELECT</c>, delete by primary key.
+    /// </summary>
+    public override async Task<int> CleanupTerminalOccurrences(DateTimeOffset cutoff, bool preserveTasksWithLogs,
+                                                               CancellationToken ct = default)
+    {
+        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+
+        var total = 0;
+        List<Guid> ids;
+        do
+        {
+            ids = await dbContext.QueuedTasks
+                .Where(qt => qt.ParentTaskId != null
+                          && (qt.Status == QueuedTaskStatus.Completed
+                              || qt.Status == QueuedTaskStatus.Failed
+                              || qt.Status == QueuedTaskStatus.Cancelled)
+                          && (!preserveTasksWithLogs || !dbContext.TaskExecutionLogs.Any(l => l.TaskId == qt.Id))
+                          && (qt.LastExecutionUtc ?? qt.CreatedAtUtc) < cutoff)
+                .Select(qt => qt.Id)
+                .Take(CleanupBatchSize)
+                .ToListAsync(ct)
+                .ConfigureAwait(false);
+
+            if (ids.Count == 0)
+                break;
+
+            total += await DeleteByIdsAsync(dbContext.QueuedTasks, ids,
+                (set, batch) => set.Where(qt => batch.Contains(qt.Id)), ct).ConfigureAwait(false);
+        } while (ids.Count == CleanupBatchSize && !ct.IsCancellationRequested);
+
+        return total;
+    }
+
+    // ---- Durable occurrences (stored procedures) --------------------------------------------------
+    // Materialization runs once per occurrence and the versioned advances once per run, so they get the same
+    // treatment as the three pre-existing hot writes: one procedure, one round-trip, one transaction. The
+    // rarer administrative operations inherit the EF base, like the other once-per-series writes already do.
+
+    /// <inheritdoc />
+    public override async Task<OccurrenceMaterializationOutcome> MaterializeOccurrence(
+        Guid parentId, int expectedScheduleVersion, DateTimeOffset? expectedCursorUtc, QueuedTask occurrence,
+        DateTimeOffset? newCursorUtc, AuditLevel auditLevel, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(occurrence);
+
+        if (occurrence.ScheduledExecutionUtc is not { } slotUtc)
+            throw new ArgumentException("An occurrence must carry its nominal slot.", nameof(occurrence));
+
+        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+
+        // The INSERT below writes the canonical occurrence shape; stamping it on the caller's entity too
+        // keeps the object it goes on using (scheduling the child) identical to the row that was stored.
+        occurrence.ApplyOccurrenceContract(parentId, expectedScheduleVersion);
+
+        var outcome = new MySqlParameter("@p_Outcome", MySqlDbType.Int32) { Direction = ParameterDirection.Output };
+
+        await CallProcedureAsync(dbContext, "usp_MaterializeOccurrence",
+        [
+            new MySqlParameter("@p_ParentId", parentId.ToString()),
+            new MySqlParameter("@p_ExpectedScheduleVersion", expectedScheduleVersion),
+            new MySqlParameter("@p_ExpectedCursorUtc", (object?)expectedCursorUtc?.UtcDateTime ?? DBNull.Value),
+            new MySqlParameter("@p_NewCursorUtc", (object?)newCursorUtc?.UtcDateTime ?? DBNull.Value),
+            new MySqlParameter("@p_AuditLevel", (int)auditLevel),
+            new MySqlParameter("@p_OccurrenceId", occurrence.Id.ToString()),
+            new MySqlParameter("@p_SlotUtc", slotUtc.UtcDateTime),
+            new MySqlParameter("@p_CreatedAtUtc", occurrence.CreatedAtUtc.UtcDateTime),
+            new MySqlParameter("@p_Type", occurrence.Type),
+            new MySqlParameter("@p_Request", occurrence.Request),
+            new MySqlParameter("@p_Handler", occurrence.Handler),
+            new MySqlParameter("@p_QueueName", (object?)occurrence.QueueName ?? DBNull.Value),
+            new MySqlParameter("@p_OccurrenceAuditLevel", (object?)occurrence.AuditLevel ?? DBNull.Value),
+            new MySqlParameter("@p_RuntimeInfo", (object?)occurrence.RuntimeInfo ?? DBNull.Value),
+            outcome
+        ], ct).ConfigureAwait(false);
+
+        return (OccurrenceMaterializationOutcome)Convert.ToInt32(outcome.Value, CultureInfo.InvariantCulture);
+    }
+
+    /// <inheritdoc />
+    public override async Task CancelSchedule(Guid parentId, AuditLevel auditLevel, CancellationToken ct = default)
+    {
+        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+
+        await CallProcedureAsync(dbContext, "usp_CancelSchedule",
+        [
+            new MySqlParameter("@p_ParentId", parentId.ToString()),
+            new MySqlParameter("@p_AuditLevel", (int)auditLevel)
+        ], ct).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public override async Task<ScheduleCasResult> UpdateCurrentRun(Guid taskId, double executionTimeMs,
+                                                                   DateTimeOffset? nextRun, AuditLevel auditLevel,
+                                                                   int expectedScheduleVersion)
+    {
+        logger.UpdatingCurrentRun(taskId);
+
+        await using var dbContext = await _contextFactory.CreateDbContextAsync().ConfigureAwait(false);
+
+        var applied = new MySqlParameter("@p_Applied", MySqlDbType.Bool) { Direction = ParameterDirection.Output };
+
+        try
+        {
+            await CallProcedureAsync(dbContext, "usp_UpdateCurrentRunCas",
+            [
+                new MySqlParameter("@p_TaskId", taskId.ToString()),
+                new MySqlParameter("@p_ExecutionTimeMs", executionTimeMs),
+                new MySqlParameter("@p_NextRunUtc", (object?)nextRun?.UtcDateTime ?? DBNull.Value),
+                new MySqlParameter("@p_AuditLevel", (int)auditLevel),
+                new MySqlParameter("@p_ExpectedScheduleVersion", expectedScheduleVersion),
+                applied
+            ], CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception e)
+        {
+            // Residual D: propagate, exactly like the unversioned overload.
+            logger.CurrentRunUpdateFailed(e, taskId);
+            throw;
+        }
+
+        return Convert.ToBoolean(applied.Value, CultureInfo.InvariantCulture)
+                   ? ScheduleCasResult.Applied
+                   : ScheduleCasResult.VersionMismatch;
+    }
+
+    /// <inheritdoc />
+    public override async Task<ScheduleCasResult> CompleteRecurringRun(Guid taskId, double executionTimeMs,
+                                                                       DateTimeOffset? nextRun, AuditLevel auditLevel,
+                                                                       int expectedScheduleVersion)
+    {
+        logger.CompletingRecurringRun(taskId);
+
+        await using var dbContext = await _contextFactory.CreateDbContextAsync().ConfigureAwait(false);
+
+        var applied = new MySqlParameter("@p_Applied", MySqlDbType.Bool) { Direction = ParameterDirection.Output };
+
+        try
+        {
+            await CallProcedureAsync(dbContext, "usp_CompleteRecurringRunCas",
+            [
+                new MySqlParameter("@p_TaskId", taskId.ToString()),
+                new MySqlParameter("@p_ExecutionTimeMs", executionTimeMs),
+                new MySqlParameter("@p_NextRunUtc", (object?)nextRun?.UtcDateTime ?? DBNull.Value),
+                new MySqlParameter("@p_CreateStatusAudit",
+                    AuditPolicy.ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Completed, null)),
+                new MySqlParameter("@p_CreateRunsAudit",
+                    AuditPolicy.ShouldCreateRunsAudit(auditLevel, QueuedTaskStatus.Completed, null)),
+                new MySqlParameter("@p_ExpectedScheduleVersion", expectedScheduleVersion),
+                applied
+            ], CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception e)
+        {
+            logger.RecurringRunCompletionFailed(e, taskId);
+            throw;
+        }
+
+        return Convert.ToBoolean(applied.Value, CultureInfo.InvariantCulture)
+                   ? ScheduleCasResult.Applied
+                   : ScheduleCasResult.VersionMismatch;
+    }
+
+    /// <summary>
+    /// Calls a stored procedure through ADO instead of <c>ExecuteSqlRaw</c>.
+    /// </summary>
+    /// <remarks>
+    /// OUT parameters are how these procedures report their outcome, and the driver only binds them with
+    /// <see cref="CommandType.StoredProcedure"/>, which raw SQL cannot set. The connection is opened and
+    /// closed through EF so a pooled context is returned in the state EF expects.
+    /// </remarks>
+    private static async Task CallProcedureAsync(ITaskStoreDbContext dbContext, string procedure,
+                                                 MySqlParameter[] parameters, CancellationToken ct)
+    {
+        var database = ((DbContext)dbContext).Database;
+
+        await database.OpenConnectionAsync(ct).ConfigureAwait(false);
+        try
+        {
+            using var command = database.GetDbConnection().CreateCommand();
+            command.CommandText = procedure;
+            command.CommandType = CommandType.StoredProcedure;
+            command.Transaction = database.CurrentTransaction?.GetDbTransaction();
+
+            foreach (var parameter in parameters)
+                command.Parameters.Add(parameter);
+
+            await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            await database.CloseConnectionAsync().ConfigureAwait(false);
+        }
     }
 }

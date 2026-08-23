@@ -68,6 +68,32 @@ The schema contains:
 - **TaskExecutionLog**: Captured log lines per execution (when the persistent logger is enabled)
 - **__EFMigrationsHistory**: EF Core migrations table (also in custom schema)
 
+### Durable-Occurrence Columns
+
+A recurring schedule can materialize each due slot as its own child row, so `QueuedTasks` carries three
+extra columns:
+
+| Column | Type | Purpose |
+|--------|------|---------|
+| `ParentTaskId` | nullable id | The schedule an occurrence belongs to; null on every ordinary row |
+| `RuntimeInfo` | nullable text | Opaque JSON: occurrence metadata on a child, schedule runtime state on a schedule row |
+| `ScheduleVersion` | int, default 0 | Bumped by a runtime reschedule; advances compare-and-swap against it |
+
+They come with three constraints that make "one row per slot" a database guarantee rather than an
+application convention: a **restrict** self-referencing foreign key `ParentTaskId → Id` (never cascade —
+deleting a schedule deletes its occurrences explicitly, in the same transaction), a unique index
+`UX_QueuedTasks_Occurrence` on `(ParentTaskId, ScheduledExecutionUtc)`, and the check constraint
+`CK_QueuedTasks_OccurrenceSlot` (an occurrence always names its slot).
+
+The unique index is **filtered** (`WHERE ParentTaskId IS NOT NULL AND ScheduledExecutionUtc IS NOT NULL`):
+SQL Server treats NULLs as equal in a unique index, and every ordinary row has a null `ParentTaskId`, so
+without the filter the second such row would violate it.
+
+The operations that run once per occurrence are stored procedures, like the three pre-existing hot writes:
+`usp_MaterializeOccurrence`, `usp_CancelSchedule`, `usp_UpdateCurrentRunCas` and
+`usp_CompleteRecurringRunCas`. They are created by the `AddDurableOccurrences` migration — with
+`AutoApplyMigrations = false`, apply it before the app handles tasks.
+
 ## Migration Management
 
 EverTask automatically applies migrations on startup by default. You can disable this behavior if you prefer to manage migrations manually:
