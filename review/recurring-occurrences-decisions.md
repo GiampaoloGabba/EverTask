@@ -145,6 +145,19 @@ Legenda: ✅ = accettato (round 1/2) · ↩ = ribattuto e **conceduto da Codex**
 | R12 | `FireOnce` in `Inline` con range in memoria | Seconda implementazione del misfire nel path legacy (P7); range non durevole. |
 | R13 | `[Obsolete]` su `ToUniversalTime` | Rompe i consumer con warnings-as-errors; deciso quando la release era pianificata minor (3.12), scelta mantenuta in 4.0.0 (T12). |
 
+## 3.1 Ratifiche del maintainer — review avversariale fase 1 (2026-08-23)
+
+Decisioni sui punti aperti di `review/recurring-occurrences-phase1-adversarial-review.md` (Gate 4). I tre P1
+(R1 CAS expectation in `FinalizeExhaustedSeriesAsync`, R2 capability check mancante in
+`WorkerService.FinalizeRecurringSeriesAsync`, R3 `Validate()` senza `Enum.IsDefined` su `OccurrenceMode`)
+vanno chiusi con fix, senza discrezionalità. Sui restanti:
+
+| Punto | Decisione |
+|-------|-----------|
+| R4 — `ToQueuedTask`, fallback wall-clock sul primo `NextRunUtc` con `ExecutionTime == null` | **Deviazione RATIFICATA**: il fallback resta (protegge i chiamanti diretti dell'extension pubblica); il piano §1.1 è superato su questo punto. I path interni continuano a passare sempre `ExecutionTime`. |
+| R5 — `ScheduleVersion` senza `HasDefaultValue(0)` nel model condiviso (SQLite rebuild senza DEFAULT 0) | **Fix ora**: `HasDefaultValue(0)` nel model e migrazione di fase 1 rigenerata/allineata su tutti i provider — le migrazioni #23 non sono mai state rilasciate, quindi non sono congelate. |
+| R15 — `CleanupTerminalOccurrences` cascata i `TaskExecutionLog` dei figli prima della loro finestra | **Allineare al guard di `CleanupCompletedTasks`**: un figlio terminale è potato solo quando anche i suoi log sono fuori dalla propria `ExecutionLogRetentionDays`. Stessa semantica del cleanup esistente. |
+
 ## 4. Stato finale
 
 1. M17 deciso (D5): single-active-host in 4.0; epic separata per la distribuzione di tutto EverTask.
