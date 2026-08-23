@@ -25,13 +25,14 @@ const OUT   = ROOT + '/review/orchestrator'
 
 const MAX_REVIEW_ROUNDS = 3   // per-phase review/fix rounds
 const MAX_GATE_FIXES    = 3   // build/test fix attempts per gate failure
-const MAX_CERT_CYCLES   = 2   // certification -> complete-the-gaps cycles
+const MAX_CERT_CYCLES   = 4   // certification -> complete-the-gaps cycles (2->3->4, maintainer 2026-08-23: cycle-3 leftovers were maintainer ratifications, now recorded in decisions 3.2, plus one trivial test)
 const MAX_ESCALATIONS   = 2   // last-resort dev attempts at max effort when a phase is stuck
 const MAX_FINAL_ROUNDS  = 3   // final review fix rounds
 
-// Model policy (maintainer, 2026-08-22): executor = dev-executor@opus (xhigh on high-risk phases 1/4/6, high otherwise); important finders = fable;
-// minor finders = opus; verify/certify/synthesis pinned opus max (never inherit the session model);
-// codex = gpt-5.6-sol, xhigh for important runs, high for minor; mechanical runners = sonnet.
+// Model policy (maintainer, rev. 2026-08-23): executor = dev-executor@opus (xhigh on high-risk phases 1/4/6, high otherwise);
+// PHASE finders AND phase certifier = opus (fable burned the session limit mid-run); fable is reserved for the FINAL
+// whole-feature review only (single most critical lens); certify/critic/synthesis pinned opus max; verify skeptics NEVER max:
+// opus xhigh on critical/high findings, high otherwise (maintainer, 2026-08-23); codex = gpt-5.6-sol, xhigh important / high minor; runners = sonnet.
 const DEV   = { agentType: 'dev-executor', model: 'opus', effort: 'high' }   // normal-risk phases
 const DEVX  = { agentType: 'dev-executor', model: 'opus', effort: 'xhigh' }  // high-risk phases (1, 4, 6)
 const DEVMAX= { agentType: 'dev-executor', model: 'opus', effort: 'max' }    // escalations and final-review fixes
@@ -183,18 +184,23 @@ function fkey(f) {
 
 // ============================== BUILDING BLOCKS ==============================
 
-async function runGates(phaseTag, focus) {
+// TFM policy (maintainer, 2026-08-23): intermediate gates test net10.0 only (build still compiles all TFMs);
+// the full net8/net9/net10 matrix runs once per phase right before the commit, and on final-review gates.
+// Phase 1 keeps the ORIGINAL gate wording byte-identical so its journaled results replay from cache on resume.
+async function runGates(phaseTag, focus, fullMatrix) {
   return await agent([
     'Verification gate for the EverTask repo at ' + ROOT + '. Run, in order, with the Bash tool (long timeouts):',
     '1. docker info (must succeed; if not, report ok=false with failure "docker down" - do NOT try to fix Docker).',
     '2. cd "' + ROOT + '" && dotnet build EverTask.slnx -c Release  (must end with 0 warnings / 0 errors).',
-    '3. cd "' + ROOT + '" && dotnet test EverTask.slnx -c Release  (FULL suite, Testcontainers included; use a 600000 ms Bash timeout and run_in_background+wait if needed; if the runner splits by TFM let it).',
+    (phaseTag === 'Fase 1' || fullMatrix)
+      ? '3. cd "' + ROOT + '" && dotnet test EverTask.slnx -c Release  (FULL suite, Testcontainers included; use a 600000 ms Bash timeout and run_in_background+wait if needed; if the runner splits by TFM let it).'
+      : '3. cd "' + ROOT + '" && dotnet test EverTask.slnx -c Release -f net10.0  (FULL suite but net10.0 ONLY - intermediate gate; Testcontainers included; use a 600000 ms Bash timeout and run_in_background+wait if needed).',
     focus ? ('Extra focus: ' + focus) : '',
     'Return ok=true only if build has zero warnings AND every test passed. On failure list each failing test/compile error verbatim (trimmed) in failures. Never mark ok=true with any failure present. Do not modify any file.',
   ].join('\n'), { ...GATE, label: 'gate:' + phaseTag, phase: phaseTag, schema: GATE_SCHEMA })
 }
 
-async function devFixLoop(phaseTag, phaseObj, gateResult) {
+async function devFixLoop(phaseTag, phaseObj, gateResult, fullMatrix) {
   let gates = gateResult
   for (let i = 1; !((gates && gates.ok)) && i <= MAX_GATE_FIXES; i++) {
     log('Fase ' + phaseObj.n + ': gate rosso, fix attempt ' + i)
@@ -205,7 +211,7 @@ async function devFixLoop(phaseTag, phaseObj, gateResult) {
       'Current failures:\n' + ((gates && gates.failures) || []).join('\n'),
       'Diagnose the root cause and fix it properly (never weaken or delete a legacy test to make it pass; if a NEW test is wrong, fix the test only when the spec says the implementation is right). Run the relevant build/tests yourself to confirm before finishing.',
     ].join('\n'), { ...devOf(phaseObj), label: 'fix:gates:' + i, phase: phaseTag, schema: DEV_SCHEMA })
-    gates = await runGates(phaseTag, 'previously failing: ' + ((gates && gates.failures) || []).slice(0, 10).join(' ; '))
+    gates = await runGates(phaseTag, 'previously failing: ' + ((gates && gates.failures) || []).slice(0, 10).join(' ; '), fullMatrix)
   }
   return gates
 }
@@ -219,7 +225,9 @@ async function verifyFinding(f, phaseTag, skeptics) {
       'Claim: ' + f.claim,
       'Scenario: ' + f.scenario,
       'refuted=true means: not a real defect (wrong reading, already handled, spec-compliant, cannot happen). refuted=false means the defect is real and material.',
-    ].join('\n'), { ...JUDGE, label: 'verify:' + (f.file || '?') + ':' + k, phase: phaseTag, schema: VERDICT_SCHEMA })))
+    ].join('\n'), phaseTag === 'Fase 1'
+      ? { ...JUDGE, label: 'verify:' + (f.file || '?') + ':' + k, phase: phaseTag, schema: VERDICT_SCHEMA }
+      : { model: 'opus', effort: (f.severity === 'critical' || f.severity === 'high') ? 'xhigh' : 'high', label: 'verify:' + (f.file || '?') + ':' + k, phase: phaseTag, schema: VERDICT_SCHEMA })))
   const valid = votes.filter(Boolean)
   if (valid.length === 0) return { confirmed: false, reason: 'no skeptic result' }
   const refutes = valid.filter(v => v.refuted).length
@@ -238,7 +246,7 @@ async function reviewRound(phaseObj, phaseTag, round, seen, focusNote) {
       SPEC, 'Adversarial finder. ' + scope, 'Your single lens: ' + lens,
       focusNote || '',
       'Also verify the phase respects: legacy byte-identical, integration-first real tests, per-provider optimization tier, spec conformance (decisions prevail). Report ONLY defects with concrete failure scenarios (severity critical/high/medium/low, repo-relative file, line, one-sentence claim, scenario). No style nits. Read code, never guess.',
-    ].join('\n'), { ...FABLE, label: 'find:fable:' + round, phase: phaseTag, schema: FINDINGS_SCHEMA }))
+    ].join('\n'), { ...MINOR, label: 'find:main:' + round, phase: phaseTag, schema: FINDINGS_SCHEMA }))
   }
   if (round === 1) {
     finderJobs.push(() => agent([
@@ -276,7 +284,7 @@ async function certify(phaseObj, phaseTag) {
     'complete=true ONLY if nothing required by the plan section is missing or half-done. List every gap in missing (one precise line each, with the plan bullet it comes from). Read code and tests, never assume.',
   ].join('\n')
   const [fable, codex] = await parallel([
-    () => agent(certPrompt, { ...FABLE, effort: 'max', label: 'certify:fable', phase: phaseTag, schema: CERT_SCHEMA }),
+    () => agent(certPrompt, { ...JUDGE, label: 'certify:main', phase: phaseTag, schema: CERT_SCHEMA }),
     () => agent(codexRunnerPrompt(OUT + '/codex/cert-f' + phaseObj.n, phaseObj.risk === 'high' ? 'xhigh' : 'high', [
       'Sei un certificatore di completezza. SOLO lettura, nessuna modifica, nessun build/test.',
       'Confronta le modifiche non committate del working tree (git status / git diff HEAD) con TUTTI i deliverable della sezione "' + phaseObj.planSection + '" di review/recurring-occurrences-plan.md e con le decisioni collegate in review/recurring-occurrences-decisions.md (test inclusi: presenti E significativi).',
@@ -422,6 +430,13 @@ for (const ph of PHASES) {
   }
   if (!cert.complete) return { aborted: 'fase ' + ph.n + ': certificazione ancora incompleta dopo ' + MAX_CERT_CYCLES + ' cicli', missing: cert.missing, phases: phaseSummaries }
 
+  // ---- pre-commit gate on the FULL TFM matrix (intermediate gates ran net10.0 only; phase 1 already gated full)
+  if (ph.n >= 2) {
+    gates = await runGates(TAG, 'pre-commit full-TFM matrix (net8/net9/net10)', true)
+    gates = await devFixLoop(TAG, ph, gates, true)
+    if (!gates || !gates.ok) return { aborted: 'fase ' + ph.n + ': gate full-TFM pre-commit rosso', phases: phaseSummaries }
+  }
+
   // ---- commit + report + close sub-issue
   const report = [
     '## Phase ' + ph.n + ' report - ' + ph.title,
@@ -471,7 +486,9 @@ for (let round = 1; ; round++) {
   const focus = finalLastFixed.length === 0 ? '' : 'Focused round after fixes. Just-fixed items to re-verify and hunt regressions around:\n' + findingsList(finalLastFixed)
   const jobs = []
   const lensSet = round === 1 ? FINAL_FABLE_LENSES : FINAL_FABLE_LENSES.slice(0, 2)
-  for (const lens of lensSet) jobs.push(() => agent([SPEC, 'Adversarial finder on ' + FINAL_SCOPE, 'Your single lens: ' + lens, focus, 'Only real, actionable defects with concrete scenarios (schema). Read code deeply; no nits.'].join('\n'), { ...FABLE, effort: 'max', label: 'final:fable', phase: FTAG, schema: FINDINGS_SCHEMA }))
+  // Fable budget is nearly exhausted (maintainer, 2026-08-23): fable ONLY on the single most critical lens
+  // (concurrency/double execution, index 0); every other final lens runs at opus max.
+  lensSet.forEach((lens, li) => jobs.push(() => agent([SPEC, 'Adversarial finder on ' + FINAL_SCOPE, 'Your single lens: ' + lens, focus, 'Only real, actionable defects with concrete scenarios (schema). Read code deeply; no nits.'].join('\n'), { ...(li === 0 ? FABLE : JUDGE), effort: 'max', label: li === 0 ? 'final:fable' : 'final:main', phase: FTAG, schema: FINDINGS_SCHEMA })))
   if (round === 1) for (const lens of FINAL_OPUS_LENSES) jobs.push(() => agent([SPEC, 'Adversarial finder on ' + FINAL_SCOPE, 'Your single lens: ' + lens, 'Only actionable findings (schema).'].join('\n'), { ...MINOR, effort: 'max', label: 'final:opus', phase: FTAG, schema: FINDINGS_SCHEMA }))
   jobs.push(() => agent(codexRunnerPrompt(OUT + '/codex/final-r' + round, 'xhigh', codexReviewBrief('l\'INTERA feature #23: git diff issue23-baseline..HEAD piu i file nuovi; concentrati sulle interazioni tra fasi.', focus)), { ...RUNNER, label: 'final:codex', phase: FTAG, schema: CODEX_SCHEMA }))
 
@@ -496,8 +513,8 @@ for (let round = 1; ; round++) {
     break
   }
   await agent([SPEC, 'Fix these CONFIRMED findings from the final whole-feature review (root causes, real tests, no suppressions). Run build + full tests before finishing.', findingsList(confirmed), HOUSE_RULES].join('\n'), { ...DEVMAX, label: 'final:fix:r' + round, phase: FTAG, schema: DEV_SCHEMA })
-  let g = await runGates(FTAG, 'final review fixes round ' + round)
-  g = await devFixLoop(FTAG, { n: 'final', title: 'final review fixes', planSection: 'final', risk: 'high' }, g)
+  let g = await runGates(FTAG, 'final review fixes round ' + round, true)
+  g = await devFixLoop(FTAG, { n: 'final', title: 'final review fixes', planSection: 'final', risk: 'high' }, g, true)
   if (!g || !g.ok) return { aborted: 'final review: gates rossi dopo i fix del round ' + round, phases: phaseSummaries }
   await commitFinalFixes(round, confirmed)
   finalLastFixed = confirmed
@@ -512,7 +529,7 @@ const critic = await agent([
 if (critic && !critic.complete && critic.missing.length) {
   log('Final critic: ' + critic.missing.length + ' gap - ciclo di completamento')
   await agent([SPEC, 'Close every gap found by the final completeness critic, then run build + full tests:\n- ' + critic.missing.join('\n- '), HOUSE_RULES].join('\n'), { ...DEVMAX, label: 'final:complete', phase: FTAG, schema: DEV_SCHEMA })
-  let g = await runGates(FTAG, 'final completeness'); g = await devFixLoop(FTAG, { n: 'final', title: 'final completeness', planSection: 'final', risk: 'high' }, g)
+  let g = await runGates(FTAG, 'final completeness', true); g = await devFixLoop(FTAG, { n: 'final', title: 'final completeness', planSection: 'final', risk: 'high' }, g, true)
   if (!g || !g.ok) return { aborted: 'final completeness: gates rossi', phases: phaseSummaries }
   await agent(['Release clerk at ' + ROOT + ' (pre-authorized): stage all except review/orchestrator, commit via message file "chore(release): close final completeness gaps (#23)". No push.'].join('\n'), { model: 'opus', effort: 'low', label: 'commit:final:gaps', phase: FTAG, schema: DEV_SCHEMA })
 }
