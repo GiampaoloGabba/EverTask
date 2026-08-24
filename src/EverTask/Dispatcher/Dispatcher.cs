@@ -111,7 +111,30 @@ public class Dispatcher(
         var builder = new RecurringTaskBuilder(Clock);
         recurring(builder);
 
+        ApplyDefaultScheduleTimeZone(builder.RecurringTask);
+
         return await ExecuteDispatch(task, null, builder.RecurringTask, null, cancellationToken, null, taskKey, auditLevel).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Stamps the configured default zone (T4) onto a freshly built schedule that is calendar-anchored and did
+    /// not name one itself.
+    /// </summary>
+    /// <remarks>
+    /// Here and nowhere else: the zone becomes part of the definition that gets serialized, so a row persisted
+    /// under one default keeps meaning the same thing when the default changes — and recovery, which re-reads
+    /// that row, never re-applies it. A plain cadence is left alone: the same instants in every zone, and
+    /// <c>Validate</c> refuses a zone on one.
+    /// </remarks>
+    private void ApplyDefaultScheduleTimeZone(RecurringTask schedule)
+    {
+        if (serviceConfiguration.DefaultScheduleTimeZoneId is not { } defaultZoneId)
+            return;
+
+        if (schedule.TimeZoneId != null || schedule.Semantics != ScheduleSemantics.Calendar)
+            return;
+
+        schedule.TimeZoneId = defaultZoneId;
     }
 
     /// <inheritdoc />

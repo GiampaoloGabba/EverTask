@@ -26,6 +26,12 @@ public sealed class RecurringTasksRegistrar(ITaskDispatcher dispatcher) : IHoste
             new BusinessHoursMonitorTask(),
             r => r.Schedule().UseCron("*/15 9-16 * * 1-5"),
             taskKey: "biz-hours-monitor");
+
+        // A digest people read at 09:00 their time, all year: name the zone, don't convert
+        await dispatcher.Dispatch(
+            new DailyDigestTask(),
+            r => r.Schedule().EveryDay().AtTime(new TimeOnly(9, 0)).InTimeZone("Europe/Rome"),
+            taskKey: "daily-digest");
     }
 
     public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
@@ -41,6 +47,9 @@ builder.Services.AddHostedService<RecurringTasksRegistrar>();
 Notes:
 - `taskKey` ≤ 200 chars, case-sensitive. Per-entity: `taskKey: $"report-{userId}"`.
 - Re-dispatch with the same key + new schedule updates a Pending/Queued task in place.
-- All times are UTC: convert local times before `AtTime`/`RunAt`.
+- Times are UTC unless the schedule names a zone. For a local wall-clock hour use `.InTimeZone("Area/City")`
+  (calendar schedules only) instead of converting once at registration, which freezes the offset and drifts
+  by an hour at the next DST change. `RunAt` still takes an absolute instant: build it with
+  `zone.GetUtcOffset(localDateTime)`, never `zone.BaseUtcOffset`.
 - `UseCron(...)` overrides every other interval call; never combine them.
 - Skipped occurrences after downtime are logged only: they don't count against `MaxRuns`.

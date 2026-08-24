@@ -53,6 +53,18 @@ internal static partial class WorkerExecutorLog
         Message = "Task {TaskId} skipped {SkippedCount} missed occurrence(s) to maintain schedule")]
     public static partial void MissedOccurrencesSkipped(this ILogger logger, Guid taskId, int skippedCount);
 
+    /// <summary>
+    /// T6's "compressed slots" counter. A daylight-saving transition can make several nominal wall-clock slots
+    /// of the same schedule stand for one instant; EverTask fires once, and this is the line that says how many
+    /// slots that one occurrence answered for. Only a zoned calendar schedule can produce it, and only around a
+    /// transition, so it stays silent the rest of the year.
+    /// </summary>
+    [LoggerMessage(EventId = 1226, Level = LogLevel.Information,
+        Message = "Task {TaskId} collapsed {CollapsedCount} nominal slot(s) into the occurrence at {NextRun}: " +
+                  "a daylight-saving transition maps them to the same instant")]
+    public static partial void DstSlotsCollapsed(this ILogger logger, Guid taskId, int collapsedCount,
+                                                 DateTimeOffset? nextRun);
+
     [LoggerMessage(EventId = 1211, Level = LogLevel.Error, Message = "Unable to publish event {Message}")]
     public static partial void EventPublishFailed(this ILogger logger, Exception exception, string message);
 

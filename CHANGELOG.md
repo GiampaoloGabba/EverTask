@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (time zones, #26)
+
+- **A recurring schedule can be read on a real time zone.** `InTimeZone(zone)` / `InTimeZone(id)` on the
+  fluent builder makes 09:00 mean 09:00 there, all year and across every daylight-saving change, instead
+  of 09:00 UTC. It applies to schedules anchored to a calendar — a time of day, a day of the week, a
+  month selector, a cron expression, and the day, week and month cadences, which land on midnight when
+  no time was named. A plain cadence in seconds, minutes or hours is refused instead of quietly
+  accepted: it is a constant step in elapsed time and falls on the same instants in every zone, so a
+  zone on one only hides a mistake. The call can sit anywhere in the chain, the middle included, and
+  the schedule keeps refining afterwards.
+- **What the row stores is the IANA id**, whichever spelling was given: `W. Europe Standard Time`
+  becomes `Europe/Berlin`, so a schedule written on Windows resolves on a Linux replica of the same
+  deployment. An id this host cannot resolve is refused before anything is persisted, and one that stops
+  resolving later is treated as corrupt schedule metadata, exactly like an unparseable cron: the row is
+  poisoned instead of running an hour off. Custom zones built in the process have no id that could bring
+  their rules back and are refused too.
+- **A daylight-saving transition neither drops an occurrence nor doubles one.** A time of day the
+  spring gap removes fires at the first local time that does exist, and several slots inside one gap
+  become a single occurrence rather than a burst; a repeated hour in autumn fires once, on its first
+  pass. The slots a transition folded away are reported for logging on
+  `NextRunResult.CollapsedSlotCount` and written to the log by the worker: they are one occurrence, so
+  they spend one run of the budget, not one each. Cron keeps its own rules: the expression is handed to Cronos with the zone, which is also
+  what the fluent grid is tested against.
+- **`SetDefaultScheduleTimeZone(zone)`** names the zone every calendar-anchored schedule is read on when
+  it does not name one itself. It is stamped into the definition when the schedule is built, so a row
+  keeps meaning what it was dispatched with: changing the default later moves nothing already stored,
+  and a row that named no zone stays on UTC even on a host that has a default. Plain cadences are left
+  alone, and an explicit `InTimeZone` wins.
+- **A handler is told which zone its delivery belongs to.** `Context.TimeZoneId` and
+  `Context.ScheduledAtLocal` carry the schedule's zone and its slot read on that clock, offset included,
+  which is what tells the two passes of a repeated hour apart. The zone also appears in the row's
+  human-readable `RecurringInfo`, and therefore in the dashboard.
+
+### Changed (times of day keep their precision, #26)
+
+- **`AtTime` / `AtTimes` store the `TimeOnly` they were given verbatim**, and the grid lands on it. Both
+  used to run it through `TimeOnly.ToUniversalTime()`, and the two places that applied it to a date
+  rebuilt the instant to the second, so a sub-second component was dropped twice over. Nothing the
+  builder could express before carried one, so every schedule written until now produces the same
+  instants; a definition written by hand with a sub-second time now fires at the time it declares.
+- **`TimeOnly.ToUniversalTime()` is deprecated** in its XML documentation, with no `[Obsolete]`
+  attribute (that would fail the build of every consumer compiling warnings-as-errors) and no change in
+  what it returns. It never converted anything: it rebuilt the value from today's UTC date, whose offset
+  is zero, so dropping the milliseconds is the only thing it has ever done — it now does that without
+  reading the clock. Pass the local time you mean to `AtTime` and name the zone with `InTimeZone`
+  instead; converting a time of day yourself freezes one offset into the schedule and is wrong for half
+  the year. It will be removed in a future major.
+
 ### Added (execution context, #25)
 
 - **A handler can now ask which delivery it is running.** `ITaskExecutionContext` says which row is

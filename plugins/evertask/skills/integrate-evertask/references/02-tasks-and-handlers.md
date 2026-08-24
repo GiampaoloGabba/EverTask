@@ -62,7 +62,7 @@ it from a constructor throws `InvalidOperationException`).
 |---|---|
 | `TaskId` / `ScheduleId` / `TaskKey` | The row being executed; the schedule it is an occurrence of (null when it is not one); the dispatch key. |
 | `ScheduledAtUtc` | The slot this delivery stands for — null for an immediate dispatch. **Never** the slot a rate-limit deferral re-parked the task at, so `StartedAtUtc - ScheduledAtUtc` is the real lateness. |
-| `ScheduledAtLocal` / `TimeZoneId` | The same slot in the schedule's zone; null while a schedule carries no zone. |
+| `ScheduledAtLocal` / `TimeZoneId` | The same slot in the schedule's zone, offset included (which tells the two passes of a DST fall-back apart); both null when the schedule carries no zone. See `05-scheduling.md`. |
 | `StartedAtUtc` | When this delivery started. |
 | `Attempt` | 1-based; `1` on the first `Handle`, `2` on the first retry. In `OnRetry` it is already the attempt about to start; in `OnError`, the last one that ran. Re-read it, don't cache it. |
 | `RunNumber` | 1-based run within a recurring series (`1` for a one-shot). Durable: it resumes from the stored counter after a restart. |

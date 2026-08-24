@@ -60,6 +60,30 @@ public class CronInterval : IInterval
             GetParsedExpression(); // throws ArgumentException on an unparseable cron expression
     }
 
+    /// <summary>
+    /// The next occurrence strictly after <paramref name="current"/>, with the expression read as UTC.
+    /// </summary>
+    /// <remarks>
+    /// Kept as its own zero-zone method rather than an optional parameter on the overload below: the original
+    /// IL signature is what an assembly compiled against the previous release calls (P6/X6).
+    /// </remarks>
     public DateTimeOffset? GetNextOccurrence(DateTimeOffset current) =>
-        GetParsedExpression().GetNextOccurrence(current, TimeZoneInfo.Utc)?.ToUniversalTime();
+        GetNextOccurrence(current, TimeZoneInfo.Utc);
+
+    /// <summary>
+    /// The next occurrence strictly after <paramref name="current"/>, with the expression read on
+    /// <paramref name="zone"/>'s clock.
+    /// </summary>
+    /// <remarks>
+    /// Cronos owns the DST rules here: a skipped local time fires at the transition, a repeated one fires on
+    /// its first pass, and an interval expression (<c>*/n</c>) keeps stepping through both. That is why T9
+    /// makes it the oracle the fluent API's own zone math is measured against, rather than a second
+    /// implementation to keep in agreement.
+    /// </remarks>
+    public DateTimeOffset? GetNextOccurrence(DateTimeOffset current, TimeZoneInfo zone)
+    {
+        ArgumentNullException.ThrowIfNull(zone);
+
+        return GetParsedExpression().GetNextOccurrence(current, zone)?.ToUniversalTime();
+    }
 }

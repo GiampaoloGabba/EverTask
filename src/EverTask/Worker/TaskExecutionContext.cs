@@ -40,15 +40,19 @@ internal sealed class TaskExecutionContext : ITaskExecutionContext
     {
         var slot = task.NominalSlotOfDelivery;
 
+        // The zone is part of the SCHEDULE, so it comes from the definition the delivery carries. A schedule
+        // without one reports null on both, which is exactly how a handler reads "plain UTC" — and how every
+        // delivery read before zones existed.
+        var schedule = task.RecurringTask;
+
         return new TaskExecutionContext
         {
-            TaskId         = task.PersistenceId,
-            ScheduleId     = task.ParentTaskId,
-            TaskKey        = task.TaskKey,
-            ScheduledAtUtc = slot,
-            // A schedule carries no time zone yet, and null is exactly how a handler reads "plain UTC".
-            ScheduledAtLocal = null,
-            TimeZoneId       = null,
+            TaskId           = task.PersistenceId,
+            ScheduleId       = task.ParentTaskId,
+            TaskKey          = task.TaskKey,
+            ScheduledAtUtc   = slot,
+            ScheduledAtLocal = schedule?.ToScheduleLocalTime(slot),
+            TimeZoneId       = schedule?.TimeZoneId,
             StartedAtUtc     = startedAtUtc,
             // The durable run number travels on the executor: the storage counter is only incremented AFTER a
             // run, so reading it here would need a round-trip on the hot path AND report one run too few. An

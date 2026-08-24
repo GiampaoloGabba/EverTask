@@ -34,4 +34,23 @@ public class WeeklySchedulerBuilder(RecurringTask task, TimeProvider? timeProvid
     }
 
     public void MaxRuns(int maxRuns) => task.MaxRuns = maxRuns;
+
+    // Returns THIS builder: EveryWeek().InTimeZone(z).OnDay(...) has to keep the day selector reachable.
+    public IWeeklySchedulerBuilder InTimeZone(TimeZoneInfo timeZone)
+    {
+        task.SetTimeZone(timeZone);
+        return this;
+    }
+
+    public IWeeklySchedulerBuilder InTimeZone(string timeZoneId)
+    {
+        task.SetTimeZone(timeZoneId);
+        return this;
+    }
+
+    IBuildableSchedulerBuilder IBuildableSchedulerBuilder.InTimeZone(TimeZoneInfo timeZone) =>
+        InTimeZone(timeZone);
+
+    IBuildableSchedulerBuilder IBuildableSchedulerBuilder.InTimeZone(string timeZoneId) =>
+        InTimeZone(timeZoneId);
 }

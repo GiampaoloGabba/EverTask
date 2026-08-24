@@ -150,7 +150,8 @@ For each capability selected in Phase 1, read the matching reference and apply:
   `Dispatch(task, DateTimeOffset)` for one-shots, or the fluent recurring builder. For
   recurring, register at startup via an `IHostedService` with a stable `taskKey` for
   idempotency (`templates/RecurringRegistrar.md`). Warn: `UseCron(...)` overrides all other
-  interval calls; all schedules are UTC.
+  interval calls; schedules are UTC unless they name a zone with `.InTimeZone(...)`, which
+  calendar-anchored schedules accept and plain cadences refuse.
 - **Retry/timeout** (`04-resilience.md`): override `RetryPolicy` / `Timeout` on the handler,
   or set queue/global defaults. Default is `LinearRetryPolicy(3, 500ms)` retrying everything
   except `OperationCanceledException`/`TimeoutException`. For exponential backoff use

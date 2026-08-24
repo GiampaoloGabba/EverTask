@@ -81,13 +81,14 @@ public static class RecurringTaskExtensions
         // isRecovery: on the recovery path the first run's time was already decided at dispatch, so the
         // initial-run configuration (InitialDelay/RunNow/SpecificRunTime) must not be re-applied while
         // skipping forward (L25-firstrun).
-        var nextRun = recurringTask.CalculateNextRun(scheduledTime, currentRun, isRecovery, nowUtc);
-        var now     = referenceTime ?? nowUtc ?? DateTimeOffset.UtcNow;
+        var nextRun = recurringTask.CalculateNextRun(scheduledTime, currentRun, isRecovery, nowUtc,
+            out var collapsedSlots);
+        var now = referenceTime ?? nowUtc ?? DateTimeOffset.UtcNow;
 
         // If nextRun is not significantly in the past, return as-is
         if (!nextRun.HasValue || nextRun.Value >= now.AddSeconds(-ToleranceSeconds))
         {
-            return new NextRunResult(nextRun, 0);
+            return new NextRunResult(nextRun, 0) { CollapsedSlotCount = collapsedSlots };
         }
 
         // nextRun is significantly in the past — realign past the downtime. ONE primitive for every schedule
@@ -104,6 +105,8 @@ public static class RecurringTaskExtensions
         var countAnchor = isRecovery ? scheduledTime : nextRun.Value;
         var skipped     = computeSkippedCount ? recurringTask.CountMissedOccurrences(countAnchor, now) : 0;
 
-        return new NextRunResult(next, skipped);
+        // The realignment answers through NextOccurrenceStrictlyAfter, which reports no collapse of its own:
+        // what travels on is the count of the occurrence the schedule had actually reached.
+        return new NextRunResult(next, skipped) { CollapsedSlotCount = collapsedSlots };
     }
 }

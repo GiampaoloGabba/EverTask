@@ -21,6 +21,7 @@ Every EverTask configuration option at a glance: one row per option with its def
 | `SetDefaultTimeout` | `TimeSpan?` | `null` (no timeout) | Global per-attempt timeout |
 | `SetDefaultAuditLevel` | `AuditLevel` | `Full` | Audit trail verbosity (see table below) |
 | `SetMisfireThreshold` | `TimeSpan` | `5 s` | How late a delivery may start before `ITaskExecutionContext.Misfire` reports it. Observation only: nothing about execution changes, and the 1 s tolerance of the recurring skip path is untouched |
+| `SetDefaultScheduleTimeZone` | `TimeZoneInfo` | `null` (UTC) | Zone for **calendar-anchored** schedules built without `InTimeZone` (days/weeks/months, `AtTime`, cron). Plain cadences (`Every(n).Seconds/Minutes/Hours`) are never touched. Stamped into the definition at dispatch, so existing rows keep their meaning. Custom zones throw |
 | `SetThrowIfUnableToPersist` | `bool` | `true` | Throw on storage save failure |
 | `UseShardedScheduler` | `int shardCount = 0` | Off (`PeriodicTimerScheduler`); auto-scale when 0 | High `Schedule()`-call rates (scheduling axis, not task-execution throughput) |
 | `SetUseLazyHandlerResolution` | `bool` | `true` (adaptive) | `DisableLazyHandlerResolution()` to opt out |
@@ -209,17 +210,20 @@ Optional parameters on every `ITaskDispatcher.Dispatch(...)` overload:
 
 ## Recurring Schedule Builder
 
-→ [Reference: Recurring Tasks](recurring-tasks.md) · used via `Dispatch(task, Action<IRecurringTaskBuilder>, …)`. All times **UTC**.
+→ [Reference: Recurring Tasks](recurring-tasks.md) · used via `Dispatch(task, Action<IRecurringTaskBuilder>, …)`. All times **UTC** unless the schedule names a zone.
 
 | Stage | Methods |
 |-------|---------|
 | Start | `Schedule()` (recurring only) · `RunNow()` / `RunDelayed(TimeSpan)` / `RunAt(DateTimeOffset)` → `.Then()` |
-| Interval | `Every(n).Seconds()/.Minutes()/.Hours()/.Days()/.Weeks()/.Months()` · `EverySecond/Minute/Hour/Day/Week/Month()` · `OnHours()` · `OnDays(params DayOfWeek[])` · `OnMonths(params int[])` |
+| Interval | `Every(n).Seconds()/.Minutes()/.Hours()/.Days()/.Weeks()/.Months()` · `EverySecond/Minute/Hour/Day/Week/Month()` · `OnDays(params DayOfWeek[])` · `OnMonths(params int[])` |
 | Refine | hour `.AtMinute(0–59)` · minute `.AtSecond(0–59)` · day `.AtTime(TimeOnly)` / `.AtTimes(…)` · week `.OnDay(s)` · month `.OnDay(1–31)` / `.OnDays(…)` / `.OnFirst(DayOfWeek)` |
 | Cron | `UseCron("expr")` (5- or 6-field; **overrides** all other interval calls) |
+| Zone | `.InTimeZone(TimeZoneInfo)` / `.InTimeZone(string)` (IANA or Windows id; stored as IANA) |
 | Limit | `.RunUntil(DateTimeOffset)` · `.MaxRuns(int)` (counts real runs; skipped-after-downtime don't count) |
 
-> `OnLast(DayOfWeek)` does **not** exist (only `OnFirst`). Use a stable `taskKey` for idempotent startup registration.
+> `OnLast(DayOfWeek)` does **not** exist (only `OnFirst`), and neither does an hourly counterpart of `OnDays`/`OnMonths`: `OnHours()` is on the concrete `IntervalSchedulerBuilder`, not on `IIntervalSchedulerBuilder`, so `Schedule().OnHours()` does not compile, and it selects no hours anyway — it is `EveryHour()`'s cadence. Use a stable `taskKey` for idempotent startup registration.
+
+> **`InTimeZone` governs calendar-anchored schedules only**: days/weeks/months, `AtTime`/`AtTimes`, weekday and month selectors, cron. On a plain cadence (`Every(n).Seconds/Minutes/Hours`, with `AtSecond`/`AtMinute`) it throws `InvalidOperationException` when the schedule is built: an elapsed step is the same set of instants in every zone, and `AtMinute`/`AtSecond` therefore align on UTC. An unresolvable or custom zone throws `ArgumentException` at build; a stored id that stops resolving is poisoned at recovery like a corrupt cron. DST: a skipped local time fires at the gap's exit (several slots inside one gap collapse into one occurrence), a repeated one fires on its first pass. See [Time Zones](recurring-tasks/time-zones.md).
 
 ## Retry Policy & Exception Filtering
 

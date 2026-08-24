@@ -55,7 +55,7 @@ public class EveryAndMonthlyBuilderChainTests
 
         Assert.Equal(dateTimeOffset, _builder.RecurringTask.SpecificRunTime);
         Assert.NotNull(_builder.RecurringTask.DayInterval);
-        Assert.Contains(time.ToUniversalTime(), _builder.RecurringTask.DayInterval.OnTimes);
+        Assert.Contains(time, _builder.RecurringTask.DayInterval.OnTimes);
     }
 }
 

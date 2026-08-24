@@ -40,6 +40,7 @@ the cache.
 |---|---|
 | `BaselineConsumer.cs` | The public surface an application calls — builders, records, dispatcher, occurrence math — still binds. Each probe is a plain call whose signature was fixed at compile time. |
 | `BaselineTaskStorage.cs` | A storage written against the previous `ITaskStorage` still loads: the CLR builds its interface map against today's interface, so a new member arriving abstract rather than default throws `TypeLoadException`. |
+| `BaselineScheduleBuilders.cs` | The same, for the ten schedule builder interfaces an application implements when it wraps or replaces the fluent API. It is what the `InTimeZone` default members exist for (T3), and the only probe that can show they work: EverTask's own builders implement them, so they prove nothing. The test constructs the type — that is the type load — and then calls each of the eight `InTimeZone` slots, which must refuse with `NotSupportedException` rather than silently drop the zone. |
 | `BaselineHandlers.cs` | The same, for handlers, and then some: two handlers compiled when neither `SetExecutionContext` nor `EverTaskHandler<T>.Context` existed — one implementing `IEverTaskHandler<T>` directly, one deriving from the base class — which the test dispatches on a real host and runs to completion. They report what they did through `BaselineHandlerProbe`, a singleton the test registers, since this project may reference nothing but the baseline packages. |
 
 ## Adding a probe

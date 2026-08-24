@@ -51,7 +51,7 @@ public class BuilderChainTests
         _builder.Schedule().EveryDay().AtTimes(times);
 
         Assert.NotNull(_builder.RecurringTask.DayInterval);
-        Assert.Equal(times.Select(t => t.ToUniversalTime()), _builder.RecurringTask.DayInterval.OnTimes);
+        Assert.Equal(times, _builder.RecurringTask.DayInterval.OnTimes);
     }
 
     [Fact]

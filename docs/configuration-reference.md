@@ -245,6 +245,35 @@ opt.SetMisfireThreshold(TimeSpan.FromMinutes(5))
 - The one-second tolerance the recurring skip-forward path uses to avoid treating a just-scheduled occurrence as past is a **separate rule**, unchanged by this setting.
 - See [Task Creation › Execution Context](task-creation.md#execution-context).
 
+### SetDefaultScheduleTimeZone
+
+Sets the time zone every calendar-anchored schedule is read on when it does not name one itself.
+
+**Signature:**
+```csharp
+SetDefaultScheduleTimeZone(TimeZoneInfo timeZone)
+```
+
+**Parameters:**
+- `timeZone` (TimeZoneInfo): a system time zone. Its IANA id is what gets persisted with each schedule, so the row resolves the same way on any host. A zone built with `TimeZoneInfo.CreateCustomTimeZone` has no such id and throws `ArgumentException`.
+
+**Default:** `null`. Schedules with no zone of their own are computed in UTC, as they always were.
+
+**Examples:**
+```csharp
+// One application, one zone
+opt.SetDefaultScheduleTimeZone(TimeZoneInfo.FindSystemTimeZoneById("Europe/Rome"))
+
+// A single schedule can still opt out
+r.Schedule().EveryDay().AtTime(new TimeOnly(9, 0)).InTimeZone("Asia/Tokyo")
+```
+
+**Notes:**
+- It applies at dispatch, to schedules built through `Dispatch(task, r => ...)` that are **calendar-anchored** (days, weeks, months, `AtTime`/`AtTimes`, weekday and month selectors, cron) and did not call `InTimeZone`. An explicit `InTimeZone` always wins.
+- A plain cadence (`Every(n).Seconds/Minutes/Hours`) is never touched: it is a constant step in elapsed time and produces identical instants in every zone, and `InTimeZone` on one throws.
+- The zone is written **into the definition** when the schedule is built. Rows already stored keep whatever they were dispatched with, so changing this default later does not silently move existing schedules by an hour; re-register them under the same `taskKey` to move them.
+- See [Recurring Tasks › Time Zones](recurring-tasks/time-zones.md) for daylight-saving behaviour and the id rules.
+
 ### Audit & Execution-Log Retention (`AddAuditCleanup`)
 
 Configure automatic retention to prevent unbounded growth of the audit and execution-log tables. Retention is enforced by the optional `AuditCleanupHostedService`, registered with **`AddAuditCleanup(policy, cleanupIntervalHours)`**, the single entry-point that actually applies the policy.
@@ -1910,7 +1939,7 @@ The scheduling discriminator (`TimeSpan` delay, `DateTimeOffset` time, or `Actio
 
 ## Recurring Task Builder
 
-The `Action<IRecurringTaskBuilder>` overload of `Dispatch` configures a recurring schedule via a fluent builder (`src/EverTask.Abstractions/Recurring/IRecurringTaskBuilder.cs`). All times are **UTC**. Full feature docs: [Recurring Tasks](recurring-tasks.md).
+The `Action<IRecurringTaskBuilder>` overload of `Dispatch` configures a recurring schedule via a fluent builder (`src/EverTask.Abstractions/Recurring/IRecurringTaskBuilder.cs`). All times are **UTC** unless the schedule names a zone. Full feature docs: [Recurring Tasks](recurring-tasks.md).
 
 **Entry / first run:**
 - `Schedule()`: pure recurring, no initial one-off run.
@@ -1919,8 +1948,8 @@ The `Action<IRecurringTaskBuilder>` overload of `Dispatch` configures a recurrin
 **Interval:**
 - `Every(int n)` followed by `.Seconds()` / `.Minutes()` / `.Hours()` / `.Days()` / `.Weeks()` / `.Months()`.
 - `EverySecond()` / `EveryMinute()` / `EveryHour()` / `EveryDay()` / `EveryWeek()` / `EveryMonth()`.
-- `OnHours()`: every hour (1-hour interval; refine with `.AtMinute(...)`).
 - `OnDays(params DayOfWeek[])`: specific weekdays; `OnMonths(params int[])`: specific months.
+- There is no hourly counterpart of those two. `OnHours()` is on the concrete `IntervalSchedulerBuilder` but not on `IIntervalSchedulerBuilder`, so `Schedule().OnHours()` does not compile, and it selects no hours in any case: it builds `EveryHour()`'s plain cadence, which a time zone does not govern. For specific hours of the day use `EveryDay().AtTimes(...)`.
 
 **Refinement:**
 - Hour → `.AtMinute(0–59)`; minute → `.AtSecond(0–59)`.
@@ -1929,6 +1958,8 @@ The `Action<IRecurringTaskBuilder>` overload of `Dispatch` configures a recurrin
 - Month → `.OnDay(1–31)` / `.OnDays(params int[])` / `.OnFirst(DayOfWeek)` → then `.AtTime(...)`.
 
 **Cron:** `UseCron("expr")`: 5-field (`min hour dom month dow`) or 6-field (with seconds), via Cronos. **Overrides** every other interval call; invalid expressions throw `ArgumentException` on the first schedule calculation.
+
+**Time zone:** `.InTimeZone(TimeZoneInfo)` / `.InTimeZone(string)`, accepted before the interval (on `Schedule()`), on the interval builder itself (`EveryDay().InTimeZone(z).AtTime(...)`) and after the final refinement: every position but between `Every(n)` and its unit. The id may be IANA or Windows; the IANA form is what gets persisted, inside the schedule definition, with no new column. It governs **calendar-anchored** schedules only: days, weeks and months (cadences included: `Every(3).Days()` lands on local midnight), `AtTime`/`AtTimes`, weekday and month selectors, cron. On a plain cadence (`Every(n).Seconds/Minutes/Hours`, with `AtSecond`/`AtMinute`) it throws `InvalidOperationException` when the schedule is built: an elapsed step is the same set of instants in every zone. An unresolvable id, or a zone with no IANA id, throws `ArgumentException` at build; an id that stops resolving later is poisoned at recovery like a corrupt cron. Across daylight saving, a skipped local time fires at the gap's exit (several slots inside one gap produce one occurrence) and a repeated one fires on its first pass. Global default: [`SetDefaultScheduleTimeZone`](#setdefaultscheduletimezone). Full rules: [Time Zones](recurring-tasks/time-zones.md).
 
 **Limits:** `.RunUntil(DateTimeOffset)` (must be future) and `.MaxRuns(int)` (counts real executions only; occurrences skipped to realign after downtime do not consume the budget). Stops at whichever is reached first.
 

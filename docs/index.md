@@ -73,6 +73,7 @@ With those four steps in place, EverTask persists the task, executes it in the b
   - [Overview](recurring-tasks/overview.md) - Concepts and when to use recurring tasks
   - [Fluent Scheduling API](recurring-tasks/fluent-api.md) - Build schedules by minute, hour, day, week, or month
   - [Cron Expressions](recurring-tasks/cron-expressions.md) - 5- and 6-field cron schedules
+  - [Time Zones](recurring-tasks/time-zones.md) - Local hours that survive daylight saving
   - [Idempotent Registration](recurring-tasks/idempotent-registration.md) - Register recurring tasks safely on every startup
   - [Managing Tasks](recurring-tasks/managing-tasks.md) - Inspect, cancel, and reschedule recurring tasks
   - [Best Practices](recurring-tasks/best-practices.md) - Patterns and pitfalls

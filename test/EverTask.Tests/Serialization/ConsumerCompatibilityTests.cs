@@ -278,6 +278,7 @@ public class ConsumerCompatibilityTests : IsolatedIntegrationTestBase
 
         BaselineConsumer.BuildEverySchedule();
         BaselineConsumer.ConstructEveryBuilderDirectly();
+        BaselineConsumer.ImplementTheBuilderInterfaces();
         BaselineConsumer.ConstructRuntimeComponents();
 
         var (nextRun, interval, skipped) = BaselineConsumer.ComputeOccurrences();
@@ -299,6 +300,47 @@ public class ConsumerCompatibilityTests : IsolatedIntegrationTestBase
         await using var provider = services.BuildServiceProvider();
         BaselineConsumer.ConstructHostedComponents(provider);
         await BaselineConsumer.UseDispatcher(provider.GetRequiredService<ITaskDispatcher>());
+    }
+
+    /// <summary>
+    /// T3 / P6, the binary half for the schedule builders: an implementation of the builder interfaces
+    /// compiled against the baseline still loads, and reaches the default bodies of the members added since.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>InTimeZone</c> was added to eight of these interfaces as a default interface member precisely so an
+    /// application that implements them — wrapping the fluent API, or replacing it — would keep compiling. The
+    /// probes above build schedules with EverTask's own builders, which say nothing about that: it is the
+    /// OUTSIDE implementation that a new abstract member would break, and only one compiled against the old
+    /// metadata can show it. The CLR builds that type's interface map against today's interfaces, so
+    /// constructing it is the assertion; the throws after it are the second half, that each of the eight
+    /// declarations really has a reachable default body rather than a hole.
+    /// </para>
+    /// <para>
+    /// <see cref="NotSupportedException"/> and not silence: a builder that accepted a zone and dropped it
+    /// would run the schedule at the wrong hour instead of failing.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void Builder_interfaces_implemented_against_the_baseline_still_load_and_reach_the_new_defaults()
+    {
+        AssertTheFixtureIsAMajorBehind();
+
+        var builder = BaselineConsumer.ImplementTheBuilderInterfaces();
+        var rome    = TimeZoneInfo.FindSystemTimeZoneById("Europe/Rome");
+
+        builder.Calls.ShouldContain("Schedule");
+        builder.Calls.ShouldContain("OnDays(int[])", "the monthly day-list overload is part of the map too");
+
+        Should.Throw<NotSupportedException>(() => ((IIntervalSchedulerBuilder)builder).InTimeZone(rome));
+        Should.Throw<NotSupportedException>(() => ((IIntervalSchedulerBuilder)builder).InTimeZone("Europe/Rome"));
+        Should.Throw<NotSupportedException>(() => ((IHourSchedulerBuilder)builder).InTimeZone(rome));
+        Should.Throw<NotSupportedException>(() => ((IMinuteSchedulerBuilder)builder).InTimeZone(rome));
+        Should.Throw<NotSupportedException>(() => ((IDailyTimeSchedulerBuilder)builder).InTimeZone(rome));
+        Should.Throw<NotSupportedException>(() => ((IWeeklySchedulerBuilder)builder).InTimeZone(rome));
+        Should.Throw<NotSupportedException>(() => ((IMonthlySchedulerBuilder)builder).InTimeZone(rome));
+        Should.Throw<NotSupportedException>(() => ((IBuildableSchedulerBuilder)builder).InTimeZone(rome));
+        Should.Throw<NotSupportedException>(() => ((IBuildableSchedulerBuilder)builder).InTimeZone("Europe/Rome"));
     }
 
     /// <summary>

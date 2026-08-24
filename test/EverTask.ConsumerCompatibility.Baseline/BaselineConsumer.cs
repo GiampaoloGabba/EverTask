@@ -93,6 +93,39 @@ public static class BaselineConsumer
         _ = new MonthlySchedulerBuilder(new RecurringTask { MonthInterval = new MonthInterval(1) });
     }
 
+    /// <summary>
+    /// The same fluent chains, driven against an implementation of the builder interfaces that lives OUTSIDE
+    /// the library (<see cref="BaselineScheduleBuilders"/>): constructing it is the type load, and every call
+    /// below resolves against the baseline's declaration of the interface it belongs to.
+    /// </summary>
+    public static BaselineScheduleBuilders ImplementTheBuilderInterfaces()
+    {
+        var builder = new BaselineScheduleBuilders();
+
+        builder.Schedule().EveryDay().AtTime(new TimeOnly(9, 0)).RunUntil(DateTimeOffset.UtcNow.AddDays(1));
+        builder.Schedule().EveryDay().AtTimes(new TimeOnly(9, 0), new TimeOnly(18, 0));
+        builder.Schedule().Every(2).Hours().AtMinute(15).MaxRuns(3);
+        builder.Schedule().Every(3).Minutes().AtSecond(5);
+        builder.Schedule().EverySecond();
+        builder.Schedule().Every(4).Seconds();
+        builder.Schedule().Every(2).Days();
+        builder.Schedule().Every(2).Weeks().OnDay(DayOfWeek.Sunday);
+        builder.Schedule().Every(2).Months().OnDays(1, 15);
+        builder.Schedule().EveryMinute().RunUntil(DateTimeOffset.UtcNow.AddDays(1));
+        builder.Schedule().EveryHour().RunUntil(DateTimeOffset.UtcNow.AddDays(1));
+        builder.Schedule().EveryWeek().OnDays(DayOfWeek.Monday, DayOfWeek.Friday);
+        builder.Schedule().EveryMonth().OnDay(15);
+        builder.Schedule().EveryMonth().OnFirst(DayOfWeek.Monday);
+        builder.Schedule().OnDays(DayOfWeek.Tuesday);
+        builder.Schedule().OnMonths(1, 7);
+        builder.Schedule().UseCron("0 3 * * *");
+        builder.RunNow().Then().EveryMinute();
+        builder.RunDelayed(TimeSpan.FromMinutes(1)).Then().EverySecond();
+        builder.RunAt(DateTimeOffset.UtcNow.AddHours(1)).Then().EveryHour();
+
+        return builder;
+    }
+
     /// <summary>The occurrence math a consumer can call on its own.</summary>
     public static (DateTimeOffset? NextRun, TimeSpan Interval, int Skipped) ComputeOccurrences()
     {

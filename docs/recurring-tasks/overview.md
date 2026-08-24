@@ -16,6 +16,7 @@ Schedule recurring tasks with a type-safe fluent API or cron, from an hourly job
 - **Idempotent Registration**: Prevent duplicate tasks with task keys
 - **Flexible Starting Strategies**: Run immediately, delay, or schedule first run
 - **Execution Limits**: MaxRuns and RunUntil for time-limited tasks
+- **Time Zones**: Read a calendar schedule on a real clock, daylight saving included
 - **Persistent Schedules**: Recurring tasks survive application restarts
 
 ## Quick Examples
@@ -54,6 +55,9 @@ Learn how to use the fluent API to build schedules for minute-based, hourly, dai
 
 ### [Cron Expressions](cron-expressions.md)
 Use cron expressions for maximum scheduling flexibility. Learn the syntax, common patterns, and how to combine cron with starting strategies and limits.
+
+### [Time Zones](time-zones.md)
+Run a calendar schedule on a real clock with `InTimeZone`, set a default zone for the whole application, and see what happens on the two days a year a local hour is skipped or repeated.
 
 ### [Idempotent Task Registration](idempotent-registration.md)
 Prevent duplicate recurring tasks using task keys. Learn about update behavior, startup registration patterns, and dynamic configuration.

@@ -1309,6 +1309,11 @@ public class WorkerExecutor(
         if (result.SkippedCount > 0)
             logger.MissedOccurrencesSkipped(task.PersistenceId, result.SkippedCount);
 
+        // T6: the slots a daylight-saving transition folded into this one occurrence. They cost one run, not
+        // one each, so the only place their number ever shows up is here.
+        if (result.CollapsedSlotCount > 0)
+            logger.DstSlotsCollapsed(task.PersistenceId, result.CollapsedSlotCount + 1, result.NextRun);
+
         // Advance the run counter by exactly ONE real execution. Occurrences skipped during a downtime
         // realign the schedule and are logged above, but they do NOT consume the MaxRuns budget: the
         // counter tracks real executions only (CurrentRunCount == RunsAudit rows), so MaxRuns means

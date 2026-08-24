@@ -1,6 +1,8 @@
 # 05: Scheduling: delayed, scheduled, recurring
 
-All schedules execute in **UTC**. Convert local times before passing to `AtTime`/`RunAt`.
+All schedules execute in **UTC** unless the schedule names a zone with `InTimeZone` (see #time-zones).
+`RunAt` always takes an absolute instant: build its `DateTimeOffset` with `zone.GetUtcOffset(localDateTime)`,
+never with `zone.BaseUtcOffset` (the standard offset, wrong for half the year).
 
 ## One-shot
 
@@ -33,9 +35,13 @@ await dispatcher.Dispatch(task, r => r.Schedule().EveryDay().AtTime(new TimeOnly
 | `UseCron("expr")` | cron (see below). **Overrides all other interval calls; never combine.** |
 | `Every(n).Seconds()/.Minutes()/.Hours()/.Days()/.Weeks()/.Months()` | every N units |
 | `EverySecond()/EveryMinute()/EveryHour()/EveryDay()/EveryWeek()/EveryMonth()` | every 1 unit |
-| `OnHours()` | every hour (1-hour interval; refine with `.AtMinute(...)`) |
 | `OnDays(params DayOfWeek[])` | specific weekdays |
 | `OnMonths(params int[])` | specific months (e.g. `1,4,7,10` quarterly) |
+
+There is no hourly counterpart of `OnDays`/`OnMonths`. `IntervalSchedulerBuilder.OnHours()` exists on the
+concrete class but not on `IIntervalSchedulerBuilder`, so `Schedule().OnHours()` does not compile — and it
+takes no hours anyway: it builds the same plain hourly cadence as `EveryHour()`. For specific hours of the
+day, name them: `EveryDay().AtTimes(new TimeOnly(8,0), new TimeOnly(20,0))`.
 
 Refinements per unit:
 - Hour: `.AtMinute(0–59)`
@@ -64,6 +70,46 @@ r => r.Schedule().EveryHour().MaxRuns(10)                              // 10 run
 r => r.Schedule().EveryDay().RunUntil(trialEndDate)                    // until a date
 ```
 
+## Time zones
+
+`.InTimeZone(TimeZoneInfo)` / `.InTimeZone(string)`, chainable before the interval (on `Schedule()`), on the
+interval builder, or after the last refinement — every position but between `Every(n)` and its unit. The id
+may be IANA (`Europe/Rome`) or Windows (`W. Europe Standard Time`); the IANA form is what gets persisted,
+inside the schedule JSON, with **no new column**.
+
+```csharp
+r => r.Schedule().EveryDay().AtTime(new TimeOnly(9,0)).InTimeZone("Europe/Rome")  // 09:00 Rome, all year
+r => r.Schedule().InTimeZone("America/New_York").EveryWeek().OnDay(DayOfWeek.Monday)
+r => r.Schedule().EveryMonth().InTimeZone("Europe/Rome").OnDay(15)               // zone before the selector
+r => r.Schedule().UseCron("0 2 * * *").InTimeZone("Asia/Tokyo")
+```
+
+| Semantics | Schedules | A zone… |
+|---|---|---|
+| **Calendar** | days/weeks/months (`EveryDay`, `Every(3).Days()`, …), `AtTime`/`AtTimes`, `OnDays`, `OnMonths`, `UseCron` | governs them |
+| **Elapsed** | `Every(n).Seconds()/.Minutes()/.Hours()`, `EverySecond`/`EveryMinute`/`EveryHour` (+ `AtSecond`/`AtMinute`) | is **refused** |
+
+- A day, week or month cadence is calendar-anchored even without `AtTime`: it defaults to midnight, and
+  midnight is a local time. `Every(3).Days()` in Rome fires at local midnight.
+- There is no hourly calendar selector. `OnHours()` is not one (see above), so an hour of the day is named the
+  same way as any other: `EveryDay().AtTimes(new TimeOnly(8,0), new TimeOnly(20,0)).InTimeZone(...)`.
+- `InTimeZone` on an elapsed cadence throws `InvalidOperationException` when the schedule is **built** (not at
+  the call): an elapsed step is the same set of instants in every zone. `AtMinute`/`AtSecond` therefore align
+  on UTC — `EveryHour().AtMinute(30)` fires at :00 local in India (+05:30) and :15 in Nepal (+05:45).
+- An id this machine cannot resolve, or a `TimeZoneInfo.CreateCustomTimeZone` zone, throws `ArgumentException`
+  at build. A stored id that stops resolving later is poisoned at recovery like a corrupt cron.
+- `AtTime`/`AtTimes` store the `TimeOnly` verbatim: pass the local time you mean and name the zone. The public
+  `TimeOnly.ToUniversalTime()` extension is **deprecated** (docs only, no `[Obsolete]`) — it never converted
+  anything, it only dropped the milliseconds. Never generate a call to it.
+- **DST**: a local time a gap removed fires at the gap's exit, and several slots inside one gap collapse into
+  a single occurrence; a repeated local time fires on its **first** pass. Gap widths are not assumed to be an
+  hour (Lord Howe moves 30 minutes). An elapsed cadence is untouched by both: it fires twice through the
+  repeated hour, and 01:45 + 30 min is 03:15 local across the gap.
+- Global default: `SetDefaultScheduleTimeZone(TimeZoneInfo)` (`01-setup.md`), applied at dispatch to calendar
+  schedules that did not call `InTimeZone`. It is written INTO the definition, so existing rows never move.
+- The handler reads `Context.TimeZoneId` and `Context.ScheduledAtLocal` (offset included, which is what tells
+  the two passes of a fall-back apart); both are null for a schedule with no zone.
+
 ## Cron
 
 Library: **Cronos**. 5-field standard (`min hour dom month dow`) or 6-field with seconds
@@ -79,6 +125,7 @@ r => r.RunNow().Then().UseCron("*/30 * * * *")   // now, then every 30 min
 
 Validate at https://crontab.guru (standard) or https://cronos.netlify.app (Cronos dialect).
 Use the fluent API for simple readable patterns; cron for multi-constraint windows.
+A cron expression takes `.InTimeZone(...)` too, and Cronos applies the transition rules.
 
 ## Idempotent registration (essential for recurring)
 
@@ -122,8 +169,10 @@ day, never an arbitrary interval-arithmetic slot.
 1. One-shot vs recurring → dispatch overload.
 2. Run immediately on first dispatch, after a delay, or at a fixed time? → `RunNow`/`RunDelayed`/`RunAt` vs `Schedule`.
 3. Interval shape → fluent unit or cron (cron overrides everything else).
-4. Stop condition → `MaxRuns` and/or `RunUntil`.
-5. Idempotent on restart → `taskKey` (strongly recommended for all recurring).
-6. High-frequency → set `auditLevel: AuditLevel.Minimal`/`ErrorsOnly`.
-7. Work defined by its slot rather than by "now" → read `Context.ScheduledAtUtc` (and `Context.Misfire`
+4. Anchored to a wall clock people read (a 09:00 digest, a 02:00 nightly job) rather than to an absolute
+   cadence? → `.InTimeZone("Area/City")`, or `SetDefaultScheduleTimeZone` once for the whole application.
+5. Stop condition → `MaxRuns` and/or `RunUntil`.
+6. Idempotent on restart → `taskKey` (strongly recommended for all recurring).
+7. High-frequency → set `auditLevel: AuditLevel.Minimal`/`ErrorsOnly`.
+8. Work defined by its slot rather than by "now" → read `Context.ScheduledAtUtc` (and `Context.Misfire`
    when a stale run should behave differently).

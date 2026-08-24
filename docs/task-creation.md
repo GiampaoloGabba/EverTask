@@ -154,7 +154,7 @@ public class SendDigestHandler(IDigestService digests) : EverTaskHandler<SendDig
 | `ScheduleId` | `Guid?` | The recurring schedule this delivery is an occurrence of, `null` when it is not one |
 | `TaskKey` | `string?` | The idempotency key the task was dispatched with |
 | `ScheduledAtUtc` | `DateTimeOffset?` | The slot this delivery stands for: the scheduled time of a delayed task, the occurrence time of a recurring one, `null` for a task dispatched to run immediately |
-| `ScheduledAtLocal` | `DateTimeOffset?` | The same slot in the schedule's own time zone, `null` while a schedule carries no zone |
+| `ScheduledAtLocal` | `DateTimeOffset?` | The same slot in the schedule's own time zone, offset included, `null` when the schedule carries no zone. See [Time Zones](recurring-tasks/time-zones.md) |
 | `TimeZoneId` | `string?` | IANA id of that zone, `null` when there is none |
 | `StartedAtUtc` | `DateTimeOffset` | When this delivery actually started |
 | `Attempt` | `int` | 1-based execution attempt: `1` on the first run of `Handle`, `2` on the first retry |

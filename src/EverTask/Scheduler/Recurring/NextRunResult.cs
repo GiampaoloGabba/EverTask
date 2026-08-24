@@ -9,4 +9,18 @@ namespace EverTask.Scheduler.Recurring;
 public record NextRunResult(
     DateTimeOffset? NextRun,
     int SkippedCount
-);
+)
+{
+    /// <summary>
+    /// How many further nominal wall-clock slots a daylight-saving transition folded into
+    /// <see cref="NextRun"/> — the "compressed slots" counter of T6. Zero for a schedule with no time zone,
+    /// for cron (whose transition rules are Cronos's own) and for every occurrence no transition touched.
+    /// </summary>
+    /// <remarks>
+    /// Logging only, like <see cref="SkippedCount"/>: the collapsed slots ARE the one occurrence, so they
+    /// consume exactly one run of the budget. An <c>init</c> property in the body rather than a positional
+    /// parameter, so the primary constructor and the generated <c>Deconstruct</c> keep the arity an already
+    /// compiled consumer calls (P6/X4).
+    /// </remarks>
+    public int CollapsedSlotCount { get; init; }
+}

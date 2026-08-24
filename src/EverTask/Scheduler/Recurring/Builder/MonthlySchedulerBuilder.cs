@@ -43,4 +43,23 @@ public class MonthlySchedulerBuilder(RecurringTask task, TimeProvider? timeProvi
     }
 
     public void MaxRuns(int maxRuns) => task.MaxRuns = maxRuns;
+
+    // Returns THIS builder: EveryMonth().InTimeZone(z).OnDay(15) has to keep the day selector reachable.
+    public IMonthlySchedulerBuilder InTimeZone(TimeZoneInfo timeZone)
+    {
+        task.SetTimeZone(timeZone);
+        return this;
+    }
+
+    public IMonthlySchedulerBuilder InTimeZone(string timeZoneId)
+    {
+        task.SetTimeZone(timeZoneId);
+        return this;
+    }
+
+    IBuildableSchedulerBuilder IBuildableSchedulerBuilder.InTimeZone(TimeZoneInfo timeZone) =>
+        InTimeZone(timeZone);
+
+    IBuildableSchedulerBuilder IBuildableSchedulerBuilder.InTimeZone(string timeZoneId) =>
+        InTimeZone(timeZoneId);
 }

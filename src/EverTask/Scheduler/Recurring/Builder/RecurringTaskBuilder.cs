@@ -52,4 +52,16 @@ public class BuildableSchedulerBuilder(RecurringTask task, TimeProvider? timePro
     }
 
     public void MaxRuns(int maxRuns) => task.MaxRuns = maxRuns;
+
+    public IBuildableSchedulerBuilder InTimeZone(TimeZoneInfo timeZone)
+    {
+        task.SetTimeZone(timeZone);
+        return new BuildableSchedulerBuilder(task, timeProvider);
+    }
+
+    public IBuildableSchedulerBuilder InTimeZone(string timeZoneId)
+    {
+        task.SetTimeZone(timeZoneId);
+        return new BuildableSchedulerBuilder(task, timeProvider);
+    }
 }

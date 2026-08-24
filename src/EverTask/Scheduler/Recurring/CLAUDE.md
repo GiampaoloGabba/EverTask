@@ -67,4 +67,62 @@ Fluent builder (`Builder/RecurringTaskBuilder.cs`) + occurrence math (`Recurring
 9. **`CalculateNextRun`, `GetMinimumInterval` and `CalculateNextValidRun` take an optional `nowUtc`** (P9).
    The scheduling path always passes it; null falls back to the real clock for callers outside it.
 
+10. **A zone moves CALENDAR schedules only, and the classification is derived, never stored**
+    (`ScheduleSemantics`, T5). `Elapsed` is exactly the constant-step grids — Second/Minute/Hour intervals with
+    no `OnHours`, since `AtMinute`/`AtSecond` only re-phase a constant step. Everything else is `Calendar`: a
+    Day, Week or Month interval always snaps to a time of day (`OnTimes` defaults to midnight). A zone on an
+    Elapsed schedule is REFUSED by `Validate()`, not ignored, and the check lives there and not in
+    `InTimeZone` because the chain has no final shape yet: `Schedule().InTimeZone(z).EveryDay()` is legitimate.
+    T5's own wording put `Every(n).Days/Weeks` among the cadences; the classification shipped here overrides
+    it, ratified in `review/recurring-occurrences-decisions.md` §3.4 — do not "restore" T5's letter.
+    `InTimeZone` is declared again on the day/week/month builder interfaces, returning the SAME builder, so a
+    zone named mid-chain does not swallow the refinement after it (`EveryWeek().InTimeZone(z).OnDay(...)`);
+    the inherited `IBuildableSchedulerBuilder` overload forwards to it explicitly.
+11. **`GoverningZone` is the single gate into the zoned math**: null for Elapsed, for no zone and for plain
+    `"UTC"`, all three of which the legacy arithmetic already answers exactly. Everything keys off it —
+    `IsUniformGrid` returns false when it is non-null (T8: local midnight is not a constant 24 h step, so the
+    O(1) jump would land off-grid) and `CountMissedOccurrences` follows. It is what keeps the zone-less path
+    byte-identical.
+12. **The zoned walk advances from the NOMINAL wall slot, never from the mapped instant** (T7).
+    `WallClock.ToUtc` reports `Consumed` when a slot maps at or before the instant the walk stands on (a slot
+    a DST gap collapsed onto an instant already served, or the second reading of a repeated hour) and
+    `NextGridOccurrenceInZone` continues from the wall time. Advancing from the shifted instant would skip the
+    slots the gap swallowed; returning it would schedule an occurrence in the past.
+    - **The slots that fire nothing are counted, and the count is the walk's** (T6, decisions §3.4).
+      `WallMapping.CollapsedCount` is 0 out of `ToUtc` — one call sees one slot — and filled in by
+      `NextGridOccurrenceInZone`, from its own discards plus `CountSlotsSwallowedByGap` (the later slots a
+      gap ate between the nominal one and its exit; reached only for a `Shifted` mapping). It travels on
+      `NextRunResult.CollapsedSlotCount`, an `init` property, and `WorkerExecutor` logs it. Logging only: the
+      compressed slots ARE the one occurrence, so they spend one run, not one each.
+13. **Cronos is the oracle, and cron delegates to it with the zone** (`CronOracleTests`: 400 occurrences,
+    five fluent shapes, nine zones, exact equality). If the two ever diverge, align to Cronos. The comparison
+    is seeded on the fluent grid's own first occurrence, because day and month intervals advance their period
+    BEFORE selecting inside it and occurrence one can legitimately differ — pinned shape by shape. A CUSTOM
+    zone cannot reach a schedule (no IANA id, gotcha 14), so its 400-occurrence run is made against the
+    mapping and the cascade directly; the reformulation is written into decisions §3.4.
+14. **The stored id is IANA, and resolution failure is poison.** `ScheduleTimeZone` takes a Windows or IANA
+    spelling and persists the IANA one (a row written on Windows must resolve on a Linux replica); a custom
+    `TimeZoneInfo` has none and is refused. An id that stops resolving reaches `Validate()` on every path, so
+    recovery poisons the row instead of running it on the wrong clock.
+    - **`Validate()` is also where the id is canonicalized**, not just checked — `InTimeZone` is not, because
+      the public `Dispatcher.ExecuteDispatch` takes a `RecurringTask` built by hand and never meets a builder.
+      Validation runs before the definition is serialized on every path that persists one, so the row gets the
+      IANA spelling whichever entry point wrote it (`TimeZoneIdNormalizationTests`,
+      `ScheduleTimeZoneIntegrationTests.A_schedule_handed_straight_to_the_dispatcher_is_persisted_with_the_IANA_id`).
+      Keep any future normalization there for the same reason.
+15. **`AtTime`/`AtTimes` store the `TimeOnly` VERBATIM** (T12): a time of day is read on whatever clock the
+    schedule ends up on, so there is nothing to convert. `TimeOnly.ToUniversalTime()` never converted anything
+    either — it rebuilt the value from today's UTC date, offset zero — it only dropped the milliseconds; it is
+    deprecated in docs and XML-doc, with no `[Obsolete]` (R13), and nothing in the library calls it. The two
+    places that apply an `OnTimes` to a date go through `WithTimeOfDay`, not `Adjust(hour, minute, second)`,
+    so the grid can land on the precision the builder kept.
+16. **`OnHours()` is not a calendar selector, and is not on the fluent API.** It sits on the concrete
+    `IntervalSchedulerBuilder` only — `IIntervalSchedulerBuilder` never declared it, so `Schedule().OnHours()`
+    does not compile — takes no hours, and builds `EveryHour()`'s cadence. Nothing populates
+    `HourInterval.OnHours`, which is reachable from persisted metadata alone. Listing it beside
+    `OnDays`/`OnMonths` is what put it in the calendar row of three documents.
+
 Builder and per-interval tests: `test/EverTask.Tests/RecurringTests/Builders/` and `.../Intervals/`.
+Time zones: `test/EverTask.Tests/RecurringTests/TimeZones/` (mapping, classification, DST, the Cronos oracle,
+skip-forward parity, id normalization) plus `IntegrationTests/ScheduleTimeZoneIntegrationTests.cs` for the
+wiring — the zone into the row, back out of it at restart, and into what the handler reads.

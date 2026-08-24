@@ -1,5 +1,6 @@
 ﻿using EverTask.Configuration;
 using EverTask.RateLimiting;
+using EverTask.Scheduler.Recurring;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -58,6 +59,8 @@ public class EverTaskServiceConfiguration
     internal RateLimiterOptions RateLimiterOptions { get; } = new();
 
     internal TimeSpan MisfireThreshold { get; private set; } = TimeSpan.FromSeconds(5);
+
+    internal string? DefaultScheduleTimeZoneId { get; private set; }
 
     /// <summary>
     /// Sets the channel capacity for the default queue.
@@ -344,6 +347,36 @@ public class EverTaskServiceConfiguration
         }
 
         MisfireThreshold = threshold;
+        return this;
+    }
+
+    /// <summary>
+    /// Sets the time zone every calendar-anchored schedule is read on when it does not name one itself.
+    /// </summary>
+    /// <param name="timeZone">
+    /// A system time zone. Its IANA id is what gets persisted with each schedule, so a row keeps meaning the
+    /// same thing after this default changes — and on a host that resolves zones differently.
+    /// </param>
+    /// <returns>The configuration instance for method chaining.</returns>
+    /// <exception cref="ArgumentException">The zone cannot be persisted as an IANA id (a custom zone).</exception>
+    /// <remarks>
+    /// <para>
+    /// It applies at dispatch, to schedules built through <c>Dispatch(task, r =&gt; ...)</c> that are anchored
+    /// to a calendar — a time of day, a day of the week, a month selector, a cron expression — and that did
+    /// not call <c>InTimeZone</c>. A plain cadence (every N seconds/minutes/hours) is never touched: it is a
+    /// constant step in elapsed time, identical in every zone.
+    /// </para>
+    /// <para>
+    /// Rows already persisted keep whatever they were dispatched with, including no zone at all: the default
+    /// is stamped onto the schedule when it is built, not re-applied on recovery, so raising it does not
+    /// silently move existing schedules by an hour.
+    /// </para>
+    /// </remarks>
+    public EverTaskServiceConfiguration SetDefaultScheduleTimeZone(TimeZoneInfo timeZone)
+    {
+        ArgumentNullException.ThrowIfNull(timeZone);
+
+        DefaultScheduleTimeZoneId = ScheduleTimeZone.Normalize(timeZone);
         return this;
     }
 

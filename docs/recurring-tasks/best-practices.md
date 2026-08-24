@@ -2,7 +2,7 @@
 layout: default
 title: Best Practices
 parent: Recurring Tasks
-nav_order: 6
+nav_order: 7
 ---
 
 # Recurring Tasks Best Practices
@@ -74,28 +74,36 @@ public class LongRunningRecurringHandler : EverTaskHandler<LongRunningRecurringT
 }
 ```
 
-## 5. Consider Time Zones
+## 5. Name the Time Zone Instead of Converting to UTC
 
-EverTask schedules run in UTC, so be explicit about time zones to avoid surprises:
+A schedule with no zone is computed in UTC, which is the right answer when you mean an absolute cadence. When
+you mean a local hour, say so with `InTimeZone` and let EverTask resolve the offset at each occurrence:
 
 ```csharp
-// ✅ Good: Clear about UTC
+// ✅ Good: an absolute daily cadence, stated as such
 await dispatcher.Dispatch(
     new GlobalTask(),
     r => r.Schedule().EveryDay().AtTime(new TimeOnly(0, 0)), // Midnight UTC
     taskKey: "global-midnight-task");
 
-// ✅ Good: Convert user's local time to UTC
+// ✅ Good: 9 AM in the user's zone, all year round
+await dispatcher.Dispatch(
+    new UserTask(user.Id),
+    r => r.Schedule().EveryDay().AtTime(new TimeOnly(9, 0)).InTimeZone(user.TimeZoneId),
+    taskKey: $"user-{user.Id}-daily-task");
+
+// ❌ Wrong: converting once freezes the offset, and the task drifts by an hour at the next DST change
 var userTimeZone = TimeZoneInfo.FindSystemTimeZoneById(user.TimeZoneId);
-var localTime = TimeZoneInfo.ConvertTimeToUtc(
-    DateTime.Today.AddHours(9), // 9 AM in user's local time
-    userTimeZone);
+var localTime    = TimeZoneInfo.ConvertTimeToUtc(DateTime.Today.AddHours(9), userTimeZone);
 
 await dispatcher.Dispatch(
     new UserTask(user.Id),
     r => r.Schedule().EveryDay().AtTime(TimeOnly.FromDateTime(localTime)),
     taskKey: $"user-{user.Id}-daily-task");
 ```
+
+`InTimeZone` also settles what happens on the two days a year a local hour is missing or repeated. See
+[Time Zones](time-zones.md).
 
 ## 6. Limit Recurring Tasks Appropriately
 

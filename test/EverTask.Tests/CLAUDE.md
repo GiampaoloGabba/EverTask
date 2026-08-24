@@ -51,6 +51,11 @@ Docker or Testcontainers here. Subsets filter on namespace: `--filter "FullyQual
   appended to an existing public method or constructor — source-level probes keep compiling while the IL
   signature changes. Add a public method, not an optional parameter; see that project's `README.md` for the
   wiring and for repacking the baseline.
+  Its `BaselineScheduleBuilders.cs` is the same proof for the fluent API: one type implementing all ten
+  schedule builder interfaces as the baseline declared them, so constructing it builds an interface map
+  against TODAY's interfaces and an `InTimeZone` that had arrived abstract would fail the type load. The test
+  then calls all eight `InTimeZone` slots on it and expects `NotSupportedException` — the default bodies are
+  reachable, and they refuse rather than drop the zone.
   Its `BaselineHandlers.cs` carries the other half: two handlers built when neither `SetExecutionContext` nor
   `EverTaskHandler<T>.Context` existed — one implementing `IEverTaskHandler<T>` directly, one deriving from
   the base class — dispatched on a REAL host by

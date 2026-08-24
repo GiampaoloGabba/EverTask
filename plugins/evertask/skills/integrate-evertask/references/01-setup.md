@@ -71,6 +71,12 @@ moderate 2000–5000, high 10000+.
 |---|---|---|
 | `SetMisfireThreshold(TimeSpan)` | `5 s` | How late a delivery may start before `Context.Misfire` reports it (`02-tasks-and-handlers.md`). **Observation only**: nothing about execution depends on it, and the 1 s tolerance of the recurring skip-forward path is a separate, untouched rule. Negative values throw. |
 
+### Scheduling
+
+| Method | Default | Notes |
+|---|---|---|
+| `SetDefaultScheduleTimeZone(TimeZoneInfo)` | `null` (UTC) | Zone for **calendar-anchored** schedules built without `InTimeZone` (`05-scheduling.md`). Plain cadences (`Every(n).Seconds/Minutes/Hours`) are never touched. Stamped into the definition at dispatch, so rows already stored keep their meaning. A custom (non-IANA) zone throws. |
+
 ### Persistent logger (handler logs → DB)
 
 `WithPersistentLogger(Action<PersistentLoggerOptions>)` auto-enables DB persistence; logs are
@@ -136,6 +142,7 @@ var everTask = builder.Services.AddEverTask(opt => opt
     .SetDefaultAuditLevel(AuditLevel.Full)
     .SetUseLazyHandlerResolution(true)
     .SetMisfireThreshold(TimeSpan.FromSeconds(5))
+    .SetDefaultScheduleTimeZone(TimeZoneInfo.FindSystemTimeZoneById("Europe/Rome"))
     .WithPersistentLogger(log => log.SetMinimumLevel(LogLevel.Information).SetMaxLogsPerTask(1000))
     .UseShardedScheduler(shardCount: 0)
     .SetRateLimiterOptions(o => { o.MaxParkedTasks = 5000; o.MaxTrackedKeys = 100_000; }))

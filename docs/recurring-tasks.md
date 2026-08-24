@@ -61,6 +61,9 @@ Learn how to use the fluent API to build schedules for minute-based, hourly, dai
 ### [Cron Expressions](recurring-tasks/cron-expressions.md)
 Use cron expressions for maximum scheduling flexibility. Learn the syntax, common patterns, and how to combine cron with starting strategies and limits.
 
+### [Time Zones](recurring-tasks/time-zones.md)
+Run a calendar schedule on a real clock with `InTimeZone`, set a default zone for the whole application, and see what happens on the two days a year a local hour is skipped or repeated.
+
 ### [Idempotent Task Registration](recurring-tasks/idempotent-registration.md)
 Prevent duplicate recurring tasks using task keys. Learn about update behavior, startup registration patterns, and dynamic configuration.
 
@@ -133,6 +136,7 @@ public async Task UpdateUserReportSchedule(string userId, TimeOnly newTime)
 Start with the [Overview](recurring-tasks/overview.md) to learn about recurring task features, or jump directly to:
 - **[Fluent Scheduling API](recurring-tasks/fluent-api.md)** - Type-safe schedule building
 - **[Cron Expressions](recurring-tasks/cron-expressions.md)** - Complex scheduling patterns
+- **[Time Zones](recurring-tasks/time-zones.md)** - Local hours that survive daylight saving
 - **[Best Practices](recurring-tasks/best-practices.md)** - Patterns and pitfalls
 
 ---

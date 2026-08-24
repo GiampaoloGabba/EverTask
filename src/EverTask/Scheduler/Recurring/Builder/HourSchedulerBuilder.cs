@@ -27,4 +27,16 @@ public class HourSchedulerBuilder(RecurringTask task, TimeProvider? timeProvider
     }
 
     public void MaxRuns(int maxRuns) =>task.MaxRuns = maxRuns;
+
+    public IHourSchedulerBuilder InTimeZone(TimeZoneInfo timeZone)
+    {
+        task.SetTimeZone(timeZone);
+        return this;
+    }
+
+    public IHourSchedulerBuilder InTimeZone(string timeZoneId)
+    {
+        task.SetTimeZone(timeZoneId);
+        return this;
+    }
 }

@@ -148,7 +148,7 @@ public class WeeklySchedulerBuilderTests
         var task = builder.RecurringTask;
         task.WeekInterval.ShouldNotBeNull();
         task.WeekInterval.OnTimes.Length.ShouldBe(1);
-        task.WeekInterval.OnTimes[0].ShouldBe(time.ToUniversalTime());
+        task.WeekInterval.OnTimes[0].ShouldBe(time);
     }
 
     [Fact]
@@ -166,8 +166,8 @@ public class WeeklySchedulerBuilderTests
         var task = builder.RecurringTask;
         task.WeekInterval.ShouldNotBeNull();
         task.WeekInterval.OnTimes.Length.ShouldBe(2);
-        task.WeekInterval.OnTimes.ShouldContain(time1.ToUniversalTime());
-        task.WeekInterval.OnTimes.ShouldContain(time2.ToUniversalTime());
+        task.WeekInterval.OnTimes.ShouldContain(time1);
+        task.WeekInterval.OnTimes.ShouldContain(time2);
     }
 
     [Fact]
@@ -187,7 +187,7 @@ public class WeeklySchedulerBuilderTests
         task.WeekInterval.ShouldNotBeNull();
         task.WeekInterval.OnDays.Length.ShouldBe(3);
         task.WeekInterval.OnTimes.Length.ShouldBe(1);
-        task.WeekInterval.OnTimes[0].ShouldBe(time.ToUniversalTime());
+        task.WeekInterval.OnTimes[0].ShouldBe(time);
     }
 
     [Fact]
@@ -209,9 +209,9 @@ public class WeeklySchedulerBuilderTests
         task.WeekInterval.ShouldNotBeNull();
         task.WeekInterval.OnDays.Length.ShouldBe(2);
         task.WeekInterval.OnTimes.Length.ShouldBe(3);
-        task.WeekInterval.OnTimes.ShouldContain(time1.ToUniversalTime());
-        task.WeekInterval.OnTimes.ShouldContain(time2.ToUniversalTime());
-        task.WeekInterval.OnTimes.ShouldContain(time3.ToUniversalTime());
+        task.WeekInterval.OnTimes.ShouldContain(time1);
+        task.WeekInterval.OnTimes.ShouldContain(time2);
+        task.WeekInterval.OnTimes.ShouldContain(time3);
     }
 
     [Fact]
@@ -250,8 +250,8 @@ public class WeeklySchedulerBuilderTests
         var task = builder.RecurringTask;
         task.WeekInterval.ShouldNotBeNull();
         task.WeekInterval.OnTimes.Length.ShouldBe(3);
-        task.WeekInterval.OnTimes[0].ShouldBe(time2.ToUniversalTime()); // 9:00
-        task.WeekInterval.OnTimes[1].ShouldBe(time3.ToUniversalTime()); // 12:00
-        task.WeekInterval.OnTimes[2].ShouldBe(time1.ToUniversalTime()); // 15:00
+        task.WeekInterval.OnTimes[0].ShouldBe(time2); // 9:00
+        task.WeekInterval.OnTimes[1].ShouldBe(time3); // 12:00
+        task.WeekInterval.OnTimes[2].ShouldBe(time1); // 15:00
     }
 }

@@ -66,4 +66,19 @@ public class IntervalSchedulerBuilder(RecurringTask task, TimeProvider? timeProv
         task.MonthInterval = new MonthInterval(0, months);
         return new MonthlySchedulerBuilder(task, timeProvider);
     }
+
+    // Zone-first chaining: Schedule().InTimeZone(z).EveryDay().AtTime(...). The interval methods below return
+    // their own refining builder, so declaring InTimeZone here as well is what lets the call sit before the
+    // interval instead of only after it.
+    public IIntervalSchedulerBuilder InTimeZone(TimeZoneInfo timeZone)
+    {
+        task.SetTimeZone(timeZone);
+        return this;
+    }
+
+    public IIntervalSchedulerBuilder InTimeZone(string timeZoneId)
+    {
+        task.SetTimeZone(timeZoneId);
+        return this;
+    }
 }

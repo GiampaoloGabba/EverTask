@@ -269,10 +269,18 @@ async function reviewRound(phaseObj, phaseTag, round, seen, focusNote) {
   const candidates = fresh.filter(f => f.severity !== 'low')
   const lows = fresh.filter(f => f.severity === 'low')
 
+  // Verifications are read-only and independent: run them concurrently (maintainer, 2026-08-24).
+  // Phases 1-2 keep the original sequential order so their journaled call sequence replays from cache.
   const verified = []
-  for (const f of candidates) {
-    const v = await verifyFinding(f, phaseTag, 1)
-    if (v.confirmed) verified.push({ ...f, verdict: v.reason })
+  if (phaseObj.n <= 2) {
+    for (const f of candidates) {
+      const v = await verifyFinding(f, phaseTag, 1)
+      if (v.confirmed) verified.push({ ...f, verdict: v.reason })
+    }
+  } else {
+    const outcomes = await parallel(candidates.map(f => () =>
+      verifyFinding(f, phaseTag, 1).then(v => ({ f, v }))))
+    for (const o of outcomes.filter(Boolean)) if (o.v.confirmed) verified.push({ ...o.f, verdict: o.v.reason })
   }
   return { confirmed: verified, lows, codexStatus: codexRes ? codexRes.status : 'missing' }
 }
@@ -498,11 +506,11 @@ for (let round = 1; ; round++) {
   const fresh = res.flatMap(r => r.findings || []).filter(f => !seenF.has(fkey(f)))
   fresh.forEach(f => seenF.add(fkey(f)))
   const candidates = fresh.filter(f => f.severity !== 'low')
+  // Read-only verifications run concurrently (the final review has no cached prefix to preserve).
   const confirmed = []
-  for (const f of candidates) {
-    const v = await verifyFinding(f, FTAG, (f.severity === 'critical' || f.severity === 'high') ? 3 : 1)
-    if (v.confirmed) confirmed.push({ ...f, verdict: v.reason })
-  }
+  const finalOutcomes = await parallel(candidates.map(f => () =>
+    verifyFinding(f, FTAG, (f.severity === 'critical' || f.severity === 'high') ? 3 : 1).then(v => ({ f, v }))))
+  for (const o of finalOutcomes.filter(Boolean)) if (o.v.confirmed) confirmed.push({ ...o.f, verdict: o.v.reason })
   log('Final review round ' + round + ': ' + confirmed.length + ' confermati')
   if (confirmed.length === 0) break
   if (round > MAX_FINAL_ROUNDS) {
