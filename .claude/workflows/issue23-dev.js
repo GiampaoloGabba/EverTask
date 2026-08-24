@@ -25,7 +25,7 @@ const OUT   = ROOT + '/review/orchestrator'
 
 const MAX_REVIEW_ROUNDS = 3   // per-phase review/fix rounds
 const MAX_GATE_FIXES    = 3   // build/test fix attempts per gate failure
-const MAX_CERT_CYCLES   = 4   // certification -> complete-the-gaps cycles (2->3->4, maintainer 2026-08-23: cycle-3 leftovers were maintainer ratifications, now recorded in decisions 3.2, plus one trivial test)
+const MAX_CERT_CYCLES   = 5   // certification -> complete-the-gaps cycles (2->3->4->5; the abort-and-ratify loop costs one cycle per maintainer sign-off, ratifications live in decisions 3.x)
 const MAX_ESCALATIONS   = 2   // last-resort dev attempts at max effort when a phase is stuck
 const MAX_FINAL_ROUNDS  = 3   // final review fix rounds
 

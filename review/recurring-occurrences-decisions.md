@@ -192,6 +192,12 @@ nel verbale di verifica, perché cambia **cosa** il piano chiede.
 | Audit della finalizzazione senza run (X3, «una finalizzazione senza run produce un audit `Queued → Completed`») | **RATIFICATA la forma consegnata**: la categoria (ii) è finalizzata in `WorkerService.FinalizeRecurringSeriesAsync` **prima** di ogni re-dispatch, quindi si scrive il solo audit `Completed`, senza transizione fittizia per `Queued`. Il test `RecoveryExecutionVsFinalizationTests.A_finalized_series_records_the_transition_and_no_run` che pinna «no phantom Queued» è la forma corretta; il testo di X3 è superato su questo punto. |
 | Versione 4.0.0 — quando bumpare (X6 «caricata con 4.0» vs piano §7 «Release») | **Bump ANTICIPATO alla fase 1**: `Directory.Build.props` → `4.0.0` subito (lockstep; nessuna release fino al merge), così la consumer baseline fixture carica davvero IL 3.11-compiled contro assembly 4.0.0 e il check di X6 è reale. Aggiornare il README della fixture di conseguenza. Alla fase 7 resta solo il CHANGELOG (`## [Unreleased]` → 4.0.0). |
 
+### Ratifiche del maintainer — certificazione fase 2 (2026-08-24)
+
+| Punto | Decisione |
+|-------|-----------|
+| `EagerHandlerOwnership` (`WorkerExecutor`): rilascio dello scope DI del handler eager su **ogni** uscita da `DoWorkGuarded` (drop da blacklist, deferral rate-limit, re-park in-flight, duplicate-delivery skip, cancellazione al gate per shutdown) | **RATIFICATA come seconda eccezione ammessa al Gate 0.3** (accanto a X3): è la correzione di un leak reale — su quei path lo scope del handler eager non veniva mai rilasciato e `DisposeAsyncCore`/le dipendenze scoped non giravano. Pinnata da `IntegrationTests/EagerHandlerScopeReleaseTests.cs`; tutte le suite esistenti verdi e non modificate. |
+
 ## 4. Stato finale
 
 1. M17 deciso (D5): single-active-host in 4.0; epic separata per la distribuzione di tutto EverTask.
