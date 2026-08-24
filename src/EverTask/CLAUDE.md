@@ -18,6 +18,44 @@ in-memory storage.
   storage; `MaxRuns` counts real executions only — see `Scheduler/Recurring/CLAUDE.md`.
 - **Rate-limit gate** (handlers declaring a `RateLimitPolicy`): all invariants, re-park rules and
   retry/restart semantics live in `RateLimiting/CLAUDE.md`.
+- **The delivery's execution context is built ONCE per delivery** in `DoWorkCore`, right after the log
+  capture and BEFORE `OnStarted`: pushed to the handler through the cached injector and to the ambient
+  `AmbientTaskExecutionContextAccessor` (static `AsyncLocal`, cleared at the end of the delivery's `finally`
+  and again in `DoWork`'s, which covers a fully synchronous delivery whose post-execution step threw). The
+  slot it reports is `TaskHandlerExecutor.NominalSlotOfDelivery`, never `ExecutionTime`: the rate-limit gate
+  overwrites the latter with its reserved slot for one-shots (and flags it), so reading it would tell a
+  deferred task it had been scheduled for the moment it finally ran. `RunNumber` travels on the executor
+  (`CurrentRunCount + 1`, stamped by the dispatcher and advanced by `QueueNextOccourrence`) because the
+  counter only moves after a run — reading storage here would cost a round-trip AND report one run too few.
+  `RunNumber` **and `ScheduleVersion` are preserved by a taskKey re-registration**, whether or not the row
+  still has a cursor: a terminal series re-registered under its key resumes at `CurrentRunCount + 1`, which
+  is where storage resumes too, and the version travels on the row metadata because `UpdateTask` never
+  rewrites that column — a rescheduled series that reported version 0 again would say so to the handler and
+  to every monitoring event of the delivery. An OCCURRENCE answers slot and run number from its own row
+  instead (C1/C4): both are read out of `RuntimeInfo` by `RecoveredTaskFactory` and travel as
+  `NominalSlotUtc` / `RunNumber`, because a child is a one-shot — its `CurrentRunCount` is zero, and deriving
+  the number there would report every occurrence of every series as run 1. A delivery that arrives with
+  neither stamp — an occurrence handed to the scheduler the moment it was materialized — reads them back out
+  of the row's own `RuntimeInfo` through `TaskHandlerExecutor.RowOccurrence`, so the answer is the row's
+  either way and an overdue catch-up never reports the moment it was fired at as its slot.
+- **The terminal rate-limit rejection gets the same two injections** (`HandleRateLimitRejectionAsync`):
+  it is the one callback path that never enters `DoWorkCore`, and `OnError` is documented to always read
+  `Context` and `Logger`. Its log capture is deliberately NOT persisted — the `Failed` status is the only
+  storage write a rejection cycle may do. Never entering `DoWorkCore` also means its `finally` never runs,
+  so the rejection method releases the executor's **owned eager scope** itself, on BOTH branches, before
+  the recurring one schedules the next occurrence.
+- **The owned eager scope is released ONCE per delivery, on every exit** (`EagerHandlerOwnership`, the same
+  principle as the single `End`): `DoWorkCore` and the terminal rejection keep their ORDERED release —
+  both must run before the next occurrence is scheduled — and `DoWork`'s `finally` covers every other exit
+  of `DoWorkGuarded`, which for those two is a no-op. Without it the exits that reach neither (both
+  blacklist drops, the rate-limit deferral, the in-flight re-park, the duplicate-delivery skip, a gate wait
+  cancelled by shutdown) strand one scope, and every scoped dependency inside it, per dropped delivery: the
+  executor is dead on all of them, because whatever they continue into is a `ToLazy()` copy that drops the
+  scope. Never enumerate those paths one by one — that enumeration is exactly what kept missing them.
+- **`Attempt` moves only when an attempt is admitted INTO the handler**, and is rolled back to it when
+  `ExecuteTask` unwinds: `OnRetry` publishes the attempt about to start, and that retry can still be
+  abandoned — a cancel inside the callback or during the delay, or the `ThrottleRetries` gate turning it
+  back before the handler — so `OnError` would otherwise report an attempt that never ran.
 - **Monitoring events go through `WorkerExecutor.RegisterEvent` only** (one gate: log template + rendered
   `Message` + publish). Never log and publish by hand, and never call the `SkipEnabledCheck` methods of
   `WorkerExecutorLog` from outside that gate — that is how the rendered-string-as-template bug (#32) comes back.
@@ -62,7 +100,10 @@ the execution predicate: a spent series must be finalized, never handed back to 
   `RecoveredTaskFactory.FromRow` rebuilds each row once (payload, validated schedule, audit level, occurrence
   metadata) and is the single place that mapping lives; its `RowMetadata` travels to the re-dispatch through
   the internal `ExecuteDispatch` overload, so a recovered executor keeps its parent, occurrence JSON, schedule
-  version and STORED queue instead of re-deriving them from the handler.
+  version and STORED queue instead of re-deriving them from the handler. It is also where the occurrence half
+  of `RuntimeInfo` is PARSED (`OccurrenceRuntimeInfo`, once per row, never on a schedule row): the durable slot
+  and run number a child carries. Unreadable JSON there is not an error — the columns answer instead, exactly
+  as they do for a row written before the metadata existed.
 - **`recoveryCutoff` is STRICT (`CreatedAtUtc < cutoff`)**: the wall clock is coarse (≈15 ms on Windows), so a
   live dispatch can share the cutoff tick and a `<=` filter would re-dispatch that live row as recovery.
   Best-effort first pass — `TaskDeliveryRegistry` is the actual defense.
@@ -124,3 +165,11 @@ and `SchedulerDeterministicClockTests.cs`; the two-wave barrier by
 implementation passes anything smaller); the byte-identical default by
 `Serialization/RecurringTaskGoldenJsonTests.cs` and `Serialization/ConsumerCompatibilityTests.cs` (whose
 `LegacyMinimalTaskStorage` exists to be COMPILED: it breaks the day a new storage member stops being default).
+The once-per-delivery release of the owned eager scope is pinned by
+`IntegrationTests/EagerHandlerScopeReleaseTests.cs`, one test per exit that reaches neither `DoWorkCore` nor
+the terminal rejection, each counting the disposals of a SCOPED probe injected into the handler; its last
+test pins the ORDER on the rejection's recurring branch, by wrapping the real scheduler and noting how many
+scopes had been released when the next occurrence was handed to it. What a handler reads about its own
+delivery — an occurrence's schedule, slot and run number included — is pinned by
+`IntegrationTests/ExecutionContextIntegrationTests.cs`, and the row-to-executor half of it by
+`RecoveredTaskFactoryTests.cs`.

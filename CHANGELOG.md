@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (execution context, #25)
+
+- **A handler can now ask which delivery it is running.** `ITaskExecutionContext` says which row is
+  executing and, for an occurrence, which schedule owns it; the task key; the slot the delivery stands
+  for, in UTC and in the schedule's own zone; when it started; the 1-based attempt and the run number
+  within a recurring series; the schedule version; and how late the delivery is, when it is late at all.
+  Handlers deriving from `EverTaskHandler<TTask>` read it from the new `protected` `Context` property.
+  It is injected before `OnStarted`, so `Handle` and every lifecycle callback can read it, the terminal
+  rate-limit rejection included: that one reaches `OnError` without ever entering the execution core.
+  Reading it from a constructor throws rather than handing back an empty context.
+- **Everything that is not the handler reads the same instance** through `ITaskExecutionContextAccessor`,
+  registered by `AddEverTask`. It is a singleton whose `Current` follows the delivery's asynchronous
+  flow and is null outside one, so a repository or a log enricher deep in the graph reaches it without
+  the handler passing it down. A scoped accessor could not: an eagerly resolved handler and its
+  dependencies are built in the dispatcher's scope, before the delivery exists.
+- **`SetMisfireThreshold(TimeSpan)`** (default 5 seconds) decides how late a delivery may start before
+  `Context.Misfire` reports it, with the real lateness. It is an observation threshold and nothing more:
+  a late task runs exactly as it did before, and the one-second tolerance of the recurring skip-forward
+  path is a separate rule, untouched.
+- `IEverTaskHandler<TTask>` gained `SetExecutionContext` as a default interface member with an empty
+  body, so a handler that implements the interface directly keeps compiling and running unchanged.
+  The worker reaches it, and `SetLogCapture`, through delegates compiled once per handler type instead
+  of the per-execution reflection it used before.
+
+### Fixed (eagerly resolved handlers, #25)
+
+- **A delivery that is dropped before it executes no longer strands the scope its handler was built in.**
+  An eagerly resolved handler travels inside an EverTask-owned DI scope, and the delivery that consumes
+  it is that scope's last owner. Only a delivery that reached the execution core released it, so every
+  earlier exit leaked the handler and every scoped dependency built with it, a `DbContext` and its
+  pooled connection included, once per dropped delivery. Those exits are a cancellation applied by the
+  worker, a rate-limit deferral, the re-park of a redelivery racing the in-flight original, a skipped
+  duplicate, a gate wait ended by shutdown, and the terminal rate-limit rejection. The release now
+  covers all of them, and where the order matters it still happens before the next occurrence of a
+  recurring series is scheduled.
+
 ### Added (durable-occurrence foundations, #24)
 
 - **A deterministic scheduling clock.** One `TimeProvider` now governs every scheduling decision:

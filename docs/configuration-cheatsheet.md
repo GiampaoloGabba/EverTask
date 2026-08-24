@@ -20,6 +20,7 @@ Every EverTask configuration option at a glance: one row per option with its def
 | `SetDefaultRetryPolicy` | `IRetryPolicy` | `LinearRetryPolicy(3, 500ms)` | Global retry policy |
 | `SetDefaultTimeout` | `TimeSpan?` | `null` (no timeout) | Global per-attempt timeout |
 | `SetDefaultAuditLevel` | `AuditLevel` | `Full` | Audit trail verbosity (see table below) |
+| `SetMisfireThreshold` | `TimeSpan` | `5 s` | How late a delivery may start before `ITaskExecutionContext.Misfire` reports it. Observation only: nothing about execution changes, and the 1 s tolerance of the recurring skip path is untouched |
 | `SetThrowIfUnableToPersist` | `bool` | `true` | Throw on storage save failure |
 | `UseShardedScheduler` | `int shardCount = 0` | Off (`PeriodicTimerScheduler`); auto-scale when 0 | High `Schedule()`-call rates (scheduling axis, not task-execution throughput) |
 | `SetUseLazyHandlerResolution` | `bool` | `true` (adaptive) | `DisableLazyHandlerResolution()` to opt out |
@@ -189,6 +190,8 @@ Defaults differ between the auto-created `default`/`recurring` queues (inherit t
 | `QueueName` | `string?` | `"default"` (`"recurring"` for recurring tasks) | Target queue. An **unregistered/unknown** name logs a warning and falls back to the `default` queue, both for routing **and** for the retry/timeout config resolution (the task runs on `default` with `default`'s config). |
 | `RateLimitPolicy` | `RateLimitPolicy?` | `null` (no limit) | Per-key throttling (v3.7+) |
 | `GetRateLimitKey(task)` | `string?` (override) | reads `IRateLimitedTask.RateLimitKey` | Derive the throttle key without changing the task type |
+| `Logger` | `ITaskLogCapture` (read) | injected per delivery | Task-scoped logging; persisted when `WithPersistentLogger` is on |
+| `Context` | `ITaskExecutionContext` (read) | injected per delivery | Identity of THIS delivery: `TaskId`, `ScheduleId`, `TaskKey`, `ScheduledAtUtc` (nominal slot, never the rate-limit reserved one), `ScheduledAtLocal`, `TimeZoneId`, `StartedAtUtc`, `Attempt`, `RunNumber` (durable), `ScheduleVersion`, `IsRecurring`, `IsOccurrence`, `Misfire`. Readable in `Handle` and every callback; throws if read from the constructor. Outside the handler: inject `ITaskExecutionContextAccessor` (singleton, ambient, `Current` is null outside a delivery) |
 
 > Obsolete: `CpuBoundOperation` (bool) still exists on the handler but is `[Obsolete]` and has **no effect**: do not set it. For CPU-bound work, use `Task.Run` inside `Handle`.
 

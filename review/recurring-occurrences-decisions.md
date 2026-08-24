@@ -192,11 +192,15 @@ nel verbale di verifica, perché cambia **cosa** il piano chiede.
 | Audit della finalizzazione senza run (X3, «una finalizzazione senza run produce un audit `Queued → Completed`») | **RATIFICATA la forma consegnata**: la categoria (ii) è finalizzata in `WorkerService.FinalizeRecurringSeriesAsync` **prima** di ogni re-dispatch, quindi si scrive il solo audit `Completed`, senza transizione fittizia per `Queued`. Il test `RecoveryExecutionVsFinalizationTests.A_finalized_series_records_the_transition_and_no_run` che pinna «no phantom Queued» è la forma corretta; il testo di X3 è superato su questo punto. |
 | Versione 4.0.0 — quando bumpare (X6 «caricata con 4.0» vs piano §7 «Release») | **Bump ANTICIPATO alla fase 1**: `Directory.Build.props` → `4.0.0` subito (lockstep; nessuna release fino al merge), così la consumer baseline fixture carica davvero IL 3.11-compiled contro assembly 4.0.0 e il check di X6 è reale. Aggiornare il README della fixture di conseguenza. Alla fase 7 resta solo il CHANGELOG (`## [Unreleased]` → 4.0.0). |
 
-### Ratifiche del maintainer — certificazione fase 2 (2026-08-24)
+## 3.3 Ratifiche del maintainer — certificazione fase 2 (2026-08-24)
+
+La fase 2 consegna **una** deviazione dal path legacy oltre a quelle della fase 1. Come per ogni deviazione
+(§3.1, §3.2), la ratifica è qui, per iscritto, con i test che la pinnano: senza questa riga il gate 3 del
+piano la blocca.
 
 | Punto | Decisione |
 |-------|-----------|
-| `EagerHandlerOwnership` (`WorkerExecutor`): rilascio dello scope DI del handler eager su **ogni** uscita da `DoWorkGuarded` (drop da blacklist, deferral rate-limit, re-park in-flight, duplicate-delivery skip, cancellazione al gate per shutdown) | **RATIFICATA come seconda eccezione ammessa al Gate 0.3** (accanto a X3): è la correzione di un leak reale — su quei path lo scope del handler eager non veniva mai rilasciato e `DisposeAsyncCore`/le dipendenze scoped non giravano. Pinnata da `IntegrationTests/EagerHandlerScopeReleaseTests.cs`; tutte le suite esistenti verdi e non modificate. |
+| `EagerHandlerOwnership` (`WorkerExecutor`): rilascio dello scope DI del handler eager su **ogni** uscita da `DoWorkGuarded` (i due drop da blacklist, deferral rate-limit, re-park in-flight, duplicate-delivery skip, cancellazione al gate per shutdown) | **RATIFICATA come seconda eccezione ammessa al Gate 0.3** (accanto a X3): è la correzione di un leak reale — su quei path lo scope del handler eager non veniva mai rilasciato e `DisposeAsyncCore`/le dipendenze scoped non giravano. I due siti **ordinati** (`DoWorkCore` e la reiezione terminale) restano dove sono, perché devono precedere la pianificazione dell'occorrenza successiva; il `finally` di `DoWork` è il rilascio unico che copre tutte le altre uscite. Pinnata da `IntegrationTests/EagerHandlerScopeReleaseTests.cs`: un test per ciascuna uscita pilotabile da un host reale (drop da blacklist, deferral del gate, re-park in-flight, skip di delivery duplicata) più l'**ordine** sul ramo ricorrente della reiezione terminale. La cancellazione al gate per shutdown non ha un test dedicato — non è pilotabile in modo deterministico — ed è coperta per costruzione: il rilascio vive nel `finally` di `DoWork`, che non enumera i path. Tutte le suite esistenti sono verdi **senza che una sola asserzione sia stata adattata**: ciò che la fase 2 aggiunge ai file di test esistenti sono test nuovi, mai modifiche a quelli che pinnano il path legacy. |
 
 ## 4. Stato finale
 

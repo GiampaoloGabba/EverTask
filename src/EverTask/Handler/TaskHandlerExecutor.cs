@@ -58,9 +58,43 @@ public record TaskHandlerExecutor(
 
     /// <summary>
     /// The nominal slot this delivery belongs to, when it differs from <see cref="ExecutionTime"/> (the
-    /// rate-limit gate replaces the latter with its reserved slot).
+    /// rate-limit gate replaces the latter with its reserved slot). An occurrence carries the slot its ROW
+    /// states, read from <see cref="RuntimeInfo"/> where the row becomes a task, so the answer never depends
+    /// on which executor is delivering it — and when it was not stamped at all, <see cref="RowOccurrence"/>
+    /// still reads it back from the same place.
     /// </summary>
     public DateTimeOffset? NominalSlotUtc { get; init; }
+
+    /// <summary>
+    /// True once the rate-limit gate replaced <see cref="ExecutionTime"/> with the slot it reserved for this
+    /// task. Internal, and set only there: from that moment <see cref="ExecutionTime"/> answers "when does the
+    /// scheduler fire this", not "which slot is this", and only <see cref="NominalSlotUtc"/> answers the latter.
+    /// </summary>
+    internal bool ExecutionTimeIsReservedSlot { get; init; }
+
+    /// <summary>
+    /// What the persisted ROW states about this delivery when it is an occurrence — its slot and its run of
+    /// the series — or null when the delivery is not one.
+    /// </summary>
+    /// <remarks>
+    /// The stamped <see cref="NominalSlotUtc"/> / <see cref="RunNumber"/> are the same two facts, read once
+    /// where the row became a task; this is what answers when they were not stamped, so an occurrence handed
+    /// straight to the scheduler after being materialized reports its slot and its run just like a recovered
+    /// one. Only reached for an occurrence that arrived without them: every other delivery answers on the
+    /// preceding null check, without parsing anything.
+    /// </remarks>
+    internal OccurrenceRuntimeInfo? RowOccurrence =>
+        ParentTaskId != null ? OccurrenceRuntimeInfo.TryParse(RuntimeInfo) : null;
+
+    /// <summary>
+    /// The slot this delivery stands for: the occurrence's own slot, the scheduled time of a delayed task, or
+    /// null for a task dispatched to run immediately. Never the moving slot a rate-limit deferral parked it at
+    /// (C4) — reporting that one would make a deferred task look as if it had been scheduled for it, and never
+    /// the moment an overdue occurrence happened to be fired at either (C4 again): an occurrence's slot comes
+    /// from its own row, whether it was stamped on the executor or is still only in the row's metadata.
+    /// </summary>
+    internal DateTimeOffset? NominalSlotOfDelivery =>
+        NominalSlotUtc ?? RowOccurrence?.SlotUtc ?? (ExecutionTimeIsReservedSlot ? null : ExecutionTime);
 
     /// <summary>
     /// True when this executor represents a DURABLE schedule row: it owns the definition and the cursor but

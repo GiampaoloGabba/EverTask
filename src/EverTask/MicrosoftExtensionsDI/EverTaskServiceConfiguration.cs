@@ -57,6 +57,8 @@ public class EverTaskServiceConfiguration
 
     internal RateLimiterOptions RateLimiterOptions { get; } = new();
 
+    internal TimeSpan MisfireThreshold { get; private set; } = TimeSpan.FromSeconds(5);
+
     /// <summary>
     /// Sets the channel capacity for the default queue.
     /// This determines the maximum number of tasks that can be queued in memory before backpressure is applied.
@@ -309,6 +311,39 @@ public class EverTaskServiceConfiguration
     public EverTaskServiceConfiguration SetDefaultAuditLevel(AuditLevel auditLevel)
     {
         DefaultAuditLevel = auditLevel;
+        return this;
+    }
+
+    /// <summary>
+    /// Sets how late a task may start before its execution context reports the delivery as a misfire.
+    /// </summary>
+    /// <param name="threshold">
+    /// The tolerance between the nominal slot and the actual start. Default: 5 seconds. Zero reports every
+    /// delivery that starts after its slot.
+    /// </param>
+    /// <returns>The configuration instance for method chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when the threshold is negative.</exception>
+    /// <remarks>
+    /// <para>
+    /// This is an OBSERVATION threshold: it decides what
+    /// <see cref="ITaskExecutionContext.Misfire"/> reports to a handler, and nothing else. A late occurrence
+    /// runs exactly as it did before, and the one-second tolerance the recurring skip-forward path uses to
+    /// avoid treating a just-scheduled occurrence as past is a separate, untouched rule.
+    /// </para>
+    /// <para>
+    /// Raise it for schedules whose handler does not care about seconds; lower it when a handler compensates
+    /// for lateness (skipping stale work, shortening a window) and needs to know sooner.
+    /// </para>
+    /// </remarks>
+    public EverTaskServiceConfiguration SetMisfireThreshold(TimeSpan threshold)
+    {
+        if (threshold < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(threshold), threshold,
+                "The misfire threshold cannot be negative.");
+        }
+
+        MisfireThreshold = threshold;
         return this;
     }
 

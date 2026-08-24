@@ -18,6 +18,7 @@ internal readonly record struct RecoveredTask(
     DateTimeOffset? ExecutionTime,
     Guid? ParentTaskId,
     string? RuntimeInfo,
+    OccurrenceRuntimeInfo? Occurrence,
     int ScheduleVersion,
     int? CurrentRunCount,
     string? TaskKey,
@@ -37,7 +38,8 @@ internal readonly record struct RecoveredTask(
     /// The slice of the row the re-dispatch must work from rather than re-derive — or read back.
     /// </summary>
     public DispatchRowMetadata RowMetadata =>
-        new(ParentTaskId, RuntimeInfo, ScheduleVersion, QueueName, Status);
+        new(ParentTaskId, RuntimeInfo, ScheduleVersion, QueueName, Status,
+            Occurrence?.RunNumber, Occurrence?.SlotUtc);
 }
 
 /// <summary>
@@ -99,6 +101,10 @@ internal static class RecoveredTaskFactory
             row.NextRunUtc ?? row.ScheduledExecutionUtc,
             row.ParentTaskId,
             row.RuntimeInfo,
+            // Read ONCE, here, where a row becomes a task: the occurrence's durable slot and run number are
+            // facts of the row that no column can restate (its own run counter belongs to the one-shot, not
+            // to the series). A schedule row's runtime state lives in the same column and yields nothing.
+            row.ParentTaskId != null ? OccurrenceRuntimeInfo.TryParse(row.RuntimeInfo) : null,
             row.ScheduleVersion,
             row.CurrentRunCount,
             row.TaskKey,

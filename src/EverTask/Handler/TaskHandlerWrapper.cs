@@ -76,7 +76,9 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
             {
                 ParentTaskId    = rowMetadata.ParentTaskId,
                 RuntimeInfo     = rowMetadata.RuntimeInfo,
-                ScheduleVersion = rowMetadata.ScheduleVersion
+                ScheduleVersion = rowMetadata.ScheduleVersion,
+                RunNumber       = rowMetadata.RunNumber,
+                NominalSlotUtc  = rowMetadata.NominalSlotUtc
             };
         }
 
@@ -126,7 +128,9 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
             {
                 ParentTaskId    = rowMetadata.ParentTaskId,
                 RuntimeInfo     = rowMetadata.RuntimeInfo,
-                ScheduleVersion = rowMetadata.ScheduleVersion
+                ScheduleVersion = rowMetadata.ScheduleVersion,
+                RunNumber       = rowMetadata.RunNumber,
+                NominalSlotUtc  = rowMetadata.NominalSlotUtc
             };
         }
         catch

@@ -65,6 +65,12 @@ moderate 2000–5000, high 10000+.
 | `SetUseLazyHandlerResolution(bool)` | `true` | Adaptive: immediate / recurring ≥5min / delayed ≥30min use lazy mode; shorter intervals eager. |
 | `DisableLazyHandlerResolution()` | (n/a) | Convenience for `SetUseLazyHandlerResolution(false)`. |
 
+### Execution context
+
+| Method | Default | Notes |
+|---|---|---|
+| `SetMisfireThreshold(TimeSpan)` | `5 s` | How late a delivery may start before `Context.Misfire` reports it (`02-tasks-and-handlers.md`). **Observation only**: nothing about execution depends on it, and the 1 s tolerance of the recurring skip-forward path is a separate, untouched rule. Negative values throw. |
+
 ### Persistent logger (handler logs → DB)
 
 `WithPersistentLogger(Action<PersistentLoggerOptions>)` auto-enables DB persistence; logs are
@@ -129,6 +135,7 @@ var everTask = builder.Services.AddEverTask(opt => opt
     .SetThrowIfUnableToPersist(true)
     .SetDefaultAuditLevel(AuditLevel.Full)
     .SetUseLazyHandlerResolution(true)
+    .SetMisfireThreshold(TimeSpan.FromSeconds(5))
     .WithPersistentLogger(log => log.SetMinimumLevel(LogLevel.Information).SetMaxLogsPerTask(1000))
     .UseShardedScheduler(shardCount: 0)
     .SetRateLimiterOptions(o => { o.MaxParkedTasks = 5000; o.MaxTrackedKeys = 100_000; }))

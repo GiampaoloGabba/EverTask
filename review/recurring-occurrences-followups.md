@@ -13,6 +13,7 @@
 | F2 | `SetRecurringTaskPoisoned inghiotte i propri errori: il sommario della recovery mente` | Review fase 1, R10 | da aprire |
 | F3 | `Recovery: la barriera Task.WhenAll per pagina fa aspettare le altre code` | Review fase 1, sezione «Confutate» | da aprire |
 | F4 | `Distributed execution lease` (epic) | Decisioni #23, M17-A / D5 | prevista dal piano §7, da aprire alla release |
+| F5 | `MemoryLeakRegressionTests: due test condividono i contatori statici della probe e si sporcano a vicenda` | Certificazione fase 2 (suite completa, net10.0) | da aprire |
 
 ---
 
@@ -81,3 +82,41 @@ Lo sketch (colonne `ExecutionLeaseOwner/Epoch/ExpiresAtUtc`, `TryClaimExecution`
 reaper delle lease scadute, clock del DB per le scadenze) è in M17, con i seam da preservare.
 
 Il piano §7 la elenca già fra le issue da aprire alla release; è qui per tenere un solo elenco.
+
+---
+
+## F5 — `MemoryLeakRegressionTests`: due test condividono i contatori statici della probe
+
+**Origine.** Suite completa della certificazione della **fase 2**: `EverTask.Tests` su **net10.0** ha riportato
+un fallimento (`1385/1386`), net8.0 e net9.0 verdi. Il test è
+`MemoryLeakRegressionTests.Should_resolve_and_dispose_fresh_handler_per_execution_for_immediate_tasks`, che la
+fase 2 **non tocca**.
+
+**Preesistente, verificato.** Lo stesso fallimento si riproduce identico sulla baseline pre-fase-2 (worktree
+staccato su `0c5d77a`, quindi senza una riga del diff della fase 2) eseguendo i due test come coppia:
+
+```
+dotnet test test/EverTask.Tests/EverTask.Tests.csproj -c Release -f net10.0 \
+  --filter "FullyQualifiedName~MemoryLeakRegressionTests.Should_dispose_dispatch_time_metadata_handler_when_dispatching_immediate_task|FullyQualifiedName~MemoryLeakRegressionTests.Should_resolve_and_dispose_fresh_handler_per_execution_for_immediate_tasks"
+```
+
+**Non è quindi una regressione della fase 2**, ed è la ragione per cui non è stato corretto qui: la
+correzione tocca un test di regressione **pinnato** senza avere un difetto di prodotto da correggere.
+
+**Il fatto.** I due test condividono i contatori **statici** di `TestTaskMem2DisposeProbeHandler`
+(`Created`/`Disposed`/`Executed`) e si coordinano solo con `Reset()`. Il primo
+(`Should_dispose_dispatch_time_metadata_handler_when_dispatching_immediate_task`) dispaccia un task immediato
+su un host **mai avviato**, quindi lascia dietro di sé una consegna che nessun consumer ritira. Quando i due
+girano in sequenza, il secondo osserva **`Created=3, Disposed=3`** invece di `2/2` — una risoluzione
+dispatch-time in più, che arriva da un `Dispatcher.ExecuteDispatchCore` che non è il suo (verificato con
+stack trace sulla costruzione della probe) — e l'attesa `Disposed == 2` scade.
+
+**Perché non si vede sempre.** Dipende dall'ordine in cui xUnit esegue i test della classe, che cambia con il
+layout dell'assembly: una ricompilazione ha rimesso la classe verde su net10.0 senza toccare né il test né il
+prodotto. È un flake latente, non un fallimento deterministico — il che lo rende peggiore, non migliore: si
+ripresenterà a caso su qualsiasi fase futura.
+
+**Direzione.** Togliere lo stato condiviso invece di allargare i timeout: dare al test dispatch-time una
+propria coppia task+handler probe (i contatori statici smettono di incrociarsi), oppure far asserire a
+entrambi i **delta** rispetto a uno snapshot iniziale invece dei valori assoluti. La prima è più semplice e
+non cambia una sola asserzione delle due esistenti.

@@ -47,8 +47,14 @@ per dispatch, fail-safe) and stamped on `TaskHandlerExecutor` (memory-only, pres
 ## Re-park rules
 
 - Unconditional `ToLazy()` (no pinned handler instance).
-- One-shot: `parked with { ExecutionTime = slot }`; recurring: `Schedule(parked, nextRecurringRun: slot)` with
-  `ExecutionTime` UNTOUCHED (the schedule-drift fix in `QueueNextOccourrence` depends on it).
+- One-shot: `ReparkOneShot` (`ExecutionTime = slot`, the original kept in `NominalSlotUtc` and
+  `ExecutionTimeIsReservedSlot` set — the execution context and the monitoring event must keep reporting the
+  slot the task was SCHEDULED for, not the one the limiter moved it to); recurring:
+  `Schedule(parked, nextRecurringRun: slot)` with `ExecutionTime` UNTOUCHED (the schedule-drift fix in
+  `QueueNextOccourrence` depends on it).
+  The kept slot is read through `NominalSlotOfDelivery`, never `ExecutionTime` directly: on a SECOND re-park
+  (the first reservation evicted or expired) `ExecutionTime` already holds the previous reserved slot, and
+  an immediate dispatch — which must stay slotless — would inherit it.
 - Floor a past slot only (`slot <= now → now + PastSlotFloor`, 100 ms); no flat clamp — it would overshoot the
   GCRA slot.
 - A recurring occurrence past `RunUntil` is skipped (never fired late) through the normal next-occurrence
@@ -64,7 +70,9 @@ per dispatch, fail-safe) and stamped on `TaskHandlerExecutor` (memory-only, pres
 - Retries (`ThrottleRetries`, default `true`) re-acquire through the gate in `ExecuteTask`'s action lambda
   BEFORE the timeout branch (budget waits must never erode the per-attempt `Timeout`); a far slot re-parks
   (attempt count restarts on redelivery) — never a retryable exception. **NEVER put this inside
-  `onRetryCallback`: `LinearRetryPolicy` swallows its exceptions.**
+  `onRetryCallback`: `LinearRetryPolicy` swallows its exceptions.** The action commits the attempt number
+  only AFTER the gate admits it: a retry the gate turns back never enters the handler, so `Context.Attempt`
+  (and the `OnError` that a terminal rejection produces) must keep reporting the previous attempt.
 - Restart: limiter state is in-memory → buckets restart full (~2× burst worst case at the external API);
   `StartEmpty` opts into steady-rate fresh buckets. Parked tasks recover via their `Queued` status.
 - A throwing limiter (future distributed impl) fails OPEN with a warning — never-lose-a-task contract;
@@ -73,10 +81,27 @@ per dispatch, fail-safe) and stamped on `TaskHandlerExecutor` (memory-only, pres
   deferrals have NO handler callback (observability via aggregated events, Debug logs, Monitor.Api).
   Retry-path rejections follow the SAME split: one-shot → `Failed` + `OnError`; recurring → occurrence
   skipped (status back to `Queued`, series advanced via `QueueNextOccourrence`, no callback).
+- That `OnError` runs OUTSIDE `DoWorkCore`, so `HandleRateLimitRejectionAsync` injects the execution context
+  and the log capture itself and publishes the context on the ambient accessor: `Context` and `Logger` are
+  promised in every callback, and without the injection both fail into the worker's generic callback-failure
+  event while the user's compensation silently never runs. The capture is not persisted — the `Failed`
+  status stays the only write of the cycle. For the same reason it releases the executor's owned eager scope
+  itself: `DoWorkCore`'s finally, the other ordered release site, never runs on this path. The recurring
+  branch releases BEFORE `QueueNextOccourrence`, like `DoWorkCore` does — a release that waited for the
+  method's own `finally` would let the series schedule its next occurrence while the dead executor's scope,
+  and every scoped dependency in it, is still alive. The `finally` covers the one-shot branch and is a no-op
+  for the other.
+- **Every gated exit releases the delivery's owned eager scope** — the deferral, the pre-gate and
+  post-`TryAdd` in-flight re-parks and the post-gate blacklist drop all continue (when they continue at all)
+  through a `ToLazy()` copy that drops the scope, so the executor they were handed is its last owner. None
+  of them does it itself: `WorkerExecutor.DoWork`'s `finally` releases once per delivery, whatever exit it
+  took (`src/EverTask/CLAUDE.md`).
 
 ## Tests
 
 `test/EverTask.Tests/RateLimiting/KeyedRateLimiterTests.cs` + `RateLimitGateTests.cs`,
 `IntegrationTests/RateLimitingIntegrationTests.cs`, `test/EverTask.Tests.Monitoring/API/RateLimitMonitoringTests.cs`.
+The eager scope of a deferred, re-parked or rejected delivery — including the ORDER of the release on the
+recurring rejection branch: `IntegrationTests/EagerHandlerScopeReleaseTests.cs`.
 Storage tests: **zero changes** — if a change here seems to require touching `test/EverTask.Tests.Storage/`,
 stop: it's a design violation.

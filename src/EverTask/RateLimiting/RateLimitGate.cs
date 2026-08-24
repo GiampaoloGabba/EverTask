@@ -159,7 +159,7 @@ internal sealed class RateLimitGate(
         }
         else
         {
-            parked = parked with { ExecutionTime = slot };
+            parked = ReparkOneShot(parked, slot);
             scheduler.Schedule(parked);
         }
 
@@ -220,6 +220,27 @@ internal sealed class RateLimitGate(
             logger.BestEffortReleaseFailed(ex, reservationId, key);
         }
     }
+
+    /// <summary>
+    /// Moves a one-shot's <c>ExecutionTime</c> to the reserved slot — the only thing the scheduler reads for a
+    /// non-recurring task — while remembering the slot the task was actually scheduled for.
+    /// </summary>
+    /// <remarks>
+    /// Recurring occurrences keep their <c>ExecutionTime</c> (the schedule-drift rule), so only one-shots ever
+    /// lose it. Without the nominal slot kept aside, a deferred task would report the limiter's slot as the
+    /// time it was scheduled for, to its own handler and to the dashboard alike. An immediate task has no
+    /// nominal slot to keep, and the marker makes that stay null instead of becoming the reserved one.
+    /// The slot is read through <c>NominalSlotOfDelivery</c>, which honours that marker: a task re-parked a
+    /// SECOND time (its first reservation evicted or expired) would otherwise pick up the first reserved
+    /// slot out of <c>ExecutionTime</c> and report an immediate dispatch as having been scheduled for it.
+    /// </remarks>
+    private static TaskHandlerExecutor ReparkOneShot(TaskHandlerExecutor parked, DateTimeOffset slot) =>
+        parked with
+        {
+            NominalSlotUtc = parked.NominalSlotOfDelivery,
+            ExecutionTime = slot,
+            ExecutionTimeIsReservedSlot = true
+        };
 
     private static string EffectiveQueueName(TaskHandlerExecutor task) =>
         task.QueueName ?? (task.RecurringTask != null ? QueueNames.Recurring : QueueNames.Default);
@@ -330,7 +351,7 @@ internal sealed class RateLimitGate(
         else
         {
             // One-shot re-park: Schedule reads ExecutionTime
-            parked = parked with { ExecutionTime = slot };
+            parked = ReparkOneShot(parked, slot);
             scheduler.Schedule(parked);
         }
 

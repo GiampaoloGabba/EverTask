@@ -17,6 +17,20 @@ namespace EverTask.Dispatcher;
 /// <c>Cancel</c> into the expectation and overwrite the status the user chose.
 /// </para>
 /// <para>
+/// <paramref name="RunNumber"/> is the 1-based run the delivery represents: the row's <c>CurrentRunCount</c>
+/// plus one, since the counter is only incremented once a run is over. The dispatcher fills it in for every
+/// dispatch (a task with no history is run 1), so the executing handler can read it without a round-trip and a
+/// recovered series keeps counting from where the row says it was. An OCCURRENCE arrives with it already set,
+/// out of its own <c>RuntimeInfo</c> (C1): the counter of a one-shot child says nothing about which run of the
+/// series it is, so deriving it there would report every recovered occurrence as run 1.
+/// </para>
+/// <para>
+/// <paramref name="NominalSlotUtc"/> is the slot an occurrence stands for, likewise out of its
+/// <c>RuntimeInfo</c> (C4). Carrying it explicitly is what keeps the answer durable: the executor's
+/// <c>ExecutionTime</c> says when the scheduler fires the delivery, and the rate-limit gate replaces it with
+/// the slot it reserved.
+/// </para>
+/// <para>
 /// It travels as an internal type through an internal member of <see cref="ITaskDispatcherInternal"/> — which
 /// <c>Dispatcher</c> implements explicitly — so the dispatcher's public surface keeps the exact shape the
 /// previous release shipped (P6/X6).
@@ -27,7 +41,9 @@ internal readonly record struct DispatchRowMetadata(
     string? RuntimeInfo,
     int ScheduleVersion,
     string? QueueName,
-    QueuedTaskStatus? Status = null)
+    QueuedTaskStatus? Status = null,
+    int? RunNumber = null,
+    DateTimeOffset? NominalSlotUtc = null)
 {
     /// <summary>A dispatch that owns no persisted row yet: everything is derived as usual.</summary>
     public static readonly DispatchRowMetadata None = default;

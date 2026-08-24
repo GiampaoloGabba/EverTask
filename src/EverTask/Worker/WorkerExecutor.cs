@@ -1,6 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using System.Linq.Expressions;
 using System.Runtime.CompilerServices;
 using EverTask.Configuration;
 using EverTask.Logging;
@@ -74,13 +75,18 @@ public class WorkerExecutor(
 
     // F23: the lifecycle MethodInfo (OnStarted/OnCompleted/OnError) are cached per handler type just
     // like OnRetry, so lazy-mode executions no longer pay a GetMethod lookup per task on the hot path.
+    // The two injectors are compiled delegates rather than MethodInfo: both members are explicitly
+    // implemented on IEverTaskHandler<T>, so every execution used to pay an interface scan plus a
+    // reflective Invoke to hand the handler its log capture.
     private record HandlerOptionsCache(
         IRetryPolicy? RetryPolicy,
         TimeSpan? Timeout,
         MethodInfo? OnRetryMethod,
         MethodInfo? OnStartedMethod,
         MethodInfo? OnCompletedMethod,
-        MethodInfo? OnErrorMethod);
+        MethodInfo? OnErrorMethod,
+        Action<object, ITaskLogCapture>? SetLogCapture,
+        Action<object, ITaskExecutionContext>? SetExecutionContext);
 
     // Test seam (F23): counts per-type reflection resolutions. The factory runs once per handler type
     // (GetOrAdd), so a single resolution across many lazy executions of the same type proves the cache
@@ -104,12 +110,44 @@ public class WorkerExecutor(
         var onCompletedMethod = type.GetMethod("OnCompleted");
         var onErrorMethod     = type.GetMethod("OnError");
 
+        // A handler closing IEverTaskHandler<> over two task types has two slots for these members; the
+        // first one has always been the one the worker injects through, and it is the same instance state
+        // either way (EverTaskHandler<T> closes the interface once).
+        var handlerInterface = Array.Find(type.GetInterfaces(),
+            i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IEverTaskHandler<>));
+
+        var setLogCapture = BuildInjector<ITaskLogCapture>(
+            handlerInterface, nameof(IEverTaskHandler<IEverTask>.SetLogCapture));
+        var setExecutionContext = BuildInjector<ITaskExecutionContext>(
+            handlerInterface, nameof(IEverTaskHandler<IEverTask>.SetExecutionContext));
+
         // Cast only once per handler type (first time): cache the RAW overrides
         return handlerInstance is IEverTaskHandlerOptions handlerOpts
                    ? new HandlerOptionsCache(handlerOpts.RetryPolicy, handlerOpts.Timeout,
-                       onRetryMethod, onStartedMethod, onCompletedMethod, onErrorMethod)
+                       onRetryMethod, onStartedMethod, onCompletedMethod, onErrorMethod,
+                       setLogCapture, setExecutionContext)
                    : new HandlerOptionsCache(null, null,
-                       onRetryMethod, onStartedMethod, onCompletedMethod, onErrorMethod);
+                       onRetryMethod, onStartedMethod, onCompletedMethod, onErrorMethod,
+                       setLogCapture, setExecutionContext);
+    }
+
+    /// <summary>
+    /// Compiles <c>(handler, value) =&gt; ((IEverTaskHandler&lt;T&gt;)handler).Method(value)</c> once per handler
+    /// type. The call goes through the interface, so an explicit implementation and the interface's own default
+    /// body are both reached — which a lookup on the concrete type would miss.
+    /// </summary>
+    private static Action<object, TValue>? BuildInjector<TValue>(Type? handlerInterface, string methodName)
+    {
+        var method = handlerInterface?.GetMethod(methodName, [typeof(TValue)]);
+        if (method == null)
+            return null;
+
+        var handlerParam = Expression.Parameter(typeof(object), "handler");
+        var valueParam   = Expression.Parameter(typeof(TValue), "value");
+
+        var call = Expression.Call(Expression.Convert(handlerParam, handlerInterface!), method, valueParam);
+
+        return Expression.Lambda<Action<object, TValue>>(call, handlerParam, valueParam).Compile();
     }
 
     // GetOrAdd is idempotent, so callers may populate the cache in any order (ExecuteTask or the
@@ -139,14 +177,64 @@ public class WorkerExecutor(
     private readonly ConcurrentDictionary<Guid, int> _inMemoryRunCounts = new();
 
 
+    /// <summary>
+    /// One delivery's claim on the EAGER handler EverTask resolved for it (L27): the executor carries an
+    /// EverTask-OWNED scope holding that handler and every scoped dependency built with it, and this
+    /// delivery is its last owner — whatever the delivery continues into (a re-park, a deferral, the next
+    /// occurrence) is a <c>ToLazy()</c> copy, which drops the scope.
+    /// </summary>
+    /// <remarks>
+    /// Release happens exactly ONCE, whichever exit the delivery takes: the ordered call sites (before the
+    /// next occurrence is scheduled) keep their position, and <c>DoWork</c>'s finally covers every other
+    /// exit as a no-op for them. Not thread-safe, and it does not need to be: the call sites are the
+    /// sequential steps of one delivery.
+    /// </remarks>
+    private sealed class EagerHandlerOwnership(WorkerExecutor executor, TaskHandlerExecutor task)
+    {
+        private bool _released;
+
+        public async ValueTask ReleaseAsync()
+        {
+            // Lazy-mode handlers belong to the worker's per-task scope and are released with it.
+            if (_released || task.IsLazy)
+                return;
+
+            _released = true;
+
+            // Disposing only the handler instance would strand the scope, its scoped dependencies and
+            // whatever they hold (a DbContext and its pooled connection). An executor built without a
+            // scope — never by this library, only by a caller constructing the public record itself —
+            // still gets its handler disposed.
+            if (task.HandlerScope != null)
+                await executor.ExecuteDisposeHandlerScope(task.HandlerScope).ConfigureAwait(false);
+            else
+                await executor.ExecuteDisposeHandler(task.Handler!).ConfigureAwait(false);
+        }
+    }
+
     public async ValueTask DoWork(TaskHandlerExecutor task, CancellationToken serviceToken)
     {
+        var eagerHandler = new EagerHandlerOwnership(this, task);
+
         try
         {
-            await DoWorkGuarded(task, serviceToken).ConfigureAwait(false);
+            await DoWorkGuarded(task, serviceToken, eagerHandler).ConfigureAwait(false);
         }
         finally
         {
+            // DoWorkCore clears the ambient context in its own finally; this covers the path where the
+            // whole delivery completed synchronously (nothing ever suspended, so the value is still on
+            // this flow) and a post-execution step threw before that line. Writing the value it already
+            // has costs nothing.
+            AmbientTaskExecutionContextAccessor.Set(null);
+
+            // THE single release of this delivery's eager handler, on the same principle as the End
+            // below: it covers every exit path of DoWorkGuarded with no per-path enumeration — the two
+            // blacklist drops, the rate-limit deferral, the in-flight re-park, the duplicate-delivery
+            // skip and a gate wait cancelled by shutdown all end the delivery without ever reaching
+            // DoWorkCore or the terminal rejection, which are the only two ordered release sites.
+            await eagerHandler.ReleaseAsync().ConfigureAwait(false);
+
             // THE single End of this delivery (see TaskDeliveryRegistry's end discipline): the
             // LAST act of every consumed delivery, covering every exit path of DoWorkGuarded
             // (terminal completion, rate-limit deferral/rejection, retry re-park, blacklist
@@ -157,7 +245,8 @@ public class WorkerExecutor(
         }
     }
 
-    private async ValueTask DoWorkGuarded(TaskHandlerExecutor task, CancellationToken serviceToken)
+    private async ValueTask DoWorkGuarded(TaskHandlerExecutor task, CancellationToken serviceToken,
+                                          EagerHandlerOwnership eagerHandler)
     {
         // Blacklist check hoisted BEFORE the rate-limit gate: a cancelled task must be discarded
         // without burning rate-limit tokens (and without entering the execution path)
@@ -212,7 +301,8 @@ public class WorkerExecutor(
             {
                 // Terminal outcome (horizon exceeded / Discard / occurrence past RunUntil):
                 // never enters DoWorkCore either
-                await HandleRateLimitRejectionAsync(task, gateResult, serviceToken).ConfigureAwait(false);
+                await HandleRateLimitRejectionAsync(task, gateResult, eagerHandler, serviceToken)
+                    .ConfigureAwait(false);
                 return;
             }
         }
@@ -234,7 +324,7 @@ public class WorkerExecutor(
 
         try
         {
-            await DoWorkCore(task, serviceToken).ConfigureAwait(false);
+            await DoWorkCore(task, serviceToken, eagerHandler).ConfigureAwait(false);
         }
         finally
         {
@@ -242,7 +332,8 @@ public class WorkerExecutor(
         }
     }
 
-    private async ValueTask DoWorkCore(TaskHandlerExecutor task, CancellationToken serviceToken)
+    private async ValueTask DoWorkCore(TaskHandlerExecutor task, CancellationToken serviceToken,
+                                       EagerHandlerOwnership eagerHandler)
     {
         //Task storage could be a dbcontext wich is not thread safe.
         //So its safer to just use a new scope for each task
@@ -257,6 +348,10 @@ public class WorkerExecutor(
 
         // Resolve handler (lazy or eager mode)
         object? handler = null!; // Will be assigned in both if and else branches
+
+        // The identity of this delivery, published to the handler and to the ambient accessor once the
+        // handler is resolved. Null until then: a delivery that cannot even resolve its handler never runs.
+        TaskExecutionContext? executionContext = null;
 
         // Track execution time (initialized to 0, updated if task completes successfully)
         var executionTime = 0.0;
@@ -326,21 +421,13 @@ public class WorkerExecutor(
             var handlerType = handler.GetType();
             logCapture = CreateLogCapture(handlerType, task.PersistenceId, scope.ServiceProvider);
 
-            // Inject log capture into handler BEFORE OnStarted
-            // Find the SetLogCapture method via interface (explicitly implemented)
-            var interfaces = handlerType.GetInterfaces();
-            var handlerInterface = interfaces.FirstOrDefault(i =>
-                i.IsGenericType &&
-                i.GetGenericTypeDefinition() == typeof(IEverTaskHandler<>));
+            // Inject log capture and execution context into the handler BEFORE OnStarted, through the
+            // delegates compiled once per handler type (both members are explicitly implemented, so they
+            // are only reachable through the interface).
+            var injectors = GetHandlerOptions(handler);
+            injectors.SetLogCapture?.Invoke(handler, logCapture);
 
-            if (handlerInterface != null)
-            {
-                var setLogCaptureMethod = handlerInterface.GetMethod(nameof(IEverTaskHandler<IEverTask>.SetLogCapture));
-                if (setLogCaptureMethod != null)
-                {
-                    setLogCaptureMethod.Invoke(handler, [logCapture]);
-                }
-            }
+            executionContext = PublishExecutionContext(task, handler, injectors);
 
             // Per-execution chatter for the LOG (Debug), but a first-class Information event for the
             // dashboard: the two levels are decoupled on purpose (see RegisterEvent).
@@ -354,7 +441,7 @@ public class WorkerExecutor(
 
             await ExecuteCallback(GetStartedCallback(task, handler), task, "Started").ConfigureAwait(false);
 
-            var execution = await ExecuteTask(task, handler, serviceToken)
+            var execution = await ExecuteTask(task, handler, executionContext, serviceToken)
                                 .ConfigureAwait(false);
             executionTime = execution.ExecutionTimeMs;
 
@@ -436,22 +523,10 @@ public class WorkerExecutor(
         }
         finally
         {
-            // Dispose the eager handler (BEFORE recurring scheduling). Lazy-mode handlers are disposed
-            // by the worker's per-task scope. Eager handlers are resolved into an EverTask-owned scope
-            // carried on the executor (L27): disposing that scope releases the handler exactly once and
-            // unpins it from the container. DisposeAsync is idempotent (CU17), so any extra dispose
-            // (e.g. a reused recurring executor) is harmless.
-            if (!task.IsLazy)
-            {
-                if (task.HandlerScope != null)
-                    await ExecuteDisposeHandlerScope(task.HandlerScope).ConfigureAwait(false);
-                // The analyzer reads `handler` as non-null because it is declared `= null!`, but this
-                // finally also runs when the try threw BEFORE the assignment (e.g. the entry
-                // ThrowIfCancellationRequested), and then it really is null. The check must stay.
-                // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
-                else if (handler != null)
-                    await ExecuteDisposeHandler(handler).ConfigureAwait(false);
-            }
+            // Release the eager handler BEFORE recurring scheduling: the ordered site of this delivery
+            // (DoWork's finally would otherwise catch it only after the next occurrence is scheduled).
+            // Lazy-mode handlers are disposed by the worker's per-task scope instead.
+            await eagerHandler.ReleaseAsync().ConfigureAwait(false);
 
             // Save persisted logs (AFTER handler disposal, BEFORE recurring scheduling)
             // Log save errors must NOT fail task execution.
@@ -491,7 +566,32 @@ public class WorkerExecutor(
                 await QueueNextOccourrence(task, executionTime, taskStorage, markCompleted: recurringRunCompleted,
                         countsAsRun: skippedOccurrenceSlot == null, skipAheadTo: skippedOccurrenceSlot)
                     .ConfigureAwait(false);
+
+            // Last, so handler disposal and the lifecycle callbacks above still read the context of the
+            // delivery they belong to.
+            AmbientTaskExecutionContextAccessor.Set(null);
         }
+    }
+
+    /// <summary>
+    /// Builds this delivery's execution context, hands it to the handler through the injector compiled once
+    /// per handler type, and publishes it on the ambient accessor.
+    /// </summary>
+    /// <remarks>
+    /// The ambient copy is what everything that is NOT the handler reads: an eager handler's own dependencies
+    /// were built in the dispatcher's scope, long before this delivery existed, so handing them a scoped
+    /// context would hand them nothing.
+    /// </remarks>
+    private TaskExecutionContext PublishExecutionContext(TaskHandlerExecutor task, object handler,
+                                                         HandlerOptionsCache injectors)
+    {
+        var executionContext = TaskExecutionContext.Create(task, _timeProvider.GetUtcNow(),
+            options.MisfireThreshold);
+
+        AmbientTaskExecutionContextAccessor.Set(executionContext);
+        injectors.SetExecutionContext?.Invoke(handler, executionContext);
+
+        return executionContext;
     }
 
     /// <summary>
@@ -582,7 +682,12 @@ public class WorkerExecutor(
     /// execute, so it only advances the schedule (like a downtime skip) — MaxRuns counts real
     /// executions only. The series stays alive and no callback is invoked.
     /// </summary>
+    /// <remarks>
+    /// Both outcomes end the delivery here, without ever entering <c>DoWorkCore</c>, so this method also
+    /// owns the ordered release that method's finally would otherwise have done.
+    /// </remarks>
     private async ValueTask HandleRateLimitRejectionAsync(TaskHandlerExecutor task, RateLimitGateResult gateResult,
+                                                          EagerHandlerOwnership eagerHandler,
                                                           CancellationToken serviceToken)
     {
 #pragma warning disable CA2007
@@ -590,52 +695,87 @@ public class WorkerExecutor(
 #pragma warning restore CA2007
         var taskStorage = scope.ServiceProvider.GetService<ITaskStorage>();
 
-        if (task.RecurringTask != null)
-        {
-            RegisterRateLimitSkippedOccurrence(task, gateResult);
-
-            // Skipped occurrence: advance the schedule without consuming the MaxRuns budget, skipping
-            // ahead to the limiter's next available slot instead of grinding occurrence by occurrence.
-            await QueueNextOccourrence(task, 0, taskStorage, countsAsRun: false, skipAheadTo: gateResult.SlotUtc)
-                .ConfigureAwait(false);
-            return;
-        }
-
-        // One-shot rejection: the typed exception is persisted AND delivered to OnError, so it is built
-        // unconditionally here (unlike the recurring skip above, where it only feeds the log/event).
-        var exception = CreateRejectionException(task, gateResult);
-
-        if (taskStorage != null)
-        {
-            await taskStorage.SetStatus(task.PersistenceId, QueuedTaskStatus.Failed, exception, task.AuditLevel,
-                null, serviceToken).ConfigureAwait(false);
-        }
-
-        // Resolve the handler once (rare terminal event, cost acceptable) to deliver OnError.
-        // The callback instance is NOT an executing instance: rejection happens pre-execution.
-        object? handler = null;
         try
         {
-            handler = task.GetOrResolveHandler(scope.ServiceProvider);
+            if (task.RecurringTask != null)
+            {
+                RegisterRateLimitSkippedOccurrence(task, gateResult);
+
+                // The ordered release, here and not in the finally below: this executor is dead the moment
+                // the occurrence is skipped, and the next occurrence must not be scheduled while its scope
+                // (and every scoped dependency in it) is still alive. Same position as DoWorkCore's.
+                await eagerHandler.ReleaseAsync().ConfigureAwait(false);
+
+                // Skipped occurrence: advance the schedule without consuming the MaxRuns budget, skipping
+                // ahead to the limiter's next available slot instead of grinding occurrence by occurrence.
+                await QueueNextOccourrence(task, 0, taskStorage, countsAsRun: false, skipAheadTo: gateResult.SlotUtc)
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            // One-shot rejection: the typed exception is persisted AND delivered to OnError, so it is built
+            // unconditionally here (unlike the recurring skip above, where it only feeds the log/event).
+            var exception = CreateRejectionException(task, gateResult);
+
+            if (taskStorage != null)
+            {
+                await taskStorage.SetStatus(task.PersistenceId, QueuedTaskStatus.Failed, exception, task.AuditLevel,
+                    null, serviceToken).ConfigureAwait(false);
+            }
+
+            // Resolve the handler once (rare terminal event, cost acceptable) to deliver OnError.
+            // The callback instance is NOT an executing instance: rejection happens pre-execution.
+            // For an eager executor this hands back the carried instance, released with its scope below;
+            // a lazy one resolves into this method's own scope and is released with it.
+            object? handler = null;
+            try
+            {
+                handler = task.GetOrResolveHandler(scope.ServiceProvider);
+            }
+            catch (Exception resolveEx)
+            {
+                logger.RejectedTaskHandlerUnresolved(resolveEx, task.PersistenceId);
+            }
+
+            if (handler != null)
+            {
+                try
+                {
+                    // This path never enters DoWorkCore, so nothing else would give the handler the two
+                    // per-delivery injections every callback is documented to have. Without them an OnError
+                    // that compensates through Context throws (the getter refuses an uninjected context) and
+                    // one that reports through Logger hits a null — and ExecuteCallback swallows both into a
+                    // generic "callback override failed" event while the user's error handling silently never
+                    // runs. The capture still forwards to ILogger; it is NOT persisted, because the only
+                    // storage write a rejection cycle is allowed is the Failed status above.
+                    var injectors = GetHandlerOptions(handler);
+                    injectors.SetLogCapture?.Invoke(handler,
+                        CreateLogCapture(handler.GetType(), task.PersistenceId, scope.ServiceProvider));
+
+                    PublishExecutionContext(task, handler, injectors);
+
+                    await ExecuteCallback(GetErrorCallback(task, handler), task, exception, exception.Message)
+                        .ConfigureAwait(false);
+                }
+                finally
+                {
+                    AmbientTaskExecutionContextAccessor.Set(null);
+                }
+            }
+
+            RegisterEvent(LogLevel.Error, SeverityLevel.Error, task, exception, null, task.PersistenceId,
+                static (l, id, e) => l.RateLimitRejected(e, id),
+                static id => string.Create(CultureInfo.InvariantCulture,
+                    $"Rate limit rejected task {id}: marked as Failed"));
         }
-        catch (Exception resolveEx)
+        finally
         {
-            logger.RejectedTaskHandlerUnresolved(resolveEx, task.PersistenceId);
+            // The release of the one-shot branch, and the backstop of the recurring one, which already
+            // released above (once per delivery: this is then a no-op). Same reason as DoWorkCore's: the
+            // executor is dead once the rejection is applied — whatever the delivery continues into is a
+            // ToLazy() copy, which drops the scope.
+            await eagerHandler.ReleaseAsync().ConfigureAwait(false);
         }
-
-        if (handler != null)
-        {
-            await ExecuteCallback(GetErrorCallback(task, handler), task, exception, exception.Message)
-                .ConfigureAwait(false);
-
-            if (!task.IsLazy)
-                await ExecuteDisposeHandler(handler).ConfigureAwait(false);
-        }
-
-        RegisterEvent(LogLevel.Error, SeverityLevel.Error, task, exception, null, task.PersistenceId,
-            static (l, id, e) => l.RateLimitRejected(e, id),
-            static id => string.Create(CultureInfo.InvariantCulture,
-                $"Rate limit rejected task {id}: marked as Failed"));
     }
 
     /// <summary>
@@ -668,6 +808,7 @@ public class WorkerExecutor(
     }
 
     private async Task<TaskExecutionResult> ExecuteTask(TaskHandlerExecutor task, object handler,
+                                                        TaskExecutionContext? executionContext,
                                                         CancellationToken serviceToken)
     {
         serviceToken.ThrowIfCancellationRequested();
@@ -690,7 +831,22 @@ public class WorkerExecutor(
 
         // Use GetTimestamp/GetElapsedTime to avoid Stopwatch allocation
         var startTime = Stopwatch.GetTimestamp();
-        await DoExecute().ConfigureAwait(false);
+        try
+        {
+            await DoExecute().ConfigureAwait(false);
+        }
+        finally
+        {
+            // OnRetry announces the attempt that is ABOUT to start (C1), and that retry can still never
+            // start — a cancel inside the callback, one that lands during the retry delay, or the throttle
+            // gate turning the attempt back before the handler. `attempt` only moves once an attempt has
+            // been admitted INTO the handler, so it IS the last attempt that really ran: roll the
+            // announcement back to it, or OnError would report an attempt that never ran. On every path
+            // where the retry did start the two already agree, and the write is a no-op.
+            if (attempt > 0)
+                executionContext?.SetAttempt(attempt);
+        }
+
         var elapsedTime = Stopwatch.GetElapsedTime(startTime);
         return new TaskExecutionResult(elapsedTime.TotalMilliseconds, retryDeferral);
 
@@ -717,6 +873,13 @@ public class WorkerExecutor(
             await retryPolicy.Execute(
                 action: async retryToken =>
                 {
+                    // The attempt this action stands for, 1-based. It is NOT committed to `attempt` yet:
+                    // the throttle gate below can turn it back without ever reaching the handler, and the
+                    // rollback in the finally above reads `attempt` as "the last attempt that really ran"
+                    // (C1). Publishing here instead would leave OnError reporting an attempt whose only
+                    // trace is a rejected gate pass.
+                    var startingAttempt = attempt + 1;
+
                     // Retry throttling (BEFORE the timeout branch: the budget wait must never
                     // erode the per-attempt timeout). The FIRST attempt skips re-acquisition —
                     // the gate pass that admitted this delivery holds its budget. Retries of a
@@ -724,7 +887,7 @@ public class WorkerExecutor(
                     // gate, a far slot re-parks the task (Design A path) instead of surfacing a
                     // retryable exception, which would consume the shared retry budget and mark
                     // never-executed tasks Failed.
-                    if (attempt++ > 0
+                    if (startingAttempt > 1
                         && task.RateLimitPolicy is { ThrottleRetries: true }
                         && rateLimitGate != null)
                     {
@@ -739,6 +902,11 @@ public class WorkerExecutor(
                             return;
                         }
                     }
+
+                    // Admitted: from here the handler IS entered, so this is the attempt the handler must
+                    // read and the one OnError reports if it ends up being the last.
+                    attempt = startingAttempt;
+                    executionContext?.SetAttempt(attempt);
 
                     if (timeout.HasValue && timeout.Value > TimeSpan.Zero)
                     {
@@ -757,6 +925,11 @@ public class WorkerExecutor(
                 token: taskToken,
                 onRetryCallback: async (attemptNumber, exception, delay) =>
                 {
+                    // OnRetry runs after the delay, immediately before the retry: the attempt the handler
+                    // should see is the one about to start, which is one past the retry's own 1-based number
+                    // (retry 1 starts attempt 2). The action above republishes the same value.
+                    executionContext?.SetAttempt(attemptNumber + 1);
+
                     // Invoke handler's OnRetry method using cached MethodInfo
                     await InvokeOnRetryCallback(task, handler, handlerOptions.OnRetryMethod, attemptNumber, exception,
                             delay)
@@ -1174,7 +1347,10 @@ public class WorkerExecutor(
             // handler scope (disposed in the finally above), so reusing the same eager executor would
             // re-run on a disposed handler/scope. ToLazy() drops the carried instance and scope, so each
             // subsequent occurrence resolves a fresh handler in the worker's per-task scope (L27).
-            var updatedTask = task.ToLazy() with { ExecutionTime = result.NextRun };
+            // RunNumber travels with the occurrence so the handler can read it without a storage round-trip:
+            // runNumber is the run this delivery WAS (currentRun + 1 for a real run, currentRun for a skipped
+            // one, which consumed nothing), so the next occurrence is always one past it.
+            var updatedTask = task.ToLazy() with { ExecutionTime = result.NextRun, RunNumber = runNumber + 1 };
             scheduler.Schedule(updatedTask, result.NextRun);
         }
         else

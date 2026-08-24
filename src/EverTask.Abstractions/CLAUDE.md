@@ -73,6 +73,23 @@ Each rule is suppressible/promotable per-member via `dotnet_diagnostic.ETxxxx.se
 Handlers are auto-registered as **transient** services (`HandlerRegistrar` uses `TryAddTransient`) and
 resolved per task inside the worker's own scope.
 
+## Per-delivery injection (`Logger`, `Context`)
+
+`ITaskLogCapture Logger` and `ITaskExecutionContext Context` are `protected` on the base class, set through
+EXPLICIT implementations of `SetLogCapture` / `SetExecutionContext` — the worker reaches both through
+compiled delegates cached per handler type (`WorkerExecutor.HandlerOptionsCache`), never per-execution
+reflection. `SetExecutionContext` is a **default interface member with an empty body**: a handler
+implementing `IEverTaskHandler<T>` directly keeps compiling, and the DIM is still reached because the
+injector calls through the interface, not the concrete type.
+
+- `Context` has a nullable backing field and a getter that THROWS when read before injection: no `null!`
+  (warnings-as-errors) and no silently empty context in a constructor.
+- Only `Attempt` moves while a delivery is alive (`TaskExecutionContext.SetAttempt`, volatile). Everything
+  else is fixed at creation, so a handler may cache it — but not `Attempt`.
+- Anything that is not the handler reads the same instance through the singleton
+  `ITaskExecutionContextAccessor` (`AsyncLocal`). Singleton on purpose: an eager handler's graph is built in
+  the DISPATCHER's scope, where a scoped accessor would never see the delivery.
+
 **Gotcha**: terminal rate-limit rejections (horizon exceeded, `Discard`) deliver a typed
 `RateLimitRejectedException` to `OnError`; plain deferrals invoke NO callback. The rate-limit key is a
 throttling key — never reuse the dispatch `taskKey` for it.

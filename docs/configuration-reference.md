@@ -215,6 +215,36 @@ opt.SetDefaultAuditLevel(AuditLevel.None)
 - Use lower levels (Minimal/ErrorsOnly/None) for high-frequency recurring tasks
 - See [Audit Configuration](storage/audit-configuration.md) for detailed usage guide
 
+### SetMisfireThreshold
+
+Sets how late a delivery may start before its execution context reports it as a misfire.
+
+**Signature:**
+```csharp
+SetMisfireThreshold(TimeSpan threshold)
+```
+
+**Parameters:**
+- `threshold` (TimeSpan): tolerance between the nominal slot (`ITaskExecutionContext.ScheduledAtUtc`) and the actual start (`StartedAtUtc`). Must not be negative; `TimeSpan.Zero` reports every delivery that starts after its slot.
+
+**Default:** 5 seconds
+
+**Examples:**
+```csharp
+// A handler that compensates for lateness wants to know early
+opt.SetMisfireThreshold(TimeSpan.FromMilliseconds(500))
+
+// A nightly report does not care about a minute of scheduler drift
+opt.SetMisfireThreshold(TimeSpan.FromMinutes(5))
+```
+
+**Notes:**
+- This is an **observation** threshold. It decides what `ITaskExecutionContext.Misfire` reports to the handler and nothing else: a late task runs exactly as it did before, and no status, retry or schedule decision reads it.
+- Below the threshold `Misfire` is `null`, so a handler that does not care never has to inspect a kind. Above it, `Misfire.Kind` is `Late` and `Misfire.Lateness` is the real gap.
+- A task dispatched to run immediately has no slot, so it can never be late.
+- The one-second tolerance the recurring skip-forward path uses to avoid treating a just-scheduled occurrence as past is a **separate rule**, unchanged by this setting.
+- See [Task Creation › Execution Context](task-creation.md#execution-context).
+
 ### Audit & Execution-Log Retention (`AddAuditCleanup`)
 
 Configure automatic retention to prevent unbounded growth of the audit and execution-log tables. Retention is enforced by the optional `AuditCleanupHostedService`, registered with **`AddAuditCleanup(policy, cleanupIntervalHours)`**, the single entry-point that actually applies the policy.
@@ -1861,6 +1891,10 @@ public class MyHandler : EverTaskHandler<MyTask>
 **Overridable methods:**
 - `GetRateLimitKey(TTask task)`: derive the rate-limit bucket key from task data (e.g. `task.TenantId.ToString()`) without implementing `IRateLimitedTask`. Default reads `IRateLimitedTask.RateLimitKey`.
 - Lifecycle callbacks: `OnStarted(Guid)`, `OnCompleted(Guid)`, `OnError(Guid, Exception?, string?)`, `OnRetry(Guid, int attemptNumber, Exception, TimeSpan delay)`, and `DisposeAsyncCore()`. See [Resilience › Error Observation](resilience/error-observation.md) and [Retry Callbacks](resilience/retry-callbacks.md).
+
+**Injected per delivery (read, don't override):**
+- `Logger` (`ITaskLogCapture`): task-scoped logging, persisted when `WithPersistentLogger` is configured.
+- `Context` (`ITaskExecutionContext`): the identity of the delivery being executed. `TaskId`, `ScheduleId`, `TaskKey`, `ScheduledAtUtc` (the nominal slot; a rate-limit deferral moves the delivery, not this), `ScheduledAtLocal`, `TimeZoneId`, `StartedAtUtc`, `Attempt`, `RunNumber` (durable across restarts), `ScheduleVersion`, `IsRecurring`, `IsOccurrence` and `Misfire`. Both are injected before `OnStarted`, so they are readable in `Handle` and in every callback, and reading `Context` from a constructor throws `InvalidOperationException`. Services that are not the handler read the same instance through `ITaskExecutionContextAccessor` (singleton; `Current` follows the delivery's asynchronous flow and is null outside one). Full walkthrough: [Task Creation › Execution Context](task-creation.md#execution-context).
 
 ## Dispatch Parameters
 

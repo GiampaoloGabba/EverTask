@@ -72,6 +72,68 @@ public class RecoveredTaskFactoryTests
     }
 
     [Fact]
+    public void An_occurrence_takes_its_slot_and_its_run_number_from_its_own_metadata()
+    {
+        // The two values are deliberately distinguishable from what the columns would give (the slot column
+        // is an hour off, the run counter is a child's zero): only the metadata can produce this answer, so
+        // the test says WHICH source was read, not just that the numbers look plausible.
+        var slot = new DateTimeOffset(2026, 7, 1, 10, 0, 0, TimeSpan.Zero);
+
+        var recovered = RecoveredTaskFactory.FromRow(Row(r =>
+        {
+            r.ParentTaskId          = Guid.NewGuid();
+            r.ScheduledExecutionUtc = slot.AddHours(1);
+            r.CurrentRunCount       = 0;
+            r.RuntimeInfo           = EverTaskJson.Serialize(
+                new OccurrenceRuntimeInfo { SlotUtc = slot, RunNumber = 42 });
+        }));
+
+        recovered.RowMetadata.NominalSlotUtc.ShouldBe(slot,
+            "the durable slot is what the row states, never the moment the scheduler happens to fire it");
+        recovered.RowMetadata.RunNumber.ShouldBe(42,
+            "an occurrence is a one-shot: its own counter says nothing about the run of the series it is");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("{ this is not json")]
+    [InlineData("{\"Halted\":{\"Reason\":\"CapExceeded\"}}")]
+    public void An_occurrence_without_readable_metadata_falls_back_to_its_columns(string? runtimeInfo)
+    {
+        // Unreadable or foreign metadata must not cost a delivery: the caller keeps the column-derived
+        // answer, which is what every row written before the metadata existed gets anyway.
+        var recovered = RecoveredTaskFactory.FromRow(Row(r =>
+        {
+            r.ParentTaskId          = Guid.NewGuid();
+            r.ScheduledExecutionUtc = new DateTimeOffset(2026, 7, 1, 10, 0, 0, TimeSpan.Zero);
+            r.RuntimeInfo           = runtimeInfo;
+        }));
+
+        recovered.RowMetadata.NominalSlotUtc.ShouldBeNull();
+        recovered.RowMetadata.RunNumber.ShouldBeNull();
+        recovered.ExecutionTime.ShouldBe(new DateTimeOffset(2026, 7, 1, 10, 0, 0, TimeSpan.Zero),
+            "the scheduled column is the fallback the executor uses for the slot");
+    }
+
+    [Fact]
+    public void A_schedule_rows_own_runtime_state_is_never_read_as_occurrence_metadata()
+    {
+        // The same column holds the runtime state of a durable SCHEDULE. A schedule is not an occurrence of
+        // anything, so nothing there may end up stamped on its delivery.
+        var recovered = RecoveredTaskFactory.FromRow(Row(r =>
+        {
+            r.IsRecurring   = true;
+            r.RecurringTask = EverTaskJson.Serialize(new RecurringTask { SecondInterval = new SecondInterval(30) });
+            r.RuntimeInfo   = EverTaskJson.Serialize(new OccurrenceRuntimeInfo { RunNumber = 99 });
+        }));
+
+        recovered.ParentTaskId.ShouldBeNull();
+        recovered.RowMetadata.RunNumber.ShouldBeNull("a schedule's run number comes from its own counter");
+        recovered.RowMetadata.NominalSlotUtc.ShouldBeNull();
+    }
+
+    [Fact]
     public void A_row_written_before_per_task_audit_levels_recovers_as_Full()
     {
         RecoveredTaskFactory.FromRow(Row(r => r.AuditLevel = null)).AuditLevel.ShouldBe(AuditLevel.Full);

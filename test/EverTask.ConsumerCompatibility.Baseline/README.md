@@ -34,8 +34,19 @@ Then clear the NuGet cache entry for the two packages (`dotnet nuget locals glob
 `~/.nuget/packages/evertask/3.11.0-issue23baseline`) — a local feed and a fixed version otherwise resolve from
 the cache.
 
+## What is in here
+
+| File | What it proves |
+|---|---|
+| `BaselineConsumer.cs` | The public surface an application calls — builders, records, dispatcher, occurrence math — still binds. Each probe is a plain call whose signature was fixed at compile time. |
+| `BaselineTaskStorage.cs` | A storage written against the previous `ITaskStorage` still loads: the CLR builds its interface map against today's interface, so a new member arriving abstract rather than default throws `TypeLoadException`. |
+| `BaselineHandlers.cs` | The same, for handlers, and then some: two handlers compiled when neither `SetExecutionContext` nor `EverTaskHandler<T>.Context` existed — one implementing `IEverTaskHandler<T>` directly, one deriving from the base class — which the test dispatches on a real host and runs to completion. They report what they did through `BaselineHandlerProbe`, a singleton the test registers, since this project may reference nothing but the baseline packages. |
+
 ## Adding a probe
 
 Add a method to `BaselineConsumer` that calls the surface you care about, then call it from the test. Keep
 every call a plain, direct one: a probe routed through reflection or `dynamic` resolves at run time and proves
 nothing about the compiled signature.
+
+A probe that has to be EXECUTED rather than called — a handler — goes in `BaselineHandlers.cs` and needs the
+test to hand its assembly to `RegisterTasksFromAssembly`, or the dispatch fails on an unresolvable handler.

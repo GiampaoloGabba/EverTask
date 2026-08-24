@@ -4,16 +4,22 @@ using EverTask.ConsumerCompatibility.Baseline;
 using EverTask.Handler;
 using EverTask.Monitoring;
 using EverTask.Storage;
+using EverTask.Tests.TestHelpers;
 using Microsoft.Extensions.Logging;
 
 namespace EverTask.Tests.Serialization;
 
 /// <summary>
-/// P6 / X4 — the durable-occurrence work must be ADDITIVE to the public surface. Two complementary proofs:
-/// a storage written against the previous version still compiles and behaves, and the public records kept
-/// their exact construction shape.
+/// P6 / X4 — the durable-occurrence work must be ADDITIVE to the public surface. Three complementary proofs:
+/// a storage written against the previous version still compiles and behaves, the public records kept their
+/// exact construction shape, and an assembly COMPILED against the previous packages still binds — and still
+/// runs a whole delivery — against the current ones.
 /// </summary>
-public class ConsumerCompatibilityTests
+/// <remarks>
+/// The last of the three needs a real host, which is why this class inherits the integration base: what a
+/// consumer's handler is worth is whether the worker can execute it, not whether it can be constructed.
+/// </remarks>
+public class ConsumerCompatibilityTests : IsolatedIntegrationTestBase
 {
     /// <summary>
     /// A storage implementing ONLY what the version before durable occurrences required. It exists to be
@@ -236,6 +242,25 @@ public class ConsumerCompatibilityTests
     }
 
     /// <summary>
+    /// X6: what makes the fixture a cross-version proof instead of a tautology is that its call sites were
+    /// compiled against 3.11 while the assembly answering them is 4.0. Unasserted, a tree that forgot the
+    /// version bump — or a baseline repacked from the current sources — would run the fixture against itself
+    /// and still pass, so every test that uses it starts here.
+    /// </summary>
+    private static void AssertTheFixtureIsAMajorBehind()
+    {
+        var compiledAgainst = typeof(BaselineConsumer).Assembly
+                                                      .GetReferencedAssemblies()
+                                                      .Single(a => a.Name == "EverTask")
+                                                      .Version.ShouldNotBeNull();
+        var runningAgainst = typeof(ITaskStorage).Assembly.GetName().Version.ShouldNotBeNull();
+
+        compiledAgainst.Major.ShouldBeLessThan(runningAgainst.Major,
+            $"the fixture must be compiled against an older MAJOR than the assembly under test: it asks for "
+            + $"{compiledAgainst} and got {runningAgainst}");
+    }
+
+    /// <summary>
     /// P6 / X6, the binary half: an assembly COMPILED against the packages master shipped before durable
     /// occurrences, executed here against the current ones.
     /// </summary>
@@ -249,19 +274,7 @@ public class ConsumerCompatibilityTests
     [Fact]
     public async Task An_assembly_compiled_against_the_baseline_still_binds_to_the_current_ones()
     {
-        // X6: what makes everything below a cross-version proof instead of a tautology is that the call sites
-        // were compiled against 3.11 while the assembly answering them is 4.0. Unasserted, a tree that forgot
-        // the version bump — or a baseline repacked from the current sources — would run this test against
-        // itself and still pass.
-        var compiledAgainst = typeof(BaselineConsumer).Assembly
-                                                      .GetReferencedAssemblies()
-                                                      .Single(a => a.Name == "EverTask")
-                                                      .Version.ShouldNotBeNull();
-        var runningAgainst = typeof(ITaskStorage).Assembly.GetName().Version.ShouldNotBeNull();
-
-        compiledAgainst.Major.ShouldBeLessThan(runningAgainst.Major,
-            $"the fixture must be compiled against an older MAJOR than the assembly under test: it asks for "
-            + $"{compiledAgainst} and got {runningAgainst}");
+        AssertTheFixtureIsAMajorBehind();
 
         BaselineConsumer.BuildEverySchedule();
         BaselineConsumer.ConstructEveryBuilderDirectly();
@@ -286,5 +299,60 @@ public class ConsumerCompatibilityTests
         await using var provider = services.BuildServiceProvider();
         BaselineConsumer.ConstructHostedComponents(provider);
         await BaselineConsumer.UseDispatcher(provider.GetRequiredService<ITaskDispatcher>());
+    }
+
+    /// <summary>
+    /// C2 / P6, the binary half of the execution-context contract: handlers that an application compiled
+    /// BEFORE the context existed are still executed, end to end, by the current worker.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>SetExecutionContext</c> arrived as a default interface member so a handler written against the bare
+    /// <see cref="IEverTaskHandler{TTask}"/> would neither have to declare it nor be recompiled. The in-tree
+    /// <c>RawInterfaceTaskHandler</c> covers the first half by compiling; only an assembly built against the
+    /// old metadata covers the second. The CLR builds its interface map against TODAY's interface, so a member
+    /// that had arrived abstract instead would fail the type load the moment the container resolves the
+    /// handler, and the worker's injector — which calls through the interface — reaches a default body inside
+    /// an assembly nobody rebuilt. That the injector lands on that slot at all is pinned separately, by
+    /// <c>RawInterfaceContextTaskHandler</c>, which implements the member and records what it receives.
+    /// </para>
+    /// <para>
+    /// Both shapes an application uses are here, because they break differently: the direct implementor
+    /// through the interface map, the <see cref="EverTaskHandler{TTask}"/> subclass through the base class's
+    /// own new members and the virtual slots it overrides.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task Handlers_compiled_against_the_baseline_are_still_executed_end_to_end()
+    {
+        AssertTheFixtureIsAMajorBehind();
+
+        var probe = new BaselineHandlerProbe();
+
+        await CreateIsolatedHostAsync(
+            configureEverTask: cfg => cfg.RegisterTasksFromAssembly(typeof(BaselineConsumer).Assembly),
+            configureServices: services => services.AddSingleton(probe));
+
+        var rawId  = await Dispatcher.Dispatch(new BaselineRawInterfaceTask());
+        var baseId = await Dispatcher.Dispatch(new BaselineBaseClassTask());
+
+        await TaskWaitHelper.WaitForConditionAsync(
+            () => probe.Phases.Count(phase => phase.EndsWith("-OnCompleted", StringComparison.Ordinal)) == 2,
+            TestEnvironment.GetTimeout(8000, 30000));
+
+        // The context injection happens inside the execution core, before OnStarted, so an injection that
+        // threw on a handler unaware of the context would end the delivery Failed with the exception on the
+        // row — which is why both handlers record OnError too, instead of leaving a missing phase to explain.
+        foreach (var taskId in new[] { rawId, baseId })
+            (await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed)).Exception.ShouldBeNull();
+
+        // The two deliveries run concurrently, so only each handler's own sequence is deterministic.
+        probe.Phases.Where(phase => phase.StartsWith("raw-", StringComparison.Ordinal))
+             .ShouldBe(["raw-OnStarted", "raw-Handle", "raw-OnCompleted"],
+                 "the whole lifecycle of a handler compiled against the bare interface still runs");
+
+        probe.Phases.Where(phase => phase.StartsWith("base-", StringComparison.Ordinal))
+             .ShouldBe(["base-OnStarted", "base-Handle", "base-OnCompleted"],
+                 "so does the lifecycle of one compiled against the previous base class");
     }
 }

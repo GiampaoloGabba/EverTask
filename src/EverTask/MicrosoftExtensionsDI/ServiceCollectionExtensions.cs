@@ -59,6 +59,11 @@ public static class ServiceCollectionExtensions
         // The single seam every component asks about a schedule's occurrence grid.
         services.TryAddSingleton<IScheduleEvaluator, ScheduleEvaluator>();
 
+        // Ambient execution context. Singleton on purpose (C3): an eager handler's dependency graph is built
+        // in the DISPATCHER's scope, so a scoped accessor would be invisible to exactly the services that
+        // cannot reach the handler's own Context property. The value it hands out is per asynchronous flow.
+        services.TryAddSingleton<ITaskExecutionContextAccessor, AmbientTaskExecutionContextAccessor>();
+
         // Register default GUID generator (UUID v7) - can be overridden by storage providers
         services.TryAddSingleton<IGuidGenerator>(sp => new DefaultGuidGenerator(UUIDNext.Database.Other));
 

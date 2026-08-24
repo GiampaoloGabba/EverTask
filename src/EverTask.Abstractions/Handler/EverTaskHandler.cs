@@ -13,6 +13,22 @@ public abstract class EverTaskHandler<TTask> : IEverTaskHandler<TTask> where TTa
     /// </summary>
     protected ITaskLogCapture Logger { get; private set; } = null!;
 
+    private ITaskExecutionContext? _context;
+
+    /// <summary>
+    /// The identity of the delivery being executed: task and schedule ids, the nominal slot, the attempt and
+    /// run numbers, and how late it is. Available in <see cref="Handle"/> and in every lifecycle callback.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when read before the worker injected it — from a constructor, or from an instance you created
+    /// yourself instead of dispatching a task.
+    /// </exception>
+    protected ITaskExecutionContext Context =>
+        _context ?? throw new InvalidOperationException(
+            $"The execution context of {GetType().Name} is not available yet. It is injected by the worker " +
+            "right before OnStarted, so it can be read from Handle and from the lifecycle callbacks, but not " +
+            "from the constructor.");
+
     /// <inheritdoc/>
     public virtual IRetryPolicy? RetryPolicy => null;
     /// <inheritdoc/>
@@ -132,5 +148,11 @@ public abstract class EverTaskHandler<TTask> : IEverTaskHandler<TTask> where TTa
     void IEverTaskHandler<TTask>.SetLogCapture(ITaskLogCapture logCapture)
     {
         Logger = logCapture ?? throw new ArgumentNullException(nameof(logCapture));
+    }
+
+    /// <inheritdoc />
+    void IEverTaskHandler<TTask>.SetExecutionContext(ITaskExecutionContext context)
+    {
+        _context = context ?? throw new ArgumentNullException(nameof(context));
     }
 }

@@ -53,6 +53,28 @@ or the failure path).
 are always forwarded to the host's `ILogger`; they are *additionally* persisted to the DB only when
 `WithPersistentLogger` is enabled. Do not assign it yourself.
 
+### `protected ITaskExecutionContext Context { get; }` — which delivery is this
+
+Injected the same way, before `OnStarted`, so it is readable in `Handle` and every callback (reading
+it from a constructor throws `InvalidOperationException`).
+
+| Member | Value |
+|---|---|
+| `TaskId` / `ScheduleId` / `TaskKey` | The row being executed; the schedule it is an occurrence of (null when it is not one); the dispatch key. |
+| `ScheduledAtUtc` | The slot this delivery stands for — null for an immediate dispatch. **Never** the slot a rate-limit deferral re-parked the task at, so `StartedAtUtc - ScheduledAtUtc` is the real lateness. |
+| `ScheduledAtLocal` / `TimeZoneId` | The same slot in the schedule's zone; null while a schedule carries no zone. |
+| `StartedAtUtc` | When this delivery started. |
+| `Attempt` | 1-based; `1` on the first `Handle`, `2` on the first retry. In `OnRetry` it is already the attempt about to start; in `OnError`, the last one that ran. Re-read it, don't cache it. |
+| `RunNumber` | 1-based run within a recurring series (`1` for a one-shot). Durable: it resumes from the stored counter after a restart. |
+| `ScheduleVersion` / `IsRecurring` / `IsOccurrence` | Schedule identity of the delivery. |
+| `Misfire` | `null` when the delivery ran on time; otherwise `Kind` (`Late`), `Lateness`, and the missed range when it covers one. The threshold is `SetMisfireThreshold` (default 5 s) and is **observation only** — nothing about execution depends on it. |
+
+Anything that is **not** the handler (a repository, an enricher, an outbox writer) reads the same
+context by injecting `ITaskExecutionContextAccessor` and reading `.Current` — a singleton whose value
+follows the delivery's asynchronous flow, null outside one. Prefer it over passing the context down
+by hand. A handler implementing `IEverTaskHandler<TTask>` directly (no base class) has no `Context`
+property: use the accessor, or implement the `SetExecutionContext` default interface member.
+
 ### Handler with DI (primary constructor, repo style)
 
 ```csharp
@@ -161,3 +183,5 @@ ServiceStopped`. `ServiceStopped` is recoverable: re-queued on next startup.
    (metrics).
 5. Custom retry/timeout/queue/rate-limit? → override the matching member (see the feature refs).
 6. Idempotent across restarts? → `taskKey`.
+7. Needs to know which run this is (slot, attempt, run number, lateness)? → `Context` in the handler,
+   `ITaskExecutionContextAccessor` in its dependencies. Never re-derive it from `DateTimeOffset.UtcNow`.

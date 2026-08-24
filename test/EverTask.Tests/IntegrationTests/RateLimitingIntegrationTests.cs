@@ -427,6 +427,41 @@ public class RateLimitingIntegrationTests : IsolatedIntegrationTestBase
     }
 
     [Fact]
+    public async Task Should_dispose_the_eager_handler_scope_when_the_task_is_terminally_rejected()
+    {
+        // Eager resolution: the handler and its SCOPED dependency are built in the EverTask-owned scope the
+        // executor carries (L27), and the rejection path is the one delivery that never enters DoWorkCore —
+        // whose finally is the only other place that disposes that scope.
+        await CreateRateLimitHostAsync(
+            configureBuilder: b => b.Services.AddScoped<ScopedDisposableProbe>(),
+            configureEverTask: cfg => cfg.DisableLazyHandlerResolution());
+
+        // Warm-up takes the only permit of the 30 s window and runs to completion the ordinary way, so its
+        // own scope is released by DoWorkCore's finally: the second delivery is the one under test.
+        var warmupId = await Dispatcher.Dispatch(new RateLimitRejectedScopedTask("eager-scope-key", 0));
+        await WaitForTaskStatusAsync(warmupId, QueuedTaskStatus.Completed, timeoutMs: 10000);
+
+        var rejectedId = await Dispatcher.Dispatch(new RateLimitRejectedScopedTask("eager-scope-key", 1));
+        await WaitForTaskStatusAsync(rejectedId, QueuedTaskStatus.Failed, timeoutMs: 10000);
+        await TaskWaitHelper.WaitForConditionAsync(() => !_state.OnErrors.IsEmpty, timeoutMs: 5000);
+
+        _state.OnErrors.Single().Exception.ShouldBeOfType<RateLimitRejectedException>();
+        _state.ExecutionCountByIndex.ContainsKey(1).ShouldBeFalse("a rejected task never executes");
+
+        Volatile.Read(ref _state.ScopedProbesCreated).ShouldBe(2,
+            "one scope per delivery, each serving both handler resolutions of the eager path");
+        Volatile.Read(ref _state.ScopedProbesUsed).ShouldBe(2,
+            "the warm-up used the dependency from Handle, the rejected delivery from OnError");
+
+        await TaskWaitHelper.WaitForConditionAsync(
+            () => Volatile.Read(ref _state.ScopedProbesDisposed) == 2, timeoutMs: 5000);
+
+        Volatile.Read(ref _state.ScopedProbesDisposed).ShouldBe(2,
+            "disposing only the handler instance would strand the rejected delivery's scope and every " +
+            "scoped dependency in it");
+    }
+
+    [Fact]
     public async Task Should_emit_fail_open_event_when_tracked_keys_cap_reached()
     {
         await CreateRateLimitHostAsync(

@@ -38,14 +38,26 @@ Docker or Testcontainers here. Subsets filter on namespace: `--filter "FullyQual
   constructs them directly and so only proves they read the clock they are GIVEN.
 - **Compile-time compatibility pin**: `Serialization/ConsumerCompatibilityTests.LegacyMinimalTaskStorage`
   implements only what `ITaskStorage` required before durable occurrences. It exists to be COMPILED — the day
-  a new storage member stops being a default one, this class fails to build.
+  a new storage member stops being a default one, this class fails to build. Its handler twin is
+  `TestTasks.ExecutionContext.cs`'s `RawInterfaceTaskHandler`: it implements `IEverTaskHandler<T>` directly
+  and declares no `SetExecutionContext`, and `ExecutionContextIntegrationTests` also DISPATCHES it, so the
+  interface's default body runs on a real delivery instead of only compiling. `RawInterfaceContextTaskHandler`
+  is the other half — it implements that member, so the injector's call is proven to reach the interface slot.
+  Both are recompiled against the new sources; the assembly that is not is in the binary pin below.
 - **Binary compatibility pin**: `test/EverTask.ConsumerCompatibility.Baseline` is compiled against the
   `issue23-baseline` packages in `nupkg/issue23-baseline` and RUN against the current assemblies by the same
-  test class, a major apart (3.11 → 4.0) — the test asserts that distance, so a missed version bump cannot
-  turn the proof into 3.11 against 3.11. It is the only thing that catches an optional parameter appended to
-  an existing public method or constructor — source-level probes keep compiling while the IL signature
-  changes. Add a public method, not an optional parameter; see that project's `README.md` for the wiring and
-  for repacking the baseline.
+  test class, a major apart (3.11 → 4.0) — both its tests assert that distance, so a missed version bump
+  cannot turn the proof into 3.11 against 3.11. It is the only thing that catches an optional parameter
+  appended to an existing public method or constructor — source-level probes keep compiling while the IL
+  signature changes. Add a public method, not an optional parameter; see that project's `README.md` for the
+  wiring and for repacking the baseline.
+  Its `BaselineHandlers.cs` carries the other half: two handlers built when neither `SetExecutionContext` nor
+  `EverTaskHandler<T>.Context` existed — one implementing `IEverTaskHandler<T>` directly, one deriving from
+  the base class — dispatched on a REAL host by
+  `ConsumerCompatibilityTests.Handlers_compiled_against_the_baseline_are_still_executed_end_to_end`. Their
+  interface map is built against today's interface, so a member arriving abstract fails the type load where a
+  recompiled twin would just keep building. They record through a `BaselineHandlerProbe` the test registers,
+  because the fixture may reference nothing but the baseline packages.
 - **Fault injection**: `TestHelpers/FaultInjectingTaskStorage` wraps a REAL storage and throws only where the
   test arms it (`FailNext` / `FailAlways` / `Heal`), so the failure and the recovery from it both execute for
   real. Used by `RecoveryFinalizationFailureTests`; a mock in its place would make both fictional.

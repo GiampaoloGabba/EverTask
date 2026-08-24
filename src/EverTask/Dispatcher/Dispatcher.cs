@@ -214,13 +214,12 @@ public class Dispatcher(
         DateTimeOffset? existingNextRunUtc = null;
         int? existingCurrentRunCount = null;
 
-        // Read in the SAME breath as the cursor above, and never re-read: they are the compare-and-swap
-        // expectations of the exhausted-series finalization below, and that write must be conditional on the
-        // values its decision was computed from. Reading them back after deciding would fold a Cancel (or a
-        // reschedule) that linearized in between into the expectation, so the CAS would confirm the concurrent
-        // state instead of losing to it.
+        // Read in the SAME breath as the cursor above, and never re-read: together with the schedule version
+        // carried by the row metadata, this is the compare-and-swap expectation of the exhausted-series
+        // finalization below, and that write must be conditional on the values its decision was computed from.
+        // Reading them back after deciding would fold a Cancel (or a reschedule) that linearized in between
+        // into the expectation, so the CAS would confirm the concurrent state instead of losing to it.
         QueuedTaskStatus? existingStatus = null;
-        int existingScheduleVersion = 0;
 
         // Handle taskKey resolution if provided
         if (!string.IsNullOrWhiteSpace(taskKey) && taskStorage != null && existingTaskId == null)
@@ -265,14 +264,25 @@ public class Dispatcher(
                     logger.UpdatingRecurringTask(existingTask.Id);
                     existingTaskId = existingTask.Id;
 
+                    // The run counter is preserved whether or not the row still has a cursor: storage keeps
+                    // counting from it, so a TERMINAL series re-registered under the same taskKey resumes at
+                    // CurrentRunCount + 1. Reading it only in the cursor branch below would hand the handler
+                    // a RunNumber of 1 for the run storage is about to record as the sixth.
+                    existingCurrentRunCount = existingTask.CurrentRunCount;
+
+                    // The schedule version belongs to the ROW, and a re-registration under the same taskKey
+                    // updates that row in place: UpdateTask never writes the column, so the version the row
+                    // is at is still the version this dispatch runs. Leaving the metadata at its default
+                    // would tell the handler's context — and every monitoring event of the delivery — that a
+                    // rescheduled series is back at version 0. It is also the compare-and-swap expectation of
+                    // the finalization below, which is why it is read here, once, with the rest of the row.
+                    rowMetadata = rowMetadata with { ScheduleVersion = existingTask.ScheduleVersion };
+
                     // Preserve existing NextRunUtc (even if in the past) to maintain schedule rhythm
-                    // Also preserve CurrentRunCount for correct calculation
                     if (existingTask.NextRunUtc.HasValue)
                     {
                         existingNextRunUtc = existingTask.NextRunUtc;
-                        existingCurrentRunCount = existingTask.CurrentRunCount;
                         existingStatus = existingTask.Status;
-                        existingScheduleVersion = existingTask.ScheduleVersion;
                         logger.PreservingRecurringSchedule(existingNextRunUtc, existingCurrentRunCount, existingTask.Id);
                     }
                 }
@@ -315,11 +325,11 @@ public class Dispatcher(
         {
             existingNextRunUtc      = executionTime;
             existingCurrentRunCount = currentRun;
-            // The recovery page IS the read this decision is computed from, so its status and version are the
-            // finalization's expectations. A row metadata without them (a hand-wired internal re-dispatch)
-            // leaves the status null, and the finalization below falls back to the unconditional write.
+            // The recovery page IS the read this decision is computed from, so its status — and the version
+            // already on the row metadata — are the finalization's expectations. A row metadata without them
+            // (a hand-wired internal re-dispatch) leaves the status null, and the finalization below falls
+            // back to the unconditional write.
             existingStatus          = rowMetadata.Status;
-            existingScheduleVersion = rowMetadata.ScheduleVersion;
         }
 
         if (recurring != null)
@@ -377,7 +387,7 @@ public class Dispatcher(
 
                         if (taskStorage != null && existingTaskId.HasValue)
                             await FinalizeExhaustedSeriesAsync(taskStorage, existingTaskId.Value,
-                                existingNextRunUtc.Value, existingStatus, existingScheduleVersion,
+                                existingNextRunUtc.Value, existingStatus, rowMetadata.ScheduleVersion,
                                 auditLevel ?? serviceConfiguration.DefaultAuditLevel, ct)
                                 .ConfigureAwait(false);
 
@@ -420,8 +430,19 @@ public class Dispatcher(
         // instance in its per-task scope at execution time
         var useLazyExecutor = ShouldUseLazyResolution(executionTime, recurring, nowUtc);
 
+        // The run this delivery is about to be: the durable counter (preserved by a taskKey update, carried in
+        // by recovery, absent on a brand new task) plus one, because the counter only moves once a run ends.
+        // Stamped on the executor so the handler's context reports it without reading the row again. An
+        // occurrence arrives with its own number already read from the row and keeps it: its counter is the
+        // one-shot's, which says nothing about the run of the series the occurrence is (C1).
         var executor = await handler.Handle(task, executionTime, recurring, serviceProvider, effectiveAuditLevel,
-            existingTaskId, taskKey, useLazyExecutor, rowMetadata).ConfigureAwait(false);
+                                       existingTaskId, taskKey, useLazyExecutor,
+                                       rowMetadata with
+                                       {
+                                           RunNumber = rowMetadata.RunNumber
+                                                       ?? (existingCurrentRunCount ?? currentRun ?? 0) + 1
+                                       })
+                                   .ConfigureAwait(false);
 
         // Persist or update task (lazy serialize only if storage exists).
         // Recovery dispatches skip the update entirely: the definition was just read from storage

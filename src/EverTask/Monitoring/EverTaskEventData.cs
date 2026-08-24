@@ -59,7 +59,7 @@ public record EverTaskEventData(
             executionLogs)
         {
             ParentTaskId    = executor.ParentTaskId,
-            ScheduledAtUtc  = executor.NominalSlotUtc ?? executor.ExecutionTime,
+            ScheduledAtUtc  = executor.NominalSlotOfDelivery,
             // A delivery belongs to a schedule either as the schedule row itself or as one of its
             // occurrences — and an occurrence never carries the definition: ApplyOccurrenceContract strips it
             // and leaves the parent id behind. Deriving the version from the definition alone therefore

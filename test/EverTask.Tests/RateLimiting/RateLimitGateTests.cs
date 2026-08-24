@@ -168,6 +168,66 @@ public class RateLimitGateTests
     }
 
     [Fact]
+    public async Task Should_keep_an_immediate_one_shot_slotless_across_a_second_repark()
+    {
+        var firstSlot  = DateTimeOffset.UtcNow.AddSeconds(4);
+        var secondSlot = DateTimeOffset.UtcNow.AddSeconds(8);
+
+        TaskHandlerExecutor? parked = null;
+        _scheduler.Setup(s => s.Schedule(It.IsAny<TaskHandlerExecutor>(), null))
+                  .Callback<TaskHandlerExecutor, DateTimeOffset?>((e, _) => parked = e);
+
+        var gate = CreateGate();
+
+        // An IMMEDIATE dispatch carries no ExecutionTime: there is no slot it ever stood for.
+        SetupDeferral(firstSlot);
+        await gate.TryPassAsync(CreateExecutor(Policy(), "k"), CancellationToken.None);
+
+        parked.ShouldNotBeNull();
+        var firstPark = parked;
+        firstPark.ExecutionTime.ShouldBe(firstSlot);
+        firstPark.NominalSlotOfDelivery.ShouldBeNull();
+
+        // The reservation lapses (eviction, TTL) and the SAME parked executor comes back through the gate.
+        SetupDeferral(secondSlot);
+        await gate.TryPassAsync(firstPark, CancellationToken.None);
+
+        parked.ShouldNotBeNull();
+        parked.ExecutionTime.ShouldBe(secondSlot);
+        parked.NominalSlotOfDelivery.ShouldBeNull(
+            "an immediate dispatch never gains a nominal slot — least of all the previous reserved one");
+    }
+
+    [Fact]
+    public async Task Should_keep_the_original_slot_of_a_delayed_one_shot_across_a_second_repark()
+    {
+        var scheduledFor = DateTimeOffset.UtcNow.AddSeconds(1);
+        var firstSlot    = DateTimeOffset.UtcNow.AddSeconds(4);
+        var secondSlot   = DateTimeOffset.UtcNow.AddSeconds(8);
+
+        TaskHandlerExecutor? parked = null;
+        _scheduler.Setup(s => s.Schedule(It.IsAny<TaskHandlerExecutor>(), null))
+                  .Callback<TaskHandlerExecutor, DateTimeOffset?>((e, _) => parked = e);
+
+        var gate = CreateGate();
+
+        SetupDeferral(firstSlot);
+        await gate.TryPassAsync(CreateExecutor(Policy(), "k", executionTime: scheduledFor), CancellationToken.None);
+
+        parked.ShouldNotBeNull();
+        var firstPark = parked;
+        firstPark.NominalSlotOfDelivery.ShouldBe(scheduledFor);
+
+        SetupDeferral(secondSlot);
+        await gate.TryPassAsync(firstPark, CancellationToken.None);
+
+        parked.ShouldNotBeNull();
+        parked.ExecutionTime.ShouldBe(secondSlot);
+        parked.NominalSlotOfDelivery.ShouldBe(scheduledFor,
+            "the slot the task was scheduled for survives every re-park, not just the first");
+    }
+
+    [Fact]
     public async Task Should_repark_recurring_at_slot_without_touching_execution_time()
     {
         var slot = DateTimeOffset.UtcNow.AddSeconds(8);

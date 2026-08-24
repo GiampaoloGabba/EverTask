@@ -99,6 +99,15 @@ Per-entity keys: `taskKey: $"report-{userId}"` or `"tenant-{tenantId}:billing"`.
 - Cancel: `dispatcher.Cancel(taskId)` (resolve id via `GetByTaskKey` if you only have the key).
 - Inspect: `ITaskStorage.Get(t => t.IsRecurring)`; `task.CurrentRunCount`, `task.Status`, next run.
 
+## What the handler knows about the occurrence
+
+Inside `Handle`, `Context` (see `02-tasks-and-handlers.md`) answers what the payload cannot: which
+slot this run stands for (`ScheduledAtUtc`), which run of the series it is (`RunNumber`, durable
+across restarts), and whether the run started late (`Misfire`, threshold `SetMisfireThreshold`,
+default 5 s). Use `Context.ScheduledAtUtc` — not `DateTimeOffset.UtcNow` — whenever the work is
+defined by its slot (the window a report covers, the day a digest is for): after a downtime or a
+rate-limit deferral the two are not the same instant.
+
 ## Schedule-drift behavior
 
 Next run is computed from the **scheduled** time, not actual execution time, so late runs don't
@@ -116,3 +125,5 @@ day, never an arbitrary interval-arithmetic slot.
 4. Stop condition → `MaxRuns` and/or `RunUntil`.
 5. Idempotent on restart → `taskKey` (strongly recommended for all recurring).
 6. High-frequency → set `auditLevel: AuditLevel.Minimal`/`ErrorsOnly`.
+7. Work defined by its slot rather than by "now" → read `Context.ScheduledAtUtc` (and `Context.Misfire`
+   when a stale run should behave differently).
