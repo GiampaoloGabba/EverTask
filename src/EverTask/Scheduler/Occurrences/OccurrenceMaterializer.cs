@@ -30,6 +30,7 @@ internal sealed class OccurrenceMaterializer
     private readonly IEverTaskLogger<OccurrenceMaterializer> _logger;
     private readonly TimeProvider _timeProvider;
     private readonly DueSlotEnumerator _enumerator;
+    private readonly ScheduleVersionRegistry _scheduleVersions;
     private readonly TaskDeliveryRegistry? _deliveryRegistry;
     private readonly SemaphoreSlim _budget;
 
@@ -63,6 +64,7 @@ internal sealed class OccurrenceMaterializer
                                   IScheduler scheduler, EverTaskServiceConfiguration options,
                                   IScheduleEvaluator evaluator,
                                   IEverTaskLogger<OccurrenceMaterializer> logger, TimeProvider timeProvider,
+                                  ScheduleVersionRegistry scheduleVersions,
                                   TaskDeliveryRegistry? deliveryRegistry = null)
     {
         _scopeFactory     = scopeFactory;
@@ -71,6 +73,7 @@ internal sealed class OccurrenceMaterializer
         _options          = options;
         _logger           = logger;
         _timeProvider     = timeProvider;
+        _scheduleVersions = scheduleVersions;
         _deliveryRegistry = deliveryRegistry;
         _enumerator       = new DueSlotEnumerator(evaluator, options.MisfireThreshold);
         _budget           = new SemaphoreSlim(options.MaterializationConcurrency,
@@ -199,13 +202,16 @@ internal sealed class OccurrenceMaterializer
         var now       = _timeProvider.GetUtcNow();
         var recovered = RecoveredTaskFactory.FromRow(row);
 
-        if (recovered.Recurring is { IsDurable: false })
+        if (recovered.Recurring is { IsDurable: false } inline)
         {
-            // Not a durable schedule any more: a task key re-registration wrote an inline definition over the
-            // row and parked its own executor under this id. Re-parking the durable executor this run was
-            // handed would REPLACE that registration — the scheduler is keyed by id and the last write wins —
-            // with one that materializes nothing. Whoever owns the row now owns its parking too.
-            _logger.MaterializationSkipped(parentId, "the row is no longer a durable schedule");
+            // Not a durable schedule any more: a task key re-registration or a reschedule wrote an INLINE
+            // definition over the row. Re-parking the durable executor this run was handed is never the
+            // answer — the scheduler is keyed by id and the last write wins, so it would replace whatever
+            // owns the row now with a registration that materializes nothing. Normally that owner has parked
+            // the row itself and this run has nothing to do; the exception is the one case that brings an old
+            // durable delivery here at all — a re-park that FAILED — where assuming it had been parked left
+            // the series in no scheduler, no queue and no delivery until a restart.
+            await ParkInlineRowAsync(scope.ServiceProvider, recovered, row, inline).ConfigureAwait(false);
             return;
         }
 
@@ -273,6 +279,13 @@ internal sealed class OccurrenceMaterializer
         if (pass.Finalized)
         {
             _logger.DurableSeriesCompleted(parentId);
+
+            // A durable series ends HERE and nowhere else — the cursor is nulled in the same commit that
+            // writes the terminal status, so it never passes through QueueNextOccourrence, which is where an
+            // inline series drops its published lower bound (S4). Without this the entry of every durable
+            // schedule an operator had rescheduled outlived the series for the life of the process.
+            _scheduleVersions.Remove(parentId);
+
             DropGate(parentId);
             return;
         }
@@ -338,6 +351,56 @@ internal sealed class OccurrenceMaterializer
         worker.PublishExternalEvent(delivered, SeverityLevel.Error,
             string.Create(CultureInfo.InvariantCulture,
                 $"Schedule {parentId} cannot be rebuilt from its row and materializes nothing: {reason.Message}"));
+    }
+
+    /// <summary>
+    /// Makes sure a row that has turned INLINE under an old durable delivery is parked, rebuilding its
+    /// executor from the row when nothing holds it.
+    /// </summary>
+    /// <remarks>
+    /// Whoever wrote the inline definition owns the parking and normally did it, so the usual answer here is
+    /// "nothing to do" and it costs one registry lookup. The case this exists for is the only one that lets an
+    /// old durable delivery reach a rewritten row: a re-park that FAILED, which publishes no version and hands
+    /// the row to nobody. The executor is rebuilt FROM THE ROW and never taken from this run — the delivered
+    /// one carries the durable definition, and parking it would put a registration that materializes nothing
+    /// over a series that now runs a handler. Without evidence (a scheduler that cannot report its
+    /// registrations) the row is parked anyway: a duplicate registration of the same instant is replaced
+    /// latest-wins, while a missing one stops the series until a restart.
+    /// </remarks>
+    private async Task ParkInlineRowAsync(IServiceProvider provider, RecoveredTask recovered, QueuedTask row,
+                                          RecurringTask inline)
+    {
+        if (_scheduler.SupportsScheduleInspection && _scheduler.IsScheduled(row.Id))
+        {
+            _logger.MaterializationSkipped(row.Id, "the row is no longer a durable schedule");
+            return;
+        }
+
+        if (recovered.Task is null)
+        {
+            _logger.ScheduleRowUnusable(
+                recovered.PayloadError ?? new InvalidOperationException(
+                    "The schedule turned inline but its persisted payload did not produce a runnable task"),
+                row.Id);
+
+            return;
+        }
+
+        try
+        {
+            var cursor   = row.NextRunUtc!.Value;
+            var executor = await BuildScheduleExecutorAsync(provider, recovered, row, inline, cursor)
+                               .ConfigureAwait(false);
+
+            if (_scheduler.TrySchedule(executor, cursor))
+                _logger.ScheduleReparked(row.Id, cursor);
+        }
+        catch (Exception ex)
+        {
+            // Nothing else parks this row from here, so a failure has to be visible: the series waits for
+            // startup recovery.
+            _logger.ReparkAfterFailureFailed(ex, row.Id);
+        }
     }
 
     /// <summary>
@@ -891,10 +954,15 @@ internal sealed class OccurrenceMaterializer
     /// The retry is what makes progress independent of the kick: recovery runs once at startup, so a schedule
     /// whose window is full and whose kick was lost would otherwise wait for the next restart.
     /// </remarks>
+    /// <remarks>
+    /// Conditional, because the executor a run was HANDED belongs to the delivery that produced it and a
+    /// reschedule may have committed a newer definition and parked it in the meantime: replacing that
+    /// registration latest-wins would hand the row back to a definition nobody owns any more.
+    /// </remarks>
     private void RePark(TaskHandlerExecutor executor, Guid parentId, DateTimeOffset at)
     {
-        _scheduler.Schedule(executor with { ExecutionTime = at }, at);
-        _logger.ScheduleReparked(parentId, at);
+        if (_scheduler.TrySchedule(executor with { ExecutionTime = at }, at))
+            _logger.ScheduleReparked(parentId, at);
     }
 
     /// <summary>

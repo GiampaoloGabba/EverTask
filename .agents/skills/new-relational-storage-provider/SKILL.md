@@ -161,6 +161,18 @@ you stored. A provider that persists the entity verbatim instead stores a materi
 different `ScheduleVersion` for the same call, and whatever schedule-only fields the entity happened to
 carry.
 
+`UpdateSchedule` — the reschedule — is guarded by version + cursor for the same reason, and it is the one
+place the null cursor is LEGAL rather than excluded: a finished series is a normal reschedule target (that is
+how a schedule is restarted under its key) and its cursor is null, so the guard needs the two-branch form,
+`NextRunUtc IS NULL` or `NextRunUtc = @cursor`. The version alone is not enough: a completed run advances the
+cursor and the run counter without ever touching the version, so a reschedule that decided on the reading
+that run superseded would commit over it and park a cursor computed from a budget already spent. **And add
+`Status <> Cancelled` to the predicate**: a cancel is the one write neither half of the guard answers for — it
+writes the status and leaves the version and the cursor exactly as they were — so a reschedule that read the
+row first matches on both and puts a live definition and a fresh cursor over a series an operator has ended.
+Every other status stays a legitimate target, `InProgress` included: a schedule that happens to be running is
+rescheduled, never refused.
+
 `TryAdvanceScheduleCursor` is the ONE write a skipped slot needs: a conditional UPDATE of `NextRunUtc`
 guarded by version + cursor, with no run counted and no audit written, because nothing executed. Every slot
 that survives the misfire policy carries the cursor forward inside `MaterializeOccurrence` instead — the

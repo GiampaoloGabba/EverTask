@@ -147,7 +147,45 @@ Fluent builder (`Builder/RecurringTaskBuilder.cs`) + occurrence math (`Recurring
       Pinned by `RecurringTests/BackfillCursorTests`, whose theory asserts the invariant every shape owes: the
       answer is never more than one period past the instant asked for.
 
+18. **A cursor belongs to the grid that produced it, so a reschedule never reuses it literally**
+    (`ScheduleRebase`, M18). What carries over is the nominal PERIOD — `RecurringTask.PeriodKind`
+    (`SchedulePeriodKind`: the coarsest selector wins, cron has none, a plain cadence is the instant itself) —
+    read on the OLD definition's clock, together with the cursor's POSITION inside it; the new cursor is the
+    NEW definition's occurrence at that same position, read on the new clock, starting from
+    `FirstOccurrenceOnOrAfter`, the one question the grid answers inclusively.
+    - **Naming only the period is right while a period holds ONE slot, and a rewind as soon as it holds two.**
+      `OnDays(Mon, Wed).AtTimes(09:00, 15:00)` fires twice a day and `OnDays(Mon, Thu)` twice a week: a
+      cursor on the later slot rebased onto the FIRST one, which has already run — replaying that
+      occurrence, spending one more of `MaxRuns`, and disagreeing with `RecalculateFromNow` on the identical
+      definition. The position is counted on the old grid with the bounds IGNORED
+      (`FirstGridOccurrenceOnOrAfter`, the twin of `NextGridOccurrenceAfter`), since a `RunUntil` inside the
+      period would truncate the count into the same rewind from the other side. A cursor past every slot of
+      its own period is not one the grid produced — a hand-written row, a seeded backlog — and stands at
+      the LAST position: that clamp is what keeps a single-slot period answering with its slot wherever the
+      cursor sits inside it. A period holding fewer slots than the position reached is refused exactly like
+      an empty one.
+
+    The week boundary is Sunday, because that is the week `NextDayOfWeekSlot` itself steps over. It refuses
+    more than it accepts, deliberately: a different cadence or selector, a cron on either side, and a period
+    the new definition has no slot in — crossing into the next period would skip a period of work or replay
+    one. `RecalculateFromNow` is always the fallback, and it is what the manager offers in every refusal
+    message.
+    - **A cadence that names no day inside its period has a period of ONE DAY**, whatever `PeriodKind` says.
+      `EveryWeek()` steps `current.AddDays(7 * Interval)` and `EveryMonth()` steps `current.AddMonths(Interval)`:
+      both keep the day they were handed, so the weekday or the day of the month is the grid's PHASE and it
+      lives on the cursor, not in the definition. Reading the whole week or month as the period and asking
+      `FirstOccurrenceOnOrAfter` for its first slot answers from the phase the backward probe landed on — a
+      Wednesday series comes back on the Sunday, a monthly one on the 18th or the 28th depending on how long
+      the previous month was — and every occurrence after it is computed from there. Those two shapes place
+      the slot directly instead: the cursor's own wall DAY, at the new definition's `OnTimes` entry in the
+      cursor's own POSITION among the old ones (it used to take the earliest, which is the same rewind one
+      level down), or at the cursor's own time when `OnTimes` is empty — the one shape that constrains no
+      time either — read on the new zone. Both definitions agree on the selectors, because `SameGrid`
+      compares exactly them.
+
 Builder and per-interval tests: `test/EverTask.Tests/RecurringTests/Builders/` and `.../Intervals/`.
+Rebase: `RecurringTests/ScheduleRebaseTests.cs` (a day kept across a Rome → Kiritimati move, the periods
+that hold several slots, and the refusals).
 Time zones: `test/EverTask.Tests/RecurringTests/TimeZones/` (mapping, classification, DST, the Cronos oracle,
 skip-forward parity, id normalization) plus `IntegrationTests/ScheduleTimeZoneIntegrationTests.cs` for the
 wiring — the zone into the row, back out of it at restart, and into what the handler reads.

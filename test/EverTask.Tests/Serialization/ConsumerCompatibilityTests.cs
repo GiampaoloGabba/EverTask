@@ -151,7 +151,7 @@ public class ConsumerCompatibilityTests : IsolatedIntegrationTestBase
         await Should.ThrowAsync<NotSupportedException>(() =>
             storage.TryHaltSchedule(row.Id, 0, null, QueuedTaskStatus.Queued, "{}"));
         await Should.ThrowAsync<NotSupportedException>(() =>
-            storage.UpdateSchedule(row.Id, 0, "{}", null, null, null, null, null));
+            storage.UpdateSchedule(row.Id, 0, null, "{}", null, null, null, null, null));
         await Should.ThrowAsync<NotSupportedException>(() =>
             storage.RequeueTerminal(row.Id, AuditLevel.Full));
         await Should.ThrowAsync<NotSupportedException>(() =>

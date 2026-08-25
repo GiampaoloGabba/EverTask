@@ -77,11 +77,13 @@ backlog.
   is written on the schedule row, and a `CatchUpHalted` event is raised. The passage of time never releases
   it — not even when `MaxAge` eventually brings the backlog back under the cap, and not a restart either.
   Kubernetes calls the same situation "too many missed start times", and for the same reason: a backlog
-  nobody has looked at should not quietly turn into a flood of work. Releasing a halt is an explicit act, and
-  the API for it (`ResumeSchedule`, `Reschedule`) arrives with runtime schedule management; until then a
-  halted schedule stays halted, and re-registering it under its task key does not clear the marker. A halted
-  schedule is also not put back in the scheduler: while it waits it writes nothing and takes no worker
-  delivery. A restart reports the halt once more and then leaves it alone.
+  nobody has looked at should not quietly turn into a flood of work. Releasing a halt is an explicit act:
+  `ITaskScheduleManager.ResumeSchedule(taskKey)` clears the marker and plans the same backlog again — halting
+  again if it still overflows — and `Reschedule` clears it whatever mode it uses. Re-registering the schedule
+  under its task key does not. A halted schedule is also not put back in the scheduler: while it waits it
+  writes nothing and takes no worker delivery. A restart reports the halt once more and then leaves it alone.
+  To replay a backlog the cap had refused, widen the caps with `Reschedule(..., RescheduleMode.RebaseFromCursor)`:
+  a plain cadence carries its cursor over unchanged, so the backlog is still there when the new caps allow it.
 - `SkipOldest` replays the most recent `MaxOccurrences` slots and drops the rest, reporting how many and
   saying that it was the cap — not the age window — that dropped them.
 
@@ -160,8 +162,10 @@ and runs it again. Run one active instance (a standby that is not started is fin
 separate epic; see [Scalability](../scalability.md).
 
 **A failed occurrence does not stop the series.** It ends `Failed`, keeps its trail, and the schedule advances
-to the next slot. Putting one back in a queue is a separate, explicit act: the storage operation is there
-(`ITaskStorage.RequeueTerminal`), and the API that hands it to you arrives with runtime schedule management.
+to the next slot. Putting one back in a queue is a separate, explicit act:
+`ITaskScheduleManager.RequeueFailedOccurrence(occurrenceId)` returns it to `Queued` with its id, its history
+and its audit trail intact, and spends no run of the series — `MaxRuns` counts materializations, and a requeue
+materializes nothing. See [Managing Recurring Tasks](managing-tasks.md#requeuing-a-failed-occurrence).
 
 **An occurrence this build cannot read is ended too.** A task type a deployment renamed away, a payload that
 no longer deserializes, or a handler the application no longer registers leaves a row the running process

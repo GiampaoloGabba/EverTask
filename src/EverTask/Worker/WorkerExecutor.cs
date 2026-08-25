@@ -76,6 +76,11 @@ public class WorkerExecutor(
     private OccurrenceMaterializer? _materializer;
     private bool _materializerResolved;
 
+    // Same lazy resolution again: the registry is a singleton, absent from a hand-wired provider, and it is
+    // read on every delivery of a recurring task — so it is resolved once and kept.
+    private ScheduleVersionRegistry? _scheduleVersions;
+    private bool _scheduleVersionsResolved;
+
     private OccurrenceMaterializer? Materializer
     {
         get
@@ -88,6 +93,21 @@ public class WorkerExecutor(
             _materializerResolved = true;
 
             return _materializer;
+        }
+    }
+
+    private ScheduleVersionRegistry? ScheduleVersions
+    {
+        get
+        {
+            if (_scheduleVersionsResolved)
+                return _scheduleVersions;
+
+            using var scope = serviceScopeFactory.CreateScope();
+            _scheduleVersions         = scope.ServiceProvider.GetService<ScheduleVersionRegistry>();
+            _scheduleVersionsResolved = true;
+
+            return _scheduleVersions;
         }
     }
 
@@ -314,6 +334,13 @@ public class WorkerExecutor(
         if (IsTaskBlacklisted(task))
             return;
 
+        // A delivery of a definition a reschedule has already replaced (S4). Right after the blacklist check
+        // and before anything else touches it: the scheduler drops a registration the moment it is replaced,
+        // but a delivery already handed to a worker queue is past its reach, and running it would execute the
+        // schedule the caller has just changed.
+        if (IsSupersededSchedule(task))
+            return;
+
         // A DURABLE schedule row runs no handler at all: its slot firing means "materialize what is due".
         // Before the gate, deliberately — the rate limit belongs to the OCCURRENCES, per key, and letting a
         // schedule row consume the handler's budget would throttle the very series it is producing (M8).
@@ -434,7 +461,10 @@ public class WorkerExecutor(
             logger.ScheduleMaterializationFailed(ex, task.PersistenceId);
 
             var retryAt = _timeProvider.GetUtcNow() + options.BacklogRetryInterval;
-            scheduler.Schedule(task.ToLazy() with { ExecutionTime = retryAt }, retryAt);
+
+            // Conditional: this executor carries the definition THIS delivery was made from, and a reschedule
+            // that has already parked a newer one owns the row's parking now.
+            scheduler.TrySchedule(task.ToLazy() with { ExecutionTime = retryAt }, retryAt);
         }
     }
 
@@ -966,6 +996,45 @@ public class WorkerExecutor(
         return task.ParentTaskId.HasValue && workerBlacklist.IsBlacklisted(scheduleId);
     }
 
+    /// <summary>
+    /// Whether this delivery carries an INLINE schedule definition a reschedule has already replaced (S4).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The contract is that a reschedule is immediate for occurrences that have not fired yet: the scheduler's
+    /// registration is replaced latest-wins, so nothing parked survives. What the scheduler cannot reach is a
+    /// delivery already written to a worker queue, and this is the only thing standing between it and a run of
+    /// the definition the caller has just changed.
+    /// </para>
+    /// <para>
+    /// The ABSENCE of an entry is not a version of zero: it is the absence of a lower bound, and nothing is
+    /// dropped on it. That is what keeps an executor recovered at startup — a fresh process publishes nothing —
+    /// from being read as stale and thrown away, which would silently stop every rescheduled series across a
+    /// restart.
+    /// </para>
+    /// <para>
+    /// DURABLE schedules are deliberately not dropped. Their delivery runs no handler at all: it means
+    /// "materialize what is due", and the materializer re-reads the row, so an old version costs nothing —
+    /// while dropping it would consume the registration that produced it and leave the row parked nowhere.
+    /// </para>
+    /// </remarks>
+    private bool IsSupersededSchedule(TaskHandlerExecutor task)
+    {
+        if (task.RecurringTask is not { IsDurable: false } || ScheduleVersions is not { } versions)
+            return false;
+
+        if (!versions.TryGetLatest(task.PersistenceId, out var published) || task.ScheduleVersion >= published)
+            return false;
+
+        RegisterEvent(LogLevel.Information, SeverityLevel.Information, task, null, null,
+            (TaskId: task.PersistenceId, Delivered: task.ScheduleVersion, Published: published),
+            static (l, a, _) => l.SupersededScheduleDelivery(a.TaskId, a.Delivered, a.Published),
+            static a => string.Create(CultureInfo.InvariantCulture,
+                $"Task with id {a.TaskId} carries schedule version {a.Delivered} and was superseded by version {a.Published}: the delivery is discarded"));
+
+        return true;
+    }
+
     private async Task<TaskExecutionResult> ExecuteTask(TaskHandlerExecutor task, object handler,
                                                         TaskExecutionContext? executionContext,
                                                         CancellationToken serviceToken)
@@ -1426,6 +1495,13 @@ public class WorkerExecutor(
                              ? current?.CurrentRunCount ?? 0
                              : _inMemoryRunCounts.GetValueOrDefault(task.PersistenceId);
 
+        // The cursor and the status THIS call decides against, taken with the run counter and never read back
+        // at write time. The in-memory store hands back LIVE entities, so a property read at the end of the
+        // call reports whatever a concurrent writer did in between and hands it to a compare-and-swap as its
+        // own expectation — the guard would then confirm the very state it exists to refuse.
+        var rowCursor = current?.NextRunUtc;
+        var rowStatus = current?.Status ?? QueuedTaskStatus.Queued;
+
         // Fix for schedule drift: Use the scheduled execution time as base for next calculation,
         // not the current time. This ensures recurring tasks maintain their intended schedule
         // even when execution is delayed due to system load or downtime.
@@ -1491,16 +1567,40 @@ public class WorkerExecutor(
         {
             if (taskStorage != null)
             {
+                // A schedule someone can reschedule at runtime advances under a compare-and-swap on its
+                // version (S1/S3), so a run that finishes after a reschedule cannot write its stale next run
+                // over the new definition. A schedule nobody can address keeps the historical unconditional
+                // write, byte for byte.
+                if (IsVersionedSchedule(task, current, taskStorage))
+                {
+                    var advance = await AdvanceVersionedRunAsync(task, executionTimeMs, result.NextRun,
+                                          markCompleted, taskStorage)
+                                      .ConfigureAwait(false);
+
+                    if (!advance.OwnsNextOccurrence)
+                    {
+                        // The row belongs to a definition this delivery knows nothing about, so scheduling
+                        // from here would put the old grid back. Its owner is SUPPOSED to have parked it —
+                        // and a re-park that failed is the one case that brings this delivery here at all, so
+                        // the schedule is parked from the row instead of being left in no scheduler at all.
+                        await ReparkFromRowAsync(advance.Rebased, runNumber + 1).ConfigureAwait(false);
+                        return;
+                    }
+                }
                 // On a successful run the Completed status is written in the SAME atomic operation as the
                 // advance (CU14/L29); otherwise (failure) the status was already set and we only advance.
-                if (markCompleted)
+                else if (markCompleted)
+                {
                     await taskStorage.CompleteRecurringRun(task.PersistenceId, executionTimeMs, result.NextRun,
                                          task.AuditLevel)
                                      .ConfigureAwait(false);
+                }
                 else
+                {
                     await taskStorage.UpdateCurrentRun(task.PersistenceId, executionTimeMs, result.NextRun,
                                          task.AuditLevel)
                                      .ConfigureAwait(false);
+                }
             }
             else
             {
@@ -1520,7 +1620,16 @@ public class WorkerExecutor(
             // runNumber is the run this delivery WAS (currentRun + 1 for a real run, currentRun for a skipped
             // one, which consumed nothing), so the next occurrence is always one past it.
             var updatedTask = task.ToLazy() with { ExecutionTime = result.NextRun, RunNumber = runNumber + 1 };
-            scheduler.Schedule(updatedTask, result.NextRun);
+
+            // CONDITIONAL, and on every path that reaches here. The compare-and-swap above owns the storage
+            // write, not this registration: a reschedule can commit, park its own executor and publish its
+            // version in the gap between them, and replacing it latest-wins would put the grid this delivery
+            // knew back in the scheduler — where the published version then drops it as superseded, leaving
+            // the series in no scheduler, no queue and no delivery until a restart. The rate-limit skip
+            // (countsAsRun == false) never even reaches the compare-and-swap — it writes nothing — so this is
+            // the ONLY thing standing between a superseded skip and that same end state.
+            if (!scheduler.TrySchedule(updatedTask, result.NextRun))
+                logger.NextOccurrenceRefusedBySuccessor(task.PersistenceId, task.ScheduleVersion);
         }
         else
         {
@@ -1533,11 +1642,248 @@ public class WorkerExecutor(
             // CompleteRecurringRun/UpdateCurrentRun with a null next run. A plain SetCompleted would leave
             // NextRunUtc populated, and a Completed recurring row with NextRunUtc != null is revived by
             // QueuedTask.IsRecoverable while RunUntil >= now — recovery would resurrect the finished
-            // series. SetRecurringSeriesCompleted does both atomically WITHOUT counting the skip (Option B).
+            // series. It does both atomically WITHOUT counting the skip (Option B).
             // Only the series-END writes here; a skip that continues still writes nothing (no-storage-write skip).
-            if (!countsAsRun && taskStorage != null)
-                await taskStorage.SetRecurringSeriesCompleted(task.PersistenceId, executionTimeMs, task.AuditLevel)
-                                 .ConfigureAwait(false);
+            if (!countsAsRun && taskStorage != null &&
+                !await FinalizeSkippedSeriesAsync(task, executionTimeMs, currentRun, rowCursor, rowStatus,
+                     taskStorage, current).ConfigureAwait(false))
+            {
+                // The row belongs to a definition this delivery knows nothing about: it keeps its cursor, its
+                // published lower bound and whatever the new owner parked for it.
+                return;
+            }
+
+            // A schedule that will not run again is no longer a version this process publishes a lower bound
+            // for (S4): the entry is dropped here and on cancellation, which are the two ways a series ends.
+            ScheduleVersions?.Remove(task.PersistenceId);
+        }
+    }
+
+    /// <summary>
+    /// Ends a series on the rate-limit SKIP path — the one advance that writes nothing above and therefore
+    /// carries no compare-and-swap of its own.
+    /// </summary>
+    /// <returns>
+    /// True when the series is this delivery's to end. False when the row now carries a definition this
+    /// delivery never saw, in which case the schedule is parked from that row instead.
+    /// </returns>
+    /// <remarks>
+    /// A skip is computed entirely from the definition the DELIVERY carries, so a reschedule that extends the
+    /// bound while this delivery waits at the rate-limit gate — seconds, by design — leaves it computing a
+    /// null next run from a definition that no longer exists. Writing that unconditionally set
+    /// <c>Completed</c> and a null cursor over the row an operator had just extended: it then satisfies
+    /// neither recovery predicate, so not even a restart brings the series back, and the audit says it ended
+    /// normally. Every other finalization in the tree — recovery, the dispatcher's exhausted-series branch,
+    /// the materializer — is compare-and-swapped on the version, cursor and status the decision was computed
+    /// from, and this is the same guard, with the delivery's OWN version as the expectation: the row's would
+    /// confirm the reschedule instead of losing to it.
+    /// </remarks>
+    private async Task<bool> FinalizeSkippedSeriesAsync(TaskHandlerExecutor task, double executionTimeMs,
+                                                        int currentRun, DateTimeOffset? expectedCursorUtc,
+                                                        QueuedTaskStatus expectedStatus, ITaskStorage taskStorage,
+                                                        QueuedTask? row)
+    {
+        // A schedule nobody can address, or a storage without the compare-and-swap, keeps the historical
+        // unconditional write byte for byte.
+        if (!IsVersionedSchedule(task, row, taskStorage))
+        {
+            await taskStorage.SetRecurringSeriesCompleted(task.PersistenceId, executionTimeMs, task.AuditLevel)
+                             .ConfigureAwait(false);
+            return true;
+        }
+
+        var finalized = await taskStorage
+                              .TrySetRecurringSeriesCompleted(task.PersistenceId, expectedCursorUtc, expectedStatus,
+                                  task.ScheduleVersion, executionTimeMs, task.AuditLevel)
+                              .ConfigureAwait(false);
+
+        if (finalized)
+            return true;
+
+        logger.SkippedSeriesFinalizationSuperseded(task.PersistenceId, task.ScheduleVersion);
+
+        // Whoever owns the row now is SUPPOSED to have parked it, and a re-park that failed is the one case
+        // that brings a superseded delivery here at all (S4) — so the row is parked from itself rather than
+        // left in no scheduler, exactly as a re-aimed advance does.
+        var rebased = (await taskStorage.Get(t => t.Id == task.PersistenceId).ConfigureAwait(false))
+            .FirstOrDefault();
+
+        await ReparkFromRowAsync(rebased, currentRun + 1).ConfigureAwait(false);
+        return false;
+    }
+
+    /// <summary>
+    /// How many times an advance re-aims at a row that was rescheduled under it before giving up ON THE GUARD.
+    /// Two reschedules landing inside one advance is already the pathological case; the bound is here so a
+    /// third party rewriting the row in a loop cannot spin this one. What it never gives up on is the run
+    /// itself, which is recorded unconditionally once the attempts are spent.
+    /// </summary>
+    private const int MaxScheduleAdvanceAttempts = 3;
+
+    /// <summary>
+    /// Whether this schedule's advances go through the compare-and-swap overloads (S1).
+    /// </summary>
+    /// <remarks>
+    /// A schedule <see cref="ITaskScheduleManager"/> can ADDRESS is compare-and-swapped from its very first
+    /// advance, and the address is the taskKey: every entry point of that interface takes one, so a recurring
+    /// row without a key can never be rescheduled and keeps the unconditional writes it always used, byte for
+    /// byte. Deciding instead on "has it been rescheduled yet" cannot be done without a race — the row was read
+    /// before the run was even evaluated, the delivery's version is older still, and the registry is published
+    /// only after the re-park — so the FIRST reschedule of a schedule could linearize between that reading and
+    /// this write and be silently overwritten by it, which is precisely the race S1 says must never be handled
+    /// without a compare-and-swap. The version fields stay in the test for the schedules a key cannot answer
+    /// for: a row whose key was cleared, and a delivery rebuilt from a row that already carries a version.
+    /// </remarks>
+    private bool IsVersionedSchedule(TaskHandlerExecutor task, QueuedTask? row, ITaskStorage taskStorage) =>
+        taskStorage.SupportsScheduleVersioning
+        && (task.ScheduleVersion > 0 || row?.ScheduleVersion > 0
+            || (row?.TaskKey ?? task.TaskKey) != null
+            || ScheduleVersions?.IsTracked(task.PersistenceId) == true);
+
+    /// <summary>
+    /// What a versioned advance leaves behind: whether the next occurrence is still this delivery's to
+    /// schedule, and the row it has to be parked from when it is not.
+    /// </summary>
+    private readonly record struct ScheduleAdvance(bool OwnsNextOccurrence, QueuedTask? Rebased);
+
+    /// <summary>
+    /// Advances a versioned schedule's run counter and cursor, re-aiming the write if a reschedule linearized
+    /// while this run was executing.
+    /// </summary>
+    /// <returns>
+    /// <see cref="ScheduleAdvance.OwnsNextOccurrence"/> when the advance applied against the version this
+    /// delivery ran, so the caller schedules the next occurrence itself. Otherwise the row now belongs to a
+    /// definition this delivery knows nothing about, and it travels back in
+    /// <see cref="ScheduleAdvance.Rebased"/> so the caller can park the schedule from it.
+    /// </returns>
+    /// <remarks>
+    /// The run HAPPENED, so it is recorded whatever the version says — dropping the write on a mismatch would
+    /// lose a completion and let recovery re-run the occurrence. What must not survive is this run's idea of
+    /// what comes NEXT: the next run it computed belongs to the definition that was just replaced. That holds
+    /// at the END of the loop too: once the re-aims are spent the guard is dropped, not the write.
+    /// </remarks>
+    private async Task<ScheduleAdvance> AdvanceVersionedRunAsync(TaskHandlerExecutor task, double executionTimeMs,
+                                                                 DateTimeOffset? nextRun, bool markCompleted,
+                                                                 ITaskStorage taskStorage)
+    {
+        var expectedVersion = task.ScheduleVersion;
+
+        // The row the last re-aim read, kept so an advance that applied against a definition this delivery
+        // never saw can hand it back WITHOUT a further round trip. Null while the first attempt is still the
+        // one in flight, which is the only attempt an ordinary advance ever makes.
+        QueuedTask? rebased = null;
+
+        for (var attempt = 0; attempt < MaxScheduleAdvanceAttempts; attempt++)
+        {
+            var outcome = markCompleted
+                              ? await taskStorage.CompleteRecurringRun(task.PersistenceId, executionTimeMs, nextRun,
+                                                      task.AuditLevel, expectedVersion)
+                                                 .ConfigureAwait(false)
+                              : await taskStorage.UpdateCurrentRun(task.PersistenceId, executionTimeMs, nextRun,
+                                                      task.AuditLevel, expectedVersion)
+                                                 .ConfigureAwait(false);
+
+            if (outcome == ScheduleCasResult.Applied)
+                return new ScheduleAdvance(attempt == 0, rebased);
+
+            var row = (await taskStorage.Get(t => t.Id == task.PersistenceId).ConfigureAwait(false))
+                .FirstOrDefault();
+
+            // Gone or cancelled: there is no series left to advance, and a cancel is terminal.
+            if (row is null || row.Status == QueuedTaskStatus.Cancelled)
+            {
+                logger.RecurringSeriesCancelled(task.PersistenceId);
+                return default;
+            }
+
+            // The row's own cursor is authoritative from here: it is the one the new definition produced.
+            rebased         = row;
+            expectedVersion = row.ScheduleVersion;
+            nextRun         = row.NextRunUtc;
+        }
+
+        // The bound is reached only when somebody rewrote the row under EVERY re-aim, and giving up on the
+        // guard is not the same thing as giving up on the run. The run happened: dropping its write leaves the
+        // row in the InProgress this delivery set, the execution unaudited, the run counter — and with it
+        // MaxRuns — one short for ever, and the series parked nowhere until a restart. So the last attempt
+        // writes unconditionally, and it writes the cursor the last read carried: that value is the current
+        // owner's own, so it advances nothing and the only thing a writer landing inside this final round trip
+        // loses is one generation of the cursor, which the next advance of the definition that owns the row
+        // overwrites. A lost run is permanent; a cursor one generation behind heals itself.
+        logger.ScheduleAdvanceLost(task.PersistenceId, MaxScheduleAdvanceAttempts);
+
+        if (markCompleted)
+        {
+            await taskStorage.CompleteRecurringRun(task.PersistenceId, executionTimeMs, nextRun, task.AuditLevel)
+                             .ConfigureAwait(false);
+        }
+        else
+        {
+            await taskStorage.UpdateCurrentRun(task.PersistenceId, executionTimeMs, nextRun, task.AuditLevel)
+                             .ConfigureAwait(false);
+        }
+
+        // Never this delivery's next occurrence — that grid is gone — but the row it was re-aimed at travels
+        // back all the same, so the caller parks the schedule from it instead of leaving it in no scheduler.
+        return new ScheduleAdvance(false, rebased);
+    }
+
+    /// <summary>
+    /// Parks a schedule from its ROW — that row's definition, cursor and version, never this delivery's — after
+    /// an advance applied against a definition this delivery never saw.
+    /// </summary>
+    /// <remarks>
+    /// Whoever rewrote the row is supposed to have parked it, and normally has: this is then a second
+    /// registration for the same instant, replaced latest-wins at the cost of one executor rebuild on a path an
+    /// ordinary series never takes. It exists for the case where that parking is exactly what FAILED, which is
+    /// also the only thing that lets a delivery of the replaced definition reach a rewritten row in the first
+    /// place (S4): a re-park that threw publishes no version, so the old occurrence fires once more and lands
+    /// here. Returning empty-handed there left the series in no scheduler, no queue and no delivery until a
+    /// restart. A row that has turned DURABLE is handed to the materializer instead, because that is what owns
+    /// the parking of a durable schedule and it re-reads the row anyway.
+    /// </remarks>
+    /// <param name="nextRunNumber">
+    /// The run the parked occurrence will BE. Taken from this delivery's own accounting — the run it just was,
+    /// plus one, exactly like the ordinary path — and never from the row's counter, whose snapshot was read
+    /// before this advance incremented it on some providers and after it on the ones that hand back live
+    /// entities.
+    /// </param>
+    private async Task ReparkFromRowAsync(QueuedTask? row, int nextRunNumber)
+    {
+        // Nothing to park: the advance never reached a row it could read, or the series has ended.
+        if (row is not { NextRunUtc: { } cursor })
+            return;
+
+        try
+        {
+            var recovered = RecoveredTaskFactory.FromRow(row);
+
+            if (recovered.Recurring is not { } definition || recovered.Task is null)
+            {
+                logger.ScheduleReparkFromRowFailed(recovered.ScheduleError ?? recovered.PayloadError, row.Id);
+                return;
+            }
+
+            using var scope = serviceScopeFactory.CreateScope();
+
+            var executor = await Dispatcher.Dispatcher.CreateCachedWrapper(recovered.Task.GetType())
+                                           .Handle(recovered.Task, cursor, definition, scope.ServiceProvider,
+                                               recovered.AuditLevel, row.Id, row.TaskKey, useLazyExecutor: true,
+                                               recovered.RowMetadata with { RunNumber = nextRunNumber })
+                                           .ConfigureAwait(false);
+
+            if (definition.IsDurable && Materializer is { } materializer)
+                await materializer.RunAsync(row.Id, executor, CancellationToken.None).ConfigureAwait(false);
+            else if (!scheduler.TrySchedule(executor, cursor))
+                return;
+
+            logger.ScheduleReparkedFromRow(row.Id, cursor);
+        }
+        catch (Exception e)
+        {
+            // Nothing else parks this row, so the situation has to be said out loud: the schedule stays
+            // unparked until startup recovery finds it again.
+            logger.ScheduleReparkFromRowFailed(e, row.Id);
         }
     }
 

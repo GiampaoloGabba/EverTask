@@ -289,13 +289,14 @@ public sealed class FaultInjectingTaskStorage(ITaskStorage inner) : ITaskStorage
         return inner.TryRequeueStaleOccurrence(childId, expectedStatus, auditLevel, ct);
     }
 
-    public Task<bool> UpdateSchedule(Guid taskId, int expectedScheduleVersion, string recurringTaskJson,
-                                     string? recurringInfo, DateTimeOffset? nextRunUtc, int? maxRuns,
-                                     DateTimeOffset? runUntil, string? runtimeInfo, CancellationToken ct = default)
+    public Task<bool> UpdateSchedule(Guid taskId, int expectedScheduleVersion, DateTimeOffset? expectedCursorUtc,
+                                     string recurringTaskJson, string? recurringInfo, DateTimeOffset? nextRunUtc,
+                                     int? maxRuns, DateTimeOffset? runUntil, string? runtimeInfo,
+                                     CancellationToken ct = default)
     {
         Gate(nameof(UpdateSchedule));
-        return inner.UpdateSchedule(taskId, expectedScheduleVersion, recurringTaskJson, recurringInfo, nextRunUtc,
-            maxRuns, runUntil, runtimeInfo, ct);
+        return inner.UpdateSchedule(taskId, expectedScheduleVersion, expectedCursorUtc, recurringTaskJson,
+            recurringInfo, nextRunUtc, maxRuns, runUntil, runtimeInfo, ct);
     }
 
     public Task<bool> TryHaltSchedule(Guid parentId, int expectedScheduleVersion, DateTimeOffset? expectedCursorUtc,

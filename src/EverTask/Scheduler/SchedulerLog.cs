@@ -83,4 +83,12 @@ internal static partial class SchedulerLog
         Message = "Shard {ShardId}: unable to dispatch task {TaskId}, retrying in {RetryDelay}")]
     public static partial void ShardUnableToDispatchTask(this ILogger logger, Exception exception, int shardId,
                                                          Guid taskId, TimeSpan retryDelay);
+
+    // --- Shared by both schedulers ------------------------------------------------------------
+
+    [LoggerMessage(EventId = 1417, Level = LogLevel.Information,
+        Message = "Registration of task {TaskId} at schedule version {Offered} was refused: version " +
+                  "{Parked} is already parked")]
+    public static partial void SupersededRegistrationKept(this ILogger logger, Guid taskId, int offered,
+                                                          int parked);
 }

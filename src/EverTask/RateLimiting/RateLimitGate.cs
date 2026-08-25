@@ -138,6 +138,8 @@ internal sealed class RateLimitGate(
 
         var parked = task.ToLazy();
 
+        bool reparked;
+
         if (task.RecurringTask != null)
         {
             // F14: same RunUntil guard as the Defer path — an occurrence whose re-park slot falls past
@@ -155,12 +157,21 @@ internal sealed class RateLimitGate(
             }
 
             // Same occurrence, ExecutionTime untouched (schedule-drift rule)
-            scheduler.Schedule(parked, nextRecurringRun: slot);
+            reparked = scheduler.TrySchedule(parked, nextRecurringRun: slot);
         }
         else
         {
-            parked = ReparkOneShot(parked, slot);
-            scheduler.Schedule(parked);
+            parked   = ReparkOneShot(parked, slot);
+            reparked = scheduler.TrySchedule(parked);
+        }
+
+        // The IsScheduled guard above cannot see a registration made after it, and the conditional
+        // registration is what covers that gap: a reschedule that parked its own executor in between owns
+        // the series, and this redelivery has nothing left to re-park.
+        if (!reparked)
+        {
+            logger.DeferralRefusedBySuccessor(task.PersistenceId);
+            return;
         }
 
         // L2 accounting: the redelivery's enqueue already removed the original lot entry, so
@@ -325,6 +336,11 @@ internal sealed class RateLimitGate(
         // Unconditional lazy re-park (L1): a parked task must never pin a handler instance
         var parked = task.ToLazy();
 
+        // Whether the registration was actually made. It is refused when a NEWER schedule version is already
+        // parked for this task, which is the one case where replacing it latest-wins would put a definition a
+        // reschedule has already retired back in the scheduler.
+        bool reparked;
+
         if (task.RecurringTask != null)
         {
             var runUntil = task.RecurringTask.RunUntil;
@@ -346,13 +362,26 @@ internal sealed class RateLimitGate(
             // Recurring re-park: schedule the SAME occurrence at the reserved slot without
             // touching ExecutionTime, which must keep pointing at the occurrence's scheduled
             // time (the schedule-drift fix in QueueNextOccourrence depends on it)
-            scheduler.Schedule(parked, nextRecurringRun: slot);
+            reparked = scheduler.TrySchedule(parked, nextRecurringRun: slot);
         }
         else
         {
             // One-shot re-park: Schedule reads ExecutionTime
-            parked = ReparkOneShot(parked, slot);
-            scheduler.Schedule(parked);
+            parked   = ReparkOneShot(parked, slot);
+            reparked = scheduler.TrySchedule(parked);
+        }
+
+        if (!reparked)
+        {
+            // A reschedule committed a new definition and parked its executor while this delivery sat in the
+            // gate: the series belongs to that registration now, and this one carries the grid it replaced.
+            // Nothing of ours is parked, so the lot entry below is never registered and the set-then-check
+            // has nothing to unschedule; what does need undoing is the reservation this pass booked for a
+            // slot no delivery will ever redeem.
+            logger.DeferralRefusedBySuccessor(task.PersistenceId);
+            _ = ReleaseBestEffortAsync(taskType, key, task.PersistenceId);
+
+            return new RateLimitGateResult(RateLimitGateOutcome.Deferred, slot);
         }
 
         // L2 accounting: distinct parked tasks (idempotent re-registration on re-park)

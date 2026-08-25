@@ -26,8 +26,12 @@ public class Dispatcher(
 
     // Per-taskKey critical-section lock: serializes the GetByTaskKey -> decide -> Persist/Update of a
     // single taskKey across concurrent dispatches so two dispatches can never both insert (or one
-    // delete under the other), the source of the taskKey dedup races (G13/G14/CU23/G17).
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _taskKeyLocks = new();
+    // delete under the other), the source of the taskKey dedup races (G13/G14/CU23/G17). It lives in the
+    // container so a runtime reschedule — the same read-decide-write over the same row — holds the SAME
+    // section: UpdateTask rewrites the definition and the cursor without touching the schedule version, so a
+    // dispatch interleaved with a reschedule would overwrite it with the row it had read first.
+    private readonly TaskKeyLockRegistry _fallbackTaskKeyLocks = new();
+    private TaskKeyLockRegistry? _taskKeyLocks;
 
     // Resolved lazily: optional components (registered by AddEverTask, may be absent in
     // hand-wired unit-test providers)
@@ -39,6 +43,8 @@ public class Dispatcher(
     private bool _deliveryRegistryResolved;
     private IScheduleEvaluator? _evaluator;
     private TimeProvider? _timeProvider;
+    private ScheduleVersionRegistry? _scheduleVersions;
+    private bool _scheduleVersionsResolved;
 
     /// <summary>
     /// The single seam for every question about the occurrence grid. Falls back to the built-in evaluator
@@ -49,6 +55,13 @@ public class Dispatcher(
 
     /// <summary>The scheduling clock (P9). Falls back to the real clock outside a configured container.</summary>
     private TimeProvider Clock => _timeProvider ??= serviceProvider.GetService<TimeProvider>() ?? TimeProvider.System;
+
+    /// <summary>
+    /// The shared per-taskKey critical section. The private fallback keeps a hand-wired dispatcher — one built
+    /// outside <c>AddEverTask</c> — serializing its own dispatches exactly as it always did.
+    /// </summary>
+    private TaskKeyLockRegistry TaskKeyLocks =>
+        _taskKeyLocks ??= serviceProvider.GetService<TaskKeyLockRegistry>() ?? _fallbackTaskKeyLocks;
 
     private TaskDeliveryRegistry? DeliveryRegistry
     {
@@ -75,6 +88,20 @@ public class Dispatcher(
             }
 
             return _gateInvalidation;
+        }
+    }
+
+    private ScheduleVersionRegistry? ScheduleVersions
+    {
+        get
+        {
+            if (!_scheduleVersionsResolved)
+            {
+                _scheduleVersions         = serviceProvider.GetService<ScheduleVersionRegistry>();
+                _scheduleVersionsResolved = true;
+            }
+
+            return _scheduleVersions;
         }
     }
 
@@ -111,30 +138,9 @@ public class Dispatcher(
         var builder = new RecurringTaskBuilder(Clock);
         recurring(builder);
 
-        ApplyDefaultScheduleTimeZone(builder.RecurringTask);
+        ScheduleTimeZone.ApplyDefault(builder.RecurringTask, serviceConfiguration.DefaultScheduleTimeZoneId);
 
         return await ExecuteDispatch(task, null, builder.RecurringTask, null, cancellationToken, null, taskKey, auditLevel).ConfigureAwait(false);
-    }
-
-    /// <summary>
-    /// Stamps the configured default zone (T4) onto a freshly built schedule that is calendar-anchored and did
-    /// not name one itself.
-    /// </summary>
-    /// <remarks>
-    /// Here and nowhere else: the zone becomes part of the definition that gets serialized, so a row persisted
-    /// under one default keeps meaning the same thing when the default changes — and recovery, which re-reads
-    /// that row, never re-applies it. A plain cadence is left alone: the same instants in every zone, and
-    /// <c>Validate</c> refuses a zone on one.
-    /// </remarks>
-    private void ApplyDefaultScheduleTimeZone(RecurringTask schedule)
-    {
-        if (serviceConfiguration.DefaultScheduleTimeZoneId is not { } defaultZoneId)
-            return;
-
-        if (schedule.TimeZoneId != null || schedule.Semantics != ScheduleSemantics.Calendar)
-            return;
-
-        schedule.TimeZoneId = defaultZoneId;
     }
 
     /// <inheritdoc />
@@ -157,6 +163,11 @@ public class Dispatcher(
         // (a cancelled parked task never re-enters a channel).
         GateInvalidation?.Invalidate(taskId);
         ParkingLot?.Remove(taskId);
+
+        // A schedule that will not run again stops being a version this process publishes a lower bound for
+        // (S4). Nothing depends on the entry surviving a cancel, and leaving one behind per cancelled schedule
+        // is the only way the registry could grow without bound.
+        ScheduleVersions?.Remove(taskId);
 
         // Persist Cancelled LAST so it is the final write of the cancel: any SetQueued a racing enqueue
         // managed to issue before the blacklist took effect is overwritten by Cancelled.
@@ -231,9 +242,10 @@ public class Dispatcher(
     }
 
     /// <summary>
-    /// Refuses a durable schedule the storage cannot support, naming the missing half.
+    /// Refuses a durable schedule the storage cannot support, naming the missing half. Shared with the runtime
+    /// schedule manager, which accepts a durable definition through the same door.
     /// </summary>
-    private void RequireDurableOccurrenceSupport()
+    internal static void RequireDurableOccurrenceSupport(ITaskStorage? taskStorage)
     {
         if (taskStorage is { SupportsDurableOccurrences: true })
             return;
@@ -309,7 +321,7 @@ public class Dispatcher(
         // reverse. Refused HERE, where the caller is still holding the dispatch, instead of at the first
         // materialization hours later on a background thread.
         if (recurring is { OccurrenceMode: OccurrenceMode.Durable })
-            RequireDurableOccurrenceSupport();
+            RequireDurableOccurrenceSupport(taskStorage);
 
         // Serialize the read-decide-write of this taskKey against concurrent dispatches (held for the
         // whole dispatch, including the enqueue). No-op when there is no taskKey, no storage, or the id
@@ -409,6 +421,15 @@ public class Dispatcher(
                     {
                         logger.RemovingTerminatedTask(existingTask.Id);
                         await taskStorage.Remove(existingTask.Id, ct).ConfigureAwait(false);
+
+                        // Removal is the third end of a schedule S4 names, beside a terminal series and a
+                        // cancellation, and this is the only place the library deletes a row. Nothing can
+                        // reach it holding a published version today — a recurring row is refused a one-shot
+                        // re-dispatch above, so the row deleted here has never been a schedule — but a
+                        // published version whose row no longer exists is a lower bound nothing can ever
+                        // clear, and the clause costs a dictionary lookup on a path that already talks to
+                        // storage.
+                        ScheduleVersions?.Remove(existingTask.Id);
                     }
                     // If task is in progress, return existing ID (cannot modify running task)
                     else if (existingTask.Status is QueuedTaskStatus.InProgress)
@@ -689,27 +710,14 @@ public class Dispatcher(
         GateInvalidation?.Invalidate(persistenceId);
     }
 
-    private async ValueTask<IDisposable> AcquireTaskKeyLockAsync(string? taskKey, Guid? existingTaskId, CancellationToken ct)
+    private ValueTask<IDisposable> AcquireTaskKeyLockAsync(string? taskKey, Guid? existingTaskId, CancellationToken ct)
     {
         // Only the taskKey resolution path needs serialization: no taskKey, no storage, or an
         // already-known id (recovery / internal re-dispatch) never reads/decides on a taskKey.
-        if (string.IsNullOrWhiteSpace(taskKey) || taskStorage == null || existingTaskId != null)
-            return NoopDisposable.Instance;
+        if (taskStorage == null || existingTaskId != null)
+            return TaskKeyLocks.AcquireAsync(null, ct);
 
-        var gate = _taskKeyLocks.GetOrAdd(taskKey, static _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync(ct).ConfigureAwait(false);
-        return new SemaphoreReleaser(gate);
-    }
-
-    private sealed class SemaphoreReleaser(SemaphoreSlim gate) : IDisposable
-    {
-        public void Dispose() => gate.Release();
-    }
-
-    private sealed class NoopDisposable : IDisposable
-    {
-        public static readonly NoopDisposable Instance = new();
-        public void Dispose() { }
+        return TaskKeyLocks.AcquireAsync(taskKey, ct);
     }
 
     /// <summary>

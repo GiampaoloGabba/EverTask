@@ -58,6 +58,33 @@ internal static partial class WorkerExecutorLog
         Message = "Task {TaskId} skipped {SkippedCount} missed occurrence(s) to maintain schedule")]
     public static partial void MissedOccurrencesSkipped(this ILogger logger, Guid taskId, int skippedCount);
 
+    [LoggerMessage(EventId = 1232, Level = LogLevel.Warning,
+        Message = "The run of recurring task {TaskId} was recorded without its compare-and-swap: the schedule " +
+                  "was rewritten under it {Attempts} times in a row, so the guard was given up rather than the " +
+                  "run. The cursor written is the one the last read carried, and the schedule is parked from " +
+                  "that row")]
+    public static partial void ScheduleAdvanceLost(this ILogger logger, Guid taskId, int attempts);
+
+    [LoggerMessage(EventId = 1233, Level = LogLevel.Debug,
+        Message = "Recurring task {TaskId} was parked at {NextRun} from its own row, because the run that just " +
+                  "ended belonged to a definition that has since been replaced")]
+    public static partial void ScheduleReparkedFromRow(this ILogger logger, Guid taskId, DateTimeOffset nextRun);
+
+    [LoggerMessage(EventId = 1234, Level = LogLevel.Error,
+        Message = "Recurring task {TaskId} carries a definition that replaced the one that just ran, and it " +
+                  "could not be parked from its own row: the series stops until startup recovery finds it")]
+    public static partial void ScheduleReparkFromRowFailed(this ILogger logger, Exception? exception, Guid taskId);
+
+    [LoggerMessage(EventId = 1235, Level = LogLevel.Information,
+        Message = "The next occurrence of recurring task {TaskId} was computed at schedule version {Version} " +
+                  "and not parked: a newer version of the schedule is already registered")]
+    public static partial void NextOccurrenceRefusedBySuccessor(this ILogger logger, Guid taskId, int version);
+
+    [LoggerMessage(EventId = 1236, Level = LogLevel.Information,
+        Message = "A rate-limit skip of recurring task {TaskId} ended the series at schedule version {Version} " +
+                  "and did not finalize it: the schedule was rewritten while the skip was decided")]
+    public static partial void SkippedSeriesFinalizationSuperseded(this ILogger logger, Guid taskId, int version);
+
     /// <summary>
     /// T6's "compressed slots" counter. A daylight-saving transition can make several nominal wall-clock slots
     /// of the same schedule stand for one instant; EverTask fires once, and this is the line that says how many
@@ -141,6 +168,12 @@ internal static partial class WorkerExecutorLog
     [LoggerMessage(EventId = 1229, Level = LogLevel.Information, SkipEnabledCheck = true,
         Message = "Occurrence {OccurrenceId} belongs to cancelled schedule {ScheduleId} and will not be executed")]
     public static partial void OccurrenceOfCancelledSchedule(this ILogger logger, Guid occurrenceId, Guid scheduleId);
+
+    [LoggerMessage(EventId = 1231, Level = LogLevel.Information, SkipEnabledCheck = true,
+        Message = "Task with id {TaskId} carries schedule version {DeliveredVersion} and was superseded by " +
+                  "version {PublishedVersion}: the delivery is discarded")]
+    public static partial void SupersededScheduleDelivery(this ILogger logger, Guid taskId, int deliveredVersion,
+                                                          int publishedVersion);
 
     [LoggerMessage(EventId = 1221, Level = LogLevel.Error, SkipEnabledCheck = true,
         Message = "Error occurred executing the callback override {CallbackName} for task with id {TaskId}")]

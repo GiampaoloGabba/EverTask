@@ -1,4 +1,4 @@
-using EverTask.Logger;
+﻿using EverTask.Logger;
 using EverTask.Storage;
 using EverTask.Tests.TestHelpers;
 
@@ -163,13 +163,18 @@ public class MemoryStorageScheduleCasTests
             (id, next) => _storage.CompleteRecurringRun(id, 12, next, AuditLevel.Full, 0));
 
     /// <summary>
-    /// Races, on many independent schedules at once, an advance computed against version 0 against a
-    /// reschedule that consumes that same version 0. Both linearizable orders leave the SAME observable
-    /// state — the reschedule's cursor and definition — because the advance either ran first and was
-    /// overwritten, or lost the compare-and-swap and wrote nothing. A cursor check that does not share the
-    /// write's critical section produces a third, illegal outcome: the advance reports <c>Applied</c> and
-    /// leaves its old-definition cursor on a row that has already moved to version 1.
+    /// Races, on many independent schedules at once, an advance computed against version 0 and cursor
+    /// <see cref="Cursor"/> against a reschedule that read that SAME state. Exactly one of them may commit:
+    /// each carries the reading it decided from into its own compare-and-swap, so whichever runs second finds
+    /// the row moved and writes nothing.
     /// </summary>
+    /// <remarks>
+    /// The reschedule's expectation has to include the CURSOR, not the version alone: an advance moves the
+    /// cursor and the run counter without ever touching the version, so a version-only guard lets a
+    /// reschedule that decided on a run count and a cursor the completion has already superseded commit over
+    /// it — which is how a rebase computed from that stale reading gets parked one occurrence past the budget
+    /// it was given.
+    /// </remarks>
     private async Task RunAdvanceVersusRescheduleRaceAsync(Func<Guid, DateTimeOffset, Task<ScheduleCasResult>> advance)
     {
         const int schedules = 400;
@@ -178,9 +183,10 @@ public class MemoryStorageScheduleCasTests
         for (var i = 0; i < ids.Length; i++)
             ids[i] = await SeedScheduleAsync();
 
-        var outcomes = new ScheduleCasResult[schedules];
-        var gate     = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var racers   = new List<Task>(schedules * 2);
+        var advanced    = new ScheduleCasResult[schedules];
+        var rescheduled = new bool[schedules];
+        var gate        = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var racers      = new List<Task>(schedules * 2);
 
         for (var i = 0; i < ids.Length; i++)
         {
@@ -190,14 +196,14 @@ public class MemoryStorageScheduleCasTests
             racers.Add(Task.Run(async () =>
             {
                 await gate.Task;
-                outcomes[index] = await advance(id, StaleNextRun);
+                advanced[index] = await advance(id, StaleNextRun);
             }));
 
             racers.Add(Task.Run(async () =>
             {
                 await gate.Task;
-                (await _storage.UpdateSchedule(id, 0, NewDefinition, null, RescheduledCursor, null, null, null))
-                    .ShouldBeTrue("no advance bumps the version, so the reschedule always owns version 0");
+                rescheduled[index] = await _storage.UpdateSchedule(id, 0, Cursor, NewDefinition, null,
+                    RescheduledCursor, null, null, null);
             }));
         }
 
@@ -207,14 +213,27 @@ public class MemoryStorageScheduleCasTests
         for (var i = 0; i < ids.Length; i++)
         {
             var row = await ReloadAsync(ids[i]);
+            var ran = advanced[i] == ScheduleCasResult.Applied;
 
-            row.ScheduleVersion.ShouldBe(1);
-            row.RecurringTask.ShouldBe(NewDefinition);
-            row.NextRunUtc.ShouldBe(RescheduledCursor,
-                "an advance that won its compare-and-swap ran BEFORE the reschedule, so the reschedule's " +
-                "cursor is the one left behind; one that lost wrote nothing at all");
-            row.CurrentRunCount.ShouldBe(outcomes[i] == ScheduleCasResult.Applied ? 1 : 0,
+            ran.ShouldNotBe(rescheduled[i],
+                "both readings are of the same state, so exactly one of the two writes may commit");
+
+            row.CurrentRunCount.ShouldBe(ran ? 1 : 0,
                 "the run counter must move if and only if the compare-and-swap reported Applied");
+
+            if (ran)
+            {
+                row.ScheduleVersion.ShouldBe(0);
+                row.RecurringTask.ShouldBe(OldDefinition);
+                row.NextRunUtc.ShouldBe(StaleNextRun,
+                    "the advance got there first, so the reschedule lost on the cursor and wrote nothing");
+            }
+            else
+            {
+                row.ScheduleVersion.ShouldBe(1);
+                row.RecurringTask.ShouldBe(NewDefinition);
+                row.NextRunUtc.ShouldBe(RescheduledCursor);
+            }
         }
     }
 
@@ -248,6 +267,26 @@ public class MemoryStorageScheduleCasTests
             row.LastExecutionUtc.ShouldNotBeNull().ShouldBeInRange(before, after,
                 "a series that ends without running still records when it ended");
         }
+    }
+
+    [Fact]
+    public async Task Should_refuse_an_UpdateSchedule_on_a_series_that_was_cancelled_under_it()
+    {
+        // The memory store's half of what EfCoreTaskStorageTestsBase pins on the four relational ones: a
+        // cancel writes the STATUS and leaves the version and the cursor exactly as they were, so both halves
+        // of the compare-and-swap still match and only the status can refuse the write.
+        var id = await SeedScheduleAsync();
+
+        await _storage.SetStatus(id, QueuedTaskStatus.Cancelled, null, AuditLevel.Full);
+
+        (await _storage.UpdateSchedule(id, 0, Cursor, NewDefinition, null, RescheduledCursor, null, null, null))
+            .ShouldBeFalse("a cancellation is terminal for the series");
+
+        var row = await ReloadAsync(id);
+        row.Status.ShouldBe(QueuedTaskStatus.Cancelled);
+        row.ScheduleVersion.ShouldBe(0);
+        row.NextRunUtc.ShouldBe(Cursor);
+        row.RecurringTask.ShouldBe(OldDefinition);
     }
 
     [Fact]

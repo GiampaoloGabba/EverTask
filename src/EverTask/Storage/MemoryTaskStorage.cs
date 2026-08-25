@@ -602,15 +602,25 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
     }
 
     /// <inheritdoc />
-    public Task<bool> UpdateSchedule(Guid taskId, int expectedScheduleVersion, string recurringTaskJson,
-                                     string? recurringInfo, DateTimeOffset? nextRunUtc, int? maxRuns,
-                                     DateTimeOffset? runUntil, string? runtimeInfo, CancellationToken ct = default)
+    public Task<bool> UpdateSchedule(Guid taskId, int expectedScheduleVersion, DateTimeOffset? expectedCursorUtc,
+                                     string recurringTaskJson, string? recurringInfo, DateTimeOffset? nextRunUtc,
+                                     int? maxRuns, DateTimeOffset? runUntil, string? runtimeInfo,
+                                     CancellationToken ct = default)
     {
         lock (_pendingTasksLock)
         {
             var task = _pendingTasks.FirstOrDefault(t => t.Id == taskId);
-            if (task == null || task.ScheduleVersion != expectedScheduleVersion)
+
+            // The cursor belongs in the compare-and-swap next to the version: an advance moves it (and the run
+            // counter with it) without touching the version, so a reschedule decided against a reading the
+            // completion has since superseded must lose here rather than commit over it. Cancelled is refused
+            // apart from both, because it is the one state NEITHER answers for: a cancel writes the status and
+            // leaves the version and the cursor exactly as they were.
+            if (task == null || task.ScheduleVersion != expectedScheduleVersion ||
+                task.NextRunUtc != expectedCursorUtc || task.Status == QueuedTaskStatus.Cancelled)
+            {
                 return Task.FromResult(false);
+            }
 
             task.RecurringTask   = recurringTaskJson;
             task.RecurringInfo   = recurringInfo;

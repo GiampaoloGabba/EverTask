@@ -24,9 +24,18 @@ real engines.
   `[CollectionDefinition]`** anywhere: the bare attribute is the only thing serializing them against
   `parallelizeTestCollections: true` in `xunit.runner.json`, so the shared static containers are never started
   concurrently. Put it on any new one.
-- Five classes start a SQL Server container, not just the storage suite: `SqlServerEfCoreTaskStorageTests`,
-  `SqlServerRecoveryIntegrationTests`, `AuditLevelIntegrationTests`, `SqlServerRecurringPoisonRecoveryTests`
-  (in `RecurringPoisonRecoveryIntegrationTests.cs`) and `SqlServerDurableOccurrencesMultiHostTests`.
+- **One SQL Server container per test process, `SqlServerTestContainer`** — five classes need SQL Server
+  (`SqlServerEfCoreTaskStorageTests`, `SqlServerRecoveryIntegrationTests`, `AuditLevelIntegrationTests`,
+  `SqlServerRecurringPoisonRecoveryTests` in `RecurringPoisonRecoveryIntegrationTests.cs`, and
+  `SqlServerDurableOccurrencesMultiHostTests`) and all five take the connection string from that holder.
+  A new one MUST do the same, never `new MsSqlBuilder(...)` of its own: an instance reserves ~5120 kernel
+  aio contexts at boot out of the 65536 a default `fs.aio-max-nr` gives the whole Docker VM, and a
+  solution-wide `dotnet test` runs the three target frameworks at once — one container per class was 12
+  instances (61440, under by a hair) and the fifth class took it to 15 (76800, over). Past the budget an
+  instance does not slow down, it aborts mid-boot ("Unable to create a new asynchronous I/O context") and
+  Testcontainers reports the wait strategy failing on an exited container, on whichever suite happened to
+  start last — it reads as flakiness, it is arithmetic. Sharing is safe because the collection serializes
+  the classes and each Respawns before every test.
 - **The two durable-occurrence suites here answer questions a single host cannot.**
   `CatchUpRecoveryIntegrationTests` (SQLite, no Docker) seeds a downtime and lets the REAL startup recovery
   replay it, so the unique index, the check constraint and the self foreign key are all in the loop. Its

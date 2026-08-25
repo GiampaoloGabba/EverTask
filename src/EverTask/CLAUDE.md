@@ -181,8 +181,13 @@ the definition opted in.
     line and a return left that row in no scheduler, no queue and no delivery until a restart. The delivered
     executor is the only one that can be re-parked: rebuilding one from the row is what just failed, and one
     built without the durable definition would run the handler. A row that is no longer durable at all (a task
-    key re-registered inline over it) is the opposite case and returns untouched — that registration owns the
-    parking now, and re-parking the durable executor would replace it, latest wins.
+    key re-registered inline over it, a reschedule that turned it inline) is the opposite case: the durable
+    executor is never re-parked there — it would replace a registration that runs a handler with one that
+    materializes nothing — but the row is not simply abandoned either. Whoever wrote the inline definition
+    owns the parking and normally did it, which costs one registry lookup to confirm; the case this exists for
+    is the only thing that lets an old durable delivery reach a rewritten row at all, a re-park that FAILED,
+    where "somebody else has parked it" is exactly the assumption that does not hold. The executor is rebuilt
+    FROM THE ROW, never taken from the run.
 - **One run, ONE reading of the row.** A run snapshots version, cursor, status, run count and queue at its
   start, and every compare-and-swap it makes carries those values — never a property read again at write
   time, which would absorb whatever a concurrent writer did in between and make the write that had to lose
@@ -322,6 +327,159 @@ the definition opted in.
 - Contracts, spelled out in `docs/recurring-tasks/durable-occurrences.md`: at-least-once, and a single ACTIVE
   host — materialization is idempotent across hosts (unique index), execution is not claimed by anyone.
 
+## Runtime schedule management (`ITaskScheduleManager`)
+
+`Dispatcher/TaskScheduleManager` is the one place a schedule that is ALREADY registered is changed. It reads
+the row, decides the new definition and cursor, writes them with `UpdateSchedule` (compare-and-swapped on the
+version it read), and hands the row back to whatever owns its parking.
+
+- **It holds the dispatcher's own per-taskKey section**, now `Dispatcher/TaskKeyLockRegistry` in the
+  container. A dispatch under the same key is the same read-decide-write over the same row and its
+  `UpdateTask` carries no version, so without one shared section a dispatch that had read the row first would
+  overwrite the definition a reschedule just committed. The dispatcher resolves the registry lazily and keeps
+  a private fallback, so a hand-wired dispatcher still serializes its own dispatches.
+- **Nothing here is best effort.** A lost compare-and-swap is reported to the caller, and a new definition
+  with no occurrence left is REFUSED rather than written: a row with a null cursor satisfies neither recovery
+  predicate, so it would sit `Queued` for ever. `CancelSchedule` is how a series is ended on purpose.
+- **Each method gates on the capability it actually uses**, and the docs say so method by method: the three
+  that rewrite a schedule row need `SupportsScheduleVersioning`, `RequeueFailedOccurrence` addresses a child
+  row and needs `SupportsDurableOccurrences`, and `CancelSchedule` needs only a registered storage. One
+  blanket sentence for the whole interface was wrong in both directions. What a call is asked to WRITE gates
+  too: a `Reschedule` whose new definition is durable goes through the same
+  `Dispatcher.RequireDurableOccurrenceSupport` a dispatch does, inside `Build`, before anything is written.
+- **A requeue asks the SCHEDULE TWICE, and the second time is the one that matters** — the same shape as
+  `Cancel`'s own two lookups. `CancelSchedule` cancels the pending occurrences in the same transaction, so
+  by status alone every one of them is a legitimate `RequeueFailedOccurrence` target; the parent's
+  `Cancelled` is what refuses it. But that check and `RequeueTerminal` are two round trips, and a `Failed`
+  occurrence is not in the set a cancel cascades to, so a cancel landing between them was caught by nobody:
+  the parent is re-read AFTER the requeue commits, and a cancellation that won puts the row back to
+  `Cancelled` and answers false. One of the two orderings always sees the other, because the cancel asks for
+  occurrences after persisting the status. The occurrence's OWN blacklist entry is dropped here too —
+  nothing else on this path ever consumes it, so `WorkerQueue` discarded the enqueue while the call reported
+  success. A schedule's entry is left alone: it covers the siblings, and its own entries lapse after about
+  an hour and never existed in a process that did not issue the cancel. A schedule merely OVER is not
+  refused: that occurrence was owed, and replaying it materializes nothing.
+- **A re-park that belongs to a REPLACED definition is refused, not merely late.** `IScheduler.TrySchedule`
+  is the conditional half of latest-wins: it leaves a registration carrying a newer `ScheduleVersion` alone
+  and answers false. Everything holding an executor of a definition a reschedule has retired goes through it
+  — the next occurrence an advance computed (both the counted path and the rate-limit skip, which writes
+  nothing to storage and so has no compare-and-swap to speak for it), the gate's deferral and in-flight
+  re-park, the materializer's operational retry, `ReparkFromRowAsync`. Without it that registration replaced
+  the one the reschedule had just published, `IsSupersededSchedule` dropped it the moment it fired, and the
+  series was left in no scheduler, no queue and no delivery until a restart. The comparison lives INSIDE the
+  registry's own swap because every ordering outside it still has a window, and a scheduler that cannot
+  compare versions keeps the unconditional behaviour through the member's default body. When the gate is
+  refused it also drops the bookkeeping it would have made — the parking-lot entry and the reservation —
+  since the registration `DropStaleRegistrationIfInvalidated` would have cleaned up was never made.
+- **Re-park, THEN publish, and bump the gate epoch last of all** (S4). The registration is replaced
+  latest-wins — never `TryUnschedule` first, which opens a window with the schedule parked nowhere — and
+  only then does `ScheduleVersionRegistry.Publish` raise the lower bound. The rate-limit gate's invalidation
+  epoch moves at that same point and for the same reason: bumping it FIRST assumes a re-park always produces
+  a registration, and one that throws produces none — so the only thing left holding the series was the
+  registration the delivery stuck at the gate was about to make, and the gate's own set-then-check deleted
+  exactly it. Nothing is lost by waiting: a stale re-park landing after that point is refused by
+  `TrySchedule` inside the registry's swap. Publishing a version whose executor never reached the scheduler
+  drops the old delivery and puts nothing in its place; if the re-park throws, nothing is published and the
+  old occurrence runs once more, its advance losing the compare-and-swap, applying the new definition **and
+  parking the row from itself** (`ReparkFromRowAsync` above) — the half that was missing, without which a
+  failed re-park cost the series rather than one extra run.
+  - **The version is not published when the parking ENDED the series either.** A durable schedule is parked
+    by the materializer, and a resume whose replanned backlog spends the last run the budget allows closes
+    the series inside this very call — dropping the entry where a durable series really ends. Publishing
+    afterwards put it straight back for a schedule that will never run again. The row is asked once, on this
+    administrative path only, and a null cursor is the answer.
+  - **The S5 event is published on BOTH exits**, because the write is committed before the parking is
+    attempted: a subscriber told only that a re-park failed had no record of the version, the cursors, the
+    mode or the backlog the row now carries. The sentence names the version the schedule came FROM as well
+    as the one it is at — the new one alone cannot tell a first reschedule from a tenth.
+- **A durable schedule is parked by the MATERIALIZER**, not by `Schedule()`: it is what decides which slot the
+  row waits for, and it re-reads the row this call has just written. The executor is handed to it so its own
+  failure path has one to re-park.
+- **`ResumeSchedule` keeps the cursor.** That is the whole point: a halted catch-up is released by planning
+  its backlog AGAIN against the definition as it stands (and halting again if it still overflows). Moving the
+  cursor there would silently do what the halt existed to prevent. Every operation clears the halt marker
+  (M10), because asking is what these calls are.
+- **The row is read ONCE.** Version, cursor and runtime info are snapshotted before the update: the in-memory
+  store hands back LIVE entities, so reading the version back after `UpdateSchedule` reports what was just
+  written as what was there before.
+- **`UpdateSchedule` compare-and-swaps on the CURSOR as well as the version, and refuses a `Cancelled` row**,
+  and the snapshot above is what it carries. A successful advance moves the cursor and the run counter
+  without touching the version, so a version-only guard let a reschedule decided on a run count and a cursor
+  a completion had already superseded commit over it — and a rebase computed from that reading is parked one
+  occurrence past the budget it was just given. A `null` expectation is legal here and means "the series has
+  ended", which every storage has to read as IS NULL rather than as an equality. The STATUS is checked apart
+  from both, because a cancel is the one write neither answers for: it writes the status and leaves the
+  version and the cursor exactly where they were, so a reschedule that read the row first matched on both
+  and put a live definition over a series an operator had ended — then reported success while the blacklist
+  dropped every delivery it produced. Only `Cancelled` refuses; `InProgress` never does (S3), and a spent
+  series is an ordinary target. The manager re-reads the row on the FAILURE path alone, to say which of the
+  three lost.
+- **`Scheduler/Recurring/ScheduleRebase`** owns `RescheduleMode.RebaseFromCursor`: the nominal period of the
+  old cursor under the OLD definition, and the NEW definition's first slot inside that period read on the new
+  zone. `RecurringTask.PeriodKind` names the unit (`SchedulePeriodKind`, coarsest selector wins; cron has
+  none), except where the period is smaller than its name — see that namespace's CLAUDE.md gotcha 18. The
+  BOUNDS are checked apart from the period arithmetic, because two of its three branches never touch the grid
+  at all: a plain cadence keeps its cursor verbatim and a day-carrying week or month cadence composes its slot
+  from the period start, so `FirstOccurrenceOnOrAfter` — the only thing that applies `RunUntil` — is never
+  asked, and `MaxRuns` no branch applies at all. `ScheduleRebase` therefore refuses a slot at or past the new
+  `RunUntil` itself, and the manager refuses a spent `MaxRuns` before it, so a definition `RecalculateFromNow`
+  turns down is turned down here too. It refuses more than it accepts on purpose — a different cadence or
+  selector, a cron on either side, a period with no slot — because every one of those either loses a period of
+  work or replays one.
+
+- **`ScheduleRebase` keeps the cursor's POSITION inside the period, not only the period.** "The new
+  definition's first slot in that period" is where the cursor stood only while the period holds ONE slot;
+  with two it is a slot that has already run, so the rebase rewound onto it, replayed that occurrence and
+  spent one more of `MaxRuns` — while `RecalculateFromNow` on the same definition answered the later one.
+  See that namespace's CLAUDE.md gotcha 18 for how the position is counted.
+
+`WorkerExecutor` is the other half. `IsSupersededSchedule` drops an INLINE delivery whose version is below the
+published one (never a durable schedule row: it runs no handler, the materializer re-reads the row anyway, and
+dropping it would consume the registration that produced it); the absence of an entry is not a lower bound of
+zero, which is what keeps a recovered executor alive across a restart. `AdvanceVersionedRunAsync` is the CAS
+advance, and on a mismatch it re-aims at the row's own cursor instead of dropping the write, because the run
+happened and has to be recorded.
+
+- **Past the last re-aim the GUARD is given up, never the write.** The bound exists so a third party rewriting
+  the row in a loop cannot spin an advance; reaching it recorded nothing at all, which left the row in the
+  `InProgress` the delivery had set, the execution unaudited, `CurrentRunCount` — and with it `MaxRuns` —
+  permanently one short, and the series in no scheduler, no queue and no delivery until a restart. The last
+  attempt therefore writes unconditionally, against the cursor the last reading carried: that value is the
+  current owner's own, so it advances nothing, and the row travels back so the caller parks the schedule from
+  it. A lost run is permanent; a cursor one generation behind is overwritten by the next advance of the
+  definition that owns the row.
+
+- **A schedule the manager can ADDRESS is compare-and-swapped from its first advance**, and the address is the
+  taskKey: every entry point of `ITaskScheduleManager` takes one, so a recurring row without a key can never
+  be rescheduled and keeps the unconditional writes byte for byte. Deciding instead on "has it been
+  rescheduled yet" cannot be done without a race — the row was read before the run was even evaluated, the
+  delivery's version is older still, and the registry is published only after the re-park — so the FIRST
+  reschedule of a schedule could linearize inside that gap and be overwritten by the very write S1 exists to
+  guard. The version fields stay in the test for what a key cannot answer for: a row whose key was cleared,
+  and a delivery rebuilt from a row that already carries a version.
+- **The rate-limit SKIP ends a series under the same compare-and-swap as every other finalization.** It is
+  the one advance that writes nothing, so when the skip is the LAST one — the limiter's slot falls past the
+  series' `RunUntil` — the terminal `Completed` and the null cursor were written unconditionally, over a
+  row a reschedule had just extended: the result answers NEITHER recovery predicate, so no restart brings
+  the series back and the audit reads like an ordinary end. The expectation is the DELIVERY's version (the
+  row's would confirm the reschedule instead of losing to it) plus the cursor and status snapshotted at the
+  top of `QueueNextOccourrence`. A lost compare-and-swap parks the row from itself and KEEPS the registry
+  entry: the unconditional `ScheduleVersions.Remove` beside it wiped the S4 lower bound just published.
+- **A DURABLE series drops its published version inside the materializer**, because that is where it ends: the
+  cursor is nulled in the same commit as the terminal status, so such a row never passes through
+  `QueueNextOccourrence`, which is where an inline one drops it. The other two ends are `Dispatcher.Cancel` and
+  a row that is removed. Nothing depends on the entry surviving — `IsSupersededSchedule` never looks at a
+  durable schedule, and a taskKey re-registration reuses the row and its version — but an entry per finished
+  durable schedule is the one way the registry could grow for the life of the process.
+- **An advance that applied against a definition it never saw PARKS the row itself** (`ReparkFromRowAsync`:
+  that row's definition, cursor and version, never the delivery's). Whoever rewrote the row is supposed to
+  have parked it and normally has — this is then a second registration of the same instant, replaced latest
+  wins — but the one thing that lets a delivery of the replaced definition reach a rewritten row at all is a
+  re-park that FAILED, and there returning empty-handed left the series in no scheduler, no queue and no
+  delivery until a restart. A row that has turned durable goes to the materializer instead, because that owns
+  a durable schedule's parking. The row is the one the re-aim already read: no extra round trip, and the
+  ordinary advance (applied on its first attempt) never reads one at all.
+
 ## Occurrence grid: one seam
 
 `IScheduleEvaluator` (internal, `ScheduleEvaluator`) is what the dispatcher, the worker and the recovery ask
@@ -342,6 +500,12 @@ three-month one-second backlog affordable), what the public surface REFUSES by
 `test/EverTask.Tests.Storage/CatchUpRecoveryIntegrationTests.cs` (SQLite, seeded downtime, restart mid-replay)
 and `SqlServerDurableOccurrencesMultiHostTests.cs`, whose second test pins the single-active-host LIMIT rather
 than a guarantee — it is the assertion the distributed-lease epic will invert.
+
+Runtime schedule management: `IntegrationTests/RescheduleIntegrationTests.cs` on a real host over a shared
+storage (the old slot really stops firing, a completion in flight really loses its compare-and-swap, a failed
+re-park really publishes nothing), and `RecurringTests/ScheduleRebaseTests.cs` for the period arithmetic —
+including the two negatives that matter: a cron schedule and a period with no slot are refused rather than
+answered from the next period.
 
 Integration tests build a real `IHost` through `test/EverTask.Tests/TestHelpers/IsolatedIntegrationTestBase.cs`.
 The invariants above are pinned by `test/EverTask.Tests/IntegrationTests/QueueResilienceIntegrationTests.cs`,

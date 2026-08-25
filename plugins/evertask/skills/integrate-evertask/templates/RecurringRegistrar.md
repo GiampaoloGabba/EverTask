@@ -44,9 +44,29 @@ Register it:
 builder.Services.AddHostedService<RecurringTasksRegistrar>();
 ```
 
+To change one of these while the application runs — an admin screen moving the digest, a tenant picking its
+own hour — use `ITaskScheduleManager` instead of re-dispatching. It is registered by `AddEverTask` and takes
+the same builder:
+
+```csharp
+public sealed class DigestSchedule(ITaskScheduleManager schedules)
+{
+    public Task<ScheduleUpdateResult> MoveTo(TimeOnly at, string zone) =>
+        schedules.Reschedule(
+            "daily-digest",
+            r => r.Schedule().EveryDay().AtTime(at).InTimeZone(zone),
+            // Keeps today's run on today: the day the cursor was in is preserved even across a zone change.
+            RescheduleMode.RebaseFromCursor);
+}
+```
+
 Notes:
 - `taskKey` ≤ 200 chars, case-sensitive. Per-entity: `taskKey: $"report-{userId}"`.
 - Re-dispatch with the same key + new schedule updates a Pending/Queued task in place.
+- `ITaskScheduleManager` is the runtime counterpart: it refuses a key that names no schedule instead of
+  creating one, bumps the schedule version so a run finishing at the same moment recomputes, and reports the
+  new cursor. `RebaseFromCursor` needs the same cadence and selectors on both sides (only the time of day, the
+  zone, the bounds and the misfire settings may move) and refuses cron; `RecalculateFromNow` is the fallback.
 - Times are UTC unless the schedule names a zone. For a local wall-clock hour use `.InTimeZone("Area/City")`
   (calendar schedules only) instead of converting once at registration, which freezes the offset and drifts
   by an hour at the next DST change. `RunAt` still takes an absolute instant: build it with

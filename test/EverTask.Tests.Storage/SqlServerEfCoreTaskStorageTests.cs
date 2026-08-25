@@ -8,7 +8,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Respawn;
 using Shouldly;
-using Testcontainers.MsSql;
 using Xunit;
 
 namespace EverTask.Tests.Storage;
@@ -20,8 +19,6 @@ public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsyn
     private ITaskStorage _taskStorage = null!;
     private Respawner? _respawner;
     private string _connectionString = "";
-    private static MsSqlContainer? _sqlContainer;
-    private static bool _containerInitialized = false;
     private static readonly object _lock = new();
 
     public async Task InitializeAsync()
@@ -34,18 +31,8 @@ public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsyn
 
     protected override void Initialize()
     {
-        // Start container once for all tests in this collection
-        lock (_lock)
-        {
-            if (!_containerInitialized)
-            {
-                _sqlContainer = new MsSqlBuilder("mcr.microsoft.com/mssql/server:2022-latest").Build();
-                _sqlContainer.StartAsync().GetAwaiter().GetResult();
-                _containerInitialized = true;
-            }
-        }
-
-        _connectionString = _sqlContainer!.GetConnectionString();
+        // The assembly shares one SQL Server container; this is the only caller that cannot await it.
+        _connectionString = SqlServerTestContainer.GetConnectionString();
 
         var services = new ServiceCollection();
         services.AddLogging();

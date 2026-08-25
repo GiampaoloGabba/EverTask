@@ -5,6 +5,35 @@ public interface IScheduler
     void Schedule(TaskHandlerExecutor item, DateTimeOffset? nextRecurringRun = null);
 
     /// <summary>
+    /// Registers <paramref name="item"/> the way <see cref="Schedule"/> does, unless a registration carrying a
+    /// NEWER <see cref="TaskHandlerExecutor.ScheduleVersion"/> of the same task is already parked — that one is
+    /// preserved and nothing is written.
+    /// </summary>
+    /// <param name="item">The task handler executor to park.</param>
+    /// <param name="nextRecurringRun">Next execution time for recurring tasks (overrides item.ExecutionTime).</param>
+    /// <returns>False when a newer registration was preserved and <paramref name="item"/> was NOT parked.</returns>
+    /// <remarks>
+    /// The conditional half of latest-wins, and the counterpart of
+    /// <see cref="TryUnschedule(Guid,TaskHandlerExecutor)"/>. A runtime reschedule commits the new definition,
+    /// parks its executor and only then publishes the version (S4), so anything still holding an executor of
+    /// the definition that was replaced — an advance that was computing its next occurrence, the rate-limit
+    /// gate re-parking a delivery it had been holding — would otherwise replace that registration with one of a
+    /// grid nobody owns any more, and the schedule would be dropped as superseded the moment it fired, parked
+    /// nowhere. The comparison is made INSIDE the registry's own atomic swap, because every ordering outside it
+    /// still has a window.
+    /// <para>
+    /// The default implementation schedules unconditionally and answers true (binary compatibility for external
+    /// schedulers compiled against older versions): a scheduler that cannot compare versions keeps exactly the
+    /// behaviour it always had.
+    /// </para>
+    /// </remarks>
+    bool TrySchedule(TaskHandlerExecutor item, DateTimeOffset? nextRecurringRun = null)
+    {
+        Schedule(item, nextRecurringRun);
+        return true;
+    }
+
+    /// <summary>
     /// Invalidates a parked registration for the given task, if present.
     /// Used when a task is re-dispatched outside the scheduler (e.g. an immediate re-dispatch
     /// via taskKey of a previously delayed task) or cancelled, so the stale parked occurrence

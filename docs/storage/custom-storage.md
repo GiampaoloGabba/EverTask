@@ -121,6 +121,16 @@ exactly the crash window these operations exist to close (an occurrence inserted
 or a cursor advanced with no occurrence), so a store either implements them atomically and advertises them,
 or dispatching a durable schedule against it fails fast.
 
+The two capabilities are independent, and so is what
+[`ITaskScheduleManager`](../recurring-tasks/managing-tasks.md#changing-a-schedule-while-it-runs) asks of them.
+`Reschedule`, `ReevaluateSchedule` and `ResumeSchedule` rewrite a schedule row and need
+`SupportsScheduleVersioning`: without a real compare-and-swap a reschedule could report success while a run
+finishing at the same moment overwrote it, so a store that returns `false` is refused rather than emulated.
+`RequeueFailedOccurrence` addresses a child row and needs `SupportsDurableOccurrences` instead — a store with
+versioning but no occurrences has nothing to requeue. `CancelSchedule` needs neither: it writes a
+cancellation. So a store that implements neither capability keeps working for everything else, including
+ending a schedule on purpose. Its schedules just cannot be changed while they run.
+
 | Operation | What must be atomic |
 |-----------|---------------------|
 | `MaterializeOccurrence` | Insert the child AND advance the schedule cursor, guarded by a compare-and-swap on version + cursor. A null new cursor ends the series in the same commit. |
@@ -129,7 +139,7 @@ or dispatching a durable schedule against it fails fast.
 | `CancelSchedule` | Cancel the schedule and its still-waiting occurrences together |
 | `RequeueTerminal` | Put a `Failed`/`Cancelled` row back to `Queued`, keeping its identity and audits |
 | `TryRequeueStaleOccurrence` | Compare-and-swap requeue of an occurrence stranded in a known status |
-| `UpdateSchedule` | Replace the definition and bump the version, from the expected version only |
+| `UpdateSchedule` | Replace the definition and bump the version, guarded by version + cursor and refused on a `Cancelled` row. A finished series expects a `null` cursor, so the guard has to read that as IS NULL; a cancel touches neither the version nor the cursor, so only the status can refuse it |
 | `TryHaltSchedule` | Write the halted marker, guarded by version + cursor + status |
 | `UpdateCurrentRun` / `CompleteRecurringRun` (version overloads) | Advance only while the schedule version matches |
 

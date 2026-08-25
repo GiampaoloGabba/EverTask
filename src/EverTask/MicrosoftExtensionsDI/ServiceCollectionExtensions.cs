@@ -157,7 +157,32 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<IScheduleEvaluator>(),
                 sp.GetRequiredService<IEverTaskLogger<OccurrenceMaterializer>>(),
                 sp.GetRequiredService<TimeProvider>(),
+                sp.GetRequiredService<ScheduleVersionRegistry>(),
                 sp.GetService<TaskDeliveryRegistry>()));
+
+        // Runtime schedule management (S2). The per-taskKey critical section is shared with the dispatcher on
+        // purpose: a reschedule and a dispatch of the same key are the same read-decide-write over the same
+        // row, and UpdateTask does not carry a version, so only one section keeps them from overwriting each
+        // other. The version registry is the in-memory lower bound a delivery already in a queue is measured
+        // against (S4) — both are per host, hence singletons.
+        services.TryAddSingleton<TaskKeyLockRegistry>();
+        services.TryAddSingleton<ScheduleVersionRegistry>();
+        services.TryAddSingleton<ITaskScheduleManager>(sp =>
+            new TaskScheduleManager(
+                sp.GetRequiredService<IServiceScopeFactory>(),
+                sp.GetRequiredService<IScheduler>(),
+                sp.GetRequiredService<IScheduleEvaluator>(),
+                sp.GetRequiredService<EverTaskServiceConfiguration>(),
+                sp.GetRequiredService<TaskKeyLockRegistry>(),
+                sp.GetRequiredService<ScheduleVersionRegistry>(),
+                sp.GetRequiredService<ITaskDispatcher>(),
+                sp.GetRequiredService<IEverTaskLogger<TaskScheduleManager>>(),
+                sp.GetRequiredService<TimeProvider>(),
+                sp.GetService<ITaskStorage>(),
+                sp.GetService<OccurrenceMaterializer>(),
+                sp.GetService<IGateInvalidationRegistry>(),
+                sp.GetService<IEverTaskWorkerExecutor>(),
+                sp.GetRequiredService<IWorkerBlacklist>()));
 
         services.AddHostedService(sp =>
             new WorkerService(

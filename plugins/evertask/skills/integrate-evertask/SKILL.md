@@ -55,7 +55,7 @@ multi-queue isolation, and monitoring. Multi-targets net8.0/net9.0/net10.0.
 | Defining task records + handlers, dispatch overloads, lifecycle callbacks, `taskKey` idempotency, cancel | `references/02-tasks-and-handlers.md` |
 | Choosing & configuring a storage provider, audit levels, retention/cleanup, custom `ITaskStorage` | `references/03-storage.md` |
 | Retry policies, exception filtering (whitelist/blacklist/predicate), timeout, cancellation, graceful shutdown | `references/04-resilience.md` |
-| Delayed / scheduled / recurring tasks, fluent builder, cron, time zones, misfire policies and durable occurrences, idempotent startup registration, drift | `references/05-scheduling.md` |
+| Delayed / scheduled / recurring tasks, fluent builder, cron, time zones, misfire policies and durable occurrences, idempotent startup registration, drift, changing a schedule at runtime (`ITaskScheduleManager`) | `references/05-scheduling.md` |
 | Keyed (per-tenant) rate limiting, named multi-queues, scalability, sharded scheduler | `references/06-rate-limiting-queues.md` |
 | Monitoring events, SignalR, dashboard + REST API (JWT), Serilog, persistent execution logs | `references/07-monitoring-logging.md` |
 | System.Text.Json payload contract + every analyzer rule ET0001–ET0007 + payload checklist | `references/08-payload-contract.md` |

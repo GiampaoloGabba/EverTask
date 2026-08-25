@@ -82,6 +82,25 @@ public class RecurringTask
                                               : ScheduleSemantics.Elapsed;
 
     /// <summary>
+    /// The calendar unit one occurrence of this schedule belongs to (M18): what a rebased cursor has to stay
+    /// inside. Derived from the definition, never stored.
+    /// </summary>
+    /// <remarks>
+    /// The DOMINANT selector decides, coarsest first, because that is the unit inside which the finer ones only
+    /// choose a position: a monthly schedule that also names a time of day still belongs to its month. Cron is
+    /// <see cref="SchedulePeriodKind.None"/> — an expression states no period anything could rely on — and an
+    /// hour cadence that selects hours belongs to the day those hours are counted in.
+    /// </remarks>
+    [JsonIgnore]
+    internal SchedulePeriodKind PeriodKind =>
+        !string.IsNullOrEmpty(CronInterval?.CronExpression) ? SchedulePeriodKind.None
+        : MonthInterval != null                             ? SchedulePeriodKind.Month
+        : WeekInterval != null                              ? SchedulePeriodKind.Week
+        : DayInterval != null                               ? SchedulePeriodKind.Day
+        : HourInterval is { OnHours.Length: > 0 }           ? SchedulePeriodKind.Day
+                                                            : SchedulePeriodKind.Instant;
+
+    /// <summary>
     /// The resolved <see cref="TimeZoneId"/>, cached, or null when the schedule carries none.
     /// </summary>
     /// <exception cref="ArgumentException">
@@ -756,15 +775,34 @@ public class RecurringTask
     /// window as wide as one period, be it a minute or a month), a successor already past means the slot
     /// is stale and the series must be finalized instead.
     /// </remarks>
-    internal DateTimeOffset? NextGridOccurrenceAfter(DateTimeOffset occurrence)
+    internal DateTimeOffset? NextGridOccurrenceAfter(DateTimeOffset occurrence) =>
+        Unbounded().NextOccurrenceStrictlyAfter(occurrence, occurrence);
+
+    /// <summary>
+    /// <see cref="FirstOccurrenceOnOrAfter"/> on the natural grid, with the termination bounds IGNORED.
+    /// </summary>
+    /// <remarks>
+    /// What a rebase counts with (M18): how far into its period a cursor stood is a question about the GRID,
+    /// and a <see cref="RunUntil"/> that falls inside the period would otherwise truncate the count and move
+    /// the answer to an earlier slot — one that has already run.
+    /// </remarks>
+    internal DateTimeOffset? FirstGridOccurrenceOnOrAfter(DateTimeOffset instant) =>
+        Unbounded().FirstOccurrenceOnOrAfter(instant);
+
+    /// <summary>
+    /// A copy of this definition with <see cref="RunUntil"/> and <see cref="MaxRuns"/> cleared.
+    /// </summary>
+    /// <remarks>
+    /// Shallow: the interval objects are only read while walking the grid, so clearing the bounds on the copy
+    /// is what makes a walk unbounded without mutating the live definition.
+    /// </remarks>
+    private RecurringTask Unbounded()
     {
-        // Shallow copy: the interval objects are only read while walking the grid, and clearing the bounds
-        // on the copy is what makes the walk unbounded without mutating the live definition.
         var unbounded = (RecurringTask)MemberwiseClone();
         unbounded.RunUntil = null;
         unbounded.MaxRuns  = null;
 
-        return unbounded.NextOccurrenceStrictlyAfter(occurrence, occurrence);
+        return unbounded;
     }
 
     /// <summary>

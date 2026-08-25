@@ -479,12 +479,30 @@ public interface ITaskStorage
     /// <summary>
     /// Replaces a schedule's definition, cursor and bounds and bumps its
     /// <see cref="QueuedTask.ScheduleVersion"/>, only while it still carries
-    /// <paramref name="expectedScheduleVersion"/>. Two concurrent reschedules cannot both win.
+    /// <paramref name="expectedScheduleVersion"/> AND stands at <paramref name="expectedCursorUtc"/> AND has
+    /// not been cancelled. Two concurrent reschedules cannot both win.
     /// </summary>
+    /// <remarks>
+    /// A <see cref="QueuedTaskStatus.Cancelled"/> row is never updated. The version and the cursor do not
+    /// answer for it — a cancel writes the status and leaves both untouched — so a reschedule that read the
+    /// row before the cancellation committed would match on both and write a live definition over a series an
+    /// operator has ended, then report success to its caller. Every other status is a legitimate target,
+    /// <see cref="QueuedTaskStatus.InProgress"/> included (S3): a schedule that happens to be running is
+    /// rescheduled, never refused.
+    /// </remarks>
+    /// <param name="expectedCursorUtc">
+    /// The <see cref="QueuedTask.NextRunUtc"/> the caller computed its new definition against — including
+    /// <c>null</c>, which expects a series that has already ended. Part of the compare-and-swap because a
+    /// successful advance moves the cursor and the run counter WITHOUT touching the version: keying on the
+    /// version alone lets a reschedule decided on a run count and a cursor that a completion has since
+    /// superseded commit over it, and a rebase computed from that stale reading runs one occurrence past the
+    /// budget it was given.
+    /// </param>
     /// <returns>True when the new definition was written.</returns>
-    Task<bool> UpdateSchedule(Guid taskId, int expectedScheduleVersion, string recurringTaskJson,
-                              string? recurringInfo, DateTimeOffset? nextRunUtc, int? maxRuns,
-                              DateTimeOffset? runUntil, string? runtimeInfo, CancellationToken ct = default) =>
+    Task<bool> UpdateSchedule(Guid taskId, int expectedScheduleVersion, DateTimeOffset? expectedCursorUtc,
+                              string recurringTaskJson, string? recurringInfo, DateTimeOffset? nextRunUtc,
+                              int? maxRuns, DateTimeOffset? runUntil, string? runtimeInfo,
+                              CancellationToken ct = default) =>
         throw new NotSupportedException(
             "This storage does not implement schedule versioning. Use a built-in provider, or implement " +
             $"{nameof(UpdateSchedule)} atomically and set {nameof(SupportsScheduleVersioning)} to true.");

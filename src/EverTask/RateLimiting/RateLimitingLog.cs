@@ -51,6 +51,11 @@ internal static partial class RateLimitingLog
     public static partial void TaskDeferred(this ILogger logger, Guid taskId, string key, DateTimeOffset slotUtc,
                                             Type taskType);
 
+    [LoggerMessage(EventId = 1510, Level = LogLevel.Information,
+        Message = "Rate limit re-park of task {TaskId} was refused: a newer version of its schedule is " +
+                  "already parked, so the reservation is released and the deferral is dropped")]
+    public static partial void DeferralRefusedBySuccessor(this ILogger logger, Guid taskId);
+
     // ---------------------------------------------------------------- InMemoryKeyedRateLimiter
 
     [LoggerMessage(EventId = 1509, Level = LogLevel.Warning,

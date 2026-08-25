@@ -39,6 +39,13 @@ public class RateLimitGateTests
         // false: WarningLogged() would never observe its Log call without this.
         _logger.Setup(l => l.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
 
+        // The gate asks for a CONDITIONAL registration, and false there means "a newer version of this
+        // schedule is already parked" — which a loose mock would say about every re-park in this suite. This
+        // is the answer a real scheduler gives when nothing supersedes the task; the tests that are about the
+        // refusal set it themselves.
+        _scheduler.Setup(s => s.TrySchedule(It.IsAny<TaskHandlerExecutor>(), It.IsAny<DateTimeOffset?>()))
+                  .Returns(true);
+
         var options = new RateLimiterOptions();
         options.ResolveDefaults(1000);
         _parkingLot = new RateLimitParkingLot(options);
@@ -148,8 +155,8 @@ public class RateLimitGateTests
         SetupDeferral(slot);
 
         TaskHandlerExecutor? parked = null;
-        _scheduler.Setup(s => s.Schedule(It.IsAny<TaskHandlerExecutor>(), null))
-                  .Callback<TaskHandlerExecutor, DateTimeOffset?>((e, _) => parked = e);
+        _scheduler.Setup(s => s.TrySchedule(It.IsAny<TaskHandlerExecutor>(), null))
+                  .Callback<TaskHandlerExecutor, DateTimeOffset?>((e, _) => parked = e).Returns(true);
 
         var gate     = CreateGate();
         var executor = CreateExecutor(Policy(), "k");
@@ -174,8 +181,8 @@ public class RateLimitGateTests
         var secondSlot = DateTimeOffset.UtcNow.AddSeconds(8);
 
         TaskHandlerExecutor? parked = null;
-        _scheduler.Setup(s => s.Schedule(It.IsAny<TaskHandlerExecutor>(), null))
-                  .Callback<TaskHandlerExecutor, DateTimeOffset?>((e, _) => parked = e);
+        _scheduler.Setup(s => s.TrySchedule(It.IsAny<TaskHandlerExecutor>(), null))
+                  .Callback<TaskHandlerExecutor, DateTimeOffset?>((e, _) => parked = e).Returns(true);
 
         var gate = CreateGate();
 
@@ -206,8 +213,8 @@ public class RateLimitGateTests
         var secondSlot   = DateTimeOffset.UtcNow.AddSeconds(8);
 
         TaskHandlerExecutor? parked = null;
-        _scheduler.Setup(s => s.Schedule(It.IsAny<TaskHandlerExecutor>(), null))
-                  .Callback<TaskHandlerExecutor, DateTimeOffset?>((e, _) => parked = e);
+        _scheduler.Setup(s => s.TrySchedule(It.IsAny<TaskHandlerExecutor>(), null))
+                  .Callback<TaskHandlerExecutor, DateTimeOffset?>((e, _) => parked = e).Returns(true);
 
         var gate = CreateGate();
 
@@ -238,12 +245,13 @@ public class RateLimitGateTests
 
         TaskHandlerExecutor? parked = null;
         DateTimeOffset? nextRecurringRun = null;
-        _scheduler.Setup(s => s.Schedule(It.IsAny<TaskHandlerExecutor>(), It.IsAny<DateTimeOffset?>()))
+        _scheduler.Setup(s => s.TrySchedule(It.IsAny<TaskHandlerExecutor>(), It.IsAny<DateTimeOffset?>()))
                   .Callback<TaskHandlerExecutor, DateTimeOffset?>((e, n) =>
                   {
                       parked           = e;
                       nextRecurringRun = n;
-                  });
+                  })
+                  .Returns(true);
 
         var gate     = CreateGate();
         var executor = CreateExecutor(Policy(), "k", recurring: recurring, executionTime: occurrenceTime);
@@ -276,7 +284,7 @@ public class RateLimitGateTests
 
         result.Outcome.ShouldBe(RateLimitGateOutcome.Rejected, "the occurrence must not execute");
         result.RejectionKind.ShouldBe(RateLimitRejectionKind.OccurrencePastRunUntil);
-        _scheduler.Verify(s => s.Schedule(It.IsAny<TaskHandlerExecutor>(), It.IsAny<DateTimeOffset?>()), Times.Never,
+        _scheduler.Verify(s => s.TrySchedule(It.IsAny<TaskHandlerExecutor>(), It.IsAny<DateTimeOffset?>()), Times.Never,
             "an occurrence past RunUntil is skipped, never fired late");
         _limiter.Verify(l => l.ReleaseAsync(It.IsAny<Type>(), "k", executor.PersistenceId, It.IsAny<CancellationToken>()),
             Times.Once, "the unredeemable reservation is released best-effort");
@@ -297,7 +305,7 @@ public class RateLimitGateTests
 
         result.Outcome.ShouldBe(RateLimitGateOutcome.Rejected);
         result.RejectionKind.ShouldBe(RateLimitRejectionKind.HorizonExceeded);
-        _scheduler.Verify(s => s.Schedule(It.IsAny<TaskHandlerExecutor>(), It.IsAny<DateTimeOffset?>()), Times.Never,
+        _scheduler.Verify(s => s.TrySchedule(It.IsAny<TaskHandlerExecutor>(), It.IsAny<DateTimeOffset?>()), Times.Never,
             "far-future slots are never parked (L3 bound)");
     }
 
@@ -317,7 +325,7 @@ public class RateLimitGateTests
 
         result.Outcome.ShouldBe(RateLimitGateOutcome.Rejected, "Discard never waits and never parks");
         result.RejectionKind.ShouldBe(RateLimitRejectionKind.Discarded);
-        _scheduler.Verify(s => s.Schedule(It.IsAny<TaskHandlerExecutor>(), It.IsAny<DateTimeOffset?>()), Times.Never);
+        _scheduler.Verify(s => s.TrySchedule(It.IsAny<TaskHandlerExecutor>(), It.IsAny<DateTimeOffset?>()), Times.Never);
         _limiter.Verify(l => l.ReleaseAsync(It.IsAny<Type>(), "k", executor.PersistenceId, It.IsAny<CancellationToken>()),
             Times.Once, "the unused reservation is released best-effort");
     }
@@ -453,8 +461,8 @@ public class RateLimitGateTests
         SetupDeferral(DateTimeOffset.UtcNow.AddSeconds(-5));
 
         TaskHandlerExecutor? parked = null;
-        _scheduler.Setup(s => s.Schedule(It.IsAny<TaskHandlerExecutor>(), null))
-                  .Callback<TaskHandlerExecutor, DateTimeOffset?>((e, _) => parked = e);
+        _scheduler.Setup(s => s.TrySchedule(It.IsAny<TaskHandlerExecutor>(), null))
+                  .Callback<TaskHandlerExecutor, DateTimeOffset?>((e, _) => parked = e).Returns(true);
 
         var gate   = CreateGate();
         var before = DateTimeOffset.UtcNow;
@@ -488,8 +496,8 @@ public class RateLimitGateTests
                 });
 
         TaskHandlerExecutor? parked = null;
-        _scheduler.Setup(s => s.Schedule(It.IsAny<TaskHandlerExecutor>(), null))
-                  .Callback<TaskHandlerExecutor, DateTimeOffset?>((e, _) => parked = e);
+        _scheduler.Setup(s => s.TrySchedule(It.IsAny<TaskHandlerExecutor>(), null))
+                  .Callback<TaskHandlerExecutor, DateTimeOffset?>((e, _) => parked = e).Returns(true);
 
         var gate   = CreateGate();
         var result = await gate.TryPassAsync(CreateExecutor(Policy(), "k"), CancellationToken.None);
@@ -511,8 +519,8 @@ public class RateLimitGateTests
 
         // The Cancel/re-dispatch lands while the gate is re-parking: invisible to TryUnschedule
         // (nothing parked yet), visible to the epoch check afterwards
-        _scheduler.Setup(s => s.Schedule(It.IsAny<TaskHandlerExecutor>(), null))
-                  .Callback<TaskHandlerExecutor, DateTimeOffset?>((_, _) => _registry.Invalidate(executor.PersistenceId));
+        _scheduler.Setup(s => s.TrySchedule(It.IsAny<TaskHandlerExecutor>(), null))
+                  .Callback<TaskHandlerExecutor, DateTimeOffset?>((_, _) => _registry.Invalidate(executor.PersistenceId)).Returns(true);
         _scheduler.Setup(s => s.TryUnschedule(executor.PersistenceId, It.IsAny<TaskHandlerExecutor>()))
                   .Returns(true);
 
@@ -524,6 +532,37 @@ public class RateLimitGateTests
             "the stale parked registration must be dropped (set-then-check)");
         _limiter.Verify(l => l.ReleaseAsync(It.IsAny<Type>(), "k", executor.PersistenceId, It.IsAny<CancellationToken>()),
             Times.Once);
+    }
+
+    [Fact]
+    public async Task Should_drop_the_deferral_when_a_newer_registration_refuses_the_repark()
+    {
+        // The premise the set-then-check above rests on — whoever moved the epoch also removed the
+        // registration — does not hold for a reschedule, which re-parks instead (S4 forbids the window an
+        // unschedule would open). So the deferral asks for a CONDITIONAL registration and is told no. Left
+        // unconditional it replaced the reschedule's registration, which made the conditional unschedule
+        // below succeed and delete the series' only one.
+        var slot = DateTimeOffset.UtcNow.AddSeconds(8);
+        SetupDeferral(slot);
+
+        var executor = CreateExecutor(Policy(), "k");
+
+        _registry.Invalidate(executor.PersistenceId);
+        _scheduler.Setup(s => s.TrySchedule(It.IsAny<TaskHandlerExecutor>(), It.IsAny<DateTimeOffset?>()))
+                  .Returns(false);
+
+        var gate   = CreateGate();
+        var result = await gate.TryPassAsync(executor, CancellationToken.None);
+
+        result.Outcome.ShouldBe(RateLimitGateOutcome.Deferred, "the delivery ends here either way");
+        result.EmitDeferralEvent.ShouldBeFalse("nothing was deferred: the series belongs to another executor");
+
+        _parkingLot.Count.ShouldBe(0, "a registration that was never made owns no parking-lot entry");
+        _scheduler.Verify(s => s.TryUnschedule(It.IsAny<Guid>(), It.IsAny<TaskHandlerExecutor>()), Times.Never,
+            "and nothing of ours is parked, so there is nothing to take away from the newer registration");
+        _limiter.Verify(
+            l => l.ReleaseAsync(It.IsAny<Type>(), "k", executor.PersistenceId, It.IsAny<CancellationToken>()),
+            Times.Once, "the reservation the refused re-park would have redeemed is released");
     }
 
     [Fact]
@@ -549,8 +588,8 @@ public class RateLimitGateTests
 
         var executor = CreateExecutor(Policy(), "k");
 
-        _scheduler.Setup(s => s.Schedule(It.IsAny<TaskHandlerExecutor>(), null))
-                  .Callback<TaskHandlerExecutor, DateTimeOffset?>((_, _) => _registry.Invalidate(executor.PersistenceId));
+        _scheduler.Setup(s => s.TrySchedule(It.IsAny<TaskHandlerExecutor>(), null))
+                  .Callback<TaskHandlerExecutor, DateTimeOffset?>((_, _) => _registry.Invalidate(executor.PersistenceId)).Returns(true);
         _scheduler.Setup(s => s.TryUnschedule(executor.PersistenceId, It.IsAny<TaskHandlerExecutor>()))
                   .Returns(false); // the invalidator's unconditional TryUnschedule won the race
         _scheduler.Setup(s => s.IsScheduled(executor.PersistenceId))
@@ -574,8 +613,8 @@ public class RateLimitGateTests
 
         var executor = CreateExecutor(Policy(), "k");
 
-        _scheduler.Setup(s => s.Schedule(It.IsAny<TaskHandlerExecutor>(), null))
-                  .Callback<TaskHandlerExecutor, DateTimeOffset?>((_, _) => _registry.Invalidate(executor.PersistenceId));
+        _scheduler.Setup(s => s.TrySchedule(It.IsAny<TaskHandlerExecutor>(), null))
+                  .Callback<TaskHandlerExecutor, DateTimeOffset?>((_, _) => _registry.Invalidate(executor.PersistenceId)).Returns(true);
         _scheduler.Setup(s => s.TryUnschedule(executor.PersistenceId, It.IsAny<TaskHandlerExecutor>()))
                   .Returns(false); // a newer registration is parked
         _scheduler.Setup(s => s.IsScheduled(executor.PersistenceId))
@@ -915,8 +954,8 @@ public class RateLimitGateTests
         var executor = CreateExecutor(Policy(), "k");
 
         TaskHandlerExecutor? reparked = null;
-        _scheduler.Setup(s => s.Schedule(It.IsAny<TaskHandlerExecutor>(), null))
-                  .Callback<TaskHandlerExecutor, DateTimeOffset?>((e, _) => reparked = e);
+        _scheduler.Setup(s => s.TrySchedule(It.IsAny<TaskHandlerExecutor>(), null))
+                  .Callback<TaskHandlerExecutor, DateTimeOffset?>((e, _) => reparked = e).Returns(true);
 
         var gate = CreateGate();
         gate.InFlightRedeliveryDelay = TimeSpan.FromMilliseconds(750);
@@ -941,12 +980,13 @@ public class RateLimitGateTests
 
         TaskHandlerExecutor? reparked = null;
         DateTimeOffset? nextRecurringRun = null;
-        _scheduler.Setup(s => s.Schedule(It.IsAny<TaskHandlerExecutor>(), It.IsAny<DateTimeOffset?>()))
+        _scheduler.Setup(s => s.TrySchedule(It.IsAny<TaskHandlerExecutor>(), It.IsAny<DateTimeOffset?>()))
                   .Callback<TaskHandlerExecutor, DateTimeOffset?>((e, n) =>
                   {
                       reparked         = e;
                       nextRecurringRun = n;
-                  });
+                  })
+                  .Returns(true);
 
         var gate = CreateGate();
         gate.InFlightRedeliveryDelay = TimeSpan.FromMilliseconds(500);
@@ -980,7 +1020,7 @@ public class RateLimitGateTests
 
         gate.ReparkInFlightRedelivery(executor);
 
-        _scheduler.Verify(s => s.Schedule(It.IsAny<TaskHandlerExecutor>(), It.IsAny<DateTimeOffset?>()), Times.Never,
+        _scheduler.Verify(s => s.TrySchedule(It.IsAny<TaskHandlerExecutor>(), It.IsAny<DateTimeOffset?>()), Times.Never,
             "an in-flight redelivery whose re-park slot falls past RunUntil must be dropped, not re-parked");
         _parkingLot.Count.ShouldBe(0, "a dropped redelivery must not register a parking-lot entry");
     }
@@ -996,7 +1036,7 @@ public class RateLimitGateTests
         var gate = CreateGate();
         gate.ReparkInFlightRedelivery(executor);
 
-        _scheduler.Verify(s => s.Schedule(It.IsAny<TaskHandlerExecutor>(), It.IsAny<DateTimeOffset?>()), Times.Never,
+        _scheduler.Verify(s => s.TrySchedule(It.IsAny<TaskHandlerExecutor>(), It.IsAny<DateTimeOffset?>()), Times.Never,
             "an existing registration must survive (latest payload wins)");
         _parkingLot.Count.ShouldBe(0);
     }
@@ -1055,7 +1095,7 @@ public class RateLimitGateTests
         // occurrence at the 30 s cadence — so a cadence far faster than the refill rate does not churn.
         // Bound on BOTH sides: it lands at the first 30 s grid point AT/AFTER farSlot, not earlier (would
         // re-reject) and not far past it (an overshoot bug that still satisfied a >= farSlot check).
-        _scheduler.Verify(s => s.Schedule(It.IsAny<TaskHandlerExecutor>(),
+        _scheduler.Verify(s => s.TrySchedule(It.IsAny<TaskHandlerExecutor>(),
                 It.Is<DateTimeOffset?>(d => d.HasValue && d.Value >= farSlot && d.Value < farSlot.AddSeconds(60))),
             Times.Once, "the skipped occurrence is rescheduled at the first grid slot at/after the limiter's next available slot");
     }
@@ -1153,7 +1193,7 @@ public class RateLimitGateTests
         await workerExecutor.DoWork(executor, CancellationToken.None);
 
         // The series advances to a real FUTURE slot, never DateTimeOffset.MinValue / the past.
-        _scheduler.Verify(s => s.Schedule(It.IsAny<TaskHandlerExecutor>(),
+        _scheduler.Verify(s => s.TrySchedule(It.IsAny<TaskHandlerExecutor>(),
                 It.Is<DateTimeOffset?>(d => d.HasValue && d.Value > DateTimeOffset.UtcNow)),
             Times.Once, "a default/past slot must not anchor the skip-ahead in the past");
     }

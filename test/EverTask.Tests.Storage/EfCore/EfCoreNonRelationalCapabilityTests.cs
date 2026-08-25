@@ -67,7 +67,7 @@ public class EfCoreNonRelationalCapabilityTests
             storage.CancelSchedule(Guid.NewGuid(), AuditLevel.Full));
 
         await Should.ThrowAsync<NotSupportedException>(() =>
-            storage.UpdateSchedule(Guid.NewGuid(), 0, "{}", null, slot, null, null, null));
+            storage.UpdateSchedule(Guid.NewGuid(), 0, slot, "{}", null, slot, null, null, null));
     }
 
     [Fact]

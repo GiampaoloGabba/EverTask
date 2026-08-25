@@ -2231,7 +2231,7 @@ public abstract class EfCoreTaskStorageTestsBase
 
     #region Durable occurrences
 
-    private async Task<QueuedTask> PersistSchedule(DateTimeOffset cursorUtc, int scheduleVersion = 0,
+    private async Task<QueuedTask> PersistSchedule(DateTimeOffset? cursorUtc, int scheduleVersion = 0,
                                                    QueuedTaskStatus status = QueuedTaskStatus.Queued)
     {
         var schedule = new QueuedTask
@@ -2243,7 +2243,7 @@ public abstract class EfCoreTaskStorageTestsBase
             CreatedAtUtc    = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-10)),
             Status          = status,
             IsRecurring     = true,
-            NextRunUtc      = FloorToMicroseconds(cursorUtc),
+            NextRunUtc      = cursorUtc is { } cursor ? FloorToMicroseconds(cursor) : null,
             ScheduleVersion = scheduleVersion,
             QueueName       = "recurring"
         };
@@ -2966,10 +2966,12 @@ public abstract class EfCoreTaskStorageTestsBase
         var schedule = await PersistSchedule(cursor, scheduleVersion: 2);
         var newCursor = FloorToMicroseconds(cursor.AddHours(1));
 
-        (await _storage.UpdateSchedule(schedule.Id, 1, "{\"stale\":true}", "stale", newCursor, null, null, null))
+        (await _storage.UpdateSchedule(schedule.Id, 1, cursor, "{\"stale\":true}", "stale", newCursor, null, null,
+             null))
             .ShouldBeFalse("two concurrent reschedules cannot both win");
 
-        (await _storage.UpdateSchedule(schedule.Id, 2, "{\"fresh\":true}", "fresh", newCursor, 7, null, "{}"))
+        (await _storage.UpdateSchedule(schedule.Id, 2, cursor, "{\"fresh\":true}", "fresh", newCursor, 7, null,
+             "{}"))
             .ShouldBeTrue();
 
         var row = (await _storage.Get(t => t.Id == schedule.Id))[0];
@@ -2978,6 +2980,100 @@ public abstract class EfCoreTaskStorageTestsBase
         row.NextRunUtc.ShouldBe(newCursor);
         row.MaxRuns.ShouldBe(7);
         row.RuntimeInfo.ShouldBe("{}");
+    }
+
+    [Fact]
+    public async Task UpdateSchedule_should_refuse_a_definition_decided_on_a_cursor_a_run_has_moved()
+    {
+        // The version alone is not the state a reschedule decides against: a completed run advances the
+        // cursor AND the run counter without ever touching the version, so a reschedule that read the row
+        // before that run — and sized its bounds on the run count it saw — must lose here. Version-only, it
+        // committed a cursor computed from a budget the completion had already spent, and the series ran one
+        // occurrence past MaxRuns.
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+
+        var advanced = FloorToMicroseconds(cursor.AddHours(1));
+
+        await _storage.UpdateCurrentRun(schedule.Id, 4, advanced, AuditLevel.Full);
+
+        (await _storage.UpdateSchedule(schedule.Id, 0, cursor, "{\"stale\":true}", "stale",
+             FloorToMicroseconds(cursor.AddMinutes(30)), 3, null, null))
+            .ShouldBeFalse("the cursor the reschedule decided against is gone, and so is the run count with it");
+
+        var untouched = (await _storage.Get(t => t.Id == schedule.Id))[0];
+        untouched.ScheduleVersion.ShouldBe(0);
+        untouched.NextRunUtc.ShouldBe(advanced);
+        untouched.MaxRuns.ShouldBeNull();
+
+        // The control: the SAME call, carrying the cursor the row actually stands at, goes through.
+        (await _storage.UpdateSchedule(schedule.Id, 0, advanced, "{\"fresh\":true}", "fresh",
+             FloorToMicroseconds(advanced.AddHours(1)), 3, null, null))
+            .ShouldBeTrue();
+
+        (await _storage.Get(t => t.Id == schedule.Id))[0].ScheduleVersion.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task UpdateSchedule_should_accept_a_null_cursor_expectation_on_a_series_that_ended()
+    {
+        // A finished series is a legitimate reschedule target — dispatching it again under its key is how a
+        // schedule is restarted — and its cursor is null. The compare-and-swap has to read that as IS NULL:
+        // an equality against a null parameter matches nothing in SQL and would refuse every one of them.
+        var schedule = await PersistSchedule(null);
+
+        var cursor = FloorToMicroseconds(DateTimeOffset.UtcNow.AddHours(1));
+
+        (await _storage.UpdateSchedule(schedule.Id, 0, cursor, "{\"stale\":true}", "stale", cursor, null, null,
+             null))
+            .ShouldBeFalse("the row has no cursor, so an expectation of one is a lost race");
+
+        (await _storage.UpdateSchedule(schedule.Id, 0, null, "{\"fresh\":true}", "fresh", cursor, null, null, null))
+            .ShouldBeTrue();
+
+        var row = (await _storage.Get(t => t.Id == schedule.Id))[0];
+        row.ScheduleVersion.ShouldBe(1);
+        row.NextRunUtc.ShouldBe(cursor);
+    }
+
+    [Fact]
+    public async Task UpdateSchedule_should_refuse_a_schedule_that_was_cancelled_under_it()
+    {
+        // The one state neither half of the compare-and-swap answers for: a cancel writes the status and
+        // leaves the version and the cursor exactly where they were, so a reschedule that read the row first
+        // matches on both and writes a live definition and a fresh cursor over a series an operator ended —
+        // then reports success. The row would satisfy no recovery predicate and the series would never run
+        // again, while its caller believed it had.
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+
+        await _storage.SetStatus(schedule.Id, QueuedTaskStatus.Cancelled, null, AuditLevel.Full);
+
+        var newCursor = FloorToMicroseconds(cursor.AddHours(1));
+
+        (await _storage.UpdateSchedule(schedule.Id, 0, cursor, "{\"stale\":true}", "stale", newCursor, null, null,
+             null))
+            .ShouldBeFalse("a cancellation is terminal, and the version and the cursor still match");
+
+        var row = (await _storage.Get(t => t.Id == schedule.Id))[0];
+        row.Status.ShouldBe(QueuedTaskStatus.Cancelled);
+        row.ScheduleVersion.ShouldBe(0);
+        row.NextRunUtc.ShouldBe(cursor);
+        row.RecurringTask.ShouldNotBe("{\"stale\":true}");
+    }
+
+    [Fact]
+    public async Task UpdateSchedule_should_still_accept_a_schedule_that_is_running()
+    {
+        // The control, and the half S3 is about: InProgress is never a refusal. Only Cancelled is.
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor, status: QueuedTaskStatus.InProgress);
+
+        (await _storage.UpdateSchedule(schedule.Id, 0, cursor, "{\"fresh\":true}", "fresh",
+             FloorToMicroseconds(cursor.AddHours(1)), null, null, null))
+            .ShouldBeTrue();
+
+        (await _storage.Get(t => t.Id == schedule.Id))[0].ScheduleVersion.ShouldBe(1);
     }
 
     [Fact]

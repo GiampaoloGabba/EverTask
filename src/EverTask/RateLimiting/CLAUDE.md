@@ -35,6 +35,14 @@ per dispatch, fail-safe) and stamped on `TaskHandlerExecutor` (memory-only, pres
   `TryUnschedule` already removed the registration (Cancel or same-taskKey re-dispatch landed mid-re-park):
   clean up the lot entry + reservation or they leak forever. `IsScheduled(id) == true` means a newer
   registration took over and must survive.
+- **Both re-parks go through `IScheduler.TrySchedule`**, which refuses to replace a registration carrying a
+  NEWER `ScheduleVersion`. That is what keeps the guard above meaning what it says: `TaskScheduleManager` is
+  the first invalidator that moves the epoch and RE-PARKS instead of unscheduling (S4 forbids the window an
+  unschedule would open), so a deferral landing after it would have replaced the reschedule's registration
+  with its own — making `TryUnschedule(id, parked)` succeed and delete the series' only registration. A
+  refused re-park owns no registration, so the deferral drops what would have gone with it, the lot entry and
+  the reservation, and returns `Deferred` with no event: the delivery is dead and the newer registration
+  carries the series.
 - **A DURABLE schedule row never reaches the gate, and never carries a policy.** It runs no handler — its slot
   firing means "materialize what is due" — so `DoWorkGuarded` routes it to the materializer right after the
   blacklist check and BEFORE the gate, and `TaskHandlerWrapperImp.ExtractRateLimit` returns `(null, null)` for

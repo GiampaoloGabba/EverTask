@@ -103,4 +103,25 @@ internal static class ScheduleTimeZone
     /// does together, so an id that will not come back on the next run is refused before it is stored (T2).
     /// </summary>
     internal static string Normalize(string timeZoneId) => Normalize(Resolve(timeZoneId));
+
+    /// <summary>
+    /// Stamps the host's configured default zone (T4) onto a freshly built schedule that is calendar-anchored
+    /// and did not name one itself.
+    /// </summary>
+    /// <remarks>
+    /// It belongs to the moment a definition is BUILT, and nowhere else: the zone becomes part of what gets
+    /// serialized, so a row persisted under one default keeps meaning the same thing when the default changes,
+    /// and recovery — which re-reads that row — never re-applies it. A plain cadence is left alone: it produces
+    /// the same instants in every zone, and <c>Validate</c> refuses a zone on one.
+    /// </remarks>
+    internal static void ApplyDefault(RecurringTask schedule, string? defaultZoneId)
+    {
+        if (defaultZoneId is null || schedule.TimeZoneId != null ||
+            schedule.Semantics != ScheduleSemantics.Calendar)
+        {
+            return;
+        }
+
+        schedule.TimeZoneId = defaultZoneId;
+    }
 }

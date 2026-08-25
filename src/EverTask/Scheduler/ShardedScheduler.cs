@@ -79,14 +79,18 @@ public class ShardedScheduler : IScheduler, IDisposable
         /// <summary>
         /// Schedules a task for execution in this shard.
         /// </summary>
-        public void Schedule(TaskHandlerExecutor item, DateTimeOffset scheduledTime)
+        /// <param name="refuseSuperseded">
+        /// True to leave a registration carrying a newer schedule version in place and answer false, instead
+        /// of replacing it latest-wins.
+        /// </param>
+        public bool Schedule(TaskHandlerExecutor item, DateTimeOffset scheduledTime, bool refuseSuperseded)
         {
             // Post-dispose guard: scheduling after shutdown must not throw into the caller.
             // The task stays in its recoverable status and is re-dispatched at the next startup.
             if (_disposed)
             {
                 _logger.ShardSchedulerDisposed(_shardId, item.PersistenceId);
-                return;
+                return false;
             }
 
             _logger.ShardSchedulingTask(_shardId, item.PersistenceId, scheduledTime);
@@ -95,11 +99,11 @@ public class ShardedScheduler : IScheduler, IDisposable
             // task becomes stale and is discarded at dequeue time (single execution per occurrence).
             // CU19: also evict the stale node from the heap now, so repeated far-future
             // re-registrations of the same id do not accumulate orphans (symmetric with
-            // PeriodicTimerScheduler). Best-effort; the dequeue-time staleness check remains the net.
-            if (_scheduledItems.TryGetValue(item.PersistenceId, out var previous) && !ReferenceEquals(previous, item))
-                _queue.Remove(previous);
+            // PeriodicTimerScheduler). The swap is atomic so that refuseSuperseded can decide on what it
+            // replaces: comparing outside it leaves the very window the conditional registration closes.
+            if (!SwapRegistration(item, refuseSuperseded))
+                return false;
 
-            _scheduledItems[item.PersistenceId] = item;
             _queue.Enqueue(item, scheduledTime);
 
             // Sveglia il timer se è dormiente.
@@ -116,6 +120,44 @@ public class ShardedScheduler : IScheduler, IDisposable
                     // Disposed concurrently with this Schedule: the registration stays parked
                     // and the task is recovered at the next startup (same as the guard above)
                 }
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Puts <paramref name="item"/> in this shard's registry, evicting whatever it replaces from the heap.
+        /// </summary>
+        /// <returns>False only when a newer registration was found and <paramref name="refuseSuperseded"/>
+        /// asked for it to be preserved.</returns>
+        private bool SwapRegistration(TaskHandlerExecutor item, bool refuseSuperseded)
+        {
+            while (true)
+            {
+                if (!_scheduledItems.TryGetValue(item.PersistenceId, out var previous))
+                {
+                    if (_scheduledItems.TryAdd(item.PersistenceId, item))
+                        return true;
+
+                    continue;
+                }
+
+                if (ReferenceEquals(previous, item))
+                    return true;
+
+                if (refuseSuperseded && previous.ScheduleVersion > item.ScheduleVersion)
+                {
+                    _logger.SupersededRegistrationKept(item.PersistenceId, item.ScheduleVersion,
+                        previous.ScheduleVersion);
+
+                    return false;
+                }
+
+                if (!_scheduledItems.TryUpdate(item.PersistenceId, item, previous))
+                    continue;
+
+                _queue.Remove(previous);
+                return true;
             }
         }
 
@@ -404,12 +446,19 @@ public class ShardedScheduler : IScheduler, IDisposable
     /// </summary>
     /// <param name="item">Task handler executor to schedule.</param>
     /// <param name="nextRecurringRun">Next execution time for recurring tasks (overrides item.ExecutionTime).</param>
-    public void Schedule(TaskHandlerExecutor item, DateTimeOffset? nextRecurringRun = null)
+    public void Schedule(TaskHandlerExecutor item, DateTimeOffset? nextRecurringRun = null) =>
+        Register(item, nextRecurringRun, refuseSuperseded: false);
+
+    /// <inheritdoc />
+    public bool TrySchedule(TaskHandlerExecutor item, DateTimeOffset? nextRecurringRun = null) =>
+        Register(item, nextRecurringRun, refuseSuperseded: true);
+
+    private bool Register(TaskHandlerExecutor item, DateTimeOffset? nextRecurringRun, bool refuseSuperseded)
     {
         var scheduledTime = nextRecurringRun ?? item.ExecutionTime;
         ArgumentNullException.ThrowIfNull(scheduledTime);
 
-        GetShard(item.PersistenceId).Schedule(item, scheduledTime.Value);
+        return GetShard(item.PersistenceId).Schedule(item, scheduledTime.Value, refuseSuperseded);
     }
 
     /// <inheritdoc />

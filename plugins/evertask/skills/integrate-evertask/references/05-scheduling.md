@@ -142,9 +142,59 @@ Per-entity keys: `taskKey: $"report-{userId}"` or `"tenant-{tenantId}:billing"`.
 
 ## Managing recurring tasks
 
-- Update schedule: re-dispatch with the same `taskKey` + new schedule (updates if Pending/Queued).
-- Cancel: `dispatcher.Cancel(taskId)` (resolve id via `GetByTaskKey` if you only have the key).
+- Registration-time update: re-dispatch with the same `taskKey` + new schedule (updates if Pending/Queued).
+  Right at startup, where the registering code owns the definition.
+- Runtime update: `ITaskScheduleManager` (below). Right for an admin screen, a tenant setting, a support
+  action — anything changing a series someone else registered.
+- Cancel: `dispatcher.Cancel(taskId)`, or `ITaskScheduleManager.CancelSchedule(taskKey)` when the key is all
+  you have. Terminal either way.
 - Inspect: `ITaskStorage.Get(t => t.IsRecurring)`; `task.CurrentRunCount`, `task.Status`, next run.
+
+## Runtime schedule management (`ITaskScheduleManager`)
+
+Registered by `AddEverTask` next to `ITaskDispatcher`. Schedules are addressed by `taskKey`, occurrences by
+id. Every call needs a registered storage; `Reschedule`/`ReevaluateSchedule`/`ResumeSchedule` rewrite a
+schedule row and need `SupportsScheduleVersioning`, `RequeueFailedOccurrence` needs
+`SupportsDurableOccurrences`, and `CancelSchedule` needs neither. A `Reschedule` whose NEW definition is
+durable (`WithDurableOccurrences()`, or `OnMisfire` picking `FireOnce`/`CatchUp`) needs
+`SupportsDurableOccurrences` too, and is refused before any write. Every built-in storage has both; a store
+missing the one a call needs gets `NotSupportedException`.
+
+```csharp
+public class ScheduleAdmin(ITaskScheduleManager schedules)
+{
+    public Task<ScheduleUpdateResult> MoveDailyReport(TimeOnly at) =>
+        schedules.Reschedule("daily-report",
+            r => r.Schedule().EveryDay().AtTime(at).InTimeZone("Europe/Rome"),
+            RescheduleMode.RebaseFromCursor);
+}
+```
+
+- `Reschedule(taskKey, configure, mode)` replaces the definition; `ReevaluateSchedule(taskKey)` keeps it and
+  recomputes the cursor from now — which on a durable schedule DISCARDS the backlog it still owed, so reach
+  for `ResumeSchedule(taskKey)` when the work is still wanted: it releases a durable catch-up halt KEEPING
+  the cursor, so the backlog is planned again; `RequeueFailedOccurrence(id)` returns one terminal occurrence
+  to the queue with its id, history and audit trail (and spends no run), unless its schedule was cancelled —
+  a cancellation is terminal for every row under it; `CancelSchedule(taskKey)` runs the full cancel pipeline,
+  pending occurrences included.
+- `RescheduleMode.RecalculateFromNow` (default) starts at the new definition's first occurrence after now,
+  dropping a durable backlog and reporting it (`DiscardedBacklog`, plus a monitoring event).
+  `RebaseFromCursor` keeps the schedule inside the day/week/month it was already in — the period is read on
+  the OLD definition's clock, and the new cursor is the NEW definition's slot at the same POSITION inside it.
+  That is what preserves the logical date when only the hour or the zone moves, and what keeps a period
+  holding several slots (`OnDays(Mon, Wed).AtTimes(09:00, 15:00)`) from rewinding onto one that already ran.
+- A rebase is narrow on purpose: same cadence and same day/month selectors (only the time of day, the zone,
+  `RunUntil`/`MaxRuns` and the misfire settings may change), no cron on either side, never crossing into the
+  next period (nor onto a period holding fewer slots than the cursor had already passed), and never past
+  bounds the series has already reached — a `MaxRuns` budget it has spent, or a
+  `RunUntil` its cursor is already at or past. Anything else throws `InvalidOperationException` and writes
+  nothing — fall back to `RecalculateFromNow`.
+- `EveryWeek()` and `EveryMonth()` name no day inside their period, so that day rides on the CURSOR: a rebase
+  keeps the weekday or the day of the month the series was on, and moves only the time of day and the zone.
+- Never refused because a run is in flight. It is immediate for occurrences that have not fired; one already
+  in a worker queue may finish under the old definition, and its advance then applies the new one.
+- Also refused (before any write): an unknown key, a one-shot, a cancelled schedule, and a new definition
+  with no occurrence left — use `CancelSchedule` to end a series on purpose.
 
 ## What the handler knows about the occurrence
 
@@ -188,10 +238,10 @@ r => r.Schedule().EveryDay().AtTime(new TimeOnly(3,0)).WithDurableOccurrences()
   replay may reach (the one ordinary way a slot is lost, always reported); `MaxOccurrences` is how many slots
   one episode may replay.
 - `OverflowPolicy`: `Halt` (default) stops the schedule and writes a durable marker; the passage of time never
-  releases it and neither does a restart, and the API that does (`ResumeSchedule`/`Reschedule`) arrives with
-  runtime schedule management. A halted schedule is not re-parked, so it costs no further deliveries or
-  writes while it waits. Or `SkipOldest`, which keeps the most recent `MaxOccurrences` and drops the rest.
-  Pick `Halt` when a flood of catch-up work would be worse than a stopped schedule.
+  releases it and neither does a restart — only `ITaskScheduleManager.ResumeSchedule`/`Reschedule` does. A
+  halted schedule is not re-parked, so it costs no further deliveries or writes while it waits. Or
+  `SkipOldest`, which keeps the most recent `MaxOccurrences` and drops the rest. Pick `Halt` when a flood of
+  catch-up work would be worse than a stopped schedule.
 - `MaxPendingOccurrences` (default `1`) is how many occurrences may be alive at once; `1` is strictly serial,
   which also stops a handler that overruns its period from overlapping itself.
 - `FireOnce` and `CatchUp` imply durable occurrences. `.BackfillFrom(startUtc)` starts the cursor in the past
@@ -232,3 +282,7 @@ r => r.Schedule().EveryDay().AtTime(new TimeOnly(3,0)).WithDurableOccurrences()
 8. High-frequency → set `auditLevel: AuditLevel.Minimal`/`ErrorsOnly`.
 9. Work defined by its slot rather than by "now" → read `Context.ScheduledAtUtc` (and `Context.Misfire`
    when a stale run should behave differently).
+10. Does anything outside the registration code change the schedule while it runs (an admin screen, a tenant
+    setting, an on-call action)? → `ITaskScheduleManager`, not a re-dispatch: `Reschedule` with
+    `RebaseFromCursor` when only the hour or the zone moves and today's run must stay today's,
+    `RecalculateFromNow` otherwise.

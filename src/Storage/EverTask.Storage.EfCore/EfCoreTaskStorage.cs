@@ -1215,7 +1215,8 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     }
 
     /// <inheritdoc />
-    public virtual async Task<bool> UpdateSchedule(Guid taskId, int expectedScheduleVersion, string recurringTaskJson,
+    public virtual async Task<bool> UpdateSchedule(Guid taskId, int expectedScheduleVersion,
+                                                   DateTimeOffset? expectedCursorUtc, string recurringTaskJson,
                                                    string? recurringInfo, DateTimeOffset? nextRunUtc, int? maxRuns,
                                                    DateTimeOffset? runUntil, string? runtimeInfo,
                                                    CancellationToken ct = default)
@@ -1225,19 +1226,35 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
         var nextRun = nextRunUtc?.ToUniversalTime();
         var until   = runUntil?.ToUniversalTime();
+        var cursor  = expectedCursorUtc?.ToUniversalTime();
 
-        var rows = await dbContext.QueuedTasks
-                                  .Where(t => t.Id == taskId && t.ScheduleVersion == expectedScheduleVersion)
-                                  .ExecuteUpdateAsync(s => s
-                                                           .SetProperty(t => t.RecurringTask, recurringTaskJson)
-                                                           .SetProperty(t => t.RecurringInfo, recurringInfo)
-                                                           .SetProperty(t => t.NextRunUtc, nextRun)
-                                                           .SetProperty(t => t.MaxRuns, maxRuns)
-                                                           .SetProperty(t => t.RunUntil, until)
-                                                           .SetProperty(t => t.RuntimeInfo, runtimeInfo)
-                                                           .SetProperty(t => t.ScheduleVersion,
-                                                               expectedScheduleVersion + 1), ct)
-                                  .ConfigureAwait(false);
+        // Cancelled is refused apart from the version and the cursor because it is the one state NEITHER of
+        // them answers for: a cancel writes the status and leaves both exactly as they were, so a reschedule
+        // that read the row first matches on both and writes a live definition over a series an operator has
+        // ended. Every other status stays a legitimate target — a schedule that is running is rescheduled (S3).
+        var candidates = dbContext.QueuedTasks
+                                  .Where(t => t.Id == taskId
+                                              && t.ScheduleVersion == expectedScheduleVersion
+                                              && t.Status != QueuedTaskStatus.Cancelled);
+
+        // Two predicates rather than one over a nullable parameter: a null expectation means "the series has
+        // ended", which in SQL is IS NULL and never an equality — comparing against a null parameter matches
+        // no row at all and would turn a legitimate reschedule of a finished series into a lost race.
+        candidates = cursor is { } expected
+                         ? candidates.Where(t => t.NextRunUtc == expected)
+                         : candidates.Where(t => t.NextRunUtc == null);
+
+        var rows = await candidates
+                         .ExecuteUpdateAsync(s => s
+                                                  .SetProperty(t => t.RecurringTask, recurringTaskJson)
+                                                  .SetProperty(t => t.RecurringInfo, recurringInfo)
+                                                  .SetProperty(t => t.NextRunUtc, nextRun)
+                                                  .SetProperty(t => t.MaxRuns, maxRuns)
+                                                  .SetProperty(t => t.RunUntil, until)
+                                                  .SetProperty(t => t.RuntimeInfo, runtimeInfo)
+                                                  .SetProperty(t => t.ScheduleVersion,
+                                                      expectedScheduleVersion + 1), ct)
+                         .ConfigureAwait(false);
 
         return rows > 0;
     }

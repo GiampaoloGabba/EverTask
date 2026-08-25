@@ -607,8 +607,8 @@ public class ExecutionContextIntegrationTests : IsolatedIntegrationTestBase
         // Two real schedule updates leave the row at version 2, exactly where a pair of reschedules would.
         for (var expectedVersion = 0; expectedVersion < 2; expectedVersion++)
         {
-            (await Storage.UpdateSchedule(scheduleId, expectedVersion, definition, "every 1 second(s)", cursor,
-                 null, null, null))
+            (await Storage.UpdateSchedule(scheduleId, expectedVersion, cursor, definition, "every 1 second(s)",
+                 cursor, null, null, null))
                 .ShouldBeTrue("the compare-and-swap of the schedule update must win on an untouched row");
         }
 

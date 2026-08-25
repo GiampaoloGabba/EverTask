@@ -8,7 +8,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Respawn;
 using Shouldly;
-using Testcontainers.MsSql;
 using Xunit;
 
 namespace EverTask.Tests.Storage;
@@ -21,27 +20,14 @@ namespace EverTask.Tests.Storage;
 [Collection("DatabaseTests")]
 public class AuditLevelIntegrationTests : IsolatedIntegrationTestBase, IAsyncLifetime
 {
-    private static MsSqlContainer? _sqlContainer;
-    private static bool _containerInitialized;
-    private static readonly object _lock = new();
-    private static string _connectionString = "";
+    private string _connectionString = "";
     private Respawner? _respawner;
 
     private ITaskStoreDbContext GetDbContext() => Host!.Services.GetRequiredService<ITaskStoreDbContext>();
 
     public async Task InitializeAsync()
     {
-        // Initialize container once for all tests
-        lock (_lock)
-        {
-            if (!_containerInitialized)
-            {
-                _sqlContainer = new MsSqlBuilder("mcr.microsoft.com/mssql/server:2022-latest").Build();
-                _sqlContainer.StartAsync().GetAwaiter().GetResult();
-                _connectionString = _sqlContainer.GetConnectionString();
-                _containerInitialized = true;
-            }
-        }
+        _connectionString = await SqlServerTestContainer.GetConnectionStringAsync();
 
         // Clean database before each test
         await CleanUpDatabase();

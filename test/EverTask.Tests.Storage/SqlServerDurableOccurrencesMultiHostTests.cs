@@ -11,7 +11,6 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Respawn;
 using Shouldly;
-using Testcontainers.MsSql;
 using Xunit;
 
 namespace EverTask.Tests.Storage;
@@ -27,41 +26,20 @@ namespace EverTask.Tests.Storage;
 /// explicitly rather than leaving it to be discovered. It is the test the distributed-execution-lease epic
 /// will invert.
 /// </remarks>
-/// <summary>
-/// The container of the two tests below, RELEASED when the class is done with it.
-/// </summary>
-/// <remarks>
-/// The other SQL Server suites here keep theirs in a static that lives until the process exits, which is fine
-/// for four of them and would not be for a fifth: a SQL Server container is about two gigabytes, and the run
-/// already keeps several alive at once. A class fixture is disposed after the last test of the class, so this
-/// one only costs what it is being used for.
-/// </remarks>
-public sealed class SqlServerMultiHostContainer : IAsyncLifetime
-{
-    private readonly MsSqlContainer _container = new MsSqlBuilder("mcr.microsoft.com/mssql/server:2022-latest").Build();
-
-    public string ConnectionString { get; private set; } = "";
-
-    public async Task InitializeAsync()
-    {
-        await _container.StartAsync();
-        ConnectionString = _container.GetConnectionString();
-    }
-
-    public Task DisposeAsync() => _container.DisposeAsync().AsTask();
-}
-
 [Collection("DatabaseTests")]
-public sealed class SqlServerDurableOccurrencesMultiHostTests(SqlServerMultiHostContainer container)
-    : IClassFixture<SqlServerMultiHostContainer>, IAsyncLifetime
+public sealed class SqlServerDurableOccurrencesMultiHostTests : IAsyncLifetime
 {
-    private readonly string _connectionString = container.ConnectionString;
+    private string _connectionString = "";
 
     private Respawner? _respawner;
     private readonly DurableOccurrenceRecorder _recorder = new();
     private readonly List<IHost> _hosts = [];
 
-    public Task InitializeAsync() => CleanUpDatabase();
+    public async Task InitializeAsync()
+    {
+        _connectionString = await SqlServerTestContainer.GetConnectionStringAsync();
+        await CleanUpDatabase();
+    }
 
     public async Task DisposeAsync()
     {

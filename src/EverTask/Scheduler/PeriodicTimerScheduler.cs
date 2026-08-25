@@ -89,7 +89,18 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
 
     internal ConcurrentPriorityQueue<TaskHandlerExecutor, DateTimeOffset> GetQueue() => _queue;
 
-    public void Schedule(TaskHandlerExecutor item, DateTimeOffset? nextRecurringRun = null)
+    public void Schedule(TaskHandlerExecutor item, DateTimeOffset? nextRecurringRun = null) =>
+        Register(item, nextRecurringRun, refuseSuperseded: false);
+
+    /// <inheritdoc />
+    public bool TrySchedule(TaskHandlerExecutor item, DateTimeOffset? nextRecurringRun = null) =>
+        Register(item, nextRecurringRun, refuseSuperseded: true);
+
+    /// <param name="refuseSuperseded">
+    /// True to leave a registration carrying a newer schedule version in place and answer false, instead of
+    /// replacing it latest-wins.
+    /// </param>
+    private bool Register(TaskHandlerExecutor item, DateTimeOffset? nextRecurringRun, bool refuseSuperseded)
     {
         DateTimeOffset scheduledTime;
         if (item.RecurringTask != null && nextRecurringRun != null)
@@ -108,19 +119,20 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
         if (_disposed)
         {
             _logger.SchedulerDisposed(item.PersistenceId);
-            return;
+            return false;
         }
 
         // Latest-wins registration per PersistenceId: a previously parked entry for the same task
         // (e.g. recovery racing with a taskKey re-registration at startup) becomes stale and is
         // discarded at dequeue time, so the task executes only once per occurrence.
         // CU19: also evict the stale node from the heap now, so repeated far-future re-registrations
-        // of the same id do not accumulate orphans retained until their due time. Best-effort: if a
-        // concurrent Schedule races this, the dequeue-time staleness check is still the safety net.
-        if (_scheduledItems.TryGetValue(item.PersistenceId, out var previous) && !ReferenceEquals(previous, item))
-            _queue.Remove(previous);
+        // of the same id do not accumulate orphans retained until their due time.
+        // The swap itself is atomic so that refuseSuperseded can DECIDE on what it replaces: comparing
+        // outside it would leave a window in which the newer registration arrives between the comparison
+        // and the write, which is the whole race the conditional registration exists to close.
+        if (!SwapRegistration(item, refuseSuperseded))
+            return false;
 
-        _scheduledItems[item.PersistenceId] = item;
         _queue.Enqueue(item, scheduledTime);
 
         // Sveglia il timer se è dormiente (coda era vuota)
@@ -138,6 +150,44 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
                 // Disposed concurrently with this Schedule: the registration stays parked and
                 // the task is recovered at the next startup (same as the guard above)
             }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Puts <paramref name="item"/> in the registry, evicting whatever it replaces from the heap.
+    /// </summary>
+    /// <returns>False only when a newer registration was found and <paramref name="refuseSuperseded"/> asked
+    /// for it to be preserved.</returns>
+    private bool SwapRegistration(TaskHandlerExecutor item, bool refuseSuperseded)
+    {
+        while (true)
+        {
+            if (!_scheduledItems.TryGetValue(item.PersistenceId, out var previous))
+            {
+                if (_scheduledItems.TryAdd(item.PersistenceId, item))
+                    return true;
+
+                continue;
+            }
+
+            if (ReferenceEquals(previous, item))
+                return true;
+
+            if (refuseSuperseded && previous.ScheduleVersion > item.ScheduleVersion)
+            {
+                _logger.SupersededRegistrationKept(item.PersistenceId, item.ScheduleVersion,
+                    previous.ScheduleVersion);
+
+                return false;
+            }
+
+            if (!_scheduledItems.TryUpdate(item.PersistenceId, item, previous))
+                continue;
+
+            _queue.Remove(previous);
+            return true;
         }
     }
 

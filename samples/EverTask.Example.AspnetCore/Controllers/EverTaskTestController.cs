@@ -9,14 +9,20 @@ namespace EverTask.Example.AspnetCore.Controllers;
 [Route("[controller]")]
 public class EverTaskTestController : ControllerBase
 {
+    /// <summary>The key the nightly cleanup is registered under, and the name every schedule call uses.</summary>
+    private const string CleanupKey = "nightly-cleanup";
+
     private readonly ITaskDispatcher _dispatcher;
+    private readonly ITaskScheduleManager _schedules;
     private readonly IEverTaskWorkerExecutor _executor;
     private readonly ILogger<EverTaskTestController> _logger;
 
-    public EverTaskTestController(ITaskDispatcher dispatcher, IEverTaskWorkerExecutor executor,
+    public EverTaskTestController(ITaskDispatcher dispatcher, ITaskScheduleManager schedules,
+                                  IEverTaskWorkerExecutor executor,
                                   ILogger<EverTaskTestController> logger)
     {
         _dispatcher = dispatcher;
+        _schedules  = schedules;
         _executor   = executor;
         _logger     = logger;
 
@@ -107,20 +113,60 @@ public class EverTaskTestController : ControllerBase
 
     [SwaggerOperation(
         Summary = "Schedule a recurring cleanup task",
-        Description = "Schedules a cleanup task to run every minute in the recurring queue")
+        Description = "Schedules a cleanup task to run every night at 03:00 in Rome, under the task key " +
+                      "'nightly-cleanup' so a restart updates it instead of duplicating it")
     ]
     [HttpGet("schedule-cleanup")]
     public async Task<IActionResult> ScheduleCleanup()
     {
         var taskId = await _dispatcher.Dispatch(
             new CleanupExpiredDataTask(),
-            recurring => recurring.Schedule().EveryMinute());
+            recurring => recurring.Schedule().EveryDay().AtTime(new TimeOnly(3, 0)).InTimeZone("Europe/Rome"),
+            taskKey: CleanupKey);
 
         return Ok(new
         {
-            message = "Cleanup task scheduled to run every minute in the recurring queue",
+            message = "Cleanup task scheduled for 03:00 Europe/Rome in the recurring queue",
             taskId
         });
+    }
+
+    [SwaggerOperation(
+        Summary = "Move the nightly cleanup to another hour",
+        Description = "The runtime counterpart of the endpoint above: it changes a schedule that is already " +
+                      "registered, keeping it on the day it was already on (RebaseFromCursor). A run already " +
+                      "in progress is never a reason to refuse — it simply recomputes when it finishes.")
+    ]
+    [HttpPost("reschedule-cleanup")]
+    public async Task<IActionResult> RescheduleCleanup([FromQuery] int hour, [FromQuery] int minute = 0)
+    {
+        var result = await _schedules.Reschedule(
+            CleanupKey,
+            recurring => recurring.Schedule()
+                                  .EveryDay()
+                                  .AtTime(new TimeOnly(hour, minute))
+                                  .InTimeZone("Europe/Rome"),
+            RescheduleMode.RebaseFromCursor);
+
+        return Ok(new
+        {
+            message = $"Nightly cleanup moved to {hour:D2}:{minute:D2} Europe/Rome",
+            result.TaskId,
+            result.ScheduleVersion,
+            previousNextRun = result.PreviousNextRunUtc,
+            nextRun         = result.NextRunUtc
+        });
+    }
+
+    [SwaggerOperation(
+        Summary = "Cancel the nightly cleanup by its task key",
+        Description = "Cancels the schedule and every occurrence of it still pending, without needing the id")
+    ]
+    [HttpDelete("cancel-cleanup")]
+    public async Task<IActionResult> CancelCleanup()
+    {
+        await _schedules.CancelSchedule(CleanupKey);
+        return Ok(new { message = "Nightly cleanup cancelled" });
     }
 
     [SwaggerOperation(

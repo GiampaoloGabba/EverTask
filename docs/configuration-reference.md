@@ -19,6 +19,7 @@ This is a complete reference for all EverTask configuration options.
 - [Monitoring Configuration](#monitoring-configuration)
 - [Storage Provider Details](#storage-provider-details)
 - [Handler Configuration](#handler-configuration)
+- [Runtime Schedule Management](#runtime-schedule-management)
 - [Complete Examples](#complete-examples)
 - [Configuration Validation](#configuration-validation)
 - [Performance Tuning Guidelines](#performance-tuning-guidelines)
@@ -2034,13 +2035,81 @@ The `Action<IRecurringTaskBuilder>` overload of `Dispatch` configures a recurrin
 
 - `.OnMisfire(m => m.Skip())` is the default written out: missed slots are dropped, at most the one still current runs, and no occurrence rows are created.
 - `.OnMisfire(m => m.FireOnce(options))` collapses a whole run of missed slots into ONE occurrence at the most recent of them, with the range it covers in `ITaskExecutionContext.Misfire`. `FireOnceOptions.MaxAge` (default `null`) drops the run entirely when even its newest slot is older than the window.
-- `.OnMisfire(m => m.CatchUp(options))` replays every missed slot, oldest first. `CatchUpOptions(maxAge, maxOccurrences)` requires both caps; `MaxPendingOccurrences` (default `1`) is how many occurrences may be alive at once; `OverflowPolicy` is `Halt` (default — nothing is materialized, a durable marker is written, the schedule stops being parked so it costs no further deliveries or writes, and neither time nor a restart releases it: the API that does arrives with runtime schedule management) or `SkipOldest`, which keeps the most recent `MaxOccurrences`.
+- `.OnMisfire(m => m.CatchUp(options))` replays every missed slot, oldest first. `CatchUpOptions(maxAge, maxOccurrences)` requires both caps; `MaxPendingOccurrences` (default `1`) is how many occurrences may be alive at once; `OverflowPolicy` is `Halt` (default — nothing is materialized, a durable marker is written, the schedule stops being parked so it costs no further deliveries or writes, and neither time nor a restart releases it: only [`ResumeSchedule` or `Reschedule`](#runtime-schedule-management) does) or `SkipOldest`, which keeps the most recent `MaxOccurrences`.
 - Both replaying policies imply durable occurrences; `.WithDurableOccurrences()` gives the rows without the replay.
 - `.BackfillFrom(startUtc)` starts the cursor at the first occurrence on or after `startUtc` instead of after the dispatch. New registrations only, and still bounded by the caps above.
 - Requires a storage that implements the atomic occurrence operations. Every built-in provider does; a custom one that does not is refused at dispatch with `NotSupportedException`.
 - Contracts: at-least-once (write idempotent handlers) and **one active host**. Full rules: [Durable Occurrences](recurring-tasks/durable-occurrences.md).
 
 > `OnLast(DayOfWeek)` is **not** implemented (only `OnFirst`). For idempotent registration across restarts, pass a stable `taskKey` (see [Dispatch Parameters](#dispatch-parameters)).
+
+## Runtime Schedule Management
+
+`ITaskScheduleManager` changes a schedule that is already registered. `AddEverTask` registers it next to `ITaskDispatcher`, which is untouched: a dispatch registers a schedule, this manages the one already registered. Schedules are addressed by the `taskKey` they were dispatched with; occurrences by their own id.
+
+```csharp
+public class ScheduleAdmin(ITaskScheduleManager schedules)
+{
+    public Task<ScheduleUpdateResult> MoveDailyReport(TimeOnly at) =>
+        schedules.Reschedule(
+            "daily-report",
+            r => r.Schedule().EveryDay().AtTime(at).InTimeZone("Europe/Rome"),
+            RescheduleMode.RebaseFromCursor);
+}
+```
+
+| Method | Returns | Purpose |
+|--------|---------|---------|
+| `Reschedule(taskKey, configure, mode, ct)` | `ScheduleUpdateResult` | Replace the definition and choose a new cursor |
+| `ReevaluateSchedule(taskKey, ct)` | `ScheduleUpdateResult` | Keep the definition, recompute the cursor from now — a durable backlog is discarded |
+| `ResumeSchedule(taskKey, ct)` | `ScheduleUpdateResult` | Release a durable catch-up halt, keeping the cursor |
+| `RequeueFailedOccurrence(occurrenceId, ct)` | `bool` | Put one terminal occurrence back in the queue |
+| `CancelSchedule(taskKey, ct)` | `Task` | Cancel the schedule and every pending occurrence of it |
+
+**Requirements.** Every method needs a registered storage, and beyond that each one asks for what it actually uses. `Reschedule`, `ReevaluateSchedule` and `ResumeSchedule` rewrite a schedule row and need `SupportsScheduleVersioning`; `RequeueFailedOccurrence` addresses a child row and needs `SupportsDurableOccurrences`; `CancelSchedule` needs neither, because writing a cancellation is something every storage has always done. What a call is asked to WRITE counts too: a `Reschedule` whose new definition turns the schedule durable — `WithDurableOccurrences()`, or an `OnMisfire` policy of `FireOnce`/`CatchUp` — needs `SupportsDurableOccurrences` on top of the versioning, and is refused before anything is written, exactly as a dispatch of the same definition would be. Both capabilities are true for all built-in providers. A storage without the one a call needs throws `NotSupportedException` rather than degrading: without a real compare-and-swap a reschedule could report success while a run finishing at the same moment silently overwrote it, and there is no half-atomic emulation of the occurrence operations to fall back on.
+
+**Storage is the source of truth.** Each schedule row carries a `ScheduleVersion`. A reschedule writes the definition, the cursor, the bounds and the version in one conditional update, guarded by the version it read; every advance of a managed schedule carries the version its run belonged to, so a completion that lands after a reschedule loses the guard, records its run against the row's own cursor and lets the new definition stand.
+
+### RescheduleMode
+
+`RecalculateFromNow` (the default) points the cursor at the new definition's first occurrence after now. On a durable schedule, whatever the old definition still owed is dropped and reported — `DiscardedBacklog`, `DiscardedBacklogIsExact` and a monitoring event naming the count.
+
+`RebaseFromCursor` keeps the schedule inside the calendar period it was already in. The day, week or month the old cursor fell in is read on the old definition's clock, and the new cursor is the new definition's occurrence at the same POSITION inside that period, read on the new one. That is what preserves the logical date when the time of day or the zone changes. Position matters as soon as a period holds more than one slot: with `OnDays(Monday, Wednesday).AtTimes(09:00, 15:00)`, a cursor standing on the afternoon run rebases onto the new afternoon time and never back onto the morning one that has already run — which would replay it and spend one more of `MaxRuns`, where `RecalculateFromNow` on the same definition answers the later slot. It is refused, with `InvalidOperationException` and no write, when:
+
+- the two definitions have different shapes (a different cadence, different weekday or month selectors, a different period kind — only the time of day, the zone, `RunUntil`/`MaxRuns` and the misfire settings may move);
+- either side is a cron schedule, which states no nominal period;
+- the period holds no slot of the new definition, or fewer slots than the cursor had already passed, so there is no position to land on. A rebase never crosses into the next period: doing so would skip a period of work or replay one;
+- the new definition's bounds are already past. `RunUntil` and `MaxRuns` are what an operator changes to wind a series down, and the period arithmetic applies neither: a plain cadence keeps its cursor verbatim and the day-carrying cadences place their slot by hand, so neither ever asks the grid, which is the only thing that applies `RunUntil`. Both bounds are checked here instead. A definition one mode would refuse is refused by the other too, rather than running one occurrence past the end just set.
+
+A plain cadence has no calendar structure to preserve, so its cursor is carried over unchanged — which is how a halted catch-up keeps its backlog while its caps are widened. A week or month cadence that names no day inside its period — `EveryWeek()` and `EveryMonth()` without `OnDay`/`OnDays`/`OnFirst` — carries that day on the cursor rather than in the definition, so the day it was already on is what the rebase keeps, and only the time of day and the zone move.
+
+### Linearization
+
+A reschedule takes effect immediately for occurrences that have not fired: the scheduler's registration is replaced in place, with no window in which the schedule is parked nowhere. A delivery already handed to a worker queue is past the scheduler's reach and is considered fired; inside the process that rescheduled it, EverTask drops that delivery rather than running the definition just replaced. After a restart nothing has been published, so a delivery recovered from storage always runs and its advance is what applies the new definition.
+
+If the re-park itself fails, nothing is published and the update still stands: the previous occurrence runs once more, and its advance loses the compare-and-swap, applies the new definition and parks the schedule from the row it has just read — so a re-park that threw costs one extra run of the old definition, never a series that stops.
+
+### ScheduleUpdateResult
+
+| Property | Meaning |
+|----------|---------|
+| `TaskId` | The schedule row that was updated |
+| `ScheduleVersion` / `PreviousScheduleVersion` | The version now on the row, and the one it replaced |
+| `NextRunUtc` / `PreviousNextRunUtc` | Where the schedule now stands, and where it stood |
+| `Mode` | The mode the cursor was decided with |
+| `DiscardedBacklog` / `DiscardedBacklogIsExact` | Due slots this call dropped, and whether that number is a total or a lower bound |
+| `ReleasedHalt` | Whether this call cleared a durable catch-up halt |
+
+### What it refuses
+
+`InvalidOperationException`, always before anything is written:
+
+- no task carries that key, or the task it names is a one-shot;
+- the schedule was cancelled — a cancellation is terminal, dispatch it again;
+- the new definition has no occurrence left to run (its bounds are already past). Use `CancelSchedule` to end a series on purpose, instead of leaving a row nothing can finish;
+- the row's payload or definition cannot be rebuilt by this build;
+- a rebase that cannot map the cursor (see above);
+- the row changed under the call and the conditional update lost. Read it again and retry.
 
 ## Complete Examples
 

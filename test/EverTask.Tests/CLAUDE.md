@@ -105,6 +105,69 @@ Docker or Testcontainers here. Subsets filter on namespace: `--filter "FullyQual
   branch's once-per-process warning, which publishes no monitoring event of its own. What the durable surface
   REFUSES — every cap, window and enum, the `OnMisfire` callback that picks none or two, and the two host
   knobs — is `Occurrences/DurableOccurrenceOptionsValidationTests`.
+- **Runtime schedule management**: `IntegrationTests/RescheduleIntegrationTests` builds every host over one
+  shared `MemoryTaskStorage` (same rows, new process) and drives the REAL worker: the S4 cases hand
+  `WorkerExecutor.DoWork` an executor built from the row BEFORE the reschedule, which is the only honest way
+  to produce a delivery the scheduler can no longer reach. Its `ScheduleFaultingScheduler` is the real
+  `PeriodicTimerScheduler` with one armed `Schedule()` throwing — the shape of a re-park that fails after the
+  new definition is already committed. Two assertions there rely on the in-memory store handing back LIVE
+  entities: read the version or the cursor AFTER the update and it reports what was just written.
+  Its `StartHostAsync` does not return until the host's STARTUP RECOVERY has ended (`StartupRecoveryWatch`
+  waits for `WorkerServiceLog` 1104/1105/1115/1117/1118 on `IEverTaskLogger<WorkerService>`). Recovery
+  captures its cutoff when it BEGINS, on a thread pool thread, not when `StartAsync` returns: a row dispatched
+  in between is created before that cutoff and is re-dispatched like any leftover — one extra `Schedule()` for
+  the id the test is working on, which ate the armed fault and let the re-park succeed. Any test that arms,
+  counts or reads back a registration has to order itself after recovery instead of assuming it. The S1 race
+  is produced, not waited for: `FaultInjectingTaskStorage.RunBefore(CompleteRecurringRun)` runs the
+  `Reschedule` on the worker's own thread, inside the window between the row the advance read and the write it
+  is about to make — the only place a FIRST reschedule can be overwritten.
+  The same `RunBefore` seam produces the two races the manager can LOSE: an `UpdateCurrentRun` in front of
+  `UpdateSchedule` (the reschedule loses the compare-and-swap and must write, publish and park nothing), and
+  a rewrite in front of EVERY `CompleteRecurringRun` attempt, which is the only way to reach the end of the
+  advance's re-aim loop — where the guard is dropped but the run still has to be recorded.
+  Monitoring events are read through `EventsOfAsync`, which subscribes, runs the call and WAITS for every
+  phrase it was given: publishing is fire-and-forget by contract, so a read taken when the call returns is a
+  race, and two events published in a row arrive in no order.
+  The window AFTER that write has its own seam: `RegistrationWatchingScheduler` is the real
+  `PeriodicTimerScheduler` with every registration recorded together with the answer it got, and one armed
+  hook (`RegistrationWatch.ArmBeforeNextRegistrationOf`) that runs the reschedule just before a chosen
+  registration reaches it. That is what puts a reschedule between a delivery deciding what comes next and the
+  moment it hands it over — the advance, the rate-limit skip that writes nothing at all, and the gate's own
+  deferral, each of which used to replace the registration the reschedule had just published.
+  `AcceptedAStaleRegistration` is the assertion those three share: no registration older than one already
+  accepted was ever let through after it. `ScheduleFaultingScheduler` takes that watch too, which is what
+  lets one test hold BOTH halves of a window: a reschedule landing inside a delivery AND its own re-park
+  failing, the only shape where a stranded delivery's registration is all the series has left.
+  The two throttled probes in `TestTasks.ScheduleManagement.cs` are how a test reaches the gate
+  deterministically — one permit an hour with a millisecond horizon rejects every delivery after the first,
+  one permit a second under the default horizon defers it.
+  The two `Resuming_a_halt_…` tests are the two halves of one contract, and the released one is the shape
+  that costs something: a resume replans against the definition AS IT STANDS, so the only thing that can put
+  the same backlog under the same cap is the age window sliding over it — which is exactly what phase 4
+  pins must NOT release a halt by itself. It therefore takes a `FakeTimeProvider` (`StartHostAsync` accepts
+  one) and a `RunUntil` already past, so the backlog can only shrink and the arithmetic is fixed; the halt is
+  produced by calling `OccurrenceMaterializer.RunAsync` on an unstarted host, as the durable suite does.
+  The period arithmetic is `RecurringTests/ScheduleRebaseTests` (pure, no host), including the Rome →
+  Kiritimati case where the rebased instant moves BACKWARDS while the logical day stays put, and the two
+  cadences that name no day (`EveryWeek()`, `EveryMonth()`), whose weekday or day of the month is the grid's
+  phase and lives on the cursor. The periods that hold SEVERAL slots are their own section, and the shapes
+  there are chosen because the grid really produces both: `OnDays(Mon, Wed).AtTimes(...)` fires every listed
+  time on every listed day, while a plain `EveryDay().AtTimes(9, 15)` or `EveryMonth().OnDays(1, 15)` steps
+  its period first and so fires ONCE — pick one of those and the test proves nothing. `EveryWeek()` and
+  `EveryMonth()` are also where the `RunUntil` cases live: they place their slot by hand and never ask the
+  grid, which is the only thing that applies the bound, so each has a refusal test AND a control that still
+  rebases inside a bound it has not reached.
+  `SchedulerVersionedRegistrationTests` is the primitive underneath all of it: `TrySchedule` refuses a
+  registration older than the one parked, on both schedulers, while `Schedule` still replaces whatever it
+  finds — and an `IScheduler` that does not implement the member keeps registering unconditionally through
+  its default body.
+  What the manager refuses BEFORE it does anything is `IntegrationTests/ScheduleManagementValidationTests`:
+  every argument of the surface the phase introduced, the capability gate ONE BRANCH AT A TIME (the three
+  calls that rewrite a schedule row over a store with durable occurrences and no versioning, a requeue over
+  the mirror image, and a cancel that goes through over a store with neither), and a host with no storage
+  under it. Its double is `TestHelpers/CapabilityBlindStorage` — `MemoryTaskStorage` re-implementing
+  `ITaskStorage` to answer whatever the test asks for the two capability flags, the only way to reach those
+  refusals without a mock that would break the host.
 - **Running startup recovery without a host**: `TestHelpers/RecoveryHarness.CreateRecoveryService(storage, …)`
   builds the REAL `WorkerService` around a storage you choose, so pagination, the two waves and the L18
   accounting all execute. `internal`, and shared with `EverTask.Tests.Storage` through this assembly's
