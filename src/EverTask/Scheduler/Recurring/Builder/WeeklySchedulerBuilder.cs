@@ -53,4 +53,30 @@ public class WeeklySchedulerBuilder(RecurringTask task, TimeProvider? timeProvid
 
     IBuildableSchedulerBuilder IBuildableSchedulerBuilder.InTimeZone(string timeZoneId) =>
         InTimeZone(timeZoneId);
+
+    public IWeeklySchedulerBuilder OnMisfire(Action<IMisfirePolicyBuilder> configure)
+    {
+        ScheduleModifiers.OnMisfire(task, configure);
+        return this;
+    }
+
+    public IWeeklySchedulerBuilder WithDurableOccurrences()
+    {
+        ScheduleModifiers.WithDurableOccurrences(task);
+        return this;
+    }
+
+    public IWeeklySchedulerBuilder BackfillFrom(DateTimeOffset startUtc)
+    {
+        ScheduleModifiers.BackfillFrom(task, startUtc);
+        return this;
+    }
+
+    IBuildableSchedulerBuilder IBuildableSchedulerBuilder.OnMisfire(Action<IMisfirePolicyBuilder> configure) =>
+        OnMisfire(configure);
+
+    IBuildableSchedulerBuilder IBuildableSchedulerBuilder.WithDurableOccurrences() => WithDurableOccurrences();
+
+    IBuildableSchedulerBuilder IBuildableSchedulerBuilder.BackfillFrom(DateTimeOffset startUtc) =>
+        BackfillFrom(startUtc);
 }

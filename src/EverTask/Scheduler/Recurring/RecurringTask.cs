@@ -43,6 +43,29 @@ public class RecurringTask
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? TimeZoneId { get; set; }
 
+    /// <summary>
+    /// What this schedule does with a slot that came due while nothing was there to run it, or <c>null</c> for
+    /// the legacy behaviour (skip).
+    /// </summary>
+    /// <remarks>
+    /// Omitted from the JSON while it is null, so the serialized form of every schedule written before misfire
+    /// policies existed stays byte-identical. A policy that replays missed work implies
+    /// <see cref="Abstractions.OccurrenceMode.Durable"/>; see <see cref="Validate"/>.
+    /// </remarks>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MisfireSettings? Misfire { get; set; }
+
+    /// <summary>
+    /// Where a durable schedule's cursor starts, when it should not start at the first occurrence after the
+    /// dispatch: the first occurrence on or after this instant, inclusive (M11).
+    /// </summary>
+    /// <remarks>
+    /// Omitted from the JSON while it is null, for the same byte-parity reason as the members above. Only a
+    /// durable schedule may carry one — an inline schedule has nowhere to put the replayed occurrences.
+    /// </remarks>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? BackfillFromUtc { get; set; }
+
     private TimeZoneInfo? _zone;
     private string?       _zoneId;
 
@@ -100,9 +123,7 @@ public class RecurringTask
     /// a throw when the id no longer resolves: a delivery must not fail over what it reports about itself.
     /// </summary>
     internal DateTimeOffset? ToScheduleLocalTime(DateTimeOffset? utcInstant) =>
-        utcInstant is { } instant && ScheduleTimeZone.TryResolve(TimeZoneId, out var zone)
-            ? WallClock.ToWall(instant, zone)
-            : null;
+        ScheduleTimeZone.ToLocalTime(TimeZoneId, utcInstant);
 
     /// <summary>
     /// Stores <paramref name="timeZone"/> as the id that will bring it back on the next run (T2). The one
@@ -154,6 +175,45 @@ public class RecurringTask
         MonthInterval?.Validate();
 
         ValidateTimeZone();
+        ValidateMisfire();
+    }
+
+    /// <summary>
+    /// True when every due slot of this schedule becomes its own durable row instead of the schedule row
+    /// running the handler itself.
+    /// </summary>
+    internal bool IsDurable => OccurrenceMode == OccurrenceMode.Durable;
+
+    /// <summary>The policy in force, with the legacy default spelled out for a schedule that declared none.</summary>
+    internal MisfirePolicy MisfirePolicy => Misfire?.Policy ?? Abstractions.MisfirePolicy.Skip;
+
+    /// <summary>
+    /// The two rules that tie a misfire policy to an occurrence mode (M3): a policy that REPLAYS missed work
+    /// needs somewhere durable to put the replay, and an inline schedule has nowhere.
+    /// </summary>
+    /// <remarks>
+    /// Refused rather than promoted silently. The fluent builders set both together, so this only fires for a
+    /// definition built by hand or deserialized from a row someone edited — and for those, quietly turning an
+    /// inline schedule durable would change where its executions live.
+    /// </remarks>
+    private void ValidateMisfire()
+    {
+        Misfire?.Validate();
+
+        if (MisfirePolicy != Abstractions.MisfirePolicy.Skip && !IsDurable)
+        {
+            throw new InvalidOperationException(
+                $"The misfire policy '{MisfirePolicy}' replays missed occurrences, which needs durable " +
+                "occurrences: every replayed slot becomes its own row. Call WithDurableOccurrences(), or set " +
+                "OccurrenceMode to Durable on a hand-built definition.");
+        }
+
+        if (BackfillFromUtc != null && !IsDurable)
+        {
+            throw new InvalidOperationException(
+                "BackfillFrom only applies to a durable schedule: an inline one runs the handler from the " +
+                "schedule row itself and has nowhere to put the backfilled occurrences.");
+        }
     }
 
     /// <summary>
@@ -531,8 +591,10 @@ public class RecurringTask
     // guarantees termination against a pathological/misbehaving interval.
     private const int MaxNextRunWalkIterations = 2_000_000;
 
-    // Skip COUNT is logging-only (Option B: it never consumes MaxRuns), so this cap is a pure cost bound:
-    // beyond it the count is under-reported but the next run is unaffected. Matches the historical cron cap.
+    // The walk's bound for the ask that carries NO cap — the logging-only skip count (Option B: it never
+    // consumes MaxRuns), where under-reporting costs nothing but a smaller number in a log line. Matches the
+    // historical cron cap. It is NOT a second bound on a caller that passed one: a walk that stopped here
+    // would answer "10,001" to a question asked with a larger cap, and 10,001 <= cap reads as a total.
     private const int MaxSkipCountIterations = 10_000;
 
     /// <summary>
@@ -590,6 +652,85 @@ public class RecurringTask
     }
 
     /// <summary>
+    /// How many steps the backfill walk may take before giving up. The probe below starts at most a couple of
+    /// periods before the answer, so two or three steps is the real cost; the bound is here so a pathological
+    /// definition cannot spin.
+    /// </summary>
+    private const int MaxBackfillProbeSteps = 64;
+
+    /// <summary>
+    /// How far back the backfill probe may reach, as a multiple of the schedule's own period, before it gives
+    /// up looking for a slot at or before <c>instant</c>. Doubling from one period, so a period the estimate
+    /// underestimates (a 30-day month, a day interval riding on <c>OnDays</c>) is still covered.
+    /// </summary>
+    private const int MaxBackfillProbeBackoffs = 8;
+
+    /// <summary>
+    /// The first occurrence at or ON <paramref name="instant"/> — the cursor a backfilled durable schedule
+    /// starts from (M11). Null when the grid produces none, or when the series already ends before it.
+    /// </summary>
+    /// <remarks>
+    /// Every other question the grid answers is "strictly after", and a probe placed just before
+    /// <paramref name="instant"/> would be wrong for most of them: a Day, Week or Month interval advances its
+    /// PERIOD before choosing a time inside it, so the first answer from such a probe already sits a whole
+    /// period past the slot the caller asked to start from — and a forward-only walk can never come back for
+    /// it. The probe therefore steps BACK by a period first (doubling while the grid still answers past
+    /// <paramref name="instant"/>, since the period estimate is approximate for months and for day-of-week
+    /// selectors) and the walk then comes forward to the first slot that is not earlier than
+    /// <paramref name="instant"/>.
+    /// </remarks>
+    internal DateTimeOffset? FirstOccurrenceOnOrAfter(DateTimeOffset instant)
+    {
+        var slot = FirstOccurrenceAfterBackfillProbe(instant);
+
+        for (var i = 0; i < MaxBackfillProbeSteps && slot is { } current && current < instant; i++)
+        {
+            var next = GetNextOccurrence(current);
+            if (next is null || next <= current)
+                return null;
+
+            slot = next;
+        }
+
+        return slot is { } value && value >= instant ? value : null;
+    }
+
+    /// <summary>
+    /// The grid's first answer from a probe far enough before <paramref name="instant"/> that the walk cannot
+    /// have already passed the slot being looked for.
+    /// </summary>
+    private DateTimeOffset? FirstOccurrenceAfterBackfillProbe(DateTimeOffset instant)
+    {
+        // Anchored on `instant`, never on the wall clock: this runs on the dispatch path, where every
+        // scheduling decision reads the injected clock (P9), and a cron's period is measured by probing it.
+        var period = GetMinimumInterval(instant);
+
+        if (period <= TimeSpan.Zero)
+            period = TimeSpan.FromSeconds(1);
+
+        DateTimeOffset? first = null;
+
+        for (var i = 0; i < MaxBackfillProbeBackoffs; i++)
+        {
+            // Only representable instants: a schedule anchored near DateTimeOffset.MinValue cannot step back
+            // any further, and the last answer it gave is the best one there is.
+            if (instant - DateTimeOffset.MinValue <= period)
+                return first ?? GetNextOccurrence(DateTimeOffset.MinValue);
+
+            first = GetNextOccurrence(instant - period);
+
+            // The probe reached a slot at or before `instant`: the walk in the caller now only has to come
+            // forward, and it cannot skip anything on the way.
+            if (first is not { } candidate || candidate <= instant)
+                return first;
+
+            period += period;
+        }
+
+        return first;
+    }
+
+    /// <summary>
     /// True iff <paramref name="occurrence"/> is still the current one to run — i.e. the NEXT occurrence
     /// after it has not yet come due at <paramref name="now"/>. Used by recovery to decide whether a
     /// just-slipped occurrence should be executed now (grace) or skipped forward. Calendar-exact: it
@@ -627,6 +768,17 @@ public class RecurringTask
     }
 
     /// <summary>
+    /// True when <see cref="CountMissedOccurrences"/> answers by division instead of walking the grid.
+    /// </summary>
+    /// <remarks>
+    /// The cap exists to keep a WALK affordable; on a grid that counts in one subtraction it buys nothing and
+    /// only turns a real total into a lower bound. A caller that has to report the number — how many runs a
+    /// downtime cost — asks this before deciding whether to cap at all.
+    /// </remarks>
+    internal bool CountsMissedInConstantTime() =>
+        string.IsNullOrEmpty(CronInterval?.CronExpression) && IsUniformGrid();
+
+    /// <summary>
     /// Number of occurrences missed in <c>(anchor, after]</c>, reported for LOGGING ONLY (Option B: it
     /// never consumes the <see cref="MaxRuns"/> budget). Uniform grids count in O(1) by division;
     /// calendar/cron schedules walk the real schedule, bounded.
@@ -634,7 +786,11 @@ public class RecurringTask
     /// <param name="cap">
     /// Upper bound on the returned count: the walk stops at <c>cap + 1</c> and the arithmetic result is
     /// clamped there, so a one-second grid over a long window never enumerates millions of slots just to
-    /// report a number. The default keeps the historical unbounded count.
+    /// report a number. Whatever cap is passed is HONOURED — a walked grid takes as many steps as the cap
+    /// asks for — which is what makes <c>result &lt;= cap</c> the test that tells a real total from a lower
+    /// bound. The default, <c>int.MaxValue</c>, is "no cap": the walk then keeps
+    /// <see cref="MaxSkipCountIterations"/> as its own bound and the answer may be a lower bound with
+    /// nothing to say so, which is why it is only asked for where the number goes to a log line.
     /// </param>
     internal int CountMissedOccurrences(DateTimeOffset anchor, DateTimeOffset after, int cap = int.MaxValue)
     {
@@ -643,7 +799,7 @@ public class RecurringTask
 
         // Uniform grid: O(1) division (mirrors the historical simple-interval skip count, and keeps a
         // 1-second interval over a year-long downtime O(1) instead of tens of millions of walk steps).
-        if (string.IsNullOrEmpty(CronInterval?.CronExpression) && IsUniformGrid())
+        if (CountsMissedInConstantTime())
         {
             var nextUniform = GetNextOccurrence(anchor);
             if (nextUniform == null)
@@ -653,11 +809,17 @@ public class RecurringTask
             if (stepTicks <= 0)
                 return 1;
 
-            // Clamp the horizon to RunUntil: occurrences past series end are not real and must not be
-            // counted (U9 — logging-only over-report). Count [anchor, horizon] inclusive of the anchor, to
-            // match the calendar/cron walk's convention below (U8 — boundary off-by-one).
-            var horizon = RunUntil.HasValue && RunUntil.Value < after ? RunUntil.Value : after;
-            var spanTicks = (horizon - anchor).Ticks;
+            // Clamp the horizon to RunUntil: occurrences past series end are not real and must not be counted
+            // (U9 — logging-only over-report). RunUntil is EXCLUSIVE everywhere else on the grid — a slot
+            // landing exactly on it is not an occurrence, which is why the walk below can never reach one — so
+            // the clamped span stops one tick short of it. Without that tick this path answers one more than
+            // the walk, and a catch-up cap of ten reads eleven due slots where there are ten. The span runs
+            // from the anchor INCLUSIVE, to match the walk's convention below (U8 — boundary off-by-one).
+            var spanTicks = (after - anchor).Ticks;
+
+            if (RunUntil is { } end && end <= after)
+                spanTicks = (end - anchor).Ticks - 1;
+
             if (spanTicks < 0)
                 spanTicks = 0;
 
@@ -665,10 +827,16 @@ public class RecurringTask
             return (int)Math.Min(count, ceiling);
         }
 
-        // Calendar / cron: walk the real schedule (the anchor itself is the first missed occurrence).
+        // Calendar / cron: walk the real schedule (the anchor itself is the first missed occurrence). The
+        // caller's cap IS the bound — the walk is O(cap) on purpose, because a caller that decides on this
+        // number (a catch-up cap can be far above ten thousand) must be able to tell "cap + 1, so there are
+        // more" from "this many, and that is all there is". Only int.MaxValue, which is not a cap but the
+        // absence of one, falls back to the walk's own bound.
+        var maxSteps = cap == int.MaxValue ? MaxSkipCountIterations : ceiling - 1;
+
         var skipped    = 1;
         var occurrence = anchor;
-        for (var i = 0; i < MaxSkipCountIterations && skipped < ceiling; i++)
+        for (long i = 0; i < maxSteps; i++)
         {
             var following = GetNextOccurrence(occurrence);
             if (following == null || following.Value > after)
@@ -797,7 +965,7 @@ public class RecurringTask
         {
             parts.Add("Use Cron expression:");
             parts.Add(CronInterval.CronExpression);
-            AppendTimeZone(parts);
+            AppendModifiers(parts);
             return string.Join(" ", parts);
         }
 
@@ -863,20 +1031,27 @@ public class RecurringTask
         if (MaxRuns != null)
             parts.Add($"up to {MaxRuns} times");
 
-        AppendTimeZone(parts);
+        AppendModifiers(parts);
 
         return string.Join(" ", parts);
     }
 
     /// <summary>
-    /// T13: the zone is part of what the schedule MEANS, so the human-readable form — which is also what the
-    /// row's <c>RecurringInfo</c> column and the dashboard show — names it. Absent for a schedule without one,
-    /// which keeps every description written before zones existed unchanged.
+    /// T13: the zone is part of what the schedule MEANS, and so is how it treats a missed slot, so the
+    /// human-readable form — which is also what the row's <c>RecurringInfo</c> column and the dashboard show —
+    /// names both. Absent for a schedule that declares neither, which keeps every description written before
+    /// they existed unchanged.
     /// </summary>
-    private void AppendTimeZone(List<string> parts)
+    private void AppendModifiers(List<string> parts)
     {
         if (TimeZoneId != null)
             parts.Add($"({TimeZoneId})");
+
+        if (!IsDurable)
+            return;
+
+        parts.Add("[durable occurrences,");
+        parts.Add($"{(Misfire?.Describe() ?? "on misfire skip")}]");
     }
 
     #endregion

@@ -32,6 +32,17 @@ public interface IIntervalSchedulerBuilder
 
     /// <inheritdoc cref="IBuildableSchedulerBuilder.InTimeZone(string)"/>
     IIntervalSchedulerBuilder InTimeZone(string timeZoneId) => throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.OnMisfire"/>
+    IIntervalSchedulerBuilder OnMisfire(Action<IMisfirePolicyBuilder> configure) =>
+        throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.WithDurableOccurrences"/>
+    IIntervalSchedulerBuilder WithDurableOccurrences() => throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.BackfillFrom"/>
+    IIntervalSchedulerBuilder BackfillFrom(DateTimeOffset startUtc) =>
+        throw SchedulerBuilderDefaults.NotImplemented();
 }
 
 /// <summary>
@@ -69,6 +80,16 @@ public interface IHourSchedulerBuilder
 
     /// <inheritdoc cref="IBuildableSchedulerBuilder.InTimeZone(string)"/>
     IHourSchedulerBuilder InTimeZone(string timeZoneId) => throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.OnMisfire"/>
+    IHourSchedulerBuilder OnMisfire(Action<IMisfirePolicyBuilder> configure) =>
+        throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.WithDurableOccurrences"/>
+    IHourSchedulerBuilder WithDurableOccurrences() => throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.BackfillFrom"/>
+    IHourSchedulerBuilder BackfillFrom(DateTimeOffset startUtc) => throw SchedulerBuilderDefaults.NotImplemented();
 }
 
 public interface IMinuteSchedulerBuilder
@@ -82,6 +103,16 @@ public interface IMinuteSchedulerBuilder
 
     /// <inheritdoc cref="IBuildableSchedulerBuilder.InTimeZone(string)"/>
     IMinuteSchedulerBuilder InTimeZone(string timeZoneId) => throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.OnMisfire"/>
+    IMinuteSchedulerBuilder OnMisfire(Action<IMisfirePolicyBuilder> configure) =>
+        throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.WithDurableOccurrences"/>
+    IMinuteSchedulerBuilder WithDurableOccurrences() => throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.BackfillFrom"/>
+    IMinuteSchedulerBuilder BackfillFrom(DateTimeOffset startUtc) => throw SchedulerBuilderDefaults.NotImplemented();
 }
 
 public interface IDailyTimeSchedulerBuilder : IBuildableSchedulerBuilder
@@ -101,6 +132,18 @@ public interface IDailyTimeSchedulerBuilder : IBuildableSchedulerBuilder
 
     /// <inheritdoc cref="InTimeZone(TimeZoneInfo)"/>
     new IDailyTimeSchedulerBuilder InTimeZone(string timeZoneId) =>
+        throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.OnMisfire"/>
+    /// <remarks>Declared again here for the same reason as <see cref="InTimeZone(TimeZoneInfo)"/>.</remarks>
+    new IDailyTimeSchedulerBuilder OnMisfire(Action<IMisfirePolicyBuilder> configure) =>
+        throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.WithDurableOccurrences"/>
+    new IDailyTimeSchedulerBuilder WithDurableOccurrences() => throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.BackfillFrom"/>
+    new IDailyTimeSchedulerBuilder BackfillFrom(DateTimeOffset startUtc) =>
         throw SchedulerBuilderDefaults.NotImplemented();
 }
 
@@ -126,6 +169,17 @@ public interface IWeeklySchedulerBuilder : IBuildableSchedulerBuilder
     /// <inheritdoc cref="IDailyTimeSchedulerBuilder.InTimeZone(TimeZoneInfo)"/>
     new IWeeklySchedulerBuilder InTimeZone(string timeZoneId) =>
         throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.OnMisfire"/>
+    new IWeeklySchedulerBuilder OnMisfire(Action<IMisfirePolicyBuilder> configure) =>
+        throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.WithDurableOccurrences"/>
+    new IWeeklySchedulerBuilder WithDurableOccurrences() => throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.BackfillFrom"/>
+    new IWeeklySchedulerBuilder BackfillFrom(DateTimeOffset startUtc) =>
+        throw SchedulerBuilderDefaults.NotImplemented();
 }
 
 public interface IMonthlySchedulerBuilder : IBuildableSchedulerBuilder
@@ -140,6 +194,17 @@ public interface IMonthlySchedulerBuilder : IBuildableSchedulerBuilder
 
     /// <inheritdoc cref="IDailyTimeSchedulerBuilder.InTimeZone(TimeZoneInfo)"/>
     new IMonthlySchedulerBuilder InTimeZone(string timeZoneId) =>
+        throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.OnMisfire"/>
+    new IMonthlySchedulerBuilder OnMisfire(Action<IMisfirePolicyBuilder> configure) =>
+        throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.WithDurableOccurrences"/>
+    new IMonthlySchedulerBuilder WithDurableOccurrences() => throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.BackfillFrom"/>
+    new IMonthlySchedulerBuilder BackfillFrom(DateTimeOffset startUtc) =>
         throw SchedulerBuilderDefaults.NotImplemented();
 }
 
@@ -185,4 +250,55 @@ public interface IBuildableSchedulerBuilder
     /// Thrown when the schedule is built, for a plain cadence — see <see cref="InTimeZone(TimeZoneInfo)"/>.
     /// </exception>
     IBuildableSchedulerBuilder InTimeZone(string timeZoneId) => throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <summary>
+    /// Chooses what this schedule does with a slot that came due while nothing was there to run it.
+    /// </summary>
+    /// <param name="configure">
+    /// Picks exactly one policy: <c>m =&gt; m.Skip()</c> (the default), <c>m =&gt; m.FireOnce(...)</c> or
+    /// <c>m =&gt; m.CatchUp(new CatchUpOptions(maxAge, maxOccurrences))</c>.
+    /// </param>
+    /// <exception cref="ArgumentNullException"><paramref name="configure"/> is null.</exception>
+    /// <exception cref="InvalidOperationException">The callback selected no policy, or selected two.</exception>
+    /// <remarks>
+    /// <c>FireOnce</c> and <c>CatchUp</c> both replay missed work, so both need a durable identity per slot:
+    /// choosing either one turns the schedule durable, exactly as <see cref="WithDurableOccurrences"/> does.
+    /// Every occurrence then becomes its own row, with its own status, retries and audit trail, and the
+    /// schedule row itself stops running the handler.
+    /// </remarks>
+    IBuildableSchedulerBuilder OnMisfire(Action<IMisfirePolicyBuilder> configure) =>
+        throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <summary>
+    /// Turns every due slot of this schedule into its own durable row, without changing what happens to
+    /// MISSED slots (they are still skipped).
+    /// </summary>
+    /// <returns>The builder, for chaining.</returns>
+    /// <remarks>
+    /// <para>
+    /// The schedule row becomes a definition plus a cursor: it never runs the handler, and each occurrence is
+    /// a one-shot child row with its own retries, audit trail and rate-limit budget. Use it when you want a
+    /// per-occurrence history (or a failed occurrence you can requeue) but no replay of a backlog.
+    /// </para>
+    /// <para>
+    /// Requires a storage that implements the atomic occurrence operations. All the built-in ones do; a custom
+    /// storage that does not is refused at dispatch rather than emulated.
+    /// </para>
+    /// </remarks>
+    IBuildableSchedulerBuilder WithDurableOccurrences() => throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <summary>
+    /// Starts the schedule's cursor at the first occurrence on or after <paramref name="startUtc"/> instead of
+    /// at the first one after the dispatch, so a durable schedule can replay a window that predates it.
+    /// </summary>
+    /// <param name="startUtc">The instant to start from, inclusive.</param>
+    /// <returns>The builder, for chaining.</returns>
+    /// <remarks>
+    /// Only a durable schedule can backfill (there is nowhere to put the replayed occurrences otherwise), and
+    /// the replay is still bounded by the misfire policy's own caps: a backfill window wider than
+    /// <see cref="CatchUpOptions.MaxAge"/> loses the part that falls outside it, reported like any other
+    /// skipped slot.
+    /// </remarks>
+    IBuildableSchedulerBuilder BackfillFrom(DateTimeOffset startUtc) =>
+        throw SchedulerBuilderDefaults.NotImplemented();
 }

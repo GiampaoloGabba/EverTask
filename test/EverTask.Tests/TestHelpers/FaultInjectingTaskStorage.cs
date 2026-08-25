@@ -25,9 +25,22 @@ public sealed class FaultInjectingTaskStorage(ITaskStorage inner) : ITaskStorage
     private readonly ConcurrentDictionary<string, Func<Exception?>> _faults =
         new(StringComparer.Ordinal);
 
+    private readonly ConcurrentDictionary<string, Action> _hooks =
+        new(StringComparer.Ordinal);
+
+    private readonly ConcurrentDictionary<string, Func<bool>> _swallowed =
+        new(StringComparer.Ordinal);
+
     /// <summary>Number of times each operation was reached, whether or not it threw.</summary>
     public ConcurrentDictionary<string, int> Calls { get; } =
         new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Runs <paramref name="hook"/> on the calling thread just BEFORE <paramref name="operation"/> reaches
+    /// the inner store, so a test can land something else — a cancel, a second writer — inside the window an
+    /// operation is about to open. A hook that blocks blocks the caller, which is the point.
+    /// </summary>
+    public void RunBefore(string operation, Action hook) => _hooks[operation] = hook;
 
     /// <summary>Makes <paramref name="operation"/> throw on its next <paramref name="times"/> calls.</summary>
     public void FailNext(string operation, int times, Func<Exception>? error = null)
@@ -42,6 +55,21 @@ public sealed class FaultInjectingTaskStorage(ITaskStorage inner) : ITaskStorage
     public void FailAlways(string operation, Func<Exception>? error = null) =>
         _faults[operation] = () => error?.Invoke() ?? new InvalidOperationException($"injected {operation} fault");
 
+    /// <summary>
+    /// Makes the next <paramref name="times"/> calls to <paramref name="operation"/> return normally WITHOUT
+    /// reaching the inner store — the shape of a write every relational provider swallows: it logs its own
+    /// failure and hands the caller a completed task, so "the call returned" says nothing about the row.
+    /// </summary>
+    /// <remarks>
+    /// Only <see cref="SetStatus"/> honours it, because it is the only best-effort write in the interface. A
+    /// thrown fault is a different test: the caller sees the failure there.
+    /// </remarks>
+    public void SwallowNext(string operation, int times)
+    {
+        var remaining = times;
+        _swallowed[operation] = () => Interlocked.Decrement(ref remaining) >= 0;
+    }
+
     /// <summary>Removes the armed fault, so the operation reaches the real store again.</summary>
     public void Heal(string operation) => _faults.TryRemove(operation, out _);
 
@@ -49,9 +77,15 @@ public sealed class FaultInjectingTaskStorage(ITaskStorage inner) : ITaskStorage
     {
         Calls.AddOrUpdate(operation, 1, static (_, count) => count + 1);
 
+        if (_hooks.TryGetValue(operation, out var hook))
+            hook();
+
         if (_faults.TryGetValue(operation, out var fault) && fault() is { } error)
             throw error;
     }
+
+    private bool Swallows(string operation) =>
+        _swallowed.TryGetValue(operation, out var swallow) && swallow();
 
     public bool SupportsDurableOccurrences => inner.SupportsDurableOccurrences;
     public bool SupportsScheduleVersioning => inner.SupportsScheduleVersioning;
@@ -135,7 +169,10 @@ public sealed class FaultInjectingTaskStorage(ITaskStorage inner) : ITaskStorage
                           double? executionTimeMs = null, CancellationToken ct = default)
     {
         Gate(nameof(SetStatus));
-        return inner.SetStatus(taskId, status, exception, auditLevel, executionTimeMs, ct);
+
+        return Swallows(nameof(SetStatus))
+                   ? Task.CompletedTask
+                   : inner.SetStatus(taskId, status, exception, auditLevel, executionTimeMs, ct);
     }
 
     public Task<int> GetCurrentRunCount(Guid taskId)
@@ -268,6 +305,14 @@ public sealed class FaultInjectingTaskStorage(ITaskStorage inner) : ITaskStorage
         Gate(nameof(TryHaltSchedule));
         return inner.TryHaltSchedule(parentId, expectedScheduleVersion, expectedCursorUtc, expectedStatus,
             runtimeInfo, ct);
+    }
+
+    public Task<bool> TryAdvanceScheduleCursor(Guid parentId, int expectedScheduleVersion,
+                                               DateTimeOffset expectedCursorUtc, DateTimeOffset newCursorUtc,
+                                               CancellationToken ct = default)
+    {
+        Gate(nameof(TryAdvanceScheduleCursor));
+        return inner.TryAdvanceScheduleCursor(parentId, expectedScheduleVersion, expectedCursorUtc, newCursorUtc, ct);
     }
 
     public Task<QueuedTask[]> GetOccurrences(Guid parentId, bool nonTerminalOnly = false,

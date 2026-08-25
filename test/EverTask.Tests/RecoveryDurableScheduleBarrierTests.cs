@@ -32,7 +32,7 @@ public class RecoveryDurableScheduleBarrierTests
     private readonly MemoryTaskStorage _storage = new(new Mock<IEverTaskLogger<MemoryTaskStorage>>().Object);
     private readonly List<Guid>        _dispatchOrder = [];
 
-    private WorkerService CreateRecovery()
+    private WorkerService CreateRecovery(ITaskStorage? storage = null)
     {
         var dispatcher = new Mock<ITaskDispatcherInternal>();
         dispatcher.Setup(d => d.ExecuteDispatch(It.IsAny<IEverTask>(), It.IsAny<DateTimeOffset?>(),
@@ -46,7 +46,7 @@ public class RecoveryDurableScheduleBarrierTests
                       return Task.FromResult(id!.Value);
                   });
 
-        return RecoveryHarness.CreateRecoveryService(_storage, dispatcher: dispatcher.Object);
+        return RecoveryHarness.CreateRecoveryService(storage ?? _storage, dispatcher: dispatcher.Object);
     }
 
     private static QueuedTask Row(DateTimeOffset createdAt) => new()
@@ -124,6 +124,59 @@ public class RecoveryDurableScheduleBarrierTests
         _dispatchOrder.IndexOf(secondSchedule.Id).ShouldBeGreaterThan(lastOccurrence);
 
         occurrences.ShouldAllBe(id => _dispatchOrder.Contains(id));
+    }
+
+    [Fact]
+    public async Task A_second_keyset_scan_finds_the_schedules_instead_of_a_buffered_id_list()
+    {
+        // R8. Holding the schedule rows back used to mean holding something in memory for the whole
+        // pagination — first the rows with their deserialized payload and definition, then their ids, a list
+        // that still grew with the number of schedules. The second wave is now the SAME keyset query run a
+        // second time over the same cutoff, keeping only the durable schedules: what crosses the loop is two
+        // scalars, and a recovery holds one page whatever the backlog is.
+        var probe  = new FaultInjectingTaskStorage(_storage);
+        var origin = DateTimeOffset.UtcNow.AddHours(-6);
+
+        var firstSchedule  = await SeedDurableScheduleAsync(origin, origin.AddHours(12));
+        var secondSchedule = await SeedDurableScheduleAsync(origin.AddSeconds(50), origin.AddHours(12));
+
+        for (var i = 0; i < 240; i++)
+        {
+            var parent = i % 2 == 0 ? firstSchedule.Id : secondSchedule.Id;
+            await SeedOccurrenceAsync(parent, origin.AddSeconds(100 + i), origin.AddMinutes(5 * i));
+        }
+
+        // 242 rows in pages of 100: four calls walk the whole query once (three pages plus the empty one that
+        // ends the loop). Anything more than that is a second pass, which is the fact under test.
+        const int pagesForOnePass = 4;
+
+        await CreateRecovery(probe).ProcessPendingAsync();
+
+        probe.Calls[nameof(ITaskStorage.RetrievePending)].ShouldBeGreaterThan(pagesForOnePass,
+            "the durable schedules are found by walking the recovery query a second time, not by reading " +
+            "back a list of ids the first pass kept");
+
+        _dispatchOrder.Count(id => id == firstSchedule.Id).ShouldBe(1,
+            "a schedule the second scan meets again must still be recovered exactly once");
+        _dispatchOrder.Count(id => id == secondSchedule.Id).ShouldBe(1);
+        _dispatchOrder.Count.ShouldBe(242);
+    }
+
+    [Fact]
+    public async Task A_recovery_with_no_durable_schedule_never_pays_for_the_second_scan()
+    {
+        // The other half of R8: the second pass is skipped outright when the first found nothing to defer, so
+        // the legacy host — every host today — reads the same number of pages it always did.
+        var probe  = new FaultInjectingTaskStorage(_storage);
+        var origin = DateTimeOffset.UtcNow.AddHours(-6);
+
+        for (var i = 0; i < 150; i++)
+            await _storage.Persist(Row(origin.AddSeconds(i)));
+
+        await CreateRecovery(probe).ProcessPendingAsync();
+
+        probe.Calls[nameof(ITaskStorage.RetrievePending)].ShouldBe(3,
+            "two pages plus the empty one that ends the loop, and no second pass at all");
     }
 
     [Fact]

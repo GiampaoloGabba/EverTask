@@ -81,4 +81,32 @@ public class DailyTimeSchedulerBuilder(RecurringTask task, TimeProvider? timePro
 
     IBuildableSchedulerBuilder IBuildableSchedulerBuilder.InTimeZone(string timeZoneId) =>
         InTimeZone(timeZoneId);
+
+    // Same shape as InTimeZone above: these return THIS builder so a modifier named mid-chain does not
+    // consume the time-of-day refinement that follows it.
+    public IDailyTimeSchedulerBuilder OnMisfire(Action<IMisfirePolicyBuilder> configure)
+    {
+        ScheduleModifiers.OnMisfire(task, configure);
+        return this;
+    }
+
+    public IDailyTimeSchedulerBuilder WithDurableOccurrences()
+    {
+        ScheduleModifiers.WithDurableOccurrences(task);
+        return this;
+    }
+
+    public IDailyTimeSchedulerBuilder BackfillFrom(DateTimeOffset startUtc)
+    {
+        ScheduleModifiers.BackfillFrom(task, startUtc);
+        return this;
+    }
+
+    IBuildableSchedulerBuilder IBuildableSchedulerBuilder.OnMisfire(Action<IMisfirePolicyBuilder> configure) =>
+        OnMisfire(configure);
+
+    IBuildableSchedulerBuilder IBuildableSchedulerBuilder.WithDurableOccurrences() => WithDurableOccurrences();
+
+    IBuildableSchedulerBuilder IBuildableSchedulerBuilder.BackfillFrom(DateTimeOffset startUtc) =>
+        BackfillFrom(startUtc);
 }

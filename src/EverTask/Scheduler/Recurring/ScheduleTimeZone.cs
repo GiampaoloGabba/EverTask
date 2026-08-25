@@ -58,6 +58,21 @@ internal static class ScheduleTimeZone
     }
 
     /// <summary>
+    /// <paramref name="utcInstant"/> read on the clock of <paramref name="timeZoneId"/>, offset included so the
+    /// two passes of a DST fall-back are distinguishable (T13).
+    /// </summary>
+    /// <remarks>
+    /// Null when there is no instant or no zone to read it on, and null rather than a throw when the id no
+    /// longer resolves: a delivery must not fail over what it reports about itself. It takes the ID and not a
+    /// schedule because a durable OCCURRENCE has no definition of its own — the zone of the series it belongs
+    /// to reaches it stamped on its row — and both must answer this question the same way.
+    /// </remarks>
+    internal static DateTimeOffset? ToLocalTime(string? timeZoneId, DateTimeOffset? utcInstant) =>
+        utcInstant is { } instant && TryResolve(timeZoneId, out var zone)
+            ? WallClock.ToWall(instant, zone)
+            : null;
+
+    /// <summary>
     /// The id to persist for <paramref name="zone"/>: its IANA spelling, resolved through CLDR when the
     /// platform handed back a Windows id (which is what Windows does even for a zone asked for by IANA id).
     /// </summary>

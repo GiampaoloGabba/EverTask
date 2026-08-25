@@ -39,4 +39,22 @@ public class HourSchedulerBuilder(RecurringTask task, TimeProvider? timeProvider
         task.SetTimeZone(timeZoneId);
         return this;
     }
+
+    public IHourSchedulerBuilder OnMisfire(Action<IMisfirePolicyBuilder> configure)
+    {
+        ScheduleModifiers.OnMisfire(task, configure);
+        return this;
+    }
+
+    public IHourSchedulerBuilder WithDurableOccurrences()
+    {
+        ScheduleModifiers.WithDurableOccurrences(task);
+        return this;
+    }
+
+    public IHourSchedulerBuilder BackfillFrom(DateTimeOffset startUtc)
+    {
+        ScheduleModifiers.BackfillFrom(task, startUtc);
+        return this;
+    }
 }

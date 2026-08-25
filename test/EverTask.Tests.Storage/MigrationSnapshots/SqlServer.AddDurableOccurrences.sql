@@ -133,7 +133,7 @@ BEGIN
   UPDATE [EverTask].[QueuedTasks]
   SET Status = 'Cancelled'
   OUTPUT inserted.Id INTO @Cancelled
-  WHERE ParentTaskId = @ParentId AND Status IN ('WaitingQueue', 'Queued', 'Pending');
+  WHERE ParentTaskId = @ParentId AND Status IN ('WaitingQueue', 'Queued', 'Pending', 'ServiceStopped');
 
   -- Cancelled carries no exception, so only AuditLevel.Full (0) audits it. The schedule row is audited only
   -- when the update actually found it: cancelling a schedule a concurrent Remove already deleted is a silent

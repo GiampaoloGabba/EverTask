@@ -17,6 +17,7 @@ Schedule recurring tasks with a type-safe fluent API or cron, from an hourly job
 - **Flexible Starting Strategies**: Run immediately, delay, or schedule first run
 - **Execution Limits**: MaxRuns and RunUntil for time-limited tasks
 - **Time Zones**: Read a calendar schedule on a real clock, daylight saving included
+- **Durable Occurrences**: One row per occurrence, with misfire policies that replay what a downtime missed
 - **Persistent Schedules**: Recurring tasks survive application restarts
 
 ## Quick Examples

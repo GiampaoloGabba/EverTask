@@ -1047,6 +1047,27 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     }
 
     /// <inheritdoc />
+    public virtual async Task<bool> TryAdvanceScheduleCursor(Guid parentId, int expectedScheduleVersion,
+                                                             DateTimeOffset expectedCursorUtc,
+                                                             DateTimeOffset newCursorUtc,
+                                                             CancellationToken ct = default)
+    {
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        RequireRelational(dbContext);
+
+        var newCursor = newCursorUtc.ToUniversalTime();
+
+        // One conditional UPDATE, no transaction and no audit: skipping a slot changes nothing but where the
+        // schedule is pointing. The compare-and-swap is the whole guard — a materialization that advanced the
+        // cursor first makes this a no-op, and the caller re-reads.
+        var rows = await CursorCas(dbContext, parentId, expectedScheduleVersion, expectedCursorUtc.ToUniversalTime())
+                         .ExecuteUpdateAsync(s => s.SetProperty(t => t.NextRunUtc, newCursor), ct)
+                         .ConfigureAwait(false);
+
+        return rows > 0;
+    }
+
+    /// <inheritdoc />
     public virtual async Task CancelSchedule(Guid parentId, AuditLevel auditLevel, CancellationToken ct = default)
     {
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
@@ -1062,14 +1083,17 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                                                  s => s.SetProperty(t => t.Status, QueuedTaskStatus.Cancelled), ct)
                                              .ConfigureAwait(false);
 
-        // Occurrences already InProgress own a live delivery and are left to finish on their own; only the
-        // ones still waiting are cancelled, so a materializer racing this cancel can only see an inactive
-        // schedule and never adds one more.
+        // Occurrences already InProgress own a live delivery and are left to finish on their own; every other
+        // non-terminal one is cancelled, so a materializer racing this cancel can only see an inactive
+        // schedule and never adds one more. ServiceStopped belongs in that set (R7): startup recovery puts a
+        // ServiceStopped row back in a queue, so leaving it out would run an occurrence of a schedule the user
+        // cancelled, one restart later. The cancelled set is the exact complement of the requeued one.
         var candidateChildren = await dbContext.QueuedTasks
                                                .Where(t => t.ParentTaskId == parentId
                                                            && (t.Status == QueuedTaskStatus.WaitingQueue
                                                                || t.Status == QueuedTaskStatus.Queued
-                                                               || t.Status == QueuedTaskStatus.Pending))
+                                                               || t.Status == QueuedTaskStatus.Pending
+                                                               || t.Status == QueuedTaskStatus.ServiceStopped))
                                                .Select(t => t.Id)
                                                .ToListAsync(ct)
                                                .ConfigureAwait(false);
@@ -1082,7 +1106,8 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                            .Where(t => candidateChildren.Contains(t.Id)
                                        && (t.Status == QueuedTaskStatus.WaitingQueue
                                            || t.Status == QueuedTaskStatus.Queued
-                                           || t.Status == QueuedTaskStatus.Pending))
+                                           || t.Status == QueuedTaskStatus.Pending
+                                           || t.Status == QueuedTaskStatus.ServiceStopped))
                            .ExecuteUpdateAsync(s => s.SetProperty(t => t.Status, QueuedTaskStatus.Cancelled), ct)
                            .ConfigureAwait(false);
         }

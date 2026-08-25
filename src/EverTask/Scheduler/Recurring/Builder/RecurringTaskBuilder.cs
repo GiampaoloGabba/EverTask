@@ -64,4 +64,22 @@ public class BuildableSchedulerBuilder(RecurringTask task, TimeProvider? timePro
         task.SetTimeZone(timeZoneId);
         return new BuildableSchedulerBuilder(task, timeProvider);
     }
+
+    public IBuildableSchedulerBuilder OnMisfire(Action<IMisfirePolicyBuilder> configure)
+    {
+        ScheduleModifiers.OnMisfire(task, configure);
+        return new BuildableSchedulerBuilder(task, timeProvider);
+    }
+
+    public IBuildableSchedulerBuilder WithDurableOccurrences()
+    {
+        ScheduleModifiers.WithDurableOccurrences(task);
+        return new BuildableSchedulerBuilder(task, timeProvider);
+    }
+
+    public IBuildableSchedulerBuilder BackfillFrom(DateTimeOffset startUtc)
+    {
+        ScheduleModifiers.BackfillFrom(task, startUtc);
+        return new BuildableSchedulerBuilder(task, timeProvider);
+    }
 }

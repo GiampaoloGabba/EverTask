@@ -37,7 +37,13 @@ in-memory storage.
   the number there would report every occurrence of every series as run 1. A delivery that arrives with
   neither stamp — an occurrence handed to the scheduler the moment it was materialized — reads them back out
   of the row's own `RuntimeInfo` through `TaskHandlerExecutor.RowOccurrence`, so the answer is the row's
-  either way and an overdue catch-up never reports the moment it was fired at as its slot.
+  either way and an overdue catch-up never reports the moment it was fired at as its slot. The **time zone**
+  travels the same way, and for a stronger reason: an occurrence is dispatched with `recurring: null`, so
+  there is no definition on the delivery to read it from at all. `OccurrenceMaterializer` stamps the
+  schedule's `TimeZoneId` into `RuntimeInfo` and `TaskExecutionContext` falls back to it, which is what keeps
+  `TimeZoneId` and `ScheduledAtLocal` from being null on exactly the schedules that are anchored to a wall
+  clock (C1/T13). Copied, not looked up on the parent: no round-trip on the delivery path, and a later
+  reschedule cannot rewrite what an occurrence already meant.
 - **The terminal rate-limit rejection gets the same two injections** (`HandleRateLimitRejectionAsync`):
   it is the one callback path that never enters `DoWorkCore`, and `OnError` is documented to always read
   `Context` and `Logger`. Its log capture is deliberately NOT persisted — the `Failed` status is the only
@@ -93,10 +99,16 @@ the execution predicate: a spent series must be finalized, never handed back to 
 - **Startup order matters**: `WorkerService.ExecuteAsync` starts consumers **first**, then runs recovery
   **concurrently** (`RunRecoveryAsync`). Recover-before-consume reintroduces the capacity deadlock.
 - **Recovery runs in two waves** (`RecoverWaveAsync`), across the WHOLE recovered set and not page by page:
-  ordinary rows are recovered as each page arrives, durable schedule rows are buffered and run after the
+  ordinary rows are recovered as each page arrives, durable schedule rows are skipped and recovered after the
   pagination loop. A schedule row asks how many of its occurrences are still active the moment it is back, and
   answering that while an occurrence of its own is still sitting in a later page reads a phantom low count.
-  Only the schedule rows are buffered, so the pagination stays bounded in memory.
+  **The second wave is a SECOND KEYSET SCAN, not a buffer** (R8): the same recovery page query over the same
+  cutoff, keeping only the durable schedules, so a recovery holds one page whatever the backlog is — buffering
+  rows kept a payload and a definition alive per schedule, buffering ids kept a list that still grew with
+  them. Two scalars cross the loop instead: whether the first pass saw a durable schedule at all (a host with
+  none never pays for the second scan) and the keyset position just BEFORE the first one, so the scan starts
+  where the durable schedules start. A row the first pass already recovered reappears in the second scan and
+  is filtered out.
   `RecoveredTaskFactory.FromRow` rebuilds each row once (payload, validated schedule, audit level, occurrence
   metadata) and is the single place that mapping lives; its `RowMetadata` travels to the re-dispatch through
   the internal `ExecuteDispatch` overload, so a recovered executor keeps its parent, occurrence JSON, schedule
@@ -142,6 +154,174 @@ the gate and the parking lot. Register a provider before `AddEverTask` and the w
 - **Out of scope, by design**: retry policies (`IRetryPolicy` owns its own waits), audit and logging stay on
   the real clock. A test using a fake clock must not expect `Advance()` to complete a retry delay.
 
+## Durable occurrences (opt-in; the default path is untouched)
+
+A schedule whose definition says `OccurrenceMode.Durable` stops running the handler and becomes a definition
+plus a cursor: `Scheduler/Occurrences/OccurrenceMaterializer` turns each due slot into its own one-shot child
+row. Nothing here runs for an inline schedule — `IsScheduleOnly` is the only branch, and it is false unless
+the definition opted in.
+
+- **The materializer is the ONLY thing that moves a durable schedule**, and every entry point calls the same
+  `RunAsync`: the schedule's own slot firing (`DoWorkGuarded`, before the rate-limit gate), the kick each
+  occurrence gives when it ends (`DoWork`'s finally, before the single `End`), recovery's second wave, and the
+  operational re-park. It re-reads the row every time and every write is a compare-and-swap on the cursor and
+  version it decided from, so two runs racing end with one winner and one re-read. The per-schedule gate is a
+  contention optimization on top of that, and it COALESCES: a run that finds the gate taken sets a pending
+  flag the holder re-checks before releasing, so a kick is never simply dropped.
+- **It never throws at its callers, and a failed run re-parks the schedule itself.** The re-park is armed
+  INSIDE the per-schedule gate, so it covers the runs the holder absorbed: a schedule's own delivery that
+  finds the gate taken returns without parking the row, and if the holder (a kick) then failed silently the
+  row was parked nowhere at all until a restart. It prefers the delivered executor over rebuilding one from
+  the row, because what usually failed is the storage. `WorkerExecutor.MaterializeScheduleAsync` keeps the
+  same re-park as the backstop for anything that fails outside the gate.
+  - **A row this build cannot rebuild is parked, not dropped** (`ParkUnusableRow`). A payload that stopped
+    deserializing, a zone id that stopped resolving: the VERDICT there is startup recovery's — it owns the
+    bounded retry and the terminal poison, and a second copy would spend the same budget twice — but the
+    PARKING is the run's, because the schedule's own delivery consumed the registration that made it. A Debug
+    line and a return left that row in no scheduler, no queue and no delivery until a restart. The delivered
+    executor is the only one that can be re-parked: rebuilding one from the row is what just failed, and one
+    built without the durable definition would run the handler. A row that is no longer durable at all (a task
+    key re-registered inline over it) is the opposite case and returns untouched — that registration owns the
+    parking now, and re-parking the durable executor would replace it, latest wins.
+- **One run, ONE reading of the row.** A run snapshots version, cursor, status, run count and queue at its
+  start, and every compare-and-swap it makes carries those values — never a property read again at write
+  time, which would absorb whatever a concurrent writer did in between and make the write that had to lose
+  win instead (the same shape as R1 in phase 1). The in-memory store hands back LIVE entities, so there "the
+  row" and "the row a cancel just changed" are the same object, and the finalization of a spent series would
+  expect the `Cancelled` it is about to overwrite.
+- **A halted schedule is NOT re-parked.** The operational retry exists so a schedule that could not advance
+  gets another chance; a halt has nothing to try again — it never releases itself, by contract — and only
+  `ResumeSchedule`/`Reschedule` clear the marker, both of which park the row themselves. Re-parking it put the
+  row through the worker queue every minute for ever, each pass a `Queued` transition plus a `StatusAudit`
+  row. A halt whose CAS was lost is re-parked, because that one is an ordinary lost race.
+- **`AlreadyExists` advances the cursor, it is not a re-read.** Every other non-`Created` outcome self-heals on
+  the next run; that one means the cursor still points at a slot that already has a row (written from outside,
+  or replayed after a rewind), so re-reading answers the same thing for ever. The run carries the cursor past
+  the served slot — compare-and-swapped, no run counted, one warning and one event — and goes on to the next.
+  **"The next" means inside the same PASS**: `MaterializeAsync` walks the grid itself and writes the occurrence
+  the plan granted at the slot behind the served one. Ending there made a rewound cursor walk its backlog at
+  one slot per `BacklogRetryInterval` — nothing shortens that wait, because a run that materializes nothing
+  produces no occurrence and therefore no kick — and handing the walk back for a fresh plan per slot made ONE
+  run quadratic in the length of the stretch, since each plan re-counts and re-bisects everything still due.
+  Nothing a walk does can change what the plan decided: `now` is fixed, a newer slot is inside the age window a
+  fortiori, a shrinking backlog cannot exceed a cap the bigger one passed, and a served slot spends neither a
+  run nor a unit of the budget. So there is ONE plan per run, and `MaxServedSlotsPerRun` bounds the whole cost
+  of the walk, because every unit it counts is constant: one grid step, one executor build and two round trips
+  per slot. A truncated run resumes at its retry from where it stopped, not from where it began.
+  - **The two things the walk must still restate.** A plan nulls its cursor when the slot it grants is meant to
+    be the last run `MaxRuns` allows, so the series ends in the same commit that creates it — but a served slot
+    creates nothing and spends no run, so that premise is false FOR THAT SLOT and the series is not over: the
+    run asks the grid for the successor and only a grid with nothing left ends it there. The premise itself is
+    still true, and `DueSlotPlan.RunBudgetEndsSeries` is what keeps it: a budget counts materializations, not
+    slots, so the write that really spends the last run — wherever the walk put it — is the one that carries a
+    null cursor and closes the series in its own commit (M6/M14). Reading the plan's null as "this slot ends
+    it" dropped the residual run; ignoring it left the row `Queued` with a spent budget for a later run to
+    close. And the misfire stamped on a row created after walking is `MisfireAfterWalking`: the range starts at
+    the slot being created and the count drops by the slots walked, because the range and the count are one
+    statement (below).
+- **The policy is `Scheduler/Occurrences/DueSlotEnumerator`, and every count in it is bounded — where a bound
+  buys something.** A grid that counts by division (every plain cadence) is asked for the real total, because
+  the cap costs it nothing and would turn "7,900,000 runs were lost" into "10,001"; a grid that has to be
+  WALKED keeps the cap, and its count travels with `IsExact = false` so no surface reports a truncated number
+  as a total (`SlotLoss.IsExact`, `OccurrenceMisfire.MissedCountIsExact`, `ScheduleHaltInfo.IsExact`
+  and the public `MisfireInfo.MissedCountIsExact`). `SkipOldest` finds where the last N slots begin by
+  bisecting the INSTANT axis, each probe a bounded forward count — never an enumeration.
+  - **One count, ONE bound: the one the caller passed.** `CountMissedOccurrences` spends the whole cap it is
+    handed (a catch-up cap can be far above ten thousand — a month of a five-minute schedule is 8,640 slots),
+    and its own `MaxSkipCountIterations` applies only to the ask that carries NO cap. Give the walk a second,
+    smaller bound and every answer above it comes back as "10,001", which `count <= cap` then reads as a
+    total: the `Halt` breaker never fires, `SkipOldest` bisects to the wrong instant, and the number reaches
+    the handler stamped exact. `DueSlotEnumerator` therefore never asks a walked grid for an UNCAPPED count
+    either — `int.MaxValue` is a legal `MaxOccurrences`, and it falls back to `DiagnosticCountCap`.
+  - **The breaker is bounded by the RUN BUDGET too.** `Halt` fires only when `MaxRuns` still allows more
+    occurrences than the cap: a series with one run left can create exactly one more whatever the backlog
+    holds, so there is no flood to stop, and halting it — a marker that by contract never releases itself —
+    left an operator to resume a schedule for the sole purpose of spending its last run. `SkipOldest` is NOT
+    short-circuited the same way: which end of a backlog matters is the policy the caller chose, so the last
+    run still gets the newest slot instead of the oldest.
+- **What makes a slot MISSED is `SetMisfireThreshold`** (M1), and the planner reads it at materialization time
+  exactly as `TaskExecutionContext` reads it at delivery time. A slot older than the threshold stands for
+  missed work even when it is the ONLY one owed — a ten-minute outage on an hourly grid owes one slot, which
+  is precisely the case a replaying policy exists for, and deciding on "more than one slot" alone left that
+  row indistinguishable from an ordinary occurrence. The threshold only ever WIDENS the definition: a run of
+  more than one slot reports whatever its age, because `FireOnce` is about to collapse slots and `CatchUp` to
+  replay them, and P5 forbids either happening unreported (decisions §3.5).
+- **A misfire's range and its count are one statement.** `MissedFromUtc`/`MissedThroughUtc` bound the backlog
+  the decision saw and `MissedCount` is how many grid slots that range holds, both ends included — so the
+  catch-up range ends at the newest slot the backlog owes, NOT at the last slot the concurrency budget let
+  this run take (which under the default budget of one would be a range of one slot carrying a count of six).
+  The extra bisection that finds it is paid only when there IS a backlog, and never for a single slot, which
+  is its own range.
+- **Skipping a slot usually costs no write**: the first materialization carries the cursor from the slot that
+  was dropped to the one that was kept. `TryAdvanceScheduleCursor` exists for the case where nothing survives
+  at all, and it counts no run and writes no audit.
+  - **Every dropped run says WHICH rule dropped it** (`SlotLoss.Reason`, M10(1)/P5), and one plan can carry
+    two of them: the age window and then the `SkipOldest` cap are different settings with different fixes,
+    and adding the second count into the first reported the whole loss as "outside the misfire window" —
+    sending an operator to widen a window that had dropped a fraction of it. The `Skip` policy's own drop is
+    the third reason, and it was wearing the age window's sentence too. One EventId and one event message per
+    reason (1802, 1819, 1820).
+- **A stale occurrence keeps consuming the budget until it terminates.** Reconciliation notices an occurrence
+  that is non-terminal but neither delivering nor parked, requeues it under a compare-and-swap on the status it
+  was found in, and hands it back to the scheduler — but it still counts as active. Only a terminal state frees
+  capacity. Without `IScheduler.SupportsScheduleInspection` there is no evidence to tell stranded from parked
+  (the default answer is a constant "yes"), so nothing is reconciled and every non-terminal occurrence counts.
+  The executor is REBUILT BEFORE the requeue, and a row that cannot produce one is marked `Failed` instead:
+  that verdict never changes while the process lives, so requeuing first wrote a `Queued` transition plus a
+  `StatusAudit` row on every run for ever while the row went on holding a slot of a budget of one. It is the
+  same poison shape recovery uses for a one-shot, and `RequeueTerminal` is the way back after a deploy.
+  **A row is unusable for TWO reasons and both end it**: the payload may not rebuild, and the rebuilt payload
+  may have no handler left to run it — a type still loadable after a re-registration pointed its schedule
+  elsewhere, whose `IEverTaskHandler<T>` nobody registers any more. Resolution happens inside `Handle`, so that
+  second one escaped as an exception out of the whole reconciliation: the run failed, the schedule re-parked,
+  and the occurrence stayed non-terminal, stalling the series on every pass.
+  - **A handler that failed to BUILD is neither of them.** A scoped dependency whose factory threw looks
+    identical from here, so after a failed rebuild the container is asked the question that separates them —
+    is anything registered for this task at all? — and only a "no" is final. Ending an occurrence on a
+    transient activation failure drops work no handler ever saw, without one of the retries its policy
+    promises; it keeps its slot of the budget instead, and the next run looks again.
+  - **Only a CONFIRMED terminal state frees capacity.** `SetStatus` is best-effort on every relational
+    provider — it logs its own failed write and returns — so the row is re-read before the slot is counted
+    free. Taking the call's return as the answer let a swallowed write leave the old occurrence alive while a
+    successor was created behind it, two of them under a budget that says one.
+- **The schedule row is not a delivery**: it never enters `DoWorkCore`, never sets `InProgress`, never touches
+  the rate-limit gate and never runs `QueueNextOccourrence`. Rate limiting applies to the occurrences, per key
+  — `TaskHandlerWrapper.ExtractRateLimit` returns nothing for a durable definition.
+- **A schedule's blacklist entry covers its occurrences.** `Cancel(scheduleId)` cancels the pending ones in
+  storage, but an occurrence already parked in the scheduler or already in a channel carries no entry of its
+  own: without the parent check in `WorkerQueue.IsCancelled` its enqueue would write `Queued` over the
+  `Cancelled` the cancel had just persisted, and `DoWorkGuarded` would run it. It is asked a THIRD time in
+  `DoWorkCore`, right before `SetInProgress`: handler resolution sits between the entry check and that write
+  and takes as long as the handler's dependencies do, and the transition is unconditional — a cancel landing
+  in there would put a row `CancelSchedule` had just marked `Cancelled` back into `InProgress`, run it and
+  complete it. None of the three CONSUMES the entry — it has to keep covering the siblings behind this one.
+  That includes the SCHEDULE's own dropped delivery: a mid-catch-up schedule has its own row in the queue
+  too, and consuming the entry there destroyed the only cover its occurrences had.
+- **`Cancel` asks for occurrences TWICE, and the second time is the one that matters.** Its two steps are a
+  classification (are there occurrences to cascade to?) and a write, and a materializer that had claimed the
+  schedule row before the first read had not inserted its occurrence yet — so the cancel saw nothing to
+  cascade to, took the simple single-row write, and left a live occurrence under a cancelled schedule. Asked
+  again AFTER the status is persisted the answer is final: both writes go through the schedule row, so a
+  materialization in flight has committed by then (its occurrence is visible) or lost, and every later one
+  reads `Cancelled` and is refused. A cancel with nothing to cascade pays one more indexed read on an
+  administrative path; one that finds something writes the cascade the race deprived it of. A lookup that
+  THREW cascades too: "the query failed" is not an answer that lets a cancel declare the series terminal, and
+  the cascade over a schedule with no occurrence is the parent's own write — the one it would have made
+  anyway. Degrading that failure to "no occurrences" let the cancel return normally while an occurrence it
+  could not see stayed non-terminal, covered only by a blacklist entry that lapses after an hour.
+- **The cancelled set is the complement of the requeued one, on every path.** `CancelSchedule` leaves an
+  `InProgress` occurrence to finish, so the two places that decide what its ending MEANS both ask the parent:
+  `HandleExceptionAsync` classifies a shutdown OCE as a user cancel when the schedule is blacklisted (else it
+  writes `ServiceStopped`, which recovery puts straight back in a queue), and the recovery cancels an
+  occurrence whose schedule row is `Cancelled` instead of re-dispatching it — the case a hard crash leaves
+  behind, where no blacklist survives. That read is ONE query per recovery wave, and only when the wave
+  carries occurrences at all.
+- **Children are always lazy and always inherit the parent's stored queue.** An occurrence is dispatched with
+  no recurring definition, and the fallback for one of those is the DEFAULT queue, so a durable series routed
+  to its own queue would quietly leave it one occurrence at a time.
+- Contracts, spelled out in `docs/recurring-tasks/durable-occurrences.md`: at-least-once, and a single ACTIVE
+  host — materialization is idempotent across hosts (unique index), execution is not claimed by anyone.
+
 ## Occurrence grid: one seam
 
 `IScheduleEvaluator` (internal, `ScheduleEvaluator`) is what the dispatcher, the worker and the recovery ask
@@ -152,6 +332,16 @@ user-supplied provider that may do I/O. Its two grid questions that no primitive
 `EnumerateDueSlotsAsync` (the slots already owed at a given now, oldest first, under a MANDATORY cap).
 
 ## Tests
+
+Durable occurrences: the policy is pinned by `test/EverTask.Tests/Occurrences/DueSlotEnumeratorTests.cs` (pure
+arithmetic, every combination of window, cap, overflow policy and budget, including the bound that makes a
+three-month one-second backlog affordable), what the public surface REFUSES by
+`Occurrences/DurableOccurrenceOptionsValidationTests.cs` (every cap, window, enum and host knob, plus the
+`OnMisfire` callback that picks none or two), and the wiring by
+`IntegrationTests/DurableOccurrencesIntegrationTests.cs` on a real host over a shared storage. Real databases:
+`test/EverTask.Tests.Storage/CatchUpRecoveryIntegrationTests.cs` (SQLite, seeded downtime, restart mid-replay)
+and `SqlServerDurableOccurrencesMultiHostTests.cs`, whose second test pins the single-active-host LIMIT rather
+than a guarantee — it is the assertion the distributed-lease epic will invert.
 
 Integration tests build a real `IHost` through `test/EverTask.Tests/TestHelpers/IsolatedIntegrationTestBase.cs`.
 The invariants above are pinned by `test/EverTask.Tests/IntegrationTests/QueueResilienceIntegrationTests.cs`,

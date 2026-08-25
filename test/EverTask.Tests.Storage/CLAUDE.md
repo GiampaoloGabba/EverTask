@@ -24,9 +24,24 @@ real engines.
   `[CollectionDefinition]`** anywhere: the bare attribute is the only thing serializing them against
   `parallelizeTestCollections: true` in `xunit.runner.json`, so the shared static containers are never started
   concurrently. Put it on any new one.
-- Four classes start a SQL Server container, not just the storage suite: `SqlServerEfCoreTaskStorageTests`,
+- Five classes start a SQL Server container, not just the storage suite: `SqlServerEfCoreTaskStorageTests`,
   `SqlServerRecoveryIntegrationTests`, `AuditLevelIntegrationTests`, `SqlServerRecurringPoisonRecoveryTests`
-  (in `RecurringPoisonRecoveryIntegrationTests.cs`).
+  (in `RecurringPoisonRecoveryIntegrationTests.cs`) and `SqlServerDurableOccurrencesMultiHostTests`.
+- **The two durable-occurrence suites here answer questions a single host cannot.**
+  `CatchUpRecoveryIntegrationTests` (SQLite, no Docker) seeds a downtime and lets the REAL startup recovery
+  replay it, so the unique index, the check constraint and the self foreign key are all in the loop. Its
+  schedules are on an **hourly** grid, not a minute one: on a real clock only an hour-wide grid lets a test
+  name the exact slots it expects, because the age window's boundary then sits half an hour from a slot
+  instead of half a minute, and an assertion that has to survive a slow run is an assertion that cannot be
+  exact. It covers each policy after a real downtime (catch-up window, `FireOnce` collapsing into one row,
+  `Skip` behaving as it does inline), the `RunUntil` that elapsed while the host was down, a restart
+  mid-replay, six schedules draining under one global materialization budget, and the retention proof that a
+  pruned occurrence does not come back (the CURSOR drives materialization, not the rows).
+  `SqlServerDurableOccurrencesMultiHostTests` builds TWO hosts by hand (the base class holds one) on one
+  database: the first test pins that materialization is idempotent across them, the second pins the
+  single-active-host LIMIT — two hosts really do deliver the same occurrence twice. That second assertion is
+  the contract of 4.0 written down, and it is what the distributed-execution-lease epic will invert; do not
+  "fix" it.
 - **Schema is asserted from the CATALOG, per provider** (`Should_have_the_durable_occurrence_schema_on_queued_tasks`
   in each provider class): the unique index and its SQL Server-only filter, `IX_QueuedTasks_ParentTaskId`,
   `CK_QueuedTasks_OccurrenceSlot`, the non-cascading self FK, and the four new procedures on SQL Server and

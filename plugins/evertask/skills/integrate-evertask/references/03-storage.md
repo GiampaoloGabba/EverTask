@@ -177,9 +177,11 @@ worker queue. Both members also have a `nowUtc` overload that the core always ca
 delegate to the legacy signatures, so an existing storage keeps working but resolves the clock itself.
 
 Durable recurring schedules need atomic operations that no non-atomic emulation can provide
-(`MaterializeOccurrence`, `CancelSchedule`, `RequeueTerminal`, `TryRequeueStaleOccurrence`,
-`UpdateSchedule`, `TryHaltSchedule`, `TrySetRecurringSeriesCompleted` and the compare-and-swap overloads
-of `UpdateCurrentRun` / `CompleteRecurringRun`). They default to throwing `NotSupportedException`, gated
+(`MaterializeOccurrence`, `TryAdvanceScheduleCursor`, `CancelSchedule`, `RequeueTerminal`,
+`TryRequeueStaleOccurrence`, `UpdateSchedule`, `TryHaltSchedule`, `TrySetRecurringSeriesCompleted` and the
+compare-and-swap overloads of `UpdateCurrentRun` / `CompleteRecurringRun`). `TryAdvanceScheduleCursor` is
+the write a SKIPPED slot needs — a compare-and-swap on version plus cursor that moves the cursor and
+nothing else: no run counted, no audit row. They default to throwing `NotSupportedException`, gated
 by `SupportsDurableOccurrences` / `SupportsScheduleVersioning` (both `false` by default). Implement them
 atomically before flipping either flag — a "best effort" version built from two writes is exactly the
 crash window they exist to close.

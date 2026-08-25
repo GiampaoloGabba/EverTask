@@ -137,6 +137,30 @@ public class ScheduleEvaluatorTests
     }
 
     [Fact]
+    public async Task A_cap_above_the_walks_own_bound_is_still_the_bound_that_applies()
+    {
+        // The walk keeps a step bound of its own for the ask that carries NO cap. It must not double as a
+        // second bound on a caller that passed one: stopping there answers "10,001" to a question asked with
+        // a cap of 12,000, and a caller reading "10,001 <= 12,000" concludes it holds the real total. A
+        // catch-up cap above ten thousand is not exotic — replaying a month of a five-minute schedule needs
+        // one — and that answer is what its circuit breaker decides on.
+        var task  = new RecurringTask { CronInterval = new CronInterval("* * * * *") };
+        var after = Anchor.AddMinutes(11_000);
+
+        (await Evaluator.CountMissedAsync(task, Anchor, after, 12_000))
+            .ShouldBe(11_001, "the whole backlog fits the cap, so the answer is the real total");
+
+        (await Evaluator.CountMissedAsync(task, Anchor, after, 10_500))
+            .ShouldBe(10_501, "one past the cap it was GIVEN — the only bound a capped ask reports against");
+
+        (await Evaluator.CountMissedAsync(task, Anchor, after, int.MaxValue - 1))
+            .ShouldBe(11_001, "one below int.MaxValue is still a cap, and a cap is always spent in full");
+
+        task.CountMissedOccurrences(Anchor, after)
+            .ShouldBe(10_001, "the uncapped ask keeps the historical step bound, and its number a log line");
+    }
+
+    [Fact]
     public async Task The_capped_count_matches_the_uncapped_one_below_the_cap()
     {
         var task  = new RecurringTask { DayInterval = new DayInterval(1, []) { OnTimes = [new TimeOnly(9, 0)] } };

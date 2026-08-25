@@ -62,12 +62,12 @@ it from a constructor throws `InvalidOperationException`).
 |---|---|
 | `TaskId` / `ScheduleId` / `TaskKey` | The row being executed; the schedule it is an occurrence of (null when it is not one); the dispatch key. |
 | `ScheduledAtUtc` | The slot this delivery stands for — null for an immediate dispatch. **Never** the slot a rate-limit deferral re-parked the task at, so `StartedAtUtc - ScheduledAtUtc` is the real lateness. |
-| `ScheduledAtLocal` / `TimeZoneId` | The same slot in the schedule's zone, offset included (which tells the two passes of a DST fall-back apart); both null when the schedule carries no zone. See `05-scheduling.md`. |
+| `ScheduledAtLocal` / `TimeZoneId` | The same slot in the schedule's zone, offset included (which tells the two passes of a DST fall-back apart); both null when the schedule carries no zone. A durable occurrence answers from its own row — it holds no definition — so a restart does not change what it reports. See `05-scheduling.md`. |
 | `StartedAtUtc` | When this delivery started. |
 | `Attempt` | 1-based; `1` on the first `Handle`, `2` on the first retry. In `OnRetry` it is already the attempt about to start; in `OnError`, the last one that ran. Re-read it, don't cache it. |
 | `RunNumber` | 1-based run within a recurring series (`1` for a one-shot). Durable: it resumes from the stored counter after a restart. |
 | `ScheduleVersion` / `IsRecurring` / `IsOccurrence` | Schedule identity of the delivery. |
-| `Misfire` | `null` when the delivery ran on time; otherwise `Kind` (`Late`), `Lateness`, and the missed range when it covers one. The threshold is `SetMisfireThreshold` (default 5 s) and is **observation only** — nothing about execution depends on it. |
+| `Misfire` | `null` when the delivery ran on time; otherwise `Kind` (`Late` for a plain delivery, `CatchUp`/`FireOnce` on a durable occurrence that stands for missed work), `Lateness`, and the missed range when it covers one. The threshold is `SetMisfireThreshold` (default 5 s): it decides both what a delivery reports about its own lateness and what a durable schedule records on the occurrence it materializes. **Observation only** — nothing about execution depends on it. |
 
 Anything that is **not** the handler (a repository, an enricher, an outbox writer) reads the same
 context by injecting `ITaskExecutionContextAccessor` and reading `.Current` — a singleton whose value

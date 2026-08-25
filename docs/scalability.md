@@ -57,13 +57,28 @@ Start here for most applications:
 
 ### Horizontal Scaling (Multiple Instances)
 
-For distributed deployments:
+**EverTask executes on ONE active instance.** There is no cross-process claim on a task, so two live instances
+pointed at the same database both recover the same pending row and both run it. Sharing a connection string is
+not how you distribute work here.
 
-1. **Shared Storage** - Use SQL Server or SQLite with shared database
-2. **Queue-Based Distribution** - Multiple instances process from shared queues
-3. **Load Balancing** - Natural distribution through persistent storage
+What a second instance is good for is availability: run it as a **standby** that is deployed and ready but
+whose EverTask host is not started, and start it when the active one is gone. Everything is in the database,
+so the standby picks up exactly what the active instance left behind.
 
-> **Note**: Full distributed clustering with leader election and automatic failover is planned for future releases.
+Two things that ARE safe across instances, because the database enforces them:
+
+- **Materialization of durable occurrences** — the unique index on (schedule, slot) means two instances
+  racing the same backlog still produce one row per slot.
+- **Idempotent registration by task key** — the unique index on the key means a schedule registered at every
+  startup exists once, whichever instance got there first.
+
+Neither of those makes execution distributed. An occurrence materialized once can still be DELIVERED twice if
+two instances are live.
+
+> **Planned**: a distributed execution lease — a claim taken on a task before it runs, with fencing and
+> expiry — is a separate epic that will apply to every task, not only to recurring ones. Until it exists, size
+> a single instance vertically (parallelism, multi-queue, sharded scheduler) and keep the second one on
+> standby.
 
 ## Best Practices
 

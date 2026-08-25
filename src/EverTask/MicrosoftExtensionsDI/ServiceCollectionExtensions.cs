@@ -1,5 +1,6 @@
 using EverTask.Configuration;
 using EverTask.RateLimiting;
+using EverTask.Scheduler.Occurrences;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -144,6 +145,19 @@ public static class ServiceCollectionExtensions
                 sp.GetService<IRateLimitGate>(),
                 sp.GetService<TaskDeliveryRegistry>(),
                 sp.GetRequiredService<TimeProvider>()));
+
+        // The one place a durable schedule turns due slots into occurrence rows. Singleton: it owns the
+        // per-schedule serialization and the global materialization budget, both of which are per host.
+        services.TryAddSingleton(sp =>
+            new OccurrenceMaterializer(
+                sp.GetRequiredService<IServiceScopeFactory>(),
+                sp,
+                sp.GetRequiredService<IScheduler>(),
+                sp.GetRequiredService<EverTaskServiceConfiguration>(),
+                sp.GetRequiredService<IScheduleEvaluator>(),
+                sp.GetRequiredService<IEverTaskLogger<OccurrenceMaterializer>>(),
+                sp.GetRequiredService<TimeProvider>(),
+                sp.GetService<TaskDeliveryRegistry>()));
 
         services.AddHostedService(sp =>
             new WorkerService(

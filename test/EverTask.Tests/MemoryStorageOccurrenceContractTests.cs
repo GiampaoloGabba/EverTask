@@ -160,6 +160,37 @@ public class MemoryStorageOccurrenceContractTests
     }
 
     [Fact]
+    public async Task Should_cancel_every_occurrence_recovery_would_put_back_in_a_queue()
+    {
+        // R7: the cancelled set is the exact complement of the requeued one. ServiceStopped is recoverable, so
+        // an occurrence left in it would come back at the next restart and run for a cancelled schedule.
+        var id = await SeedScheduleAsync();
+
+        var waiting = NewOccurrence(id);
+        await _storage.Persist(waiting);
+
+        var stopped = NewOccurrence(id);
+        stopped.ScheduledExecutionUtc = Cursor.AddMinutes(1);
+        stopped.Status                = QueuedTaskStatus.ServiceStopped;
+        await _storage.Persist(stopped);
+
+        var running = NewOccurrence(id);
+        running.ScheduledExecutionUtc = Cursor.AddMinutes(2);
+        running.Status                = QueuedTaskStatus.InProgress;
+        await _storage.Persist(running);
+
+        await _storage.CancelSchedule(id, AuditLevel.Full);
+
+        (await ReloadAsync(waiting.Id)).Status.ShouldBe(QueuedTaskStatus.Cancelled);
+        (await ReloadAsync(stopped.Id)).Status.ShouldBe(QueuedTaskStatus.Cancelled);
+        (await ReloadAsync(running.Id)).Status
+            .ShouldBe(QueuedTaskStatus.InProgress, "an occurrence already executing owns a live delivery");
+
+        (await _storage.TrySetQueuedIfRecoverable(DateTimeOffset.UtcNow, stopped.Id, AuditLevel.Full))
+            .ShouldBeFalse("and recovery must then refuse to put it back in a queue");
+    }
+
+    [Fact]
     public async Task Should_write_nothing_when_cancelling_a_schedule_that_is_already_gone()
     {
         var id = await SeedScheduleAsync();

@@ -162,7 +162,7 @@ public class SendDigestHandler(IDigestService digests) : EverTaskHandler<SendDig
 | `ScheduleVersion` | `int` | Version of the schedule definition behind this delivery |
 | `IsRecurring` | `bool` | The delivery belongs to a recurring series |
 | `IsOccurrence` | `bool` | The delivery is an occurrence row owned by a schedule row |
-| `Misfire` | `MisfireInfo?` | `null` when the delivery ran on time; otherwise `Kind`, `Lateness`, and the missed range when it covers one |
+| `Misfire` | `MisfireInfo?` | `null` when the delivery ran on time; otherwise `Kind`, `Lateness`, and the missed range with the number of slots it holds (`MissedCountIsExact` says whether that number is the real total or a lower bound) |
 
 `ScheduledAtUtc` is the slot the task was scheduled for, and it does not move. A rate-limit deferral parks the task at a later slot of its own, but the context keeps reporting the original one, so `StartedAtUtc - ScheduledAtUtc` measures how late the run really is.
 
@@ -189,7 +189,7 @@ public class AuditingRepository(ITaskExecutionContextAccessor tasks, AppDbContex
 
 ### When a delivery counts as late
 
-A delivery is a misfire when it starts more than `SetMisfireThreshold` (default 5 seconds) after its slot. This is an observation threshold, and only that: it decides what `Context.Misfire` reports, never whether the task runs.
+A delivery is a misfire when it starts more than `SetMisfireThreshold` (default 5 seconds) after its slot. This is an observation threshold, and only that: it decides what `Context.Misfire` reports, never whether the task runs. A [durable schedule](recurring-tasks/durable-occurrences.md) applies the same threshold one step earlier, to decide whether the occurrence it is about to create stands for missed work.
 
 ```csharp
 services.AddEverTask(opt => opt

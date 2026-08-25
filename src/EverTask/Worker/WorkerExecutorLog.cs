@@ -29,6 +29,11 @@ internal static partial class WorkerExecutorLog
         Message = "Failed to resolve handler for task {TaskId}")]
     public static partial void HandlerResolutionFailed(this ILogger logger, Exception exception, Guid taskId);
 
+    [LoggerMessage(EventId = 1230, Level = LogLevel.Error,
+        Message = "The epilogue of task {TaskId} failed after the delivery itself had ended; the delivery is " +
+                  "released anyway")]
+    public static partial void DeliveryEpilogueFailed(this ILogger logger, Exception exception, Guid taskId);
+
     [LoggerMessage(EventId = 1203, Level = LogLevel.Error,
         Message = "Failed to persist execution logs for task {TaskId}")]
     public static partial void ExecutionLogsPersistFailed(this ILogger logger, Exception exception, Guid taskId);
@@ -64,6 +69,15 @@ internal static partial class WorkerExecutorLog
                   "a daylight-saving transition maps them to the same instant")]
     public static partial void DstSlotsCollapsed(this ILogger logger, Guid taskId, int collapsedCount,
                                                  DateTimeOffset? nextRun);
+
+    [LoggerMessage(EventId = 1227, Level = LogLevel.Error,
+        Message = "Durable schedule {TaskId} fired but no occurrence materializer is registered: no occurrence " +
+                  "will be created. Register EverTask through AddEverTask")]
+    public static partial void DurableScheduleWithoutMaterializer(this ILogger logger, Guid taskId);
+
+    [LoggerMessage(EventId = 1228, Level = LogLevel.Error,
+        Message = "Materialization of durable schedule {TaskId} failed; the schedule is re-parked for a retry")]
+    public static partial void ScheduleMaterializationFailed(this ILogger logger, Exception exception, Guid taskId);
 
     [LoggerMessage(EventId = 1211, Level = LogLevel.Error, Message = "Unable to publish event {Message}")]
     public static partial void EventPublishFailed(this ILogger logger, Exception exception, string message);
@@ -123,6 +137,10 @@ internal static partial class WorkerExecutorLog
     [LoggerMessage(EventId = 1220, Level = LogLevel.Information, SkipEnabledCheck = true,
         Message = "Task with id {TaskId} is signaled to be cancelled and will not be executed")]
     public static partial void TaskCancellationSignaled(this ILogger logger, Guid taskId);
+
+    [LoggerMessage(EventId = 1229, Level = LogLevel.Information, SkipEnabledCheck = true,
+        Message = "Occurrence {OccurrenceId} belongs to cancelled schedule {ScheduleId} and will not be executed")]
+    public static partial void OccurrenceOfCancelledSchedule(this ILogger logger, Guid occurrenceId, Guid scheduleId);
 
     [LoggerMessage(EventId = 1221, Level = LogLevel.Error, SkipEnabledCheck = true,
         Message = "Error occurred executing the callback override {CallbackName} for task with id {TaskId}")]

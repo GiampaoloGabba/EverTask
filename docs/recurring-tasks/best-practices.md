@@ -2,7 +2,7 @@
 layout: default
 title: Best Practices
 parent: Recurring Tasks
-nav_order: 7
+nav_order: 8
 ---
 
 # Recurring Tasks Best Practices

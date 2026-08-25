@@ -6,6 +6,7 @@ using System.Runtime.CompilerServices;
 using EverTask.Configuration;
 using EverTask.Logging;
 using EverTask.RateLimiting;
+using EverTask.Scheduler.Occurrences;
 
 namespace EverTask.Worker;
 
@@ -13,6 +14,24 @@ public interface IEverTaskWorkerExecutor
 {
     event Func<EverTaskEventData, Task>? TaskEventOccurredAsync;
     internal ValueTask DoWork(TaskHandlerExecutor task, CancellationToken serviceToken);
+
+    /// <summary>
+    /// True while at least one monitoring subscriber is attached. A caller outside a delivery renders its
+    /// message itself, so it asks first instead of paying for a sentence nobody reads.
+    /// </summary>
+    internal bool HasEventSubscribers => false;
+
+    /// <summary>
+    /// Publishes a monitoring event for work that happens OUTSIDE a delivery — the occurrence materializer,
+    /// which has a schedule row and a decision but no execution.
+    /// </summary>
+    /// <remarks>
+    /// It does NOT log: the caller has already logged through its own <c>[LoggerMessage]</c> template, in its
+    /// own category. That split is deliberate — the one thing that must never happen is a rendered sentence
+    /// reaching a logger as if it were a template (#32), and a publish-only entry point cannot do it.
+    /// </remarks>
+    internal void PublishExternalEvent(TaskHandlerExecutor executor, SeverityLevel severity, string message,
+                                       Exception? exception = null) { }
 }
 
 public class WorkerExecutor(
@@ -51,6 +70,26 @@ public class WorkerExecutor(
     // Resolved once, lazily: the evaluator is a singleton, and the worker only reaches the container
     // through the scope factory. Racing initializations are harmless — the value is the same instance.
     private IScheduleEvaluator? _evaluator;
+
+    // Same lazy resolution, and for one more reason: the materializer asks the worker executor to publish
+    // its monitoring events, so injecting it here would close a constructor cycle.
+    private OccurrenceMaterializer? _materializer;
+    private bool _materializerResolved;
+
+    private OccurrenceMaterializer? Materializer
+    {
+        get
+        {
+            if (_materializerResolved)
+                return _materializer;
+
+            using var scope = serviceScopeFactory.CreateScope();
+            _materializer         = scope.ServiceProvider.GetService<OccurrenceMaterializer>();
+            _materializerResolved = true;
+
+            return _materializer;
+        }
+    }
 
     private IScheduleEvaluator Evaluator
     {
@@ -222,26 +261,48 @@ public class WorkerExecutor(
         }
         finally
         {
-            // DoWorkCore clears the ambient context in its own finally; this covers the path where the
-            // whole delivery completed synchronously (nothing ever suspended, so the value is still on
-            // this flow) and a post-execution step threw before that line. Writing the value it already
-            // has costs nothing.
-            AmbientTaskExecutionContextAccessor.Set(null);
+            // Everything this finally does before the End is fallible — releasing a scope runs user
+            // DisposeAsync code, and reaching the materializer resolves a service — so it all sits inside its
+            // own try. The End below is not one of the things that may be skipped: a delivery whose id stays
+            // registered can never be delivered again, and for an occurrence under the default budget of one
+            // that stalls its whole schedule until a restart.
+            try
+            {
+                // DoWorkCore clears the ambient context in its own finally; this covers the path where the
+                // whole delivery completed synchronously (nothing ever suspended, so the value is still on
+                // this flow) and a post-execution step threw before that line. Writing the value it already
+                // has costs nothing.
+                AmbientTaskExecutionContextAccessor.Set(null);
 
-            // THE single release of this delivery's eager handler, on the same principle as the End
-            // below: it covers every exit path of DoWorkGuarded with no per-path enumeration — the two
-            // blacklist drops, the rate-limit deferral, the in-flight re-park, the duplicate-delivery
-            // skip and a gate wait cancelled by shutdown all end the delivery without ever reaching
-            // DoWorkCore or the terminal rejection, which are the only two ordered release sites.
-            await eagerHandler.ReleaseAsync().ConfigureAwait(false);
+                // THE single release of this delivery's eager handler, on the same principle as the End
+                // below: it covers every exit path of DoWorkGuarded with no per-path enumeration — the two
+                // blacklist drops, the rate-limit deferral, the in-flight re-park, the duplicate-delivery
+                // skip and a gate wait cancelled by shutdown all end the delivery without ever reaching
+                // DoWorkCore or the terminal rejection, which are the only two ordered release sites.
+                await eagerHandler.ReleaseAsync().ConfigureAwait(false);
 
-            // THE single End of this delivery (see TaskDeliveryRegistry's end discipline): the
-            // LAST act of every consumed delivery, covering every exit path of DoWorkGuarded
-            // (terminal completion, rate-limit deferral/rejection, retry re-park, blacklist
-            // drop) with no per-path enumeration. Because nothing runs after this, a successor
-            // delivery of the same id can only register after it — no delivery can ever release
-            // a successor's registration.
-            deliveryRegistry?.End(task.PersistenceId);
+                // An occurrence that has ended kicks its schedule: the fast path back to the materializer, so
+                // a serial catch-up moves to the next slot as soon as this one is over instead of waiting for
+                // the operational retry. KickAsync is non-throwing by contract, but REACHING it is not —
+                // resolving the materializer builds a scope and a service — which is why the try is around
+                // the whole statement and not inside the kick.
+                if (task.ParentTaskId is { } scheduleId && Materializer is { } materializer)
+                    await materializer.KickAsync(scheduleId, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception e)
+            {
+                logger.DeliveryEpilogueFailed(e, task.PersistenceId);
+            }
+            finally
+            {
+                // THE single End of this delivery (see TaskDeliveryRegistry's end discipline): the
+                // LAST act of every consumed delivery, covering every exit path of DoWorkGuarded
+                // (terminal completion, rate-limit deferral/rejection, retry re-park, blacklist
+                // drop) with no per-path enumeration. Because nothing runs after this, a successor
+                // delivery of the same id can only register after it — no delivery can ever release
+                // a successor's registration.
+                deliveryRegistry?.End(task.PersistenceId);
+            }
         }
     }
 
@@ -252,6 +313,15 @@ public class WorkerExecutor(
         // without burning rate-limit tokens (and without entering the execution path)
         if (IsTaskBlacklisted(task))
             return;
+
+        // A DURABLE schedule row runs no handler at all: its slot firing means "materialize what is due".
+        // Before the gate, deliberately — the rate limit belongs to the OCCURRENCES, per key, and letting a
+        // schedule row consume the handler's budget would throttle the very series it is producing (M8).
+        if (task.IsScheduleOnly)
+        {
+            await MaterializeScheduleAsync(task, serviceToken).ConfigureAwait(false);
+            return;
+        }
 
         if (rateLimitGate != null && task.RateLimitPolicy != null)
         {
@@ -329,6 +399,42 @@ public class WorkerExecutor(
         finally
         {
             _inFlightTasks.TryRemove(task.PersistenceId, out _);
+        }
+    }
+
+    /// <summary>
+    /// The whole delivery of a durable schedule row: hand it to the materializer, which decides which slots
+    /// are owed and re-parks the row where its own decision says.
+    /// </summary>
+    /// <remarks>
+    /// The failure path is the point of the wrapper. This delivery IS the schedule — the scheduler consumed
+    /// the row's registration to make it — so an exception escaping here leaves the row parked nowhere, and
+    /// nothing but a restart would bring it back. The materializer arms the same retry itself for a run that
+    /// failed inside its per-schedule gate, including the runs it absorbed from a caller that found the gate
+    /// taken; this is the backstop for anything that fails before or around it.
+    /// </remarks>
+    private async ValueTask MaterializeScheduleAsync(TaskHandlerExecutor task, CancellationToken serviceToken)
+    {
+        if (Materializer is not { } materializer)
+        {
+            logger.DurableScheduleWithoutMaterializer(task.PersistenceId);
+            return;
+        }
+
+        try
+        {
+            await materializer.RunAsync(task.PersistenceId, task, serviceToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (serviceToken.IsCancellationRequested)
+        {
+            // Shutdown: the row keeps its cursor and startup recovery parks it again.
+        }
+        catch (Exception ex)
+        {
+            logger.ScheduleMaterializationFailed(ex, task.PersistenceId);
+
+            var retryAt = _timeProvider.GetUtcNow() + options.BacklogRetryInterval;
+            scheduler.Schedule(task.ToLazy() with { ExecutionTime = retryAt }, retryAt);
         }
     }
 
@@ -428,6 +534,20 @@ public class WorkerExecutor(
             injectors.SetLogCapture?.Invoke(handler, logCapture);
 
             executionContext = PublishExecutionContext(task, handler, injectors);
+
+            // A cancel of the SCHEDULE that landed while this delivery was resolving its handler has ALREADY
+            // written Cancelled on this occurrence's row (M15 cancels the pending occurrences together with
+            // their schedule, in one transaction). SetInProgress below is unconditional, so without asking
+            // again here it would write straight over that terminal status and the occurrence would run and
+            // complete. Handler resolution is the wide window the two earlier checks cannot cover: they sit
+            // before the rate-limit gate, and this one is the last question before the transition.
+            // The entry never covers this delivery alone, so it is not consumed — it keeps covering the
+            // siblings behind it.
+            if (IsScheduleCancelled(task, out var cancelledSchedule))
+            {
+                RegisterOccurrenceOfCancelledSchedule(task, cancelledSchedule);
+                return;
+            }
 
             // Per-execution chatter for the LOG (Debug), but a first-class Information event for the
             // dashboard: the two levels are decoupled on purpose (see RegisterEvent).
@@ -800,11 +920,50 @@ public class WorkerExecutor(
                 static (l, id, _) => l.TaskCancellationSignaled(id),
                 static id => string.Create(CultureInfo.InvariantCulture,
                     $"Task with id {id} is signaled to be cancelled and will not be executed"));
-            workerBlacklist.Remove(task.PersistenceId);
+
+            // Consumed only when the entry covers THIS delivery alone. A durable schedule's own entry is
+            // also the only thing covering the occurrences it already produced — they carry none of their
+            // own — so a schedule row dropped from the queue must leave it standing, or the very next
+            // occurrence out of the channel finds nothing blacklisted and runs after its series was
+            // cancelled. It lapses on the blacklist's own TTL like any entry nobody consumes.
+            if (!task.IsScheduleOnly)
+                workerBlacklist.Remove(task.PersistenceId);
+
             return true;
         }
 
-        return false;
+        // Cancelling a durable schedule cancels its pending occurrences in storage, but the ones ALREADY
+        // parked in the scheduler, or already sitting in a channel, carry no blacklist entry of their own —
+        // and the enqueue on their way in would write Queued over the Cancelled the cancel had just
+        // persisted. The schedule's entry covers them: an occurrence of a cancelled schedule is cancelled.
+        // The entry is NOT consumed here, because it has to keep covering the siblings behind this one.
+        if (!IsScheduleCancelled(task, out var scheduleId))
+            return false;
+
+        RegisterOccurrenceOfCancelledSchedule(task, scheduleId);
+
+        return true;
+    }
+
+    private void RegisterOccurrenceOfCancelledSchedule(TaskHandlerExecutor task, Guid scheduleId) =>
+        RegisterEvent(LogLevel.Information, SeverityLevel.Information, task, null, null,
+            (OccurrenceId: task.PersistenceId, ScheduleId: scheduleId),
+            static (l, a, _) => l.OccurrenceOfCancelledSchedule(a.OccurrenceId, a.ScheduleId),
+            static a => string.Create(CultureInfo.InvariantCulture,
+                $"Occurrence {a.OccurrenceId} belongs to cancelled schedule {a.ScheduleId} and will not be executed"));
+
+    /// <summary>
+    /// Whether this delivery is an occurrence whose durable SCHEDULE has been cancelled.
+    /// </summary>
+    /// <remarks>
+    /// The entry is never consumed: one cancel covers every occurrence the schedule produced, and the first
+    /// of them to ask must not answer for the rest.
+    /// </remarks>
+    private bool IsScheduleCancelled(TaskHandlerExecutor task, out Guid scheduleId)
+    {
+        scheduleId = task.ParentTaskId ?? Guid.Empty;
+
+        return task.ParentTaskId.HasValue && workerBlacklist.IsBlacklisted(scheduleId);
     }
 
     private async Task<TaskExecutionResult> ExecuteTask(TaskHandlerExecutor task, object handler,
@@ -1166,7 +1325,12 @@ public class WorkerExecutor(
             // A user cancel (blacklisted id) must classify as terminal Cancelled even when the service
             // token is ALSO cancelled (shutdown racing the user cancel): otherwise it would be
             // ServiceStopped (recoverable) and re-execute at the next restart (F17).
-            var userCancelled      = workerBlacklist.IsBlacklisted(task.PersistenceId);
+            // An OCCURRENCE never carries an entry of its own — cancelling a durable schedule blacklists the
+            // SCHEDULE — so the same question has to be asked of its parent, or the one occurrence a cancel
+            // deliberately lets finish (M15) is persisted ServiceStopped and requeued by the next startup
+            // recovery: an execution of a series the user cancelled.
+            var userCancelled      = workerBlacklist.IsBlacklisted(task.PersistenceId)
+                                     || IsScheduleCancelled(task, out _);
             var cancelledByService = serviceToken.IsCancellationRequested && !userCancelled;
             if (taskStorage != null)
             {
@@ -1462,6 +1626,23 @@ public class WorkerExecutor(
     // taken (in PublishEvent) and decremented when the callback finishes — so a test can read it
     // deterministically without depending on thread-pool scheduling.
     internal int MonitoringInFlightCount => MonitoringMaxConcurrency - _monitoringConcurrency.CurrentCount;
+
+    /// <inheritdoc />
+    bool IEverTaskWorkerExecutor.HasEventSubscribers => TaskEventOccurredAsync != null;
+
+    /// <inheritdoc />
+    void IEverTaskWorkerExecutor.PublishExternalEvent(TaskHandlerExecutor executor, SeverityLevel severity,
+                                                      string message, Exception? exception)
+    {
+        try
+        {
+            PublishEvent(executor, severity, message, exception);
+        }
+        catch (Exception e)
+        {
+            logger.EventPublishFailed(e, message);
+        }
+    }
 
     private void PublishEvent(TaskHandlerExecutor task, SeverityLevel severity, string formattedMessage,
                               Exception? exception = null, IReadOnlyList<TaskExecutionLog>? executionLogs = null)

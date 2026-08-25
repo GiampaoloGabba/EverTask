@@ -118,7 +118,8 @@ procedure OR PL/SQL). **Invariants that MUST hold (verify with tests):**
 `NotSupportedException`**, plus two capabilities that default to `false`:
 
 ```csharp
-bool SupportsDurableOccurrences => false;   // MaterializeOccurrence, CancelSchedule, RequeueTerminal,
+bool SupportsDurableOccurrences => false;   // MaterializeOccurrence, TryAdvanceScheduleCursor,
+                                            // CancelSchedule, RequeueTerminal,
                                             // TryRequeueStaleOccurrence, TryHaltSchedule,
                                             // TrySetRecurringSeriesCompleted
 bool SupportsScheduleVersioning => false;   // UpdateSchedule + the CAS overloads of
@@ -160,13 +161,29 @@ you stored. A provider that persists the entity verbatim instead stores a materi
 different `ScheduleVersion` for the same call, and whatever schedule-only fields the entity happened to
 carry.
 
-`CancelSchedule` audits only the rows its UPDATE really changed, the schedule row included: cancelling a
+`TryAdvanceScheduleCursor` is the ONE write a skipped slot needs: a conditional UPDATE of `NextRunUtc`
+guarded by version + cursor, with no run counted and no audit written, because nothing executed. Every slot
+that survives the misfire policy carries the cursor forward inside `MaterializeOccurrence` instead — the
+occurrence is written at the slot that survives while the cursor jumps over the ones that did not — so this
+is only reached when nothing survives at all. A cursor that would move to `null` goes through
+`TrySetRecurringSeriesCompleted`, which is why the new cursor here is not nullable. One statement, so the
+base's version is already at the right tier: leave it alone.
+
+`CancelSchedule` cancels exactly the set startup recovery would put back in a queue: `WaitingQueue`,
+`Queued`, `Pending` and `ServiceStopped`. Leave one of those out and an occurrence of a cancelled schedule
+comes back at the next restart and runs. Occurrences already `InProgress` own a live delivery and are left
+alone.
+
+It audits only the rows its UPDATE really changed, the schedule row included: cancelling a
 schedule a concurrent `Remove` already deleted is a silent no-op everywhere, and an audit row for a task
 that no longer exists violates the `StatusAudit` foreign key and takes the whole call down. "Really changed"
 is not the id list a preceding SELECT returned — an occurrence that reached `InProgress` in between is
-skipped by the conditional UPDATE and must not get a `Cancelled` audit row for a status it never took. Read
-the set back from the UPDATE itself (`OUTPUT`, `RETURNING`) or re-read the candidates inside the same
-transaction.
+skipped by the conditional UPDATE and must not get a `Cancelled` audit row for a status it never took.
+**If your engine admits concurrent writers, read that set back from the UPDATE itself** (`OUTPUT`,
+`RETURNING`): under READ COMMITTED a second read can attribute to this call an occurrence another writer
+cancelled, so the trail would claim a transition your transaction never made. Re-reading the candidates
+inside the same transaction — what the EF base does — is exact only while writers are serialized, as they
+are on SQLite.
 
 **Verify how your engine treats an error inside a multi-statement procedure.** SQL Server, by default, aborts
 only the failing statement: the procedure runs on to the writes that follow and COMMITs half the operation,

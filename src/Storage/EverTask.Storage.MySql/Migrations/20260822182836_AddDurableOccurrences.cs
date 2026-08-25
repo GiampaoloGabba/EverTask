@@ -192,13 +192,13 @@ BEGIN
         SELECT Id, v_now, 'Cancelled', NULL
         FROM QueuedTasks
         WHERE Id = p_ParentId
-           OR (ParentTaskId = p_ParentId AND Status IN ('WaitingQueue', 'Queued', 'Pending'));
+           OR (ParentTaskId = p_ParentId AND Status IN ('WaitingQueue', 'Queued', 'Pending', 'ServiceStopped'));
     END IF;
 
     UPDATE QueuedTasks
     SET Status = 'Cancelled'
     WHERE Id = p_ParentId
-       OR (ParentTaskId = p_ParentId AND Status IN ('WaitingQueue', 'Queued', 'Pending'));
+       OR (ParentTaskId = p_ParentId AND Status IN ('WaitingQueue', 'Queued', 'Pending', 'ServiceStopped'));
 
     COMMIT;
 END;", suppressTransaction: true);

@@ -145,4 +145,9 @@ internal static partial class WorkerServiceLog
         Message = "Could not clear the recovery-failure counter of task {TaskId} after its terminal write; the " +
                   "write itself is committed, and the stale counter stays on a row no recovery will read again")]
     public static partial void RecoveryFailureCounterResetFailed(this ILogger logger, Exception exception, Guid taskId);
+
+    [LoggerMessage(EventId = 1130, Level = LogLevel.Information,
+        Message = "Occurrence {TaskId} belongs to cancelled schedule {ScheduleId} and was cancelled instead of " +
+                  "being put back in a queue")]
+    public static partial void OccurrenceOfCancelledScheduleDropped(this ILogger logger, Guid taskId, Guid scheduleId);
 }

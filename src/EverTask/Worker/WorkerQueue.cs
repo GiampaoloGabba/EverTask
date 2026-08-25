@@ -147,11 +147,25 @@ public class WorkerQueue : IWorkerQueue
     internal ValueTask QueueForRecovery(TaskHandlerExecutor task, CancellationToken cancellationToken = default)
         => QueueCore(task, enforceRecoverable: true, cancellationToken);
 
+    /// <summary>
+    /// Whether this delivery has been cancelled — by its own id, or by the DURABLE SCHEDULE it is an
+    /// occurrence of.
+    /// </summary>
+    /// <remarks>
+    /// Cancelling a schedule cancels its pending occurrences in storage, but an occurrence already parked in
+    /// the scheduler carries no blacklist entry of its own: without the second check its enqueue would write
+    /// Queued over the Cancelled the cancel had just persisted, and it would run. The schedule's entry covers
+    /// every occurrence it produced, so it is never consumed here.
+    /// </remarks>
+    private bool IsCancelled(TaskHandlerExecutor task) =>
+        _workerBlacklist.IsBlacklisted(task.PersistenceId)
+        || (task.ParentTaskId is { } scheduleId && _workerBlacklist.IsBlacklisted(scheduleId));
+
     private async ValueTask QueueCore(TaskHandlerExecutor task, bool enforceRecoverable, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(task);
 
-        if (_workerBlacklist.IsBlacklisted(task.PersistenceId))
+        if (IsCancelled(task))
             return;
 
         // A delivery of this id is already in flight in this process (in a channel or executing):
@@ -234,7 +248,7 @@ public class WorkerQueue : IWorkerQueue
     {
         ArgumentNullException.ThrowIfNull(task);
 
-        if (_workerBlacklist.IsBlacklisted(task.PersistenceId))
+        if (IsCancelled(task))
             return EnqueueResult.Discarded;
 
         // Fast path: skip the storage round-trips below while the queue is saturated.

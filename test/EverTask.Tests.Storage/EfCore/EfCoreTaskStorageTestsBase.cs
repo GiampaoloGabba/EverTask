@@ -2799,6 +2799,77 @@ public abstract class EfCoreTaskStorageTestsBase
     }
 
     [Fact]
+    public async Task CancelSchedule_should_also_cancel_an_occurrence_the_service_stopped()
+    {
+        // R7: the cancelled set has to be the exact complement of the set startup recovery puts back in a
+        // queue, and ServiceStopped is in that set. Leaving it out means an occurrence of a schedule the user
+        // cancelled comes back one restart later and runs.
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+
+        var stopped = NewOccurrence(schedule.Id, cursor);
+        stopped.Status = QueuedTaskStatus.ServiceStopped;
+        await _storage.Persist(stopped);
+
+        await _storage.CancelSchedule(schedule.Id, AuditLevel.Full);
+
+        (await _storage.Get(t => t.Id == stopped.Id))[0].Status.ShouldBe(QueuedTaskStatus.Cancelled);
+
+        (await _storage.TrySetQueuedIfRecoverable(DateTimeOffset.UtcNow, stopped.Id, AuditLevel.Full))
+            .ShouldBeFalse("and recovery must then refuse to put it back in a queue");
+    }
+
+    [Fact]
+    public async Task TryAdvanceScheduleCursor_should_move_the_cursor_without_counting_a_run()
+    {
+        // Skipping a slot changes nothing but where the schedule points: no occurrence, no run, no audit.
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-10));
+        var schedule = await PersistSchedule(cursor);
+        var skipTo   = FloorToMicroseconds(cursor.AddMinutes(30));
+
+        (await _storage.TryAdvanceScheduleCursor(schedule.Id, 0, cursor, skipTo)).ShouldBeTrue();
+
+        var parent = (await _storage.Get(t => t.Id == schedule.Id))[0];
+        parent.NextRunUtc.ShouldBe(skipTo);
+        (parent.CurrentRunCount ?? 0).ShouldBe(0, "nothing executed, so nothing may be counted against MaxRuns");
+        parent.Status.ShouldBe(QueuedTaskStatus.Queued);
+
+        _mockedDbContext.StatusAudit.Count(a => a.QueuedTaskId == schedule.Id)
+                        .ShouldBe(0, "a skipped slot is not a status transition");
+        _mockedDbContext.RunsAudit.Count(a => a.QueuedTaskId == schedule.Id).ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task TryAdvanceScheduleCursor_should_lose_when_the_cursor_already_moved()
+    {
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-10));
+        var schedule = await PersistSchedule(cursor);
+        var moved    = FloorToMicroseconds(cursor.AddMinutes(1));
+
+        (await _storage.TryAdvanceScheduleCursor(schedule.Id, 0, cursor, moved)).ShouldBeTrue();
+
+        (await _storage.TryAdvanceScheduleCursor(schedule.Id, 0, cursor, FloorToMicroseconds(cursor.AddHours(1))))
+            .ShouldBeFalse("the compare-and-swap is on the cursor the decision was computed from");
+
+        (await _storage.Get(t => t.Id == schedule.Id))[0].NextRunUtc.ShouldBe(moved);
+    }
+
+    [Fact]
+    public async Task TryAdvanceScheduleCursor_should_lose_on_a_rescheduled_or_cancelled_schedule()
+    {
+        var cursor    = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-10));
+        var versioned = await PersistSchedule(cursor, scheduleVersion: 3);
+
+        (await _storage.TryAdvanceScheduleCursor(versioned.Id, 0, cursor, FloorToMicroseconds(cursor.AddHours(1))))
+            .ShouldBeFalse("a schedule rescheduled under the caller is a lost race, not a stale write");
+
+        var cancelled = await PersistSchedule(cursor, status: QueuedTaskStatus.Cancelled);
+
+        (await _storage.TryAdvanceScheduleCursor(cancelled.Id, 0, cursor, FloorToMicroseconds(cursor.AddHours(1))))
+            .ShouldBeFalse("and a cancelled schedule has no cursor left to move");
+    }
+
+    [Fact]
     public async Task RequeueTerminal_should_requeue_a_failed_row_keeping_its_identity_and_its_audit_trail()
     {
         var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));

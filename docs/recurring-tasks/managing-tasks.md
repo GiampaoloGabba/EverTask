@@ -2,7 +2,7 @@
 layout: default
 title: Managing Recurring Tasks
 parent: Recurring Tasks
-nav_order: 6
+nav_order: 7
 ---
 
 # Managing Recurring Tasks

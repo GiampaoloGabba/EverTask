@@ -405,13 +405,49 @@ public interface ITaskStorage
             $"implement {nameof(TrySetRecurringSeriesCompleted)} atomically.");
 
     /// <summary>
+    /// Moves a durable schedule's cursor forward WITHOUT creating an occurrence, guarded by a compare-and-swap
+    /// on the version and the current cursor.
+    /// </summary>
+    /// <remarks>
+    /// This is how slots are SKIPPED. Every kept slot advances the cursor inside
+    /// <see cref="MaterializeOccurrence"/>, which is what makes a skip free: the occurrence is written at the
+    /// slot that survives while the cursor jumps from the one that did not. When nothing survives at all — a
+    /// whole backlog older than the age window, or a stale slot under the skip policy — there is no
+    /// materialization to carry the jump, and this is that jump on its own.
+    /// <para>
+    /// It counts no run and writes no audit: nothing executed. A cursor that would move to <c>null</c> is the
+    /// end of the series and goes through <see cref="TrySetRecurringSeriesCompleted"/> instead, which is why
+    /// the new cursor here is not nullable.
+    /// </para>
+    /// </remarks>
+    /// <returns>True when the cursor was moved; false when the compare-and-swap lost.</returns>
+    Task<bool> TryAdvanceScheduleCursor(Guid parentId, int expectedScheduleVersion, DateTimeOffset expectedCursorUtc,
+                                        DateTimeOffset newCursorUtc, CancellationToken ct = default) =>
+        throw new NotSupportedException(
+            "This storage does not implement durable occurrences. Use a built-in provider, or implement " +
+            $"{nameof(TryAdvanceScheduleCursor)} atomically and set {nameof(SupportsDurableOccurrences)} to true.");
+
+    /// <summary>
     /// Cancels a durable schedule AND every occurrence of it still pending, in one transaction, so a
     /// materializer racing the cancel can only observe the schedule as already inactive. Occurrences already
     /// executing are left alone and run to their own end.
     /// </summary>
     /// <remarks>
+    /// The set it cancels is the exact complement of the set startup recovery puts back in a queue —
+    /// <c>WaitingQueue</c>, <c>Queued</c>, <c>Pending</c> and <c>ServiceStopped</c>. Leaving any of them out
+    /// means an occurrence of a cancelled schedule comes back at the next restart and runs (R7).
+    /// <para>
     /// Audits only the rows it really changed. A schedule a concurrent <c>Remove</c> already deleted is a
     /// silent no-op — never an error, and never a status audit for a task that no longer exists.
+    /// </para>
+    /// <para>
+    /// CONTRACT for an implementation whose backend admits CONCURRENT WRITERS (R6b): the audited set must come
+    /// from the cancelling statement itself — SQL Server's <c>OUTPUT</c>, PostgreSQL's <c>RETURNING</c>, or the
+    /// equivalent — never from a second read. Under READ COMMITTED a re-read can attribute to this call an
+    /// occurrence another writer cancelled, so the audit trail would claim a transition this transaction never
+    /// made. The three optimized providers derive it from the statement; the base implementation here re-reads
+    /// inside the transaction, which is exact only while writers are serialized (as SQLite serializes them).
+    /// </para>
     /// </remarks>
     Task CancelSchedule(Guid parentId, AuditLevel auditLevel, CancellationToken ct = default) =>
         throw new NotSupportedException(

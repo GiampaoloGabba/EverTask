@@ -354,7 +354,7 @@ public class PostgresTaskStorage(
                        SET "Status" = 'Cancelled'
                        WHERE "Id" = @parentId
                           OR ("ParentTaskId" = @parentId
-                              AND "Status" IN ('WaitingQueue', 'Queued', 'Pending'))
+                              AND "Status" IN ('WaitingQueue', 'Queued', 'Pending', 'ServiceStopped'))
                        RETURNING "Id"
                    )
                    INSERT INTO "{_schema}"."StatusAudit" ("QueuedTaskId", "UpdatedAtUtc", "NewStatus", "Exception")

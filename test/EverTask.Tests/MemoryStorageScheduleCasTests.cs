@@ -109,6 +109,38 @@ public class MemoryStorageScheduleCasTests
     }
 
     [Fact]
+    public async Task Should_move_the_cursor_of_a_skipped_slot_without_counting_a_run()
+    {
+        // The one write a SKIP needs: nothing executed, so no run, no status transition and no audit — only
+        // the cursor moves. Every kept slot carries its own jump inside the materialization instead.
+        var id = await SeedScheduleAsync();
+
+        (await _storage.TryAdvanceScheduleCursor(id, 0, Cursor, RescheduledCursor)).ShouldBeTrue();
+
+        var row = await ReloadAsync(id);
+        row.NextRunUtc.ShouldBe(RescheduledCursor);
+        row.CurrentRunCount.ShouldBe(0, "nothing ran, so nothing may be counted against MaxRuns");
+        row.Status.ShouldBe(QueuedTaskStatus.Queued);
+        row.StatusAudits.ShouldBeEmpty();
+        row.RunsAudits.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Should_refuse_a_cursor_advance_computed_against_a_state_that_moved()
+    {
+        var rescheduled = await SeedScheduleAsync(scheduleVersion: 2);
+
+        (await _storage.TryAdvanceScheduleCursor(rescheduled, 0, Cursor, RescheduledCursor))
+            .ShouldBeFalse("a schedule rescheduled under the caller is a lost race");
+
+        var advanced = await SeedScheduleAsync();
+        (await _storage.TryAdvanceScheduleCursor(advanced, 0, StaleNextRun, RescheduledCursor))
+            .ShouldBeFalse("and so is a cursor another writer already moved");
+
+        (await ReloadAsync(advanced)).NextRunUtc.ShouldBe(Cursor);
+    }
+
+    [Fact]
     public async Task Should_report_VersionMismatch_when_the_schedule_row_is_gone()
     {
         // Parity with the relational providers, where the conditional UPDATE simply matches zero rows.

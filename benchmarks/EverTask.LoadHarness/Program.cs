@@ -8,8 +8,9 @@ using EverTask.LoadHarness.Scenarios;
 //   A1   raw Channel<T> ceiling        A2   bare Task.Run floor
 //   A3   naive DB-polling reference    A4S  storage-only (3 writes)    A4W  worker-only (engine, no persistence)
 //   L8   full lifecycle per --storage  LDP  dispatch-call latency   LRA  recurring advance (evaluate + write)
+//   LDM  durable materialization (occurrence insert + cursor advance, one commit)
 //   tier0  run A1, A2, A4W (no DB)      anchors  run all Tier-0 (A4S/A3 honour --storage)
-//   tier1  run L8 + LDP                 recurring  run LRA
+//   tier1  run L8 + LDP                 recurring  run LRA + LDM
 // Common knobs: --count 1m --parallelism 16 --producers 4 --capacity 2000 --warmup 3 --measured 7
 //               --storage inmemory|sqlite|sqlserver|postgres   --poll-interval 1000   --out benchmarks/results
 //               --log Warning|Information|Debug|…   --sink none|render|enumerate   (EverTask's own logging)
@@ -37,7 +38,8 @@ var registry = new Dictionary<string, IScenario>(StringComparer.OrdinalIgnoreCas
     ["A4W"] = new A4WorkerOnly(),
     ["L8"] = new L8Lifecycle(),
     ["LDP"] = new LDispatchProd(),
-    ["LRA"] = new LRARecurringAdvance()
+    ["LRA"] = new LRARecurringAdvance(),
+    ["LDM"] = new LDMDurableMaterialization()
 };
 
 IReadOnlyList<IScenario> toRun = scenarioId switch
@@ -48,8 +50,9 @@ IReadOnlyList<IScenario> toRun = scenarioId switch
     "ANCHORS" => [registry["A1"], registry["A2"], registry["A4W"], registry["A4S"], registry["A3"]],
     // tier1 = the production headline pair (both honour --storage).
     "TIER1" => [registry["L8"], registry["LDP"]],
-    // recurring = the schedule-advance axis of the D7 gate (honours --storage).
-    "RECURRING" => [registry["LRA"]],
+    // recurring = the schedule axes of the D7 gate: the inline advance and the durable materialization
+    // (both honour --storage).
+    "RECURRING" => [registry["LRA"], registry["LDM"]],
     _ when registry.TryGetValue(scenarioId, out var s) => [s],
     _ => []
 };

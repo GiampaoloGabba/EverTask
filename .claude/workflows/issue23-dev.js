@@ -270,9 +270,9 @@ async function reviewRound(phaseObj, phaseTag, round, seen, focusNote) {
   const lows = fresh.filter(f => f.severity === 'low')
 
   // Verifications are read-only and independent: run them concurrently (maintainer, 2026-08-24).
-  // Phases 1-2 keep the original sequential order so their journaled call sequence replays from cache.
+  // Phases 1-4 keep the original sequential order so their journaled call sequence replays from cache.
   const verified = []
-  if (phaseObj.n <= 2) {
+  if (phaseObj.n <= 4) {
     for (const f of candidates) {
       const v = await verifyFinding(f, phaseTag, 1)
       if (v.confirmed) verified.push({ ...f, verdict: v.reason })
@@ -290,6 +290,9 @@ async function certify(phaseObj, phaseTag) {
     SPEC,
     'Completeness certifier for phase ' + phaseObj.n + ' (' + phaseObj.title + '). Compare the UNCOMMITTED working-tree changes (git status / git diff HEAD, read new files fully) against EVERY deliverable of section "' + phaseObj.planSection + '" of the plan and every decision it references, including: tests listed for the phase (present AND meaningful, integration-first), docs/cheatsheet/reference/skill updates required in the same phase, per-provider storage parity, and the gates of section 0 of the plan.',
     'complete=true ONLY if nothing required by the plan section is missing or half-done. List every gap in missing (one precise line each, with the plan bullet it comes from). Read code and tests, never assume.',
+    (phaseObj.n >= 5
+      ? 'RATIFICATION POLICY (maintainer, 2026-08-25, phases 5+): separate two kinds of item. (a) BLOCKING GAPS - a deliverable of the plan section that is missing, half-done, untested, or lacking per-provider parity: these go in missing and force complete=false, exactly as before. (b) DELIVERED DIVERGENCES - the tree does something DIFFERENT from the plan/decisions text but the delivered behaviour is demonstrably correct, is pinned by real tests, and leaves the existing suites green: do NOT put these in missing and do NOT set complete=false for them. Put each one in notes prefixed with "RATIFICA RICHIESTA: " plus the exact plan/decision bullet it supersedes and one line on why the delivered form is the better one. The maintainer has pre-delegated recording those ratifications in review/recurring-occurrences-decisions.md at phase commit time. If unsure whether an item is (a) or (b), treat it as (a).'
+      : ''),
   ].join('\n')
   const [fable, codex] = await parallel([
     () => agent(certPrompt, { ...JUDGE, label: 'certify:main', phase: phaseTag, schema: CERT_SCHEMA }),
@@ -297,6 +300,9 @@ async function certify(phaseObj, phaseTag) {
       'Sei un certificatore di completezza. SOLO lettura, nessuna modifica, nessun build/test.',
       'Confronta le modifiche non committate del working tree (git status / git diff HEAD) con TUTTI i deliverable della sezione "' + phaseObj.planSection + '" di review/recurring-occurrences-plan.md e con le decisioni collegate in review/recurring-occurrences-decisions.md (test inclusi: presenti E significativi).',
       'Rispondi: complete true/false e l\'elenco preciso di ogni mancanza (missing).',
+      (phaseObj.n >= 5
+        ? 'POLITICA DI RATIFICA (maintainer, fasi 5+): distingui (a) GAP BLOCCANTI - deliverable del piano mancante, fatto a meta, non testato o senza parita fra provider: vanno in missing e complete=false; da (b) DIVERGENZE CONSEGNATE - il tree fa qualcosa di DIVERSO dal testo del piano/decisioni ma il comportamento consegnato e dimostrabilmente corretto, pinnato da test veri, con le suite esistenti verdi: NON metterle in missing e NON abbassare complete per loro; elencale in fondo al messaggio finale come righe "RATIFICA RICHIESTA: <punto del piano superato> - <perche la forma consegnata e migliore>". Nel dubbio, trattala come (a).'
+        : ''),
     ].join('\n')), { ...RUNNER, label: 'certify:codex', phase: phaseTag, schema: CODEX_CERT_SCHEMA }),
   ])
   const missing = []

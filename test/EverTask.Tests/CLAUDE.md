@@ -65,7 +65,46 @@ Docker or Testcontainers here. Subsets filter on namespace: `--filter "FullyQual
   because the fixture may reference nothing but the baseline packages.
 - **Fault injection**: `TestHelpers/FaultInjectingTaskStorage` wraps a REAL storage and throws only where the
   test arms it (`FailNext` / `FailAlways` / `Heal`), so the failure and the recovery from it both execute for
-  real. Used by `RecoveryFinalizationFailureTests`; a mock in its place would make both fictional.
+  real. Used by `RecoveryFinalizationFailureTests` and by the durable-occurrence kick test; a mock in its
+  place would make both fictional. It forwards EVERY default interface member explicitly — a new one left out
+  silently runs the interface's own default (a `NotSupportedException`) instead of the inner store.
+  `RunBefore(operation, hook)` is the other half: the hook runs on the calling thread just before the
+  operation reaches the inner store, so a test can land something else inside the window that operation is
+  about to open (a cancel arriving mid-`MaterializeOccurrence`) or measure how many callers are inside one at
+  once (the global materialization budget). A blocking hook blocks its caller — that is the point.
+  `SwallowNext(operation, times)` is the third: the call RETURNS without reaching the store, which is the
+  shape of a write every relational provider swallows (`SetStatus` logs its own failure and returns), and the
+  only one honoured — a fault that throws is a different test, because there the caller sees the failure.
+- **Durable occurrences**: the policy is pure arithmetic and lives in `Occurrences/DueSlotEnumeratorTests`
+  (including the two halves of a misfire agreeing with each other, a count that says whether it is a total or
+  a lower bound, and a catch-up whose backlog CONTAINS a DST transition — checked against the grid itself,
+  walked one step at a time, because a zoned calendar grid is the one shape no shortcut in that class
+  applies to); the backfill cursor is `RecurringTests/BackfillCursorTests` at the grid level and
+  `DurableOccurrencesIntegrationTests.A_backfilled_schedule_starts_its_cursor_in_the_past…` through the
+  public builder;
+  the wiring is `IntegrationTests/DurableOccurrencesIntegrationTests`, which SEEDS its backlogs as rows
+  (`_shared`, one `MemoryTaskStorage` registered into every host the test builds, so "restart" means the same
+  rows in a new process). There is no honest way to produce a downtime by sleeping. `TestTasks.DurableOccurrences.cs`
+  carries the recorder: it tracks the highest number of handlers inside `Handle` at once, which is what the
+  `MaxPendingOccurrences` tests assert, and its handlers override `RetryPolicy` with ONE quick retry so a test
+  that wants a `Failed` occurrence does not wait out the global three at half a second. It also carries
+  `ResolutionGate`, whose handler blocks in its CONSTRUCTOR so a test can hold a delivery inside DI
+  resolution — the stretch between the blacklist check and the `InProgress` write. **Arm it only after
+  building the executor**: the dispatch path resolves the handler once already, for its per-type metadata, and
+  a gate that holds every resolution hangs the test instead of the delivery it meant to hold.
+  `HandlerlessOccurrenceTask` has NO handler on purpose — it is a row that rebuilds its payload and then finds
+  nothing to run it, the half of "unusable" that used to throw out of reconciliation. Writing a handler for it
+  would quietly retire the test that pins that. `FlakyResolutionTask` is its opposite number and the reason
+  the two are not the same verdict: its handler IS registered and throws from its constructor while
+  `ActivationFaultGate` says so, which is what a scoped dependency failing to build looks like from the
+  reconciliation — indistinguishable from a missing handler except by asking the container.
+  `InspectionBlindScheduler` is the real scheduler minus `IsScheduled`, the only way to reach the branch a
+  CUSTOM `IScheduler` lands on: every other wrapper in the suite forwards `SupportsScheduleInspection`, so
+  without it the value is `true` everywhere and the disabled-reconciliation path never runs.
+  `RecordingLogger<T>`, registered as `IEverTaskLogger<OccurrenceMaterializer>`, is what observes that
+  branch's once-per-process warning, which publishes no monitoring event of its own. What the durable surface
+  REFUSES — every cap, window and enum, the `OnMisfire` callback that picks none or two, and the two host
+  knobs — is `Occurrences/DurableOccurrenceOptionsValidationTests`.
 - **Running startup recovery without a host**: `TestHelpers/RecoveryHarness.CreateRecoveryService(storage, …)`
   builds the REAL `WorkerService` around a storage you choose, so pagination, the two waves and the L18
   accounting all execute. `internal`, and shared with `EverTask.Tests.Storage` through this assembly's

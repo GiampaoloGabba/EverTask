@@ -226,9 +226,16 @@ public class WorkerService(
         // A durable schedule row, once recovered, immediately asks "how many of my occurrences are still
         // active?" to decide how many new ones to create; answering that while an occurrence of its own is
         // still sitting in a later page reads a phantom low count and overshoots the concurrency budget.
-        // Only the schedule rows are held back — a handful per host, not the backlog — so the pagination
-        // stays bounded in memory.
-        var durableSchedules = new List<PreparedRow>();
+        // NOTHING is held back to achieve it (R8): the second wave is a SECOND KEYSET SCAN over the same
+        // cutoff that keeps only the durable schedules, so the memory of a recovery stays one page whatever
+        // the backlog is. Buffering rows kept a deserialized payload and definition alive per schedule;
+        // buffering their ids kept a list that still grew with the number of schedules. What is carried
+        // instead is two scalars: whether the first pass saw a durable schedule at all — a host with none
+        // never pays for the second scan — and the keyset position just BEFORE the first one, so the scan
+        // starts where the durable schedules start instead of at the beginning.
+        var durableSchedules = 0;
+        DateTimeOffset? durableFromCreatedAt = null;
+        Guid? durableFromId = null;
 
         while (true)
         {
@@ -259,7 +266,20 @@ public class WorkerService(
                            .Select(row => new PreparedRow(row, RecoveredTaskFactory.FromRow(row)))
                            .ToArray();
 
-            durableSchedules.AddRange(prepared.Where(p => p.Recovered.IsDurableSchedule));
+            if (durableSchedules == 0)
+            {
+                var first = Array.FindIndex(prepared, p => p.Recovered.IsDurableSchedule);
+
+                if (first >= 0)
+                {
+                    // The keyset position of the row before it — or the page's own entry cursor when the
+                    // schedule IS the first row — is where the second scan resumes from.
+                    durableFromCreatedAt = first == 0 ? lastCreatedAt : prepared[first - 1].Row.CreatedAtUtc;
+                    durableFromId        = first == 0 ? lastId : prepared[first - 1].Row.Id;
+                }
+            }
+
+            durableSchedules += prepared.Count(p => p.Recovered.IsDurableSchedule);
             await RecoverWaveAsync(prepared.Where(p => !p.Recovered.IsDurableSchedule)).ConfigureAwait(false);
 
             totalProcessed += pendingTasks.Length;
@@ -275,8 +295,14 @@ public class WorkerService(
                 break;
         }
 
-        // Second wave: every ordinary row (occurrences included) of every page is back by now.
-        await RecoverWaveAsync(durableSchedules).ConfigureAwait(false);
+        // Second wave: every ordinary row (occurrences included) of every page is back by now, so a schedule
+        // row that asks how many of its occurrences are alive gets the real answer. The same keyset scan as
+        // above, over the same cutoff, keeping only the durable schedules — one page of rows in memory at a
+        // time, exactly like the first pass. A row the first pass already recovered reappears here and is
+        // filtered out; one that stopped matching the filter in between (cancelled, or finalized by the kick
+        // of an occurrence this recovery just put back) is a row the second wave has nothing left to do for.
+        if (durableSchedules > 0)
+            await RecoverDurableSchedulesAsync().ConfigureAwait(false);
 
         // L18: the summary must reflect failures, never report plain success when re-dispatches failed.
         if (transientFailures > 0 || permanentFailures > 0)
@@ -286,13 +312,52 @@ public class WorkerService(
 
         return;
 
+        // The second wave's own pagination (R8). It re-walks the recovery page query from the position just
+        // before the first durable schedule the first pass met, keeping only the durable schedules: no list
+        // grows with the backlog, and the rows of a page are released as soon as that page is recovered.
+        async Task RecoverDurableSchedulesAsync()
+        {
+            var fromCreatedAt = durableFromCreatedAt;
+            var fromId        = durableFromId;
+
+            while (true)
+            {
+                var page = await taskStorage.RetrievePending(_timeProvider.GetUtcNow(), fromCreatedAt, fromId,
+                                                pageSize, ct)
+                                            .ConfigureAwait(false);
+
+                if (page.Length == 0)
+                    break;
+
+                // The column check comes FIRST and costs nothing: only a row carrying a serialized definition
+                // can be a durable schedule, so the occurrences and one-shots this scan meets again are
+                // dropped without deserializing a payload for the second time.
+                var schedules = page
+                                .Where(row => row.CreatedAtUtc < recoveryCutoff
+                                              && !string.IsNullOrEmpty(row.RecurringTask))
+                                .Select(row => new PreparedRow(row, RecoveredTaskFactory.FromRow(row)))
+                                .Where(p => p.Recovered.IsDurableSchedule);
+
+                await RecoverWaveAsync(schedules).ConfigureAwait(false);
+
+                var lastRow = page[^1];
+                fromCreatedAt = lastRow.CreatedAtUtc;
+                fromId        = lastRow.Id;
+
+                if (lastRow.CreatedAtUtc >= recoveryCutoff)
+                    break;
+            }
+        }
+
         // Recovers one wave of rows: partitioned PER TARGET QUEUE and each group fanned out concurrently.
         // A single global Parallel.ForEachAsync let blocking enqueues toward one saturated queue occupy every
         // global slot and head-of-line-block the recovery of other, idle queues (L34). The partition key
         // mirrors ExecuteDispatch's routing (stored QueueName, else Recurring/Default), so a group maps to
         // exactly one worker queue: a wedged queue can only stall its own group's slots.
-        Task RecoverWaveAsync(IEnumerable<PreparedRow> wave)
+        async Task RecoverWaveAsync(IEnumerable<PreparedRow> wave)
         {
+            var rows = wave as PreparedRow[] ?? wave.ToArray();
+
             var options = new ParallelOptions
             {
                 // Clamp to >= 1: ParallelOptions rejects 0, and a misconfigured zero must never abort
@@ -301,14 +366,42 @@ public class WorkerService(
                 CancellationToken      = ct
             };
 
-            var byQueue = wave.GroupBy(p =>
+            var cancelledSchedules = await ReadCancelledSchedulesAsync(rows).ConfigureAwait(false);
+
+            var byQueue = rows.GroupBy(p =>
                 p.Row.QueueName ?? (p.Row.IsRecurring ? QueueNames.Recurring : QueueNames.Default));
 
-            return Task.WhenAll(byQueue.Select(group =>
-                Parallel.ForEachAsync(group, options, ProcessRecoveredTaskAsync)));
+            await Task.WhenAll(byQueue.Select(group =>
+                       Parallel.ForEachAsync(group, options,
+                           (prepared, token) => ProcessRecoveredTaskAsync(prepared, cancelledSchedules, token))))
+                      .ConfigureAwait(false);
         }
 
-        async ValueTask ProcessRecoveredTaskAsync(PreparedRow prepared, CancellationToken token)
+        // Which of this wave's occurrences belong to a schedule the user cancelled. A cancel terminalizes
+        // every occurrence it finds waiting, so the only ones that can reach here are the InProgress ones a
+        // cancel deliberately leaves running (M15) and that a HARD crash then froze: no delivery ever wrote
+        // their outcome, and InProgress is a status the recovery filter accepts. Requeuing one would execute
+        // an occurrence of a cancelled series. ONE query per wave, and only when the wave carries occurrences
+        // at all — a host with no durable schedule never pays for it.
+        async ValueTask<HashSet<Guid>> ReadCancelledSchedulesAsync(PreparedRow[] rows)
+        {
+            var scheduleIds = rows.Where(p => p.Row.ParentTaskId != null)
+                                  .Select(p => p.Row.ParentTaskId!.Value)
+                                  .Distinct()
+                                  .ToArray();
+
+            if (scheduleIds.Length == 0)
+                return [];
+
+            var cancelled = await taskStorage
+                                  .Get(t => scheduleIds.Contains(t.Id) && t.Status == QueuedTaskStatus.Cancelled, ct)
+                                  .ConfigureAwait(false);
+
+            return cancelled.Select(t => t.Id).ToHashSet();
+        }
+
+        async ValueTask ProcessRecoveredTaskAsync(PreparedRow prepared, HashSet<Guid> cancelledSchedules,
+                                                  CancellationToken token)
         {
             var taskInfo   = prepared.Row;
             var task       = prepared.Recovered.Task;
@@ -319,6 +412,17 @@ public class WorkerService(
 
             if (prepared.Recovered.ScheduleError != null)
                 logger.RecurringMetadataDeserializationFailed(prepared.Recovered.ScheduleError, taskInfo.Id);
+
+            // An occurrence of a cancelled schedule is cancelled, however it was left behind. The in-memory
+            // blacklist that covers the same case while the host lives does not survive a restart, and no
+            // recovery predicate consults the parent, so this is where the schedule's Cancelled status has to
+            // be honoured: terminalize the row instead of handing it to a queue.
+            if (taskInfo.ParentTaskId is { } scheduleId && cancelledSchedules.Contains(scheduleId))
+            {
+                await taskStorage.SetCancelledByUser(taskInfo.Id, auditLevel).ConfigureAwait(false);
+                logger.OccurrenceOfCancelledScheduleDropped(taskInfo.Id, scheduleId);
+                return;
+            }
 
             // X3 category (ii): a recurring series with nothing left to run but a cursor still set. It must be
             // FINALIZED, not executed — and before any grace decision, since a slot at or past RunUntil is not

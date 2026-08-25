@@ -124,6 +124,7 @@ or dispatching a durable schedule against it fails fast.
 | Operation | What must be atomic |
 |-----------|---------------------|
 | `MaterializeOccurrence` | Insert the child AND advance the schedule cursor, guarded by a compare-and-swap on version + cursor. A null new cursor ends the series in the same commit. |
+| `TryAdvanceScheduleCursor` | Move the cursor with NO occurrence, guarded by version + cursor |
 | `TrySetRecurringSeriesCompleted` | Finalize only while the expected cursor, status and version still hold |
 | `CancelSchedule` | Cancel the schedule and its still-waiting occurrences together |
 | `RequeueTerminal` | Put a `Failed`/`Cancelled` row back to `Queued`, keeping its identity and audits |
@@ -151,8 +152,25 @@ runtime info. The in-box providers that build the `INSERT` by hand write those c
 store that persists the entity it was handed calls the method first. Skip it and the same
 `MaterializeOccurrence(...)` call stores a different row on your backend than on every other one.
 
-`CancelSchedule` touches only rows that exist. Cancelling a schedule someone else has already removed is a
-no-op, not an error, and it leaves no audit row for a task that is gone.
+`TryAdvanceScheduleCursor` is how a slot is SKIPPED. Every slot that survives the misfire policy carries the
+cursor forward inside `MaterializeOccurrence` — the occurrence is written at the slot that survives while the
+cursor jumps over the ones that did not — so a skip usually costs no write of its own. This is the write for
+the case where nothing survives at all: a whole backlog outside the age window, or a stale slot under the skip
+policy. It counts no run and writes no audit, because nothing executed, and a cursor that would move to `null`
+goes through `TrySetRecurringSeriesCompleted` instead.
+
+`CancelSchedule` cancels exactly the set startup recovery would put back in a queue: `WaitingQueue`, `Queued`,
+`Pending` and `ServiceStopped`. Leave one of them out and an occurrence of a cancelled schedule comes back at
+the next restart and runs. Occurrences already `InProgress` own a live delivery and are left to end on their
+own. It also touches only rows that exist: cancelling a schedule someone else has already removed is a no-op,
+not an error, and it leaves no audit row for a task that is gone.
+
+**If your backend admits concurrent writers, derive the audited set from the cancelling statement itself** —
+`OUTPUT`, `RETURNING`, or whatever your engine offers — never from a second read. Under READ COMMITTED a
+re-read can attribute to this call an occurrence another writer cancelled, so the audit trail would claim a
+transition your transaction never made. The three optimized in-box providers take it from the statement; the
+EF Core base re-reads inside the transaction, which is exact only while writers are serialized, as they are
+on SQLite.
 
 The two read helpers (`GetOccurrences`, `CountActiveOccurrences`) carry no atomicity contract, so their
 defaults are a correct query over `Get`. Override them for an indexed one.

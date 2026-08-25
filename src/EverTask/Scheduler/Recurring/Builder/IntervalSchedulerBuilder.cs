@@ -81,4 +81,22 @@ public class IntervalSchedulerBuilder(RecurringTask task, TimeProvider? timeProv
         task.SetTimeZone(timeZoneId);
         return this;
     }
+
+    public IIntervalSchedulerBuilder OnMisfire(Action<IMisfirePolicyBuilder> configure)
+    {
+        ScheduleModifiers.OnMisfire(task, configure);
+        return this;
+    }
+
+    public IIntervalSchedulerBuilder WithDurableOccurrences()
+    {
+        ScheduleModifiers.WithDurableOccurrences(task);
+        return this;
+    }
+
+    public IIntervalSchedulerBuilder BackfillFrom(DateTimeOffset startUtc)
+    {
+        ScheduleModifiers.BackfillFrom(task, startUtc);
+        return this;
+    }
 }

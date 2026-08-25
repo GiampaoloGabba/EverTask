@@ -150,19 +150,71 @@ Per-entity keys: `taskKey: $"report-{userId}"` or `"tenant-{tenantId}:billing"`.
 
 Inside `Handle`, `Context` (see `02-tasks-and-handlers.md`) answers what the payload cannot: which
 slot this run stands for (`ScheduledAtUtc`), which run of the series it is (`RunNumber`, durable
-across restarts), and whether the run started late (`Misfire`, threshold `SetMisfireThreshold`,
-default 5 s). Use `Context.ScheduledAtUtc` — not `DateTimeOffset.UtcNow` — whenever the work is
+across restarts), and whether the run started late or stands for missed work (`Misfire`, threshold
+`SetMisfireThreshold`, default 5 s). Use `Context.ScheduledAtUtc` — not `DateTimeOffset.UtcNow` — whenever the work is
 defined by its slot (the window a report covers, the day a digest is for): after a downtime or a
 rate-limit deferral the two are not the same instant.
 
 ## Schedule-drift behavior
 
 Next run is computed from the **scheduled** time, not actual execution time, so late runs don't
-drift forward. After downtime, missed occurrences are **skipped** (logged only; they do NOT count
+drift forward. After downtime, missed occurrences are **skipped** by default (logged only; they do NOT count
 against `MaxRuns` and produce no audit rows); the schedule resumes at the next valid future slot
 (no catch-up storm). For calendar schedules (`OnDays`, monthly, etc.) the resume point walks to the
 next *real* occurrence on the grid, e.g. an `OnDays(Mon,Wed,Fri)` task always lands on a listed
 day, never an arbitrary interval-arithmetic slot.
+
+To replay what a downtime missed instead of skipping it, see durable occurrences below.
+
+## Durable occurrences and misfire policies
+
+Opt-in, off by default. `.WithDurableOccurrences()` / `.OnMisfire(...)` / `.BackfillFrom(...)` chain in the
+same positions as `InTimeZone`. They turn every due slot into its own one-shot row — own status, retries,
+audit trail and rate-limit budget — and the schedule row stops running the handler.
+
+```csharp
+// Replay what a downtime missed, oldest first, inside caps
+r => r.Schedule().EveryDay().AtTime(new TimeOnly(2,0)).InTimeZone("Europe/Rome")
+      .OnMisfire(m => m.CatchUp(new CatchUpOptions(maxAge: TimeSpan.FromDays(2), maxOccurrences: 5)))
+
+// One run stands for the whole missed range
+r => r.Schedule().EveryHour().OnMisfire(m => m.FireOnce())
+
+// One row per occurrence, no replay
+r => r.Schedule().EveryDay().AtTime(new TimeOnly(3,0)).WithDurableOccurrences()
+```
+
+- `CatchUpOptions(maxAge, maxOccurrences)` requires BOTH caps — no defaults. `MaxAge` is how far back a
+  replay may reach (the one ordinary way a slot is lost, always reported); `MaxOccurrences` is how many slots
+  one episode may replay.
+- `OverflowPolicy`: `Halt` (default) stops the schedule and writes a durable marker; the passage of time never
+  releases it and neither does a restart, and the API that does (`ResumeSchedule`/`Reschedule`) arrives with
+  runtime schedule management. A halted schedule is not re-parked, so it costs no further deliveries or
+  writes while it waits. Or `SkipOldest`, which keeps the most recent `MaxOccurrences` and drops the rest.
+  Pick `Halt` when a flood of catch-up work would be worse than a stopped schedule.
+- `MaxPendingOccurrences` (default `1`) is how many occurrences may be alive at once; `1` is strictly serial,
+  which also stops a handler that overruns its period from overlapping itself.
+- `FireOnce` and `CatchUp` imply durable occurrences. `.BackfillFrom(startUtc)` starts the cursor in the past
+  on a NEW registration, still bounded by the caps.
+- `MaxRuns` on a durable schedule counts **materializations**, including occurrences that later fail or are
+  cancelled. A failed occurrence is a dead letter; the series advances past it.
+- The handler reads the replay from `Context.Misfire`: `Kind` (`CatchUp`/`FireOnce`), `MissedFromUtc`,
+  `MissedThroughUtc`, `MissedCount` (how many slots the range holds, both ends included),
+  `MissedCountIsExact` (`false` when a walked calendar/cron grid was counted under a bound, so the number is
+  "at least this many") and `Lateness`. It is `null` while the schedule is keeping up AND the delivery started on
+  time; a delivery that starts late for its own reasons (full queue, long previous run) still reports
+  `Kind = Late` with `Lateness` and no range, even when the materializer registered no replay. What separates
+  keeping up from missed work is `SetMisfireThreshold` (default 5 s, `01-setup.md`): a slot that came due longer ago than that stands
+  for missed work even when it is the only one owed. A run of more than one slot always reports, threshold or
+  not — the policy is about to collapse or replay slots nothing ran.
+- A dropped slot always says WHICH limit dropped it, in the log and in the monitoring event: the age window
+  (`MaxAge`), the episode cap under `SkipOldest`, or the skip policy itself. One catch-up run can report two
+  of them, with a separate count each.
+- **Contracts**: at-least-once (write idempotent handlers) and **one active host** — materialization is
+  idempotent across hosts, execution is not. Requires a storage that implements the atomic occurrence
+  operations; every built-in one does, and a custom one that does not is refused at dispatch.
+- Occurrences are rows: set `OccurrenceRetentionDays` in the audit-cleanup policy (`03-storage.md`) for any
+  schedule that runs often.
 
 ## Wizard decision points
 
@@ -171,8 +223,12 @@ day, never an arbitrary interval-arithmetic slot.
 3. Interval shape → fluent unit or cron (cron overrides everything else).
 4. Anchored to a wall clock people read (a 09:00 digest, a 02:00 nightly job) rather than to an absolute
    cadence? → `.InTimeZone("Area/City")`, or `SetDefaultScheduleTimeZone` once for the whole application.
-5. Stop condition → `MaxRuns` and/or `RunUntil`.
-6. Idempotent on restart → `taskKey` (strongly recommended for all recurring).
-7. High-frequency → set `auditLevel: AuditLevel.Minimal`/`ErrorsOnly`.
-8. Work defined by its slot rather than by "now" → read `Context.ScheduledAtUtc` (and `Context.Misfire`
+5. Does a run the host missed still have to happen (billing, a nightly report, a digest someone waits for)?
+   → `.OnMisfire(m => m.CatchUp(...))` to replay each missed slot, or `m.FireOnce()` when one run covers the
+   whole gap. Leave it alone for a heartbeat, a poll or a cache refresh: a slot nobody missed is a row nobody
+   needed.
+6. Stop condition → `MaxRuns` and/or `RunUntil`.
+7. Idempotent on restart → `taskKey` (strongly recommended for all recurring).
+8. High-frequency → set `auditLevel: AuditLevel.Minimal`/`ErrorsOnly`.
+9. Work defined by its slot rather than by "now" → read `Context.ScheduledAtUtc` (and `Context.Misfire`
    when a stale run should behave differently).

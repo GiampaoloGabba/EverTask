@@ -46,6 +46,11 @@ Fluent builder (`Builder/RecurringTaskBuilder.cs`) + occurrence math (`Recurring
    - `RunUntil` is applied **once, by the caller**: a top guard returns null when `after >= RunUntil`, and the
      uniform jump's self-verify is skipped at/after `RunUntil`. The walk's cap-hit fallback never returns a
      value `<= after` (a stale past next-run would fire immediately and consume `MaxRuns`).
+   - **`RunUntil` is EXCLUSIVE, and `CountMissedOccurrences` has to say so too.** Every path that produces a
+     slot refuses one equal to the bound, so the O(1) division must stop a tick short of it instead of
+     counting `[anchor, RunUntil]`. Counting it made the two paths disagree by one, and that one is not a log
+     line: it is what `DueSlotEnumerator` compares against `MaxOccurrences`, so a backlog that fits its cap
+     exactly tripped the `Halt` breaker — which never releases itself.
    - The recovery grace-window decides via `RecurringTask.IsOccurrenceStillCurrent` (calendar-exact), **not**
      `GetMinimumInterval`. Do NOT reintroduce flat `GetMinimumInterval()` arithmetic for skip-forward: it is
      approximate (30 days for Month, the 5-minute default for `DayInterval(Interval=0)` from `OnDays`) and
@@ -121,6 +126,26 @@ Fluent builder (`Builder/RecurringTaskBuilder.cs`) + occurrence math (`Recurring
     does not compile — takes no hours, and builds `EveryHour()`'s cadence. Nothing populates
     `HourInterval.OnHours`, which is reachable from persisted metadata alone. Listing it beside
     `OnDays`/`OnMonths` is what put it in the calendar row of three documents.
+
+17. **A misfire policy and the occurrence mode are ONE decision** (M3). `FireOnce` and `CatchUp` replay missed
+    work, and a replay needs a durable row per slot, so the builder sets `OccurrenceMode.Durable` with them
+    and `RecurringTask.Validate()` REFUSES the combination on an inline definition rather than promoting it
+    silently — quietly turning an inline schedule durable would move where its executions live. `BackfillFrom`
+    follows the same rule. `MisfireSettings` is the persisted, flat shape (one record covering all three
+    policies, because a polymorphic member would need a declared alias set to round-trip at all); the typed
+    `CatchUpOptions`/`FireOnceOptions` are what a caller sees. Both new members are
+    `[JsonIgnore(WhenWritingNull)]`, which is what keeps every schedule written before them byte-identical.
+    The behaviour lives in `Scheduler/Occurrences/` — see `src/EverTask/CLAUDE.md`; this namespace only owns
+    the definition, its validation and `FirstOccurrenceOnOrAfter` (the backfill cursor, the one question the
+    grid answers inclusively).
+    - **`FirstOccurrenceOnOrAfter` probes BACKWARD by a period, never by a second.** Day, week and month
+      intervals advance their period before choosing a time inside it (gotcha 13), so a probe placed just
+      before the instant already answers a whole period late and the forward-only walk can never come back:
+      `EveryDay().AtTime(02:00).BackfillFrom(the 10th at 01:00)` used to start on the 11th. It steps back one
+      `GetMinimumInterval` (anchored on the instant, never on the wall clock — P9) and doubles while the grid
+      still answers past the instant, because that estimate is approximate for months and for `OnDays`.
+      Pinned by `RecurringTests/BackfillCursorTests`, whose theory asserts the invariant every shape owes: the
+      answer is never more than one period past the instant asked for.
 
 Builder and per-interval tests: `test/EverTask.Tests/RecurringTests/Builders/` and `.../Intervals/`.
 Time zones: `test/EverTask.Tests/RecurringTests/TimeZones/` (mapping, classification, DST, the Cronos oracle,

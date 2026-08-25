@@ -30,14 +30,27 @@ public sealed record MisfireInfo
     /// <summary>What kind of misfire this is. Never <see cref="MisfireKind.None"/> on a reported misfire.</summary>
     public MisfireKind Kind { get; init; }
 
-    /// <summary>The first slot this delivery stands for, when it covers more than its own.</summary>
+    /// <summary>
+    /// The oldest slot of the run of missed slots this delivery came out of. For a
+    /// <see cref="MisfireKind.FireOnce"/> delivery that whole run collapsed into this one execution; for a
+    /// <see cref="MisfireKind.CatchUp"/> one it is the backlog this row is a part of.
+    /// </summary>
     public DateTimeOffset? MissedFromUtc { get; init; }
 
-    /// <summary>The last slot this delivery stands for, when it covers more than its own.</summary>
+    /// <summary>The newest slot of that same run.</summary>
     public DateTimeOffset? MissedThroughUtc { get; init; }
 
-    /// <summary>How many slots were missed. Zero when the delivery is merely late.</summary>
+    /// <summary>
+    /// How many slots that run holds, both ends included. Zero when the delivery is merely late.
+    /// </summary>
     public int MissedCount { get; init; }
+
+    /// <summary>
+    /// Whether <see cref="MissedCount"/> is the real total or only a lower bound. Counting a calendar grid
+    /// means walking it, and a long outage is not walked to the end just to report a number — when that
+    /// happens the count says "at least this many" instead of pretending to be exact.
+    /// </summary>
+    public bool MissedCountIsExact { get; init; } = true;
 
     /// <summary>How far past its slot the delivery actually started.</summary>
     public TimeSpan Lateness { get; init; }

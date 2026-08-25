@@ -149,6 +149,13 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
     private static (RateLimitPolicy? Policy, string? Key) ExtractRateLimit(
         IEverTaskHandler<TTask> handler, TTask task, RecurringTask? recurring, IServiceProvider serviceFactory)
     {
+        // A DURABLE schedule row never runs the handler: it must not carry the handler's policy (it would
+        // spend the key's budget on a row that executes nothing, and starve the occurrences it produces), and
+        // the "recurrence faster than the limiter" warning does not apply to it either — that one is about the
+        // occurrences, which are gated one by one (M8).
+        if (recurring is { OccurrenceMode: OccurrenceMode.Durable })
+            return (null, null);
+
         var handlerType = handler.GetType();
 
         var policy = RateLimitPolicyCache.GetOrAdd(

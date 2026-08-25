@@ -14,6 +14,7 @@
 | F3 | `Recovery: la barriera Task.WhenAll per pagina fa aspettare le altre code` | Review fase 1, sezione «Confutate» | da aprire |
 | F4 | `Distributed execution lease` (epic) | Decisioni #23, M17-A / D5 | prevista dal piano §7, da aprire alla release |
 | F5 | `MemoryLeakRegressionTests: due test condividono i contatori statici della probe e si sporcano a vicenda` | Certificazione fase 2 (suite completa, net10.0) | da aprire |
+| F6 | `Occorrenze: la ricostruzione di una riga non ha un tetto di tentativi, come invece ce l'ha la recovery` | Review avversariale fase 4, round 4 (finding 2) | da aprire |
 
 ---
 
@@ -120,3 +121,34 @@ ripresenterà a caso su qualsiasi fase futura.
 propria coppia task+handler probe (i contatori statici smettono di incrociarsi), oppure far asserire a
 entrambi i **delta** rispetto a uno snapshot iniziale invece dei valori assoluti. La prima è più semplice e
 non cambia una sola asserzione delle due esistenti.
+
+---
+
+## F6 — Occorrenze: la ricostruzione di una riga non ha un tetto di tentativi
+
+**Origine.** Review avversariale della **fase 4**, round 4, finding 2
+(`review/recurring-occurrences-phase4-adversarial-review.md`). Nasce **dal fix** di quella finding, non dal
+codice che la precedeva: è il costo che il fix ha scelto di pagare.
+
+**Il fatto.** La riconciliazione distingue ora due esiti di una ricostruzione fallita: l'handler non è
+registrato (verdetto definitivo ⇒ `Failed`) oppure l'handler c'è e **non si è lasciato costruire** (fallimento
+transitorio ⇒ l'occorrenza resta dov'è e il run successivo riprova). La seconda strada non ha un tetto: un
+handler registrato il cui costruttore lancia **sempre** — una dipendenza scoped configurata male, non una
+indisponibilità momentanea — tiene la sua occorrenza non-terminale per tutta la vita del processo, e con il
+budget di default (`MaxPendingOccurrences = 1`) la serie non materializza più nulla. Ogni run lascia un
+warning (EventId 1817), quindi la situazione è visibile, ma nessuna scrittura la chiude.
+
+**Perché la scelta è questa.** L'alternativa — terminalizzare — è ciò che il round 4 ha classificato high: un
+timeout di una connection factory finiva l'occorrenza `Failed` senza uno solo dei retry che la sua policy
+promette, e il lavoro tornava solo con un requeue amministrativo. Fra «perdere lavoro per un guasto che
+passa» e «fermare una serie finché qualcuno guarda i log» la seconda è l'unica conservativa.
+
+**Direzione.** Un contatore di tentativi di ricostruzione per riga, con la stessa forma del contatore L18
+della recovery (`IncrementRecoveryFailure` / `ClearRecoveryFailure`, poison terminale alla soglia): dopo N run
+consecutivi in cui la riga non si lascia ricostruire, il verdetto diventa definitivo e l'occorrenza va
+`Failed` come le altre. La colonna esiste già ed è per riga, quindi non serve nuova superficie storage.
+
+**Test da portare con il fix.** Un handler che non si attiva mai: N run, poi la riga è `Failed` e la serie
+riparte; e uno che si attiva al secondo tentativo, che deve restare non-terminale e poi essere riconsegnato
+allo scheduler (il test che oggi pinna il ramo transitorio,
+`DurableOccurrencesIntegrationTests.An_occurrence_whose_handler_only_failed_to_activate_keeps_its_place_in_the_series`).

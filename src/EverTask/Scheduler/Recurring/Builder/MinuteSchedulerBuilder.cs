@@ -44,4 +44,22 @@ public class MinuteSchedulerBuilder(RecurringTask task, TimeProvider? timeProvid
         task.SetTimeZone(timeZoneId);
         return this;
     }
+
+    public IMinuteSchedulerBuilder OnMisfire(Action<IMisfirePolicyBuilder> configure)
+    {
+        ScheduleModifiers.OnMisfire(task, configure);
+        return this;
+    }
+
+    public IMinuteSchedulerBuilder WithDurableOccurrences()
+    {
+        ScheduleModifiers.WithDurableOccurrences(task);
+        return this;
+    }
+
+    public IMinuteSchedulerBuilder BackfillFrom(DateTimeOffset startUtc)
+    {
+        ScheduleModifiers.BackfillFrom(task, startUtc);
+        return this;
+    }
 }

@@ -81,4 +81,11 @@ internal static partial class DispatcherLog
     [LoggerMessage(EventId = 1017, Level = LogLevel.Debug,
         Message = "Lazy handler resolution disabled globally (UseLazyHandlerResolution = false)")]
     public static partial void LazyResolutionDisabledGlobally(this ILogger logger);
+
+    [LoggerMessage(EventId = 1018, Level = LogLevel.Warning,
+        Message = "Could not read the occurrences of task {TaskId} while cancelling it: cancelling the row " +
+                  "alone. Any occurrence of it is dropped by the blacklist in this process and cancelled by " +
+                  "the next startup recovery")]
+    public static partial void OccurrenceLookupForCancelFailed(this ILogger logger, Exception exception,
+                                                               Guid taskId);
 }

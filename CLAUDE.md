@@ -40,6 +40,7 @@ The analyzer ruleset is an explicit rule list at the end of `.editorconfig` (NOT
 - **Dispatcher** → serializes & persists (`ITaskStorage`) → routes: immediate to a bounded channel,
   scheduled/recurring to the priority queue of `PeriodicTimerScheduler` / `ShardedScheduler`
 - **WorkerExecutor** → retry policy, timeout and lifecycle callbacks, in a scoped service scope per task
+- **OccurrenceMaterializer** (durable schedules only, opt-in) → one child row per due slot, misfire policies
 - **RateLimitGate** (handlers declaring a `RateLimitPolicy` only) → per-key GCRA budget at dequeue
 - **ITaskStorage** → SqlServer, Postgres, MySql, Sqlite (all EF Core) + InMemory
 

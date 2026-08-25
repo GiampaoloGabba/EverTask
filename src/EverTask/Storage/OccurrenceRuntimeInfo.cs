@@ -28,6 +28,50 @@ internal sealed record OccurrenceRuntimeInfo
     public int? RunNumber { get; init; }
 
     /// <summary>
+    /// The time zone the schedule that produced this occurrence is read on, or null for a schedule that names
+    /// none (plain UTC).
+    /// </summary>
+    /// <remarks>
+    /// An occurrence carries NO definition of its own — it belongs to its series through its parent — so
+    /// without this the zone and the local slot a handler is contractually promised (C1/T13) would be null on
+    /// every durable occurrence, exactly where a calendar schedule needs them most. Copied at materialization
+    /// rather than read from the parent at delivery: it is a fact of the decision that created the row, it
+    /// costs no round-trip on the delivery path, and a later reschedule cannot rewrite what this occurrence
+    /// already means.
+    /// </remarks>
+    public string? TimeZoneId { get; init; }
+
+    /// <summary>
+    /// What kind of misfire this occurrence stands for, when it stands for one — a replayed slot
+    /// (<see cref="MisfireKind.CatchUp"/>) or a whole run of missed slots collapsed into it
+    /// (<see cref="MisfireKind.FireOnce"/>). Null on an occurrence that is simply its own slot.
+    /// </summary>
+    /// <remarks>
+    /// Persisted rather than derived, because it is a fact of the DECISION that created the row: by the time
+    /// the occurrence runs, the backlog it belonged to no longer exists to be measured. Lateness is not stored
+    /// — it is the distance between the slot and the moment the delivery actually starts, which only the
+    /// delivery knows.
+    /// </remarks>
+    public MisfireKind? MisfireKind { get; init; }
+
+    /// <summary>The oldest slot of the backlog this occurrence was created out of.</summary>
+    public DateTimeOffset? MissedFromUtc { get; init; }
+
+    /// <summary>The newest slot of that backlog.</summary>
+    public DateTimeOffset? MissedThroughUtc { get; init; }
+
+    /// <summary>
+    /// How many grid slots that range holds, its two ends included — so this occurrence's own slot counts.
+    /// </summary>
+    public int? MissedCount { get; init; }
+
+    /// <summary>
+    /// Whether <see cref="MissedCount"/> is the real total or only a lower bound. Null on a row written
+    /// before the distinction existed, which is read as "exact" — the historical meaning of the number.
+    /// </summary>
+    public bool? MissedCountIsExact { get; init; }
+
+    /// <summary>
     /// Reads the occurrence metadata of a row, or null when there is none to read.
     /// </summary>
     /// <remarks>

@@ -69,13 +69,15 @@ moderate 2000–5000, high 10000+.
 
 | Method | Default | Notes |
 |---|---|---|
-| `SetMisfireThreshold(TimeSpan)` | `5 s` | How late a delivery may start before `Context.Misfire` reports it (`02-tasks-and-handlers.md`). **Observation only**: nothing about execution depends on it, and the 1 s tolerance of the recurring skip-forward path is a separate, untouched rule. Negative values throw. |
+| `SetMisfireThreshold(TimeSpan)` | `5 s` | How late a delivery may start before `Context.Misfire` reports it (`02-tasks-and-handlers.md`), and how old a due slot must be for a durable schedule to stamp the occurrence it materializes as missed work (`05-scheduling.md`). **Observation only**: nothing about execution depends on it, and the 1 s tolerance of the recurring skip-forward path is a separate, untouched rule. A run of more than one missed slot is reported whatever the threshold. Negative values throw. |
 
 ### Scheduling
 
 | Method | Default | Notes |
 |---|---|---|
 | `SetDefaultScheduleTimeZone(TimeZoneInfo)` | `null` (UTC) | Zone for **calendar-anchored** schedules built without `InTimeZone` (`05-scheduling.md`). Plain cadences (`Every(n).Seconds/Minutes/Hours`) are never touched. Stamped into the definition at dispatch, so rows already stored keep their meaning. A custom (non-IANA) zone throws. |
+| `SetMaterializationConcurrency(int)` | same as `SetMaxDegreeOfParallelism` | How many durable schedules may materialize occurrences at once (`05-scheduling.md`). Bounds the storage burst of a restart backlog; it is neither the queue's parallelism nor `MaxPendingOccurrences`. Below 1 throws. |
+| `SetBacklogRetryInterval(TimeSpan)` | `1 min` | How long a durable schedule waits before trying again when it could not progress (budget full, or a write that lost its race). The usual way it resumes is the kick each occurrence gives when it ends; this is the guarantee behind it. A **halted** catch-up is never retried — only `ResumeSchedule`/`Reschedule` releases one. Below 1 s throws, and so does above 1 day: it is the last resort before a restart, and it is added to a UTC instant at every re-park. |
 
 ### Persistent logger (handler logs → DB)
 

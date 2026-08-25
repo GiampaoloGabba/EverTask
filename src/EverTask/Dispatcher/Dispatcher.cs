@@ -160,10 +160,92 @@ public class Dispatcher(
 
         // Persist Cancelled LAST so it is the final write of the cancel: any SetQueued a racing enqueue
         // managed to issue before the blacklist took effect is overwritten by Cancelled.
-        if (taskStorage != null)
+        if (taskStorage == null)
+            return;
+
+        // A schedule that owns occurrences is cancelled together with them, in one transaction (M15): a
+        // materializer racing this can then only ever see an inactive schedule, and no occurrence of a
+        // cancelled series is left waiting in a queue — or waiting to be put back in one by the next startup
+        // recovery. Everything else keeps the historical single status write, byte for byte.
+        if (await OwnsPendingOccurrencesAsync(taskId).ConfigureAwait(false) == true)
         {
-            await taskStorage.SetCancelledByUser(taskId, AuditLevel.ErrorsOnly).ConfigureAwait(false);
+            await taskStorage.CancelSchedule(taskId, AuditLevel.ErrorsOnly, cancellationToken).ConfigureAwait(false);
+            return;
         }
+
+        await taskStorage.SetCancelledByUser(taskId, AuditLevel.ErrorsOnly).ConfigureAwait(false);
+
+        // Asked a SECOND time, and this is the one that closes the race: a materializer that had already
+        // claimed the schedule row when the first read ran had not inserted its occurrence yet, so that read
+        // answered "no occurrences" and the simple write cancelled the schedule alone, leaving a live
+        // occurrence under a cancelled series — the one thing M15 says cannot happen. By the time the write
+        // above is committed that materialization is decided either way, because both of them write the
+        // schedule row and so serialize on it: it committed (its occurrence is visible here) or it lost, and
+        // every one that starts from now on is refused by the status it reads. A cancel with nothing to
+        // cascade pays one indexed read on an administrative path; one that finds something writes the
+        // cascade the race deprived it of.
+        //
+        // A read that FAILED cascades too: it is the only lookup left, and "the query threw" is not an answer
+        // that lets a cancel declare the series terminal. The cascade over a schedule with no occurrence is
+        // the parent's own write, which is the one that would have been made anyway.
+        if (await OwnsPendingOccurrencesAsync(taskId).ConfigureAwait(false) != false)
+            await taskStorage.CancelSchedule(taskId, AuditLevel.ErrorsOnly, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Whether this row still has occurrences that a cancel has to terminalize with it, or <c>null</c> when
+    /// the lookup itself failed and there is no answer.
+    /// </summary>
+    /// <remarks>
+    /// The question is asked of the persisted RELATIONSHIP — the rows that name this one as their schedule —
+    /// and never of the definition. Reading the definition answered "nothing to cascade" for a schedule whose
+    /// JSON no longer parses and for one a task-key re-registration had just turned inline, both of which
+    /// still own every occurrence they had already created; and a row with no occurrence gets the historical
+    /// single write either way, because there is nothing for the cascade to add.
+    /// <para>
+    /// One indexed read on an administrative path, skipped entirely for a storage that has no occurrences to
+    /// find. It does NOT take the caller's token and it never propagates: this classification sits in front of
+    /// the status write that has always been the cancel's last act, and it must not become a new way for that
+    /// write not to happen. It reports the failure instead of deciding it — a failed read that answered
+    /// "no occurrences" let a cancel end normally having cancelled the schedule alone, and the occurrence it
+    /// could not see went on to run once the blacklist entry lapsed.
+    /// </para>
+    /// </remarks>
+    private async Task<bool?> OwnsPendingOccurrencesAsync(Guid taskId)
+    {
+        if (taskStorage is not { SupportsDurableOccurrences: true } storage)
+            return false;
+
+        try
+        {
+            var occurrences = await storage.GetOccurrences(taskId, nonTerminalOnly: true, CancellationToken.None)
+                                           .ConfigureAwait(false);
+
+            return occurrences.Length > 0;
+        }
+        catch (Exception e)
+        {
+            logger.OccurrenceLookupForCancelFailed(e, taskId);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Refuses a durable schedule the storage cannot support, naming the missing half.
+    /// </summary>
+    private void RequireDurableOccurrenceSupport()
+    {
+        if (taskStorage is { SupportsDurableOccurrences: true })
+            return;
+
+        throw new NotSupportedException(
+            taskStorage == null
+                ? "Durable occurrences need persistence: every occurrence is a row. Register a storage " +
+                  "provider (AddMemoryStorage, AddSqlServerStorage, …) before dispatching a schedule that " +
+                  "uses WithDurableOccurrences, OnMisfire(FireOnce/CatchUp) or BackfillFrom."
+                : "The registered storage does not implement the atomic durable-occurrence operations " +
+                  $"({taskStorage.GetType().Name}.SupportsDurableOccurrences is false), and there is no " +
+                  "non-atomic emulation to fall back to. Use a built-in provider, or implement them.");
     }
 
     /// <inheritdoc />
@@ -221,6 +303,13 @@ public class Dispatcher(
         // there. Without it a corrupt interval, or an OccurrenceMode outside the defined values, is read as
         // valid all the way down to IsScheduleOnly, which only ever compares against Durable.
         recurring?.Validate();
+
+        // A durable schedule needs the atomic occurrence operations, and there is no half-atomic emulation to
+        // degrade to: a storage without them would leave occurrences without their cursor advance, or the
+        // reverse. Refused HERE, where the caller is still holding the dispatch, instead of at the first
+        // materialization hours later on a background thread.
+        if (recurring is { OccurrenceMode: OccurrenceMode.Durable })
+            RequireDurableOccurrenceSupport();
 
         // Serialize the read-decide-write of this taskKey against concurrent dispatches (held for the
         // whole dispatch, including the enqueue). No-op when there is no taskKey, no storage, or the id
@@ -357,8 +446,19 @@ public class Dispatcher(
 
         if (recurring != null)
         {
+            // A DURABLE schedule's cursor belongs to the materializer, which owns every decision about a slot
+            // that came due — the grace window, the skip-forward and the finalization below are all the inline
+            // path's answers to a misfire, and applying them here would silently consume the backlog the
+            // misfire policy exists to replay. The row keeps the cursor it has; parking it at a past cursor
+            // simply fires it now.
+            if (recurring.IsDurable && existingNextRunUtc.HasValue)
+            {
+                nextRun       = existingNextRunUtc;
+                executionTime = nextRun;
+                logger.UsingPreservedNextRun(nextRun, existingTaskId);
+            }
             // If we have a valid existing NextRunUtc from a task with TaskKey
-            if (existingNextRunUtc.HasValue)
+            else if (existingNextRunUtc.HasValue)
             {
                 // If NextRunUtc is still in the future, use it directly
                 if (existingNextRunUtc.Value > nowUtc)
@@ -421,6 +521,18 @@ public class Dispatcher(
                     executionTime = nextRun;
                     logger.CalculatedNextRunFromPast(nextRun, existingTaskId, existingNextRunUtc, result.SkippedCount);
                 }
+            }
+            else if (recurring.BackfillFromUtc is { } backfillFrom && !isRecovery)
+            {
+                // An explicit backfill starts the cursor in the past, on the first occurrence at or after the
+                // instant the caller named (M11). The replay it triggers is still bounded by the misfire
+                // policy's own caps — this only decides where the schedule starts counting from.
+                nextRun = recurring.FirstOccurrenceOnOrAfter(backfillFrom.ToUniversalTime())
+                          ?? throw new ArgumentException(
+                              "The schedule has no occurrence at or after the requested backfill start.",
+                              nameof(recurring));
+
+                executionTime = nextRun;
             }
             else
             {
@@ -619,6 +731,11 @@ public class Dispatcher(
         // Recurring tasks: adaptive based on interval
         if (recurring != null)
         {
+            // A durable schedule row never runs a handler, so resolving one eagerly for it would build an
+            // instance and a scope per slot only to dispose them untouched.
+            if (recurring.IsDurable)
+                return true;
+
             var minInterval = recurring.GetMinimumInterval(nowUtc);
             return minInterval >= TimeSpan.FromMinutes(5);
         }

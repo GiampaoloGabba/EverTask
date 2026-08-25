@@ -124,6 +124,39 @@ public class ScheduleTimeZoneIntegrationTests : IsolatedIntegrationTestBase
     }
 
     [Fact]
+    public async Task A_durable_occurrence_reads_the_zone_and_the_local_slot_of_the_series_it_belongs_to()
+    {
+        // The durable twin of the test above, and the case where the answer cannot come from the delivery:
+        // an occurrence is dispatched with NO definition of its own (M4), so unless the zone is carried on its
+        // row it has nothing to read — and the C1/T13 contract would report null on exactly the schedules that
+        // are anchored to a wall clock.
+        await CreateHostAsync(SummerNow);
+
+        var id = await Dispatcher.Dispatch(new ContextRecurringTask(),
+            r => r.RunNow().Then().EveryDay().AtTime(new TimeOnly(9, 0)).InTimeZone(RomeId)
+                  .WithDurableOccurrences(),
+            taskKey: "tz-durable-context");
+
+        await TaskWaitHelper.WaitForConditionAsync(() => _recorder.For("Handle").Length >= 1,
+            TestEnvironment.GetTimeout(10000, 30000));
+
+        var snapshot = _recorder.For("Handle")[0];
+
+        snapshot.IsOccurrence.ShouldBeTrue("the premise: what ran is a materialized child, not the schedule row");
+        snapshot.ScheduleId.ShouldBe(id);
+        snapshot.ScheduledAtUtc.ShouldBe(SummerNow);
+        snapshot.TimeZoneId.ShouldBe(RomeId);
+        snapshot.ScheduledAtLocal.ShouldBe(new DateTimeOffset(2026, 7, 1, 8, 0, 0, TimeSpan.FromHours(2)),
+            "the occurrence reads its own slot on the schedule's clock, offset included");
+
+        var occurrence = (await Storage.Get(t => t.ParentTaskId == id))[0];
+
+        occurrence.RecurringTask.ShouldBeNull("an occurrence carries no definition, which is why this matters");
+        occurrence.RuntimeInfo!.Contains(RomeId, StringComparison.Ordinal).ShouldBeTrue(
+            "the zone is on the ROW, so a restart answers the same thing without the parent");
+    }
+
+    [Fact]
     public async Task A_handler_of_a_schedule_without_a_zone_still_reads_nulls()
     {
         await CreateHostAsync(SummerNow);

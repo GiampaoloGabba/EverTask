@@ -239,8 +239,10 @@ opt.SetMisfireThreshold(TimeSpan.FromMinutes(5))
 ```
 
 **Notes:**
-- This is an **observation** threshold. It decides what `ITaskExecutionContext.Misfire` reports to the handler and nothing else: a late task runs exactly as it did before, and no status, retry or schedule decision reads it.
+- This is an **observation** threshold. It decides what gets *reported* about a delivery, never whether anything runs: a late task runs exactly as it did before, and no status, retry or scheduling decision reads it.
 - Below the threshold `Misfire` is `null`, so a handler that does not care never has to inspect a kind. Above it, `Misfire.Kind` is `Late` and `Misfire.Lateness` is the real gap.
+- It is the same threshold a **durable schedule** applies one step earlier, when it materializes an occurrence: a slot that came due longer ago than this produces an occurrence stamped with the backlog it stands for (`Misfire.Kind` `CatchUp` or `FireOnce`, plus the missed range and count), while a slot inside it produces an ordinary occurrence. See [Durable Occurrences](recurring-tasks/durable-occurrences.md).
+- A run of **more than one** missed slot is reported whatever the threshold says. `FireOnce` is about to collapse those slots and `CatchUp` to replay them, and neither may happen unreported just because the grid ticks faster than the tolerance.
 - A task dispatched to run immediately has no slot, so it can never be late.
 - The one-second tolerance the recurring skip-forward path uses to avoid treating a just-scheduled occurrence as past is a **separate rule**, unchanged by this setting.
 - See [Task Creation › Execution Context](task-creation.md#execution-context).
@@ -273,6 +275,71 @@ r.Schedule().EveryDay().AtTime(new TimeOnly(9, 0)).InTimeZone("Asia/Tokyo")
 - A plain cadence (`Every(n).Seconds/Minutes/Hours`) is never touched: it is a constant step in elapsed time and produces identical instants in every zone, and `InTimeZone` on one throws.
 - The zone is written **into the definition** when the schedule is built. Rows already stored keep whatever they were dispatched with, so changing this default later does not silently move existing schedules by an hour; re-register them under the same `taskKey` to move them.
 - See [Recurring Tasks › Time Zones](recurring-tasks/time-zones.md) for daylight-saving behaviour and the id rules.
+
+### SetMaterializationConcurrency
+
+Sets how many durable schedules may be turning due slots into occurrence rows at the same time.
+
+**Signature:**
+```csharp
+SetMaterializationConcurrency(int concurrency)
+```
+
+**Parameters:**
+- `concurrency` (int): maximum concurrent materializations. Must be at least 1.
+
+**Default:** the value of `SetMaxDegreeOfParallelism`, which is also what bounds startup recovery. It is
+resolved lazily, so setting the parallelism after this call still takes effect.
+
+**Examples:**
+```csharp
+// A restart with many durable schedules puts more pressure on the database than the work itself
+opt.SetMaterializationConcurrency(4)
+```
+
+**Notes:**
+- Materialization is a short burst of storage writes, so this bounds how much of that the store sees at once.
+- It is **not** how many occurrences execute concurrently — that is the queue's parallelism — and not how many
+  may be alive per schedule, which is `CatchUpOptions.MaxPendingOccurrences`.
+- See [Recurring Tasks › Durable Occurrences](recurring-tasks/durable-occurrences.md).
+
+### SetBacklogRetryInterval
+
+Sets how long a durable schedule waits before trying again when it could not make progress.
+
+**Signature:**
+```csharp
+SetBacklogRetryInterval(TimeSpan interval)
+```
+
+**Parameters:**
+- `interval` (TimeSpan): the retry interval. Must be at least one second and at most one day; anything outside
+  that range throws `ArgumentOutOfRangeException`.
+
+**Default:** 1 minute
+
+**Examples:**
+```csharp
+// A schedule with a large backlog and a wide MaxPendingOccurrences drains faster on a shorter retry
+opt.SetBacklogRetryInterval(TimeSpan.FromSeconds(15))
+```
+
+**Notes:**
+- A schedule cannot make progress when its concurrency budget is full, or when one of its compare-and-swapped
+  writes lost a race and the run has to look at the row again. The ordinary way it resumes is the kick each
+  occurrence gives when it ends, which is immediate; this interval is the guarantee behind that kick.
+- Startup recovery runs once, so without a retry a schedule whose kick was lost would wait for the next
+  restart.
+- A **halted** catch-up is the one thing this interval does not cover. A halt never releases itself, not by
+  ageing and not by restarting, so retrying it would put the schedule row back through the worker queue every
+  interval for ever: a status transition and an audit row each time, to produce nothing. Only
+  `ResumeSchedule` or `Reschedule` releases one.
+- Below the scheduler's own one-second tick it buys nothing, which is the lower bound.
+- The upper bound is one day. This interval is the last thing between a blocked schedule and the next restart,
+  so a value measured in weeks guarantees nothing. It is also added to a UTC instant at every re-park,
+  including on the failure path, which repeats the same addition: an interval of centuries overflows both, and
+  the schedule then sits parked nowhere at all.
+- See [Recurring Tasks › Durable Occurrences](recurring-tasks/durable-occurrences.md).
 
 ### Audit & Execution-Log Retention (`AddAuditCleanup`)
 
@@ -1961,7 +2028,17 @@ The `Action<IRecurringTaskBuilder>` overload of `Dispatch` configures a recurrin
 
 **Time zone:** `.InTimeZone(TimeZoneInfo)` / `.InTimeZone(string)`, accepted before the interval (on `Schedule()`), on the interval builder itself (`EveryDay().InTimeZone(z).AtTime(...)`) and after the final refinement: every position but between `Every(n)` and its unit. The id may be IANA or Windows; the IANA form is what gets persisted, inside the schedule definition, with no new column. It governs **calendar-anchored** schedules only: days, weeks and months (cadences included: `Every(3).Days()` lands on local midnight), `AtTime`/`AtTimes`, weekday and month selectors, cron. On a plain cadence (`Every(n).Seconds/Minutes/Hours`, with `AtSecond`/`AtMinute`) it throws `InvalidOperationException` when the schedule is built: an elapsed step is the same set of instants in every zone. An unresolvable id, or a zone with no IANA id, throws `ArgumentException` at build; an id that stops resolving later is poisoned at recovery like a corrupt cron. Across daylight saving, a skipped local time fires at the gap's exit (several slots inside one gap produce one occurrence) and a repeated one fires on its first pass. Global default: [`SetDefaultScheduleTimeZone`](#setdefaultscheduletimezone). Full rules: [Time Zones](recurring-tasks/time-zones.md).
 
-**Limits:** `.RunUntil(DateTimeOffset)` (must be future) and `.MaxRuns(int)` (counts real executions only; occurrences skipped to realign after downtime do not consume the budget). Stops at whichever is reached first.
+**Limits:** `.RunUntil(DateTimeOffset)` (must be future) and `.MaxRuns(int)` (counts real executions only; occurrences skipped to realign after downtime do not consume the budget). Stops at whichever is reached first. On a **durable** schedule `MaxRuns` counts materializations instead — an occurrence that later fails or is cancelled still spent a run, because the schedule did produce it.
+
+**Durable occurrences:** `.WithDurableOccurrences()`, `.OnMisfire(Action<IMisfirePolicyBuilder>)` and `.BackfillFrom(DateTimeOffset)`, accepted in the same positions as `InTimeZone`. They turn every due slot into its own one-shot row — its own status, retries, audit trail and rate-limit budget — and the schedule row stops running the handler.
+
+- `.OnMisfire(m => m.Skip())` is the default written out: missed slots are dropped, at most the one still current runs, and no occurrence rows are created.
+- `.OnMisfire(m => m.FireOnce(options))` collapses a whole run of missed slots into ONE occurrence at the most recent of them, with the range it covers in `ITaskExecutionContext.Misfire`. `FireOnceOptions.MaxAge` (default `null`) drops the run entirely when even its newest slot is older than the window.
+- `.OnMisfire(m => m.CatchUp(options))` replays every missed slot, oldest first. `CatchUpOptions(maxAge, maxOccurrences)` requires both caps; `MaxPendingOccurrences` (default `1`) is how many occurrences may be alive at once; `OverflowPolicy` is `Halt` (default — nothing is materialized, a durable marker is written, the schedule stops being parked so it costs no further deliveries or writes, and neither time nor a restart releases it: the API that does arrives with runtime schedule management) or `SkipOldest`, which keeps the most recent `MaxOccurrences`.
+- Both replaying policies imply durable occurrences; `.WithDurableOccurrences()` gives the rows without the replay.
+- `.BackfillFrom(startUtc)` starts the cursor at the first occurrence on or after `startUtc` instead of after the dispatch. New registrations only, and still bounded by the caps above.
+- Requires a storage that implements the atomic occurrence operations. Every built-in provider does; a custom one that does not is refused at dispatch with `NotSupportedException`.
+- Contracts: at-least-once (write idempotent handlers) and **one active host**. Full rules: [Durable Occurrences](recurring-tasks/durable-occurrences.md).
 
 > `OnLast(DayOfWeek)` is **not** implemented (only `OnFirst`). For idempotent registration across restarts, pass a stable `taskKey` (see [Dispatch Parameters](#dispatch-parameters)).
 

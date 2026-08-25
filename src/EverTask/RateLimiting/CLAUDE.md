@@ -35,6 +35,13 @@ per dispatch, fail-safe) and stamped on `TaskHandlerExecutor` (memory-only, pres
   `TryUnschedule` already removed the registration (Cancel or same-taskKey re-dispatch landed mid-re-park):
   clean up the lot entry + reservation or they leak forever. `IsScheduled(id) == true` means a newer
   registration took over and must survive.
+- **A DURABLE schedule row never reaches the gate, and never carries a policy.** It runs no handler — its slot
+  firing means "materialize what is due" — so `DoWorkGuarded` routes it to the materializer right after the
+  blacklist check and BEFORE the gate, and `TaskHandlerWrapperImp.ExtractRateLimit` returns `(null, null)` for
+  a durable definition (the "recurrence faster than the limiter" warning goes with it: that one is about the
+  occurrences). Letting a schedule row take the gate would spend the key's budget on a row that executes
+  nothing and starve the occurrences it produces. The limit applies to the OCCURRENCES, one by one, per key —
+  each is an ordinary one-shot delivery and every rule above applies to it unchanged.
 - **Rate limiting itself changes no storage schema and no recovery filter.** `EverTaskEventData` may only
   grow `init` properties in its body: appending a positional parameter would change its primary constructor
   and `Deconstruct`, which every subscriber compiled against them depends on.

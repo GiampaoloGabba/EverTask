@@ -50,11 +50,19 @@ Base EF Core storage for every relational provider; never used standalone.
   the base and the memory store insert the caller's entity, so they stamp it; the procedures and the Postgres
   CTE spell the same columns out in their `INSERT`. Skip it in one of them and the same
   `MaterializeOccurrence(...)` call persists a different row per provider.
-- **`CancelSchedule` audits what the UPDATE changed, not what the lookup found.** `ExecuteUpdate` reports a
+- **`CancelSchedule` cancels the exact complement of what recovery requeues** — `WaitingQueue`, `Queued`,
+  `Pending` and `ServiceStopped` (R7). Leave one out and an occurrence of a cancelled schedule comes back at
+  the next restart and runs. `InProgress` is deliberately left alone: it owns a live delivery.
+  It **audits what the UPDATE changed, not what the lookup found.** `ExecuteUpdate` reports a
   count and no ids, and the id lookup and the conditional UPDATE are two statements: an occurrence that
   reached `InProgress` in between is skipped by the UPDATE and must not get a `Cancelled` audit row for a
-  status it never took. The candidates are re-read inside the same transaction; the procedures and the
-  Postgres CTE get the same set from `OUTPUT` / `RETURNING`, which EF cannot express.
+  status it never took. The candidates are re-read inside the same transaction, which is exact only while
+  writers are serialized (SQLite); the procedures and the Postgres CTE get the same set from `OUTPUT` /
+  `RETURNING`, which EF cannot express, and that is the CONTRACT for any provider with concurrent writers.
+- **`TryAdvanceScheduleCursor` is the one write a SKIPPED slot needs**: `CursorCas` plus a single
+  `SetProperty(NextRunUtc)`, no transaction, no run counted, no audit — nothing executed. Every slot that
+  survives the misfire policy carries the cursor forward inside `MaterializeOccurrence` instead, so this is
+  only reached when nothing survives at all. One statement, so no provider override is warranted.
 - **A null expected cursor never reaches that WHERE** — `CursorCas` takes a NON-nullable one. EF rewrites a
   null parameter to `NextRunUtc IS NULL`, which matches exactly the finalized and poisoned schedules the
   compare-and-swap exists to exclude, and the caller that retried with the cursor it read back would insert

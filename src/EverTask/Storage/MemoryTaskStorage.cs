@@ -525,6 +525,29 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
     }
 
     /// <inheritdoc />
+    public Task<bool> TryAdvanceScheduleCursor(Guid parentId, int expectedScheduleVersion,
+                                               DateTimeOffset expectedCursorUtc, DateTimeOffset newCursorUtc,
+                                               CancellationToken ct = default)
+    {
+        lock (_pendingTasksLock)
+        {
+            var task = _pendingTasks.FirstOrDefault(t => t.Id == parentId);
+
+            if (task == null
+                || task.Status == QueuedTaskStatus.Cancelled
+                || task.ScheduleVersion != expectedScheduleVersion
+                || task.NextRunUtc != expectedCursorUtc)
+            {
+                return Task.FromResult(false);
+            }
+
+            // No run counted and no audit: skipping a slot only moves where the schedule points.
+            task.NextRunUtc = newCursorUtc;
+            return Task.FromResult(true);
+        }
+    }
+
+    /// <inheritdoc />
     public Task CancelSchedule(Guid parentId, AuditLevel auditLevel, CancellationToken ct = default)
     {
         lock (_pendingTasksLock)
@@ -534,9 +557,12 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
                 TransitionLocked(parent, QueuedTaskStatus.Cancelled, auditLevel);
 
             // Occurrences already executing are left alone: they own a live delivery and end on their own.
+            // ServiceStopped is cancelled with the rest (R7): recovery would otherwise put it back in a queue
+            // at the next restart and run an occurrence of a cancelled schedule.
             foreach (var child in _pendingTasks.Where(t => t.ParentTaskId == parentId
                                                            && t.Status is QueuedTaskStatus.WaitingQueue
-                                                               or QueuedTaskStatus.Queued or QueuedTaskStatus.Pending))
+                                                               or QueuedTaskStatus.Queued or QueuedTaskStatus.Pending
+                                                               or QueuedTaskStatus.ServiceStopped))
             {
                 TransitionLocked(child, QueuedTaskStatus.Cancelled, auditLevel);
             }

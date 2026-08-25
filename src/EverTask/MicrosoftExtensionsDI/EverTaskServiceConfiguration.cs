@@ -62,6 +62,29 @@ public class EverTaskServiceConfiguration
 
     internal string? DefaultScheduleTimeZoneId { get; private set; }
 
+    private int? _materializationConcurrency;
+
+    /// <summary>
+    /// How many durable schedules may materialize occurrences at the same time. Resolved lazily against
+    /// <see cref="MaxDegreeOfParallelism"/> so it follows a parallelism configured after this one.
+    /// </summary>
+    /// <remarks>
+    /// Clamped to at least one for the same reason the worker and startup recovery clamp it:
+    /// <see cref="SetMaxDegreeOfParallelism"/> accepts zero and negatives, and the two places that consume it
+    /// treat those as "one". Inheriting the raw value instead made a zero throw out of the materializer's own
+    /// constructor — on the schedule's first slot, after the scheduler had already consumed its registration,
+    /// so nothing re-parked the row and every restart repeated it.
+    /// </remarks>
+    internal int MaterializationConcurrency => Math.Max(1, _materializationConcurrency ?? MaxDegreeOfParallelism);
+
+    internal TimeSpan BacklogRetryInterval { get; private set; } = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// Upper bound of <see cref="SetBacklogRetryInterval"/>. The interval is added to a UTC instant on every
+    /// operational re-park, so it has to stay inside what that addition can represent.
+    /// </summary>
+    internal static readonly TimeSpan MaxBacklogRetryInterval = TimeSpan.FromDays(1);
+
     /// <summary>
     /// Sets the channel capacity for the default queue.
     /// This determines the maximum number of tasks that can be queued in memory before backpressure is applied.
@@ -347,6 +370,70 @@ public class EverTaskServiceConfiguration
         }
 
         MisfireThreshold = threshold;
+        return this;
+    }
+
+    /// <summary>
+    /// Sets how many durable schedules may be materializing occurrences at the same time.
+    /// </summary>
+    /// <param name="concurrency">
+    /// Maximum concurrent materializations. Default: the same value as
+    /// <see cref="SetMaxDegreeOfParallelism"/>, which is also what bounds startup recovery.
+    /// </param>
+    /// <returns>The configuration instance for method chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Less than one.</exception>
+    /// <remarks>
+    /// Materialization is a short burst of storage writes, so this bounds how much of that the store sees at
+    /// once — it has nothing to do with how many occurrences RUN concurrently, which is the queue's
+    /// parallelism, nor with how many may be alive per schedule, which is
+    /// <see cref="CatchUpOptions.MaxPendingOccurrences"/>. Lower it when a large restart backlog puts more
+    /// pressure on the database than the workload it is catching up on.
+    /// </remarks>
+    public EverTaskServiceConfiguration SetMaterializationConcurrency(int concurrency)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(concurrency, 1);
+
+        _materializationConcurrency = concurrency;
+        return this;
+    }
+
+    /// <summary>
+    /// Sets how long a durable schedule waits before trying again when it could not make progress: its
+    /// concurrency budget was full, or a compare-and-swapped write lost its race.
+    /// </summary>
+    /// <param name="interval">
+    /// The retry interval. Default: one minute. At least one second, and at most a day.
+    /// </param>
+    /// <returns>The configuration instance for method chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Below one second, or above one day.</exception>
+    /// <remarks>
+    /// The ordinary way a blocked schedule resumes is the kick each occurrence gives when it ends, which is
+    /// immediate. This is the guarantee behind it: startup recovery runs once, so without a retry a schedule
+    /// whose kick was lost would wait for the next restart. Shorter than the scheduler's own one-second tick
+    /// buys nothing. A HALTED catch-up is not retried at all — it never releases itself, and only an explicit
+    /// resume or reschedule clears the marker.
+    /// </remarks>
+    public EverTaskServiceConfiguration SetBacklogRetryInterval(TimeSpan interval)
+    {
+        if (interval < TimeSpan.FromSeconds(1))
+        {
+            throw new ArgumentOutOfRangeException(nameof(interval), interval,
+                "The backlog retry interval must be at least one second: the scheduler itself ticks once a " +
+                "second, so anything shorter only adds churn.");
+        }
+
+        // An upper bound because this is the LAST resort of a blocked schedule, and the value is added to a
+        // UTC instant on every re-park: an interval measured in centuries overflows that addition, and the
+        // failure path re-parks by repeating exactly the same addition, so the schedule ends up parked
+        // nowhere at all.
+        if (interval > MaxBacklogRetryInterval)
+        {
+            throw new ArgumentOutOfRangeException(nameof(interval), interval,
+                "The backlog retry interval must be at most one day: it is the guarantee that a blocked " +
+                "schedule makes progress without a restart, and a longer one is indistinguishable from none.");
+        }
+
+        BacklogRetryInterval = interval;
         return this;
     }
 
