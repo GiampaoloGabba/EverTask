@@ -119,9 +119,12 @@ an optional `Action<HttpConnectionDispatcherOptions>` to tune the SignalR hub co
 > set them.)
 
 Fixed paths: dashboard `/evertask-monitoring`, API `/evertask-monitoring/api`, hub
-`/evertask-monitoring/hub`. Auth is a custom JWT middleware (IP whitelist first → JWT via
-`Authorization: Bearer` or `?access_token=`). Login: `POST /evertask-monitoring/api/auth/login`
+`/evertask-monitoring/hub`. Auth is a custom JWT scheme (IP whitelist first → JWT via
+`Authorization: Bearer`, or `?access_token=` on the hub alone). Login: `POST /evertask-monitoring/api/auth/login`
 `{username,password}`. Default creds `admin`/`admin`: **always change in production.**
+Enforced inside routing since 4.0+, so the whitelist, the JWT and the hub handshake all hold under
+`app.UsePathBase(...)` — before that a path base skipped every one of them (issue #46). CORS is the
+exception: its branch still keys off the pre-`UsePathBase` path.
 
 Magic link when `MagicLinkToken` is set (4.0+): hand users
 `https://host/evertask-monitoring/magic#token=<MagicLinkToken>`. The fragment never reaches the

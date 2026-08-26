@@ -57,6 +57,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IStatisticsService, StatisticsService>();
         services.AddScoped<IManagementService, ManagementService>();
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
+        services.AddSingleton<MonitoringAccessPolicy>();
+        services.AddSingleton<MonitoringAccessFilter>();
         services.AddSingleton<ManagementAuthorizationFilter>();
 
         // NOTE: JWT authentication is handled by JwtAuthenticationMiddleware (custom middleware)
@@ -148,6 +150,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IStatisticsService, StatisticsService>();
         services.AddScoped<IManagementService, ManagementService>();
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
+        services.AddSingleton<MonitoringAccessPolicy>();
+        services.AddSingleton<MonitoringAccessFilter>();
         services.AddSingleton<ManagementAuthorizationFilter>();
 
         // NOTE: JWT authentication is handled by JwtAuthenticationMiddleware (custom middleware)

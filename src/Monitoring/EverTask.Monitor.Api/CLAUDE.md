@@ -22,10 +22,32 @@ REST API + embedded React dashboard, all under the fixed `/evertask-monitoring` 
   is attached per-controller by `MonitoringJsonResultFilter` through `RoutePrefixConvention`, NEVER via
   `AddJsonOptions`, which rewrites the host's shared MVC `JsonOptions`. CORS likewise runs inside a
   `UseWhen` branch under `BasePath` (`Infrastructure/EverTaskApiStartupFilter.cs`).
-- Middleware order: CORS branch, then `JwtAuthenticationMiddleware` — IP whitelist (403) BEFORE JWT (401 +
-  `WWW-Authenticate`). Anonymous skips: `{ApiBasePath}/config|auth/login|auth/validate|auth/magic`.
-- JWT only — no Basic Auth, and deliberately not `AddAuthentication().AddJwtBearer()`: the custom
-  middleware must cover API + hub + UI and accept `?access_token=` for the SignalR handshake.
+- **`Infrastructure/MonitoringAccessPolicy` is the ONE place that decides access** — which surface a path is
+  (`None`/`Ui`/`Api`/`Hub`, matched with `StartsWithSegments`, never a string prefix), the IP whitelist (403)
+  BEFORE the JWT (401 + `WWW-Authenticate`), and the anonymous skips
+  (`{ApiBasePath}/config|auth/login|auth/validate|auth/magic`). Three callers share it and none of them
+  re-implements a path test: `JwtAuthenticationMiddleware`, `MonitoringAccessFilter` (controllers) and
+  `MonitoringEndpointGuard` (everything else).
+- **The policy is enforced INSIDE routing, because the middleware cannot see the real path (#46).** A host
+  that calls `app.UsePathBase("/tenant")` moves the base out of `Request.Path` only after the startup
+  filter's middleware has run, so on such a host every layer of it missed at once: reads answered 200
+  anonymously, the IP whitelist never ran, and an anonymous hub negotiate got a connection id. What protects
+  the surface is therefore the pair that runs where routing already resolved the path — `MonitoringAccessFilter`
+  on every monitoring controller (attached by `RoutePrefixConvention`, `Order` before the management gate so
+  a blocked IP never reaches a write decision) and `MonitoringEndpointGuard` on everything that is not MVC.
+  The middleware stays as an outer shield for the ordinary pipeline; nothing security-critical may rest on it
+  alone.
+  - The guard is a convention on the **route group with an empty prefix** that `MapEverTaskApi` maps the hub,
+    the dashboard files, the OpenAPI document and the companion packages' endpoints into. A group, because
+    `MapEverTaskMonitorHub` returns `IEndpointRouteBuilder` and exposes no convention builder of its own;
+    empty prefix, so no route changes. It wraps only endpoints whose ROUTE is under the monitoring base path
+    (decided once, at build time), so `MapControllers` — which maps the host's controllers too — leaves the
+    host's endpoints literally untouched.
+  - Known limitation, functional and not security: the CORS branch in `EverTaskApiStartupFilter` still tests
+    the pre-`UsePathBase` path, so under a path base the monitoring CORS policy is not applied.
+- JWT only — no Basic Auth, and deliberately not `AddAuthentication().AddJwtBearer()`: the policy must cover
+  API + hub + UI and accept `?access_token=` for the SignalR handshake, which no host-registered scheme
+  would look at. The query-string token is accepted on the HUB surface alone.
 - `MagicLinkToken`: the UI reads the `/magic#token=` fragment (never sent to the server) and posts it to
   `POST /api/auth/magic`; `GET ?token=` is `[Obsolete]` and OpenAPI-deprecated because the query lands in
   request logs (#22). Both share the login rate-limit policy, use `FixedTimeEquals`, answer `no-store`.

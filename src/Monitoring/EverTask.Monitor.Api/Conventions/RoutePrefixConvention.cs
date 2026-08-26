@@ -19,6 +19,13 @@ public class RoutePrefixConvention(string prefix, string apiExplorerGroupName) :
     /// </summary>
     private static readonly ServiceFilterAttribute ManagementGate = new(typeof(ManagementAuthorizationFilter));
 
+    /// <summary>
+    /// The IP whitelist and the JWT check, inside routing: the middleware that also carries them cannot see
+    /// the path a host's <c>UsePathBase</c> produced, and under one every read answered anonymously.
+    /// </summary>
+    private static readonly ServiceFilterAttribute AccessGate =
+        new(typeof(MonitoringAccessFilter)) { Order = MonitoringAccessFilter.FilterOrder };
+
     private readonly string _prefix = prefix.Trim('/');
 
     /// <summary>
@@ -41,6 +48,7 @@ public class RoutePrefixConvention(string prefix, string apiExplorerGroupName) :
 
             // Monitoring JSON contract without touching the host's shared MVC JsonOptions
             controller.Filters.Add(JsonFilter);
+            controller.Filters.Add(AccessGate);
 
             foreach (var selector in controller.Selectors)
             {

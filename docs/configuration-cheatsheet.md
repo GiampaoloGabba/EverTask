@@ -172,7 +172,7 @@ Defaults differ between the auto-created `default`/`recurring` queues (inherit t
 | `JwtExpirationHours` | `8` | Token TTL |
 | `EnableCors` | `true` | Applies the `EverTaskMonitoringApi` CORS policy to requests under `/evertask-monitoring` only (since 4.0.0); the host's CORS setup is untouched |
 | `CorsAllowedOrigins` | `[]` (allow all) | Origins for the monitoring CORS policy (non-empty adds `AllowCredentials`). Restrict in production |
-| `AllowedIpAddresses` | `[]` (allow all) | IPv4/IPv6/CIDR; checked before auth |
+| `AllowedIpAddresses` | `[]` (allow all) | IPv4/IPv6/CIDR; checked before auth, dashboard files included. Enforced inside routing since 4.0.0, so it holds under `app.UsePathBase(...)` too |
 | `MagicLinkToken` | `null` (disabled) | Instant auth via `/magic#token=...` (fragment + `POST /api/auth/magic`, since 4.0.0); `?token=` still works but lands in request logs |
 | `EventDebounceMs` | `1000` | Dashboard SignalR refresh debounce |
 | `BasePath` | `/evertask-monitoring` | **read-only** computed; fixed |

@@ -1460,6 +1460,13 @@ options.EnableAuthentication = !builder.Environment.IsDevelopment();
 - **SignalR hub**: Real-time monitoring hub at `/evertask-monitoring/hub`
 - **UI**: Not protected by JWT (only IP whitelist, see `AllowedIpAddresses`)
 
+**Behind a path base.** The checks are enforced inside routing, so they hold when the application runs under
+`app.UsePathBase("/tenant")`: what is judged is the path routing resolved, which is the monitoring path
+without the base. Before 4.0.0 they were enforced only by a middleware that runs before `UsePathBase`, so on
+such a host every layer was skipped at once — the read endpoints answered anonymously, the IP whitelist never
+ran and the SignalR handshake was granted (issue #46). Only the monitoring CORS policy still keys off the
+pre-`UsePathBase` path, so under a path base you may need your own CORS setup for cross-origin dashboards.
+
 **Always Accessible (No JWT Required):**
 - `/api/config` - Dashboard configuration endpoint
 - `/api/auth/login` - Login endpoint for obtaining JWT

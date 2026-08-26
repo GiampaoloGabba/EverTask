@@ -53,16 +53,24 @@ public static class EndpointRouteBuilderExtensions
     {
         var options = endpoints.ServiceProvider.GetRequiredService<EverTaskApiOptions>();
 
+        // Everything that is NOT a controller goes into this group, whose only job is to carry the access
+        // guard: the hub exposes no convention builder of its own, and a group is what lets one convention
+        // reach it, the dashboard files and a companion package's endpoints alike. The prefix is empty, so
+        // no route changes; controllers stay outside because MVC applies MonitoringAccessFilter to them
+        // whoever maps them.
+        var guarded = endpoints.MapGroup("").Guard(endpoints.ServiceProvider);
+
         // Map SignalR hub
-        // Note: Authentication is handled by JwtAuthenticationMiddleware, not by [Authorize] attribute
-        // This allows proper JWT validation for both HTTP negotiation and WebSocket connections
+        // Note: authentication is enforced by the guard above (and by JwtAuthenticationMiddleware as an
+        // outer shield), never by an [Authorize] attribute: the handshake carries its JWT in the query
+        // string, which no authentication scheme registered by the host would look at.
         if (configureHub != null)
         {
-            endpoints.MapEverTaskMonitorHub(options.SignalRHubPath, configureHub);
+            guarded.MapEverTaskMonitorHub(options.SignalRHubPath, configureHub);
         }
         else
         {
-            endpoints.MapEverTaskMonitorHub(options.SignalRHubPath);
+            guarded.MapEverTaskMonitorHub(options.SignalRHubPath);
         }
 
         // Map API controllers
@@ -74,14 +82,15 @@ public static class EndpointRouteBuilderExtensions
         // setup is never touched.
         if (options.EnableOpenApiDocument)
         {
-            endpoints.MapOpenApi($"{options.BasePath}/openapi/{{documentName}}.json");
+            guarded.MapOpenApi($"{options.BasePath}/openapi/{{documentName}}.json");
         }
 #endif
 
-        // Companion packages (e.g. EverTask.Monitor.Api.Scalar) map their endpoints here
+        // Companion packages (e.g. EverTask.Monitor.Api.Scalar) map their endpoints here — into the guarded
+        // group, so what they serve is protected exactly like the rest of the surface
         foreach (var extension in endpoints.ServiceProvider.GetServices<IMonitoringApiEndpointExtension>())
         {
-            extension.MapEndpoints(endpoints, options);
+            extension.MapEndpoints(guarded, options);
         }
 
         // Conditionally serve UI: bail out early when the embedded dashboard is disabled
@@ -109,7 +118,7 @@ public static class EndpointRouteBuilderExtensions
         }
 
         // Map static files endpoint (assets)
-        endpoints.MapGet($"{options.UIBasePath}/assets/{{**file}}", async (string file, HttpContext context) =>
+        guarded.MapGet($"{options.UIBasePath}/assets/{{**file}}", async (string file, HttpContext context) =>
         {
             var fileInfo = fileProvider.GetFileInfo($"assets/{file}");
             if (!fileInfo.Exists)
@@ -135,7 +144,7 @@ public static class EndpointRouteBuilderExtensions
         }).ExcludeFromDescription();
 
         // Map favicon and other root files (only files with extensions, not subroutes like /tasks)
-        endpoints.MapGet($"{options.UIBasePath}/{{file}}.{{ext}}", async (string file, string ext, HttpContext context) =>
+        guarded.MapGet($"{options.UIBasePath}/{{file}}.{{ext}}", async (string file, string ext, HttpContext context) =>
         {
             // Only serve specific file types (prevent directory traversal)
             if (ext != "svg" && ext != "ico" && ext != "png")
@@ -167,7 +176,7 @@ public static class EndpointRouteBuilderExtensions
         }).ExcludeFromDescription();
 
         // Map index.html for root UI path
-        endpoints.MapGet(options.UIBasePath.TrimEnd('/'), async context =>
+        guarded.MapGet(options.UIBasePath.TrimEnd('/'), async context =>
         {
             context.Response.ContentType = "text/html";
             var fileInfo = fileProvider.GetFileInfo("index.html");
@@ -186,7 +195,7 @@ public static class EndpointRouteBuilderExtensions
         // constrained to the monitoring base path so the host keeps its own fallback and
         // 404 handling: an unconstrained MapFallback would collide with the host's SPA
         // fallback (AmbiguousMatchException) and hijack every unmatched path (issue #21)
-        endpoints.MapFallback($"{options.UIBasePath}/{{**path}}", async context =>
+        guarded.MapFallback($"{options.UIBasePath}/{{**path}}", async context =>
         {
             // Skip API routes
             if (context.Request.Path.StartsWithSegments(options.ApiBasePath))
