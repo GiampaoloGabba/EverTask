@@ -49,13 +49,21 @@ public class AuthController : ControllerBase
             return BadRequest(ModelState);
         }
 
+        // The operate credential is checked FIRST: it is a second account, so a host that configures the
+        // same username with a different password still gets the role it asked for.
+        if (IsManagementCredential(request))
+        {
+            return Ok(_jwtTokenService.GenerateToken(request.Username, canManage: true));
+        }
+
         // Validate credentials against configured username/password
         if (request.Username != _options.Username || request.Password != _options.Password)
         {
             return Unauthorized(new { message = "Invalid username or password" });
         }
 
-        // Generate JWT token
+        // Generate JWT token — read-only: the dashboard credential is shared by everyone who looks at the
+        // dashboard, and the management endpoints put handlers with side effects back into execution.
         var response = _jwtTokenService.GenerateToken(request.Username);
 
         return Ok(response);
@@ -143,11 +151,22 @@ public class AuthController : ControllerBase
             return Unauthorized(new { message = "Invalid magic link token" });
         }
 
-        // Generate session JWT
+        // Generate session JWT — always read-only: a magic link is a URL, and a URL is forwarded, bookmarked
+        // and pasted into chats. The operate role is only ever granted by an explicit login.
         var response = _jwtTokenService.GenerateToken(_options.Username);
 
         return Ok(response);
     }
+
+    /// <summary>
+    /// Whether the credentials are the operate-level pair. Both halves must be configured for it to exist,
+    /// and both are compared in fixed time: this is the credential that can requeue, resume and cancel.
+    /// </summary>
+    private bool IsManagementCredential(LoginRequest request) =>
+        !string.IsNullOrEmpty(_options.ManagementUsername)
+        && !string.IsNullOrEmpty(_options.ManagementPassword)
+        && FixedTimeEquals(request.Username, _options.ManagementUsername)
+        && FixedTimeEquals(request.Password, _options.ManagementPassword);
 
     private static bool FixedTimeEquals(string a, string b) =>
         CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(a), Encoding.UTF8.GetBytes(b));

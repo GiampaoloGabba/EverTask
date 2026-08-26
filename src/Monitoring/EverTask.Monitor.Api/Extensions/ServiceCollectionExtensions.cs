@@ -53,6 +53,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ITaskQueryService, TaskQueryService>();
         services.AddScoped<IDashboardService, DashboardService>();
         services.AddScoped<IStatisticsService, StatisticsService>();
+        services.AddScoped<IManagementService, ManagementService>();
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
 
         // NOTE: JWT authentication is handled by JwtAuthenticationMiddleware (custom middleware)
@@ -140,6 +141,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ITaskQueryService, TaskQueryService>();
         services.AddScoped<IDashboardService, DashboardService>();
         services.AddScoped<IStatisticsService, StatisticsService>();
+        services.AddScoped<IManagementService, ManagementService>();
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
 
         // NOTE: JWT authentication is handled by JwtAuthenticationMiddleware (custom middleware)
@@ -205,8 +207,13 @@ public static class ServiceCollectionExtensions
 #if NET9_0_OR_GREATER
     private static void ConfigureOpenApi(OpenApiOptions openApiOptions, EverTaskApiOptions options)
     {
-        // Strictly this document's group: ungrouped host endpoints stay in the host's documents
-        openApiOptions.ShouldInclude = description => description.GroupName == options.OpenApiDocumentName;
+        // Strictly this document's group: ungrouped host endpoints stay in the host's documents. The
+        // management routes are left out while they are disabled: every one of them answers 404 then, and a
+        // document that lists a route the API refuses to have is a document that lies to its reader.
+        openApiOptions.ShouldInclude = description =>
+            description.GroupName == options.OpenApiDocumentName
+            && (options.EnableManagementEndpoints
+                || description.RelativePath?.Contains("/api/management/", StringComparison.OrdinalIgnoreCase) != true);
 
         // The built-in generator ignores [Obsolete]; surface it as "deprecated" (GET /auth/magic, #22)
         openApiOptions.AddOperationTransformer((operation, context, _) =>

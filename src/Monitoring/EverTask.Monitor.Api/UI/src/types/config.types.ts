@@ -5,4 +5,5 @@ export interface RuntimeConfig {
   requireAuthentication: boolean;
   uiEnabled: boolean;
   eventDebounceMs: number;
+  managementEnabled: boolean;
 }

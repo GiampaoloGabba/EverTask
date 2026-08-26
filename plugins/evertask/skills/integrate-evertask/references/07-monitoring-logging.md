@@ -88,6 +88,13 @@ keep their routes and MVC JsonOptions, and a host SPA fallback keeps working (is
     options.EnableOpenApiDocument = false;   // default; true serves the OpenAPI doc at
                                              // /evertask-monitoring/openapi/evertask-monitoring.json (net9+)
     options.EventDebounceMs      = 1000;     // dashboard cache-invalidation debounce
+    // Write surface (4.0+), OFF by default. Enabling it is not enough: a caller must also carry the
+    // operate role, which ONLY the second credential below grants (never Username/Password, never a
+    // magic link). Or replace the role check with the host's own authorization.
+    options.EnableManagementEndpoints = false;
+    options.ManagementUsername        = Environment.GetEnvironmentVariable("MONITOR_OPERATE_USER");
+    options.ManagementPassword        = Environment.GetEnvironmentVariable("MONITOR_OPERATE_PASS");
+    options.ManagementAuthorization   = null;  // Func<HttpContext, Task<bool>>; when set it REPLACES the role check
 });
 ```
 
@@ -128,8 +135,24 @@ paged), `/tasks/{id}` (+ `/status-audit`, `/runs-audit`, `/execution-logs`, `/oc
 `/tasks/counts`, `/dashboard/overview`, `/dashboard/recent-activity`, `/queues`,
 `/queues/{name}/tasks`, `/statistics/{success-rate-trend|task-types|execution-times}`,
 `/rate-limits` (per-key parked count, next slot, tracked keys, fail-open count; in-memory,
-single-node), `/config` (no auth). Every endpoint is **read-only**: changing a schedule at runtime is
-`ITaskScheduleManager` in your own code, behind your own authorization (`05-scheduling.md`).
+single-node), `/config` (no auth). Every endpoint is **read-only** except the three management ones
+below; from application code, changing a schedule at runtime is still `ITaskScheduleManager`, behind
+your own authorization (`05-scheduling.md`).
+
+The two audit trails are **paged** (4.0+): `GET /tasks/{id}/status-audit` and `/runs-audit` take
+`skip`/`take` (default 0/100) and answer `{audits, totalCount, skip, take}` — not a bare array. The
+detail's `statusAudits`/`runsAudits` blocks carry only the FIRST page and report
+`statusAuditsTotalCount`/`runsAuditsTotalCount`: a long-lived recurring row records one transition per
+state per run, so nothing serves the whole history at once any more.
+
+Management endpoints (4.0+, `POST`, no body, task id in the path):
+`/management/tasks/{id}/requeue` (a terminal occurrence back in the queue),
+`/management/tasks/{id}/resume` (release a halted catch-up, cursor and backlog KEPT),
+`/management/tasks/{id}/cancel` (cancel the schedule and every pending occurrence, terminal). They
+answer `{status, message, taskId, nextRunUtc?, releasedHalt}` with 200 / 404 / 409 / 501 / 503. 404 on
+every route while `EnableManagementEndpoints` is false; 403 for a read-only session. `resume` and
+`cancel` resolve the row's `taskKey`, so a schedule dispatched without one answers 409. No CSRF token
+is needed (Bearer header, never a cookie) — keep the dashboard token out of cookies.
 
 Durable schedules (`.WithDurableOccurrences()` / `.OnMisfire(...)`, see `05-scheduling.md`) show up
 in three places. Task DTOs carry `parentTaskId`, `occurrenceMode`, `misfirePolicy`, `timeZoneId`,

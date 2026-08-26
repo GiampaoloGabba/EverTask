@@ -36,13 +36,37 @@ REST API + embedded React dashboard, all under the fixed `/evertask-monitoring` 
 - `SignalRHubPath` is readonly `/evertask-monitoring/hub`; it cannot be reconfigured.
 - Storage holds assembly-qualified type names; DTOs shorten them with `GetShortTypeName` EXCEPT
   `TaskDetailDto`, which returns `task.Type` as stored.
-- **The two audit trails are READ from the storage** (`ITaskStorage.GetStatusAudits` / `GetRunsAudits`), for
-  the same reason as `GetLastRunStarts`: nothing populates `row.StatusAudits` / `row.RunsAudits`, so the two
-  endpoints and the detail's two blocks answered the whole history over the in-memory store and `[]` over all
-  four relational ones — for a task whose audit tables hold every transition it ever made. The detail and the
-  endpoints share one reader each (`ReadStatusAuditsAsync` / `ReadRunsAuditsAsync`), so they cannot drift.
+- **The two audit trails are READ from the storage, a PAGE at a time**
+  (`ITaskStorage.GetStatusAuditsPage` / `GetRunsAuditsPage`, #44), for the same reason as `GetLastRunStarts`:
+  nothing populates `row.StatusAudits` / `row.RunsAudits`, so the two endpoints and the detail's two blocks
+  answered the whole history over the in-memory store and `[]` over all four relational ones — for a task
+  whose audit tables hold every transition it ever made. The detail and the endpoints share one reader each
+  (`ReadStatusAuditsAsync` / `ReadRunsAuditsAsync`), so they cannot drift.
   Both come back **newest-first**, ordered by the storage on the audit IDENTITY (insertion order; SQLite
   refuses a `DateTimeOffset` in an `ORDER BY`); so does `GET /tasks/{id}/occurrences`, on the nominal slot.
+  - The paging is the STORAGE's, like `GetOccurrencesPage`'s and for the same reason (a long-lived recurring
+    row records one transition per state per run); `skip`/`take` are clamped non-negative before the call.
+    The two endpoints answer `{audits, totalCount, skip, take}` — NOT a bare array — and the detail carries
+    the first page plus `StatusAuditsTotalCount`/`RunsAuditsTotalCount`. `ITaskQueryService.DefaultAuditPageSize`
+    is the one default the endpoints and the detail share.
+  - The in-memory store assigns the audits **no identity** (every `Id` is 0), so a test that asserts the order
+    by id passes only over a relational provider: over memory, assert against the unpaged read of the same
+    storage instead.
+- **The management endpoints are the ONE write surface, and they start from the authorization** (#42).
+  `EnableManagementEndpoints` is off by default and, while it is, every path under `{ApiBasePath}/management`
+  answers **404** from `JwtAuthenticationMiddleware` — the prefix is gated there, not per action, so a route
+  added to `ManagementController` cannot forget to ask for it. Once enabled the session must carry the
+  **operate** role (`MonitoringRoles`, a `role` claim on the JWT), granted ONLY by the second credential
+  `ManagementUsername`/`ManagementPassword`: the dashboard credential is shared by everyone who looks at the
+  dashboard, and a magic link is a URL, so both stay read. The host's `ManagementAuthorization` hook REPLACES
+  the role check when set — including when `EnableAuthentication` is false, where there is no session and the
+  answer without a hook is 403, never "open".
+  - CSRF needs no token here: the API authenticates with a Bearer header and never a cookie, and
+    `?access_token=` is accepted on the hub path alone.
+  - `ITaskScheduleManager` is OPTIONAL in `ManagementService` (an optional constructor parameter, like
+    `TaskQueryService`'s rate limiter): the standalone registration has no EverTask host, and 501 is the
+    honest answer there. `resume`/`cancel` resolve the row's `TaskKey` — the only way a schedule can be named
+    — so a keyless schedule answers 409 instead of failing on a null.
 - **Schedule facts come out of two JSON columns, read through EverTask's own internals.** `OccurrenceMode`,
   `MisfirePolicy` and `TimeZoneId` live inside the serialized `RecurringTask`; the occurrence metadata and the
   catch-up halt are the two shapes of `RuntimeInfo`, told apart by `ParentTaskId`. `Services/TaskScheduleFacts`

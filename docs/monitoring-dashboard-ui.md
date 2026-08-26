@@ -9,7 +9,7 @@ nav_order: 4
 
 The EverTask dashboard is a React interface for monitoring task execution, debugging failures, and spotting performance patterns.
 
-> **Note**: The dashboard is **read-only**. You can view, analyze, filter and export all task data; anything that changes a schedule (reschedule, resume a halted catch-up, requeue a failed occurrence, cancel a series) is [`ITaskScheduleManager`](recurring-tasks/managing-tasks.md), called from your own code behind your own authorization.
+> **Note**: The dashboard itself is **read-only**. You can view, analyze, filter and export all task data; requeue, resume and cancel are exposed by the API's [management endpoints](monitoring-api-reference.md#management-endpoints) — opt-in and behind their own role — and not yet by a button here. From application code, changing a schedule is [`ITaskScheduleManager`](recurring-tasks/managing-tasks.md), behind your own authorization.
 
 **Quick Access:**
 ```

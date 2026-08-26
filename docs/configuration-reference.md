@@ -1349,6 +1349,10 @@ not auto-register SignalR monitoring and requires you to register `ITaskStorage`
 | `Username` | `string` | `"admin"` | JWT Authentication username |
 | `Password` | `string` | `"admin"` | JWT Authentication password (CHANGE IN PRODUCTION!) |
 | `EnableAuthentication` | `bool` | `true` | Enable JWT Authentication |
+| `EnableManagementEndpoints` | `bool` | `false` | Expose the management (write) endpoints under `/evertask-monitoring/api/management`. While false, every path under that prefix answers 404 |
+| `ManagementUsername` | `string?` | `null` | Username of the second, operate-level credential. Logging in with it returns a token carrying the operate role, which is what the management endpoints require |
+| `ManagementPassword` | `string?` | `null` | Password of the operate-level credential (compared in fixed time). Both halves must be set for the credential to exist |
+| `ManagementAuthorization` | `Func<HttpContext, Task<bool>>?` | `null` | Host-supplied authorization for the management endpoints. When set it **replaces** the role check; returning false answers 403 |
 | `JwtSecret` | `string?` | `null` | JWT signing key; when unset, a random 256-bit secret is generated per instance. Set it explicitly (≥ 32 bytes) for multi-instance deployments |
 | `JwtIssuer` | `string` | `"EverTask.Monitor.Api"` | JWT issuer claim |
 | `JwtAudience` | `string` | `"EverTask.Monitor.Api"` | JWT audience claim |
@@ -1474,6 +1478,57 @@ options.EnableAuthentication = !builder.Environment.IsDevelopment();
 - When disabled, all API and hub endpoints are publicly accessible (only IP whitelist applies)
 - UI is always accessible (relies on IP whitelist for protection)
 - JWT tokens expire after 8 hours by default (see `JwtExpirationHours`)
+
+#### EnableManagementEndpoints, ManagementUsername / ManagementPassword, ManagementAuthorization
+
+The monitoring API is read-only by construction. These four options are what opens the one exception to that
+— the management endpoints, which requeue a terminal occurrence, resume a halted catch-up or cancel a
+schedule — and they start from the **authorization**, not from the endpoints.
+
+**Why a second credential.** `Username`/`Password` is the dashboard credential: everyone who looks at the
+dashboard shares it, and looking is all it is for. A requeue puts a handler with side effects back into
+execution, so it does not travel on that credential. `ManagementUsername`/`ManagementPassword` is a separate
+account, and logging in with it returns a token carrying the **operate** role; every other login — the
+dashboard credential and every magic link, which is a URL and gets forwarded — returns a read-only one.
+
+**Examples:**
+```csharp
+// Default: no write surface at all. A host that upgrades gains nothing it did not ask for.
+options.EnableManagementEndpoints = false;
+
+// Opened, behind a second credential
+options.EnableManagementEndpoints = true;
+options.ManagementUsername        = "evertask-operator";
+options.ManagementPassword        = builder.Configuration["EverTask:OperatePassword"];
+
+// Or decided by the application's own authorization, whatever it is
+options.EnableManagementEndpoints = true;
+options.ManagementAuthorization   = context =>
+    Task.FromResult(context.User.IsInRole("BackgroundJobsOperator"));
+```
+
+**How a request is decided** (`/evertask-monitoring/api/management/*` only):
+1. `EnableManagementEndpoints` is false → **404**. The prefix does not exist; an API that never opened a
+   write surface does not advertise one.
+2. Authentication is enabled and no valid token is presented → **401**, as everywhere else.
+3. `ManagementAuthorization` is set → the host decides. It **replaces** the role check, so holding the
+   operate credential does not bypass it. Returning false → **403**.
+4. Otherwise the session must carry the operate role → **403** without it.
+
+With `EnableAuthentication = false` there is no session and therefore no role: the management endpoints are
+refused (403) unless `ManagementAuthorization` says otherwise. Opening the read API must not silently mean
+"anyone may cancel a schedule".
+
+**CSRF.** These endpoints need no anti-forgery token: the API authenticates a session with a Bearer token in
+the `Authorization` header, never with a cookie (the `?access_token=` fallback exists on the SignalR hub path
+alone). A browser attaches neither to a cross-site request, so a page the operator did not open cannot make
+one of these calls in their name — which also means the dashboard's token must stay out of cookies.
+
+The endpoints themselves are documented in
+[Monitoring API Reference](monitoring-api-reference.md#management-endpoints). The application-side road is
+unchanged and still the right one for anything programmatic: `ITaskScheduleManager`, called behind the
+application's own authorization (see
+[Managing schedules at runtime](recurring-tasks/managing-tasks.md)).
 
 #### SignalRHubPath
 

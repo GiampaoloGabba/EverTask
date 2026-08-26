@@ -11,8 +11,12 @@ public interface IJwtTokenService
     /// Generate a JWT token for the specified username.
     /// </summary>
     /// <param name="username">The username to generate the token for.</param>
+    /// <param name="canManage">
+    /// Whether the session may call the management endpoints. False issues a read-only token, which is what
+    /// the dashboard credential and every magic link get.
+    /// </param>
     /// <returns>The generated JWT token and expiration information.</returns>
-    LoginResponse GenerateToken(string username);
+    LoginResponse GenerateToken(string username, bool canManage = false);
 
     /// <summary>
     /// Validate a JWT token and extract claims.

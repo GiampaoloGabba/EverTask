@@ -49,6 +49,44 @@ public class OpenApiDocumentTests
     }
 
     [Fact]
+    public async Task Should_list_the_management_routes_only_when_the_host_enabled_them()
+    {
+        // A document that advertises a route the API answers 404 on is a document that lies to its reader.
+        await using var disabled = new MonitoringTestWebAppFactory(
+            configureOptions: options => options.EnableOpenApiDocument = true);
+        using var disabledClient = disabled.CreateClient();
+
+        (await PathsOfAsync(disabledClient)).ShouldNotContain(
+            p => p.Contains("/api/management/", StringComparison.Ordinal),
+            "the write surface is off, so it is not in the document either");
+
+        await using var enabled = new MonitoringTestWebAppFactory(configureOptions: options =>
+        {
+            options.EnableOpenApiDocument     = true;
+            options.EnableManagementEndpoints = true;
+        });
+        using var enabledClient = enabled.CreateClient();
+
+        var paths = await PathsOfAsync(enabledClient);
+
+        foreach (var route in new[] { "requeue", "resume", "cancel" })
+        {
+            paths.ShouldContain($"/evertask-monitoring/api/management/tasks/{{id}}/{route}",
+                $"'{route}' is part of the surface the host just enabled");
+        }
+    }
+
+    private static async Task<List<string>> PathsOfAsync(HttpClient client)
+    {
+        var response = await client.GetAsync(DocumentPath);
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+
+        return document.RootElement.GetProperty("paths").EnumerateObject().Select(p => p.Name).ToList();
+    }
+
+    [Fact]
     public async Task Should_flag_magic_link_get_as_deprecated_and_keep_post()
     {
         // Issue #22: the query-string exchange is [Obsolete]; the body-based POST is the supported form

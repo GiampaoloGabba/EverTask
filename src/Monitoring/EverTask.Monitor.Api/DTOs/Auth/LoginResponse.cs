@@ -10,4 +10,11 @@ public record LoginResponse(
     string Token,
     DateTimeOffset ExpiresAt,
     string Username
-);
+)
+{
+    /// <summary>
+    /// Whether this session carries the operate role, i.e. whether the management endpoints will accept it.
+    /// False for the dashboard credential and for every magic link.
+    /// </summary>
+    public bool CanManage { get; init; }
+}

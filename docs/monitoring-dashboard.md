@@ -43,7 +43,7 @@ The monitoring system can be used in two modes:
 
 ### Feature complete for read-only monitoring
 
-The dashboard and API are **feature complete for read-only monitoring**: observability and analytics over your task pipeline, without write operations.
+The dashboard and API are **feature complete for read-only monitoring**: observability and analytics over your task pipeline. The one exception is the three [management endpoints](monitoring-api-reference.md#management-endpoints), which a host has to enable and authorize explicitly.
 
 **What it covers:**
 - ✅ Complete read-only monitoring and observability
@@ -55,13 +55,15 @@ The dashboard and API are **feature complete for read-only monitoring**: observa
 - ✅ Terminal-style log viewer with color-coded severity levels
 - ✅ Durable occurrences: the backlog of every schedule by state, its lag, and the occurrences of a schedule with the misfire each of them stands for
 
-**Not there, and waiting on an authorization model rather than on endpoints:**
-- ⏳ Requeue, resume and cancel from the dashboard itself
+- ✅ Requeue, resume and cancel over the API, behind an authorization of their own (`EnableManagementEndpoints`, off by default)
+
+**Not there yet:**
+- ⏳ Buttons for the three management operations in the dashboard itself
 - ⏳ Runtime parameter modification for queued/scheduled tasks
 - ⏳ Queue management operations (pause/resume queues)
 - ⏳ Bulk task operations
 
-> **Note**: Both the REST API and embedded dashboard operate in **read-only mode**. You can view, analyze and export all task data, but nothing you do there changes task execution or queue behavior. Changing a schedule at runtime — reschedule, resume a halted catch-up, requeue a failed occurrence, cancel a series — goes through [`ITaskScheduleManager`](recurring-tasks/managing-tasks.md) in your own code, behind your own authorization.
+> **Note**: every endpoint of the REST API is read-only except the three under `/api/management`, and those do not exist until a host sets `EnableManagementEndpoints = true` AND a caller carries the operate role — the dashboard credential never does. See [Management Endpoints](monitoring-api-reference.md#management-endpoints). Changing a schedule from application code stays [`ITaskScheduleManager`](recurring-tasks/managing-tasks.md), behind your own authorization.
 
 ## Installation
 

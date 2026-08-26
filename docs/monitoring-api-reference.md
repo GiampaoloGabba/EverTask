@@ -9,7 +9,7 @@ nav_order: 3
 
 Complete REST API documentation for the EverTask Monitoring Dashboard.
 
-> **Note**: every endpoint is **read-only**. Changing a schedule at runtime — reschedule, resume a halted catch-up, requeue a failed occurrence, cancel a series — goes through [`ITaskScheduleManager`](recurring-tasks/managing-tasks.md) in your own code, behind your own authorization; the dashboard reports, it does not command.
+> **Note**: every endpoint is **read-only** except the three under [`/management`](#management-endpoints), which a host has to enable and authorize explicitly (`EnableManagementEndpoints`, off by default). Changing a schedule at runtime from application code — reschedule, resume a halted catch-up, requeue a failed occurrence, cancel a series — still goes through [`ITaskScheduleManager`](recurring-tasks/managing-tasks.md), behind your own authorization.
 
 ## Table of Contents
 
@@ -19,6 +19,7 @@ Complete REST API documentation for the EverTask Monitoring Dashboard.
 - [Dashboard Endpoints](#dashboard-endpoints)
 - [Queue Endpoints](#queue-endpoints)
 - [Statistics Endpoints](#statistics-endpoints)
+- [Management Endpoints](#management-endpoints)
 - [Configuration Endpoint](#configuration-endpoint)
 - [Examples](#examples)
 
@@ -54,9 +55,15 @@ Content-Type: application/json
 {
   "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
   "expiresAt": "2025-01-16T02:00:00Z",
-  "username": "admin"
+  "username": "admin",
+  "canManage": false
 }
 ```
+
+`canManage` says whether this session carries the **operate** role, i.e. whether the
+[management endpoints](#management-endpoints) will accept it. Only the second credential
+(`ManagementUsername` / `ManagementPassword`) grants it: the dashboard credential is a read credential, and
+so is every magic link. `POST /auth/validate` reports the same field for a token it validated.
 
 > **Exception**: The `/config` and `/auth/magic` endpoints do not require authentication.
 
@@ -211,6 +218,8 @@ Authorization: Bearer {token}
   "executionTimeMs": 12.5,
   "statusAudits": [],
   "runsAudits": [],
+  "statusAuditsTotalCount": 0,
+  "runsAuditsTotalCount": 0,
   "parentTaskId": "6f0f6b0e-6f3e-4b1a-9d5f-2b2f1c0f4a11",
   "occurrenceMode": "Durable",
   "timeZoneId": "Europe/Rome",
@@ -232,8 +241,10 @@ Authorization: Bearer {token}
 
 `statusAudits` and `runsAudits` both come back **newest first**, read from the audit tables themselves — the
 same source as `GET /tasks/{id}/status-audit` and `GET /tasks/{id}/runs-audit`, so the two blocks and the two
-endpoints always agree. What they hold is whatever the task's [audit level](configuration-reference.md) let
-storage record.
+endpoints always agree. Each block holds the FIRST PAGE of its trail (100 entries), and
+`statusAuditsTotalCount` / `runsAuditsTotalCount` report how many there are in total: a schedule that has run
+for a year holds one transition per state per run, and the two paged endpoints are where the rest is asked
+for. What they hold is whatever the task's [audit level](configuration-reference.md) let storage record.
 
 A **durable schedule row** answers with `occurrenceMode: "Durable"`, its `misfirePolicy`, and — while its
 catch-up has stopped itself over the overflow cap — a `halt` block:
@@ -258,41 +269,55 @@ A halt never releases itself, not even across a restart: `ResumeSchedule` or `Re
 
 ### GET /tasks/{id}/status-audit
 
-Get status change history for a task, newest transition first. It is read from the status audit table, so it
-answers the same history whichever storage provider is behind the API.
+Get one page of the status change history of a task, newest transition first. It is read from the status audit
+table, so it answers the same history whichever storage provider is behind the API.
 
 **Path Parameters:**
 - `id` (Guid, required): Task ID
 
+**Query Parameters:**
+- `skip` (int, optional): Number of transitions to skip, from the newest. Default: `0`
+- `take` (int, optional): Number of transitions to return. Default: `100`, `0` asks for the total alone
+
 **Example Request:**
 ```bash
-GET /evertask-monitoring/api/tasks/dc49351d-476d-49f0-a1e8-3e2a39182d22/status-audit
+GET /evertask-monitoring/api/tasks/dc49351d-476d-49f0-a1e8-3e2a39182d22/status-audit?skip=0&take=100
 Authorization: Bearer {token}
 ```
 
 **Response:**
 ```json
-[
-  {
-    "id": 3,
-    "queuedTaskId": "dc49351d-476d-49f0-a1e8-3e2a39182d22",
-    "updatedAtUtc": "2025-01-15T10:00:05Z",
-    "newStatus": "Completed"
-  },
-  {
-    "id": 2,
-    "queuedTaskId": "dc49351d-476d-49f0-a1e8-3e2a39182d22",
-    "updatedAtUtc": "2025-01-15T10:00:00Z",
-    "newStatus": "InProgress"
-  },
-  {
-    "id": 1,
-    "queuedTaskId": "dc49351d-476d-49f0-a1e8-3e2a39182d22",
-    "updatedAtUtc": "2025-01-15T09:59:58Z",
-    "newStatus": "Queued"
-  }
-]
+{
+  "audits": [
+    {
+      "id": 3,
+      "queuedTaskId": "dc49351d-476d-49f0-a1e8-3e2a39182d22",
+      "updatedAtUtc": "2025-01-15T10:00:05Z",
+      "newStatus": "Completed"
+    },
+    {
+      "id": 2,
+      "queuedTaskId": "dc49351d-476d-49f0-a1e8-3e2a39182d22",
+      "updatedAtUtc": "2025-01-15T10:00:00Z",
+      "newStatus": "InProgress"
+    },
+    {
+      "id": 1,
+      "queuedTaskId": "dc49351d-476d-49f0-a1e8-3e2a39182d22",
+      "updatedAtUtc": "2025-01-15T09:59:58Z",
+      "newStatus": "Queued"
+    }
+  ],
+  "totalCount": 3,
+  "skip": 0,
+  "take": 100
+}
 ```
+
+`totalCount` is the whole trail, not the page: a long-lived recurring row records one transition per state per
+run, so the endpoint pages it (`skip`/`take`) instead of answering the entire history — exactly as
+`GET /tasks/{id}/occurrences` does on the other side of the detail. The page is ordered, counted and sliced by
+the storage, not in the API. `skip` and `take` are clamped to non-negative.
 
 An entry records the status the row moved TO. There is no `oldStatus`: the one it left is the `newStatus` of
 the entry under it.
@@ -307,38 +332,49 @@ omits nulls instead of writing them out.
 
 ### GET /tasks/{id}/runs-audit
 
-Get execution history for a task (especially useful for recurring tasks), newest run first, read from the runs
-audit table.
+Get one page of the execution history of a task (especially useful for recurring tasks), newest run first, read
+from the runs audit table.
 
 **Path Parameters:**
 - `id` (Guid, required): Task ID
 
+**Query Parameters:**
+- `skip` (int, optional): Number of runs to skip, from the newest. Default: `0`
+- `take` (int, optional): Number of runs to return. Default: `100`, `0` asks for the total alone
+
 **Example Request:**
 ```bash
-GET /evertask-monitoring/api/tasks/b7c1a4e2-5d3f-4a90-8c11-9f2e5a6d70b3/runs-audit
+GET /evertask-monitoring/api/tasks/b7c1a4e2-5d3f-4a90-8c11-9f2e5a6d70b3/runs-audit?skip=0&take=100
 Authorization: Bearer {token}
 ```
 
 **Response:**
 ```json
-[
-  {
-    "id": 2,
-    "queuedTaskId": "b7c1a4e2-5d3f-4a90-8c11-9f2e5a6d70b3",
-    "executedAt": "2025-01-15T10:00:05Z",
-    "executionTimeMs": 12.5,
-    "status": "Completed"
-  },
-  {
-    "id": 1,
-    "queuedTaskId": "b7c1a4e2-5d3f-4a90-8c11-9f2e5a6d70b3",
-    "executedAt": "2025-01-15T09:00:07Z",
-    "executionTimeMs": 0,
-    "status": "Failed",
-    "exception": "System.Net.Http.HttpRequestException: Connection refused"
-  }
-]
+{
+  "audits": [
+    {
+      "id": 2,
+      "queuedTaskId": "b7c1a4e2-5d3f-4a90-8c11-9f2e5a6d70b3",
+      "executedAt": "2025-01-15T10:00:05Z",
+      "executionTimeMs": 12.5,
+      "status": "Completed"
+    },
+    {
+      "id": 1,
+      "queuedTaskId": "b7c1a4e2-5d3f-4a90-8c11-9f2e5a6d70b3",
+      "executedAt": "2025-01-15T09:00:07Z",
+      "executionTimeMs": 0,
+      "status": "Failed",
+      "exception": "System.Net.Http.HttpRequestException: Connection refused"
+    }
+  ],
+  "totalCount": 2,
+  "skip": 0,
+  "take": 100
+}
 ```
+
+`totalCount`, `skip` and `take` mean here exactly what they mean on the status trail.
 
 `executedAt` is when the outcome of the run was recorded, which is the end of it and the same instant
 `lastExecutionUtc` reports. There is no start column here: the start of the last run is `startedAtUtc` on the
@@ -707,6 +743,119 @@ Authorization: Bearer {token}
 
 ---
 
+## Management Endpoints
+
+The only endpoints of this API that WRITE. They exist behind an authorization of their own, and a host that
+upgrades does not gain them:
+
+- `EnableManagementEndpoints` is `false` by default. While it is, **every** path under
+  `/evertask-monitoring/api/management` answers `404` — the prefix does not exist.
+- Once enabled, a call must still carry the **operate** role: the token returned by logging in with
+  `ManagementUsername` / `ManagementPassword`. The dashboard credential and every magic link are read-only
+  and get `403`.
+- A host with its own authorization can decide instead, with the
+  `ManagementAuthorization` hook (`Func<HttpContext, Task<bool>>`), which **replaces** the role check.
+
+Configuration and the full decision order are in
+[Monitoring Configuration](configuration-reference.md#enablemanagementendpoints-managementusername--managementpassword-managementauthorization).
+No anti-forgery token is needed: the API authenticates with a Bearer header and never with a cookie, so a
+cross-site request cannot carry a session.
+
+All three take the task id in the path and no body, and answer the same object:
+
+```json
+{
+  "status": "Succeeded",
+  "message": "The occurrence was put back in the queue",
+  "taskId": "dc49351d-476d-49f0-a1e8-3e2a39182d22"
+}
+```
+
+| Status | HTTP | Meaning |
+|--------|------|---------|
+| `Succeeded` | 200 | The operation was applied |
+| `NotFound` | 404 | No task carries that id (or the endpoints are disabled) |
+| `Conflict` | 409 | The row is not in a state the operation applies to |
+| `NotSupported` | 501 | No EverTask host is registered, or the storage lacks the capability |
+| `Unavailable` | 503 | The schedule's occurrence provider could not answer; nothing was written |
+
+---
+
+### POST /management/tasks/{id}/requeue
+
+Put a terminal occurrence (`Failed` or `Cancelled`) back in the queue, keeping its id, its history and its
+audit trail. It spends no run of the series: on a durable schedule the run budget counts materializations,
+and a requeue materializes nothing.
+
+**Path Parameters:**
+- `id` (Guid, required): the occurrence row. A schedule row is refused with `409`.
+
+**Example Request:**
+```bash
+POST /evertask-monitoring/api/management/tasks/dc49351d-476d-49f0-a1e8-3e2a39182d22/requeue
+Authorization: Bearer {operate-token}
+```
+
+`409` also answers an occurrence that is not terminal any more, and one whose schedule was cancelled — which
+is terminal for every row under it.
+
+---
+
+### POST /management/tasks/{id}/resume
+
+Release a durable catch-up that halted itself and hand the schedule back to the materializer, **keeping its
+cursor** and therefore its backlog. A halt never releases itself, not even across a restart, so this is the
+only thing that puts a halted schedule back to work.
+
+**Path Parameters:**
+- `id` (Guid, required): the schedule row.
+
+**Example Request:**
+```bash
+POST /evertask-monitoring/api/management/tasks/6f0f6b0e-6f3e-4b1a-9d5f-2b2f1c0f4a11/resume
+Authorization: Bearer {operate-token}
+```
+
+**Response:**
+```json
+{
+  "status": "Succeeded",
+  "message": "The halted catch-up was released and the schedule keeps its backlog",
+  "taskId": "6f0f6b0e-6f3e-4b1a-9d5f-2b2f1c0f4a11",
+  "nextRunUtc": "2025-01-15T11:00:00Z",
+  "releasedHalt": true
+}
+```
+
+Because the cursor is kept, the backlog that caused the halt is re-planned against the definition as it
+stands now: if it still exceeds the cap, the schedule halts again. To drop the backlog instead, call
+`ITaskScheduleManager.ReevaluateSchedule` from application code.
+
+---
+
+### POST /management/tasks/{id}/cancel
+
+Cancel a schedule and, with it, every occurrence of it still pending. Occurrences already executing are left
+to finish. The cancellation is **terminal**: the schedule cannot be rescheduled afterwards, nor can one of its
+occurrences be requeued — it has to be dispatched again.
+
+**Path Parameters:**
+- `id` (Guid, required): the schedule row.
+
+**Example Request:**
+```bash
+POST /evertask-monitoring/api/management/tasks/6f0f6b0e-6f3e-4b1a-9d5f-2b2f1c0f4a11/cancel
+Authorization: Bearer {operate-token}
+```
+
+---
+
+**A schedule is addressed by its task key.** `resume` and `cancel` resolve the row's `taskKey` and call
+`ITaskScheduleManager` with it, which is the only way a schedule can be named. A schedule dispatched without
+a key cannot be operated on from here and answers `409`.
+
+---
+
 ## Configuration Endpoint
 
 ### GET /config
@@ -725,9 +874,14 @@ GET /evertask-monitoring/api/config
   "uiBasePath": "/evertask-monitoring",
   "signalRHubPath": "/evertask-monitoring/hub",
   "requireAuthentication": true,
-  "uiEnabled": true
+  "uiEnabled": true,
+  "eventDebounceMs": 1000,
+  "managementEnabled": false
 }
 ```
+
+`managementEnabled` says whether the write surface exists at all on this host. Whether the CALLER may use it
+is a property of the session (`canManage` on the login response), not of the API.
 
 ---
 

@@ -29,6 +29,7 @@ public class JwtAuthenticationMiddleware
     /// Protection layers:
     /// 1. IP whitelist (if configured) -> applies to ALL /evertask-monitoring paths
     /// 2. JWT authentication (if enabled) -> applies only to /api and /hub paths
+    /// 3. Management authorization -> applies only to /api/management paths, on top of layer 2
     /// </summary>
     public async Task InvokeAsync(HttpContext context)
     {
@@ -69,9 +70,29 @@ public class JwtAuthenticationMiddleware
             return;
         }
 
+        // LAYER 3a: the management prefix does not exist unless the host opted in. A 404 rather than a 403:
+        // an API that never enabled the write surface should not advertise that it has one.
+        var isManagementPath = path.StartsWith(_options.ManagementBasePath, StringComparison.OrdinalIgnoreCase);
+
+        if (isManagementPath && !_options.EnableManagementEndpoints)
+        {
+            context.Response.StatusCode = 404;
+            await context.Response.WriteAsync("Not found").ConfigureAwait(false);
+            return;
+        }
+
         // Skip JWT auth if disabled
         if (!_options.EnableAuthentication)
         {
+            // With authentication off there is no session and therefore no role to carry: the only thing
+            // that can still authorize an operation is the host's own hook. Otherwise the endpoints are
+            // refused — "the API is open" must not silently mean "anyone may cancel a schedule".
+            if (isManagementPath && !await IsManagementAuthorizedAsync(context, canManage: false).ConfigureAwait(false))
+            {
+                await ForbidManagementAsync(context).ConfigureAwait(false);
+                return;
+            }
+
             await _next(context).ConfigureAwait(false);
             return;
         }
@@ -124,8 +145,32 @@ public class JwtAuthenticationMiddleware
             return;
         }
 
+        // LAYER 3b: a valid session is not enough for a write. The read credential everyone shares carries
+        // the read role, and only the operate one (or the host's hook) opens this prefix.
+        if (isManagementPath && !await IsManagementAuthorizedAsync(context, validation.CanManage).ConfigureAwait(false))
+        {
+            await ForbidManagementAsync(context).ConfigureAwait(false);
+            return;
+        }
+
         // JWT token is valid, proceed
         await _next(context).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Whether this caller may use the management endpoints. The host's hook REPLACES the role check when
+    /// it is set: an application with its own authorization decides for itself, and the monitoring options
+    /// stop being a second, weaker door into the same operations.
+    /// </summary>
+    private Task<bool> IsManagementAuthorizedAsync(HttpContext context, bool canManage) =>
+        _options.ManagementAuthorization is { } authorize
+            ? authorize(context)
+            : Task.FromResult(canManage);
+
+    private static Task ForbidManagementAsync(HttpContext context)
+    {
+        context.Response.StatusCode = 403;
+        return context.Response.WriteAsync("Management operations require the operate role");
     }
 
     private static Task ChallengeAsync(HttpContext context)

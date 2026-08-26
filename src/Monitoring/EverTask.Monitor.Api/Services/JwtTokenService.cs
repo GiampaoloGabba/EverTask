@@ -46,16 +46,20 @@ public class JwtTokenService : IJwtTokenService
     }
 
     /// <inheritdoc />
-    public LoginResponse GenerateToken(string username)
+    public LoginResponse GenerateToken(string username, bool canManage = false)
     {
         var now = DateTimeOffset.UtcNow;
         var expiresAt = now.AddHours(_options.JwtExpirationHours);
 
+        // The role is written on every token, read one included: a session that carries no role at all would
+        // be indistinguishable from one minted before the claim existed, and the management gate must never
+        // have to guess.
         var claims = new[]
         {
             new Claim(JwtRegisteredClaimNames.Sub, username),
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
-            new Claim(JwtRegisteredClaimNames.Iat, now.ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64)
+            new Claim(JwtRegisteredClaimNames.Iat, now.ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
+            new Claim(MonitoringRoles.ClaimType, canManage ? MonitoringRoles.Operate : MonitoringRoles.Read)
         };
 
         var token = new JwtSecurityToken(
@@ -71,7 +75,7 @@ public class JwtTokenService : IJwtTokenService
 
         _logger.JwtTokenGenerated(username, expiresAt);
 
-        return new LoginResponse(tokenString, expiresAt, username);
+        return new LoginResponse(tokenString, expiresAt, username) { CanManage = canManage };
     }
 
     /// <inheritdoc />
@@ -101,6 +105,9 @@ public class JwtTokenService : IJwtTokenService
             // Extract username from claims (using original JWT claim type)
             var username = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
 
+            // A token minted without the claim is a read one: the role is only ever ADDED to a session.
+            var canManage = principal.FindFirst(MonitoringRoles.ClaimType)?.Value == MonitoringRoles.Operate;
+
             // Extract expiration
             var jwtToken = (JwtSecurityToken)validatedToken;
             var expiresAt = jwtToken.ValidTo != DateTime.MinValue
@@ -109,7 +116,7 @@ public class JwtTokenService : IJwtTokenService
 
             _logger.JwtTokenValidated(username);
 
-            return new TokenValidationResponse(true, username, expiresAt);
+            return new TokenValidationResponse(true, username, expiresAt) { CanManage = canManage };
         }
         catch (SecurityTokenExpiredException ex)
         {
