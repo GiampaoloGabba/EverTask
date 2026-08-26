@@ -196,6 +196,16 @@ public class WorkerService(
     /// </summary>
     internal int MaxRecoveryDispatchAttempts { get; set; } = 5;
 
+    /// <summary>
+    /// How many recovery pages may be in flight at the same time (#39). The reader hands a page over to its
+    /// wave and goes straight back for the next one, so a slow delivery no longer holds the page behind it —
+    /// and with it the recovery of rows belonging to queues that are completely idle. The cap is the other
+    /// half of that: it is what keeps a recovery's memory bounded by a constant instead of by the backlog
+    /// (R8), and it bounds the concurrent re-dispatches at that many times the per-queue fan-out of one wave.
+    /// Internal for testing purposes.
+    /// </summary>
+    internal int MaxRecoveryPagesInFlight { get; set; } = 4;
+
     internal async Task ProcessPendingAsync(CancellationToken ct = default)
     {
         using var scope       = serviceScopeFactory.CreateScope();
@@ -243,62 +253,94 @@ public class WorkerService(
         DateTimeOffset? durableFromCreatedAt = null;
         Guid? durableFromId = null;
 
-        while (true)
+        // #39: the reader does not wait for the page it has just handed over. Awaiting the whole wave meant
+        // one slow delivery — a blocking enqueue toward a saturated queue, a storage hiccup — held the NEXT
+        // page too, so rows belonging to queues that were completely idle waited behind it: the per-queue
+        // fan-out inside a wave only ever protected them from each other WITHIN a page. Up to
+        // MaxRecoveryPagesInFlight waves therefore run at once and the reader blocks only when that cap is
+        // reached, on whichever wave finishes first — a single wedged page costs one slot of the pipeline
+        // instead of stopping it.
+        var pipeline = new WavePipeline(MaxRecoveryPagesInFlight);
+
+        try
         {
-            // The clock travels WITH the query: the storage never resolves "now" on its own, so the
-            // RunUntil / MaxRuns gating of the filter is the same instant the rest of the pipeline sees.
-            var page = await taskStorage.RetrievePending(_timeProvider.GetUtcNow(), lastCreatedAt, lastId, pageSize, ct)
-                                        .ConfigureAwait(false);
-
-            if (page.Length == 0)
-                break;
-
-            // STRICT cutoff (<, not <=): live dispatches happen after this host captured the cutoff,
-            // but the wall clock is coarse (DateTimeOffset.UtcNow resolves to ~15 ms on Windows), so a
-            // live dispatch can land in the SAME tick as the cutoff. A <= filter then grabs that live
-            // row and re-dispatches it via ExecuteDispatch(isRecovery:true), racing the live delivery —
-            // wasted re-park churn for rate-limited tasks and, worse, the re-dispatch used to drop the
-            // per-dispatch audit level (see the auditLevel propagation below). < excludes the same-tick
-            // tie up front; the cutoff stays a best-effort first pass — the channel-write
-            // TaskDeliveryRegistry is still the correctness defense for any residual race (stale page),
-            // and the conditional SetQueued refuses a row that terminally finished since the page read.
-            var pendingTasks = page.Where(t => t.CreatedAtUtc < recoveryCutoff).ToArray();
-
-            logger.ProcessingPendingBatch(pendingTasks.Length, lastCreatedAt, lastId);
-
-            // Rebuild every row ONCE, up front: the durable/ordinary split below needs the deserialized
-            // schedule, and doing it here keeps a single decode per row instead of one per decision.
-            var prepared = pendingTasks
-                           .Select(row => new PreparedRow(row, RecoveredTaskFactory.FromRow(row, providers)))
-                           .ToArray();
-
-            if (durableSchedules == 0)
+            while (true)
             {
-                var first = Array.FindIndex(prepared, p => p.Recovered.IsDurableSchedule);
+                // The gate sits BEFORE the read, so a page is fetched only when there is a slot to recover it
+                // in: reading first would keep one more page of rebuilt rows alive while waiting here.
+                await pipeline.WaitForSlotAsync().ConfigureAwait(false);
 
-                if (first >= 0)
+                // The clock travels WITH the query: the storage never resolves "now" on its own, so the
+                // RunUntil / MaxRuns gating of the filter is the same instant the rest of the pipeline sees.
+                var page = await taskStorage
+                                 .RetrievePending(_timeProvider.GetUtcNow(), lastCreatedAt, lastId, pageSize, ct)
+                                 .ConfigureAwait(false);
+
+                if (page.Length == 0)
+                    break;
+
+                // STRICT cutoff (<, not <=): live dispatches happen after this host captured the cutoff,
+                // but the wall clock is coarse (DateTimeOffset.UtcNow resolves to ~15 ms on Windows), so a
+                // live dispatch can land in the SAME tick as the cutoff. A <= filter then grabs that live
+                // row and re-dispatches it via ExecuteDispatch(isRecovery:true), racing the live delivery —
+                // wasted re-park churn for rate-limited tasks and, worse, the re-dispatch used to drop the
+                // per-dispatch audit level (see the auditLevel propagation below). < excludes the same-tick
+                // tie up front; the cutoff stays a best-effort first pass — the channel-write
+                // TaskDeliveryRegistry is still the correctness defense for any residual race (stale page),
+                // and the conditional SetQueued refuses a row that terminally finished since the page read.
+                var pendingTasks = page.Where(t => t.CreatedAtUtc < recoveryCutoff).ToArray();
+
+                logger.ProcessingPendingBatch(pendingTasks.Length, lastCreatedAt, lastId);
+
+                // Rebuild every row ONCE, up front: the durable/ordinary split below needs the deserialized
+                // schedule, and doing it here keeps a single decode per row instead of one per decision.
+                var prepared = pendingTasks
+                               .Select(row => new PreparedRow(row, RecoveredTaskFactory.FromRow(row, providers)))
+                               .ToArray();
+
+                if (durableSchedules == 0)
                 {
-                    // The keyset position of the row before it — or the page's own entry cursor when the
-                    // schedule IS the first row — is where the second scan resumes from.
-                    durableFromCreatedAt = first == 0 ? lastCreatedAt : prepared[first - 1].Row.CreatedAtUtc;
-                    durableFromId        = first == 0 ? lastId : prepared[first - 1].Row.Id;
+                    var first = Array.FindIndex(prepared, p => p.Recovered.IsDurableSchedule);
+
+                    if (first >= 0)
+                    {
+                        // The keyset position of the row before it — or the page's own entry cursor when the
+                        // schedule IS the first row — is where the second scan resumes from.
+                        durableFromCreatedAt = first == 0 ? lastCreatedAt : prepared[first - 1].Row.CreatedAtUtc;
+                        durableFromId        = first == 0 ? lastId : prepared[first - 1].Row.Id;
+                    }
                 }
+
+                // Both of these are decided by the READER, in page order, before the wave is handed over: the
+                // pipeline overlaps the recoveries, never the reading that positions the second scan.
+                durableSchedules += prepared.Count(p => p.Recovered.IsDurableSchedule);
+                pipeline.Add(RecoverWaveAsync(prepared.Where(p => !p.Recovered.IsDurableSchedule)));
+
+                totalProcessed += pendingTasks.Length;
+
+                // Advance the keyset cursor using the RAW page (not the filtered one) so pagination
+                // always makes progress; stop once the page reaches the recovery cutoff (>=, matching the
+                // strict < filter above: every row from the cutoff tick onward is excluded anyway).
+                var lastTask = page[^1];
+                lastCreatedAt = lastTask.CreatedAtUtc;
+                lastId = lastTask.Id;
+
+                if (lastTask.CreatedAtUtc >= recoveryCutoff)
+                    break;
             }
 
-            durableSchedules += prepared.Count(p => p.Recovered.IsDurableSchedule);
-            await RecoverWaveAsync(prepared.Where(p => !p.Recovered.IsDurableSchedule)).ConfigureAwait(false);
-
-            totalProcessed += pendingTasks.Length;
-
-            // Advance the keyset cursor using the RAW page (not the filtered one) so pagination
-            // always makes progress; stop once the page reaches the recovery cutoff (>=, matching the
-            // strict < filter above: every row from the cutoff tick onward is excluded anyway).
-            var lastTask = page[^1];
-            lastCreatedAt = lastTask.CreatedAtUtc;
-            lastId = lastTask.Id;
-
-            if (lastTask.CreatedAtUtc >= recoveryCutoff)
-                break;
+            // The M7 barrier is the whole recovered set, not the pages the reader happens to have handed
+            // over: every ordinary row must really be BACK before a durable schedule counts its live
+            // occurrences, so the pipeline is drained here and not merely emptied of its finished waves.
+            await pipeline.DrainAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            // A wave that failed ends the recovery exactly as it did when the reader awaited each page in
+            // turn — but the waves still running are not abandoned: one would go on re-dispatching rows after
+            // the summary line, and its own failure would surface as an unobserved task exception.
+            await pipeline.SettleAsync().ConfigureAwait(false);
+            throw;
         }
 
         // Second wave: every ordinary row (occurrences included) of every page is back by now, so a schedule
@@ -326,32 +368,48 @@ public class WorkerService(
             var fromCreatedAt = durableFromCreatedAt;
             var fromId        = durableFromId;
 
-            while (true)
+            // Pipelined exactly like the first pass, and for the same reason (#39): a schedule whose
+            // re-dispatch is slow must not hold the page of schedules behind it.
+            var schedulePipeline = new WavePipeline(MaxRecoveryPagesInFlight);
+
+            try
             {
-                var page = await taskStorage.RetrievePending(_timeProvider.GetUtcNow(), fromCreatedAt, fromId,
-                                                pageSize, ct)
-                                            .ConfigureAwait(false);
+                while (true)
+                {
+                    await schedulePipeline.WaitForSlotAsync().ConfigureAwait(false);
 
-                if (page.Length == 0)
-                    break;
+                    var page = await taskStorage.RetrievePending(_timeProvider.GetUtcNow(), fromCreatedAt, fromId,
+                                                    pageSize, ct)
+                                                .ConfigureAwait(false);
 
-                // The column check comes FIRST and costs nothing: only a row carrying a serialized definition
-                // can be a durable schedule, so the occurrences and one-shots this scan meets again are
-                // dropped without deserializing a payload for the second time.
-                var schedules = page
-                                .Where(row => row.CreatedAtUtc < recoveryCutoff
-                                              && !string.IsNullOrEmpty(row.RecurringTask))
-                                .Select(row => new PreparedRow(row, RecoveredTaskFactory.FromRow(row, providers)))
-                                .Where(p => p.Recovered.IsDurableSchedule);
+                    if (page.Length == 0)
+                        break;
 
-                await RecoverWaveAsync(schedules).ConfigureAwait(false);
+                    // The column check comes FIRST and costs nothing: only a row carrying a serialized
+                    // definition can be a durable schedule, so the occurrences and one-shots this scan meets
+                    // again are dropped without deserializing a payload for the second time.
+                    var schedules = page
+                                    .Where(row => row.CreatedAtUtc < recoveryCutoff
+                                                  && !string.IsNullOrEmpty(row.RecurringTask))
+                                    .Select(row => new PreparedRow(row, RecoveredTaskFactory.FromRow(row, providers)))
+                                    .Where(p => p.Recovered.IsDurableSchedule);
 
-                var lastRow = page[^1];
-                fromCreatedAt = lastRow.CreatedAtUtc;
-                fromId        = lastRow.Id;
+                    schedulePipeline.Add(RecoverWaveAsync(schedules));
 
-                if (lastRow.CreatedAtUtc >= recoveryCutoff)
-                    break;
+                    var lastRow = page[^1];
+                    fromCreatedAt = lastRow.CreatedAtUtc;
+                    fromId        = lastRow.Id;
+
+                    if (lastRow.CreatedAtUtc >= recoveryCutoff)
+                        break;
+                }
+
+                await schedulePipeline.DrainAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+                await schedulePipeline.SettleAsync().ConfigureAwait(false);
+                throw;
             }
         }
 
@@ -757,6 +815,51 @@ public class WorkerService(
 
     /// <summary>A recovered row paired with everything the factory could rebuild from it.</summary>
     private readonly record struct PreparedRow(QueuedTask Row, RecoveredTask Recovered);
+
+    /// <summary>
+    /// The bounded pipeline of recovery waves a paginating pass hands its pages to (#39): at most
+    /// <paramref name="maxInFlight"/> of them run at once, and the reader waits only when they all do.
+    /// </summary>
+    /// <remarks>
+    /// A slot is freed by whichever wave finishes FIRST, not by the oldest: a page wedged behind a slow
+    /// delivery would otherwise stop the pipeline as surely as awaiting each page in turn did, instead of
+    /// costing it the one slot it is holding.
+    /// </remarks>
+    private sealed class WavePipeline(int maxInFlight)
+    {
+        // Clamped to >= 1, like every other parallelism knob (F5): at zero the reader would wait for a wave
+        // it has not added yet, and at one it reads exactly as it did before the pipeline existed.
+        private readonly int _maxInFlight = Math.Max(1, maxInFlight);
+
+        private readonly List<Task> _waves = [];
+
+        /// <summary>
+        /// Waits until a wave may be added. A failure is reported HERE, on the wave that carried it, so a
+        /// broken recovery stops reading pages exactly as it did before the pipeline existed.
+        /// </summary>
+        public async ValueTask WaitForSlotAsync()
+        {
+            if (_waves.Count < _maxInFlight)
+                return;
+
+            var completed = await Task.WhenAny(_waves).ConfigureAwait(false);
+            _waves.Remove(completed);
+            await completed.ConfigureAwait(false);
+        }
+
+        public void Add(Task wave) => _waves.Add(wave);
+
+        /// <summary>Waits for every wave and reports the first failure.</summary>
+        public Task DrainAsync() => Task.WhenAll(_waves);
+
+        /// <summary>
+        /// Waits for every wave and reports nothing: used on the way out of a failure that has already
+        /// decided the recovery's outcome, where the point is that no wave is left running behind it.
+        /// </summary>
+        public Task SettleAsync() =>
+            Task.WhenAll(_waves).ContinueWith(static _ => { }, CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+    }
 
     public override async Task StopAsync(CancellationToken stoppingToken)
     {

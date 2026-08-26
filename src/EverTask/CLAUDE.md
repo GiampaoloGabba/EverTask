@@ -123,9 +123,9 @@ the execution predicate: a spent series must be finalized, never handed back to 
   pagination loop. A schedule row asks how many of its occurrences are still active the moment it is back, and
   answering that while an occurrence of its own is still sitting in a later page reads a phantom low count.
   **The second wave is a SECOND KEYSET SCAN, not a buffer** (R8): the same recovery page query over the same
-  cutoff, keeping only the durable schedules, so a recovery holds one page whatever the backlog is — buffering
-  rows kept a payload and a definition alive per schedule, buffering ids kept a list that still grew with
-  them. Two scalars cross the loop instead: whether the first pass saw a durable schedule at all (a host with
+  cutoff, keeping only the durable schedules, so a recovery holds a bounded number of pages whatever the
+  backlog is — buffering rows kept a payload and a definition alive per schedule, buffering ids kept a list
+  that still grew with them. Two scalars cross the loop instead: whether the first pass saw a durable schedule at all (a host with
   none never pays for the second scan) and the keyset position just BEFORE the first one, so the scan starts
   where the durable schedules start. A row the first pass already recovered reappears in the second scan and
   is filtered out.
@@ -136,6 +136,21 @@ the execution predicate: a spent series must be finalized, never handed back to 
   of `RuntimeInfo` is PARSED (`OccurrenceRuntimeInfo`, once per row, never on a schedule row): the durable slot
   and run number a child carries. Unreadable JSON there is not an error — the columns answer instead, exactly
   as they do for a row written before the metadata existed.
+- **The reader does not wait for the page it handed over** (#39, `WavePipeline`, both passes): a wave is
+  started and the next page is read while it runs, up to `MaxRecoveryPagesInFlight`. Awaiting each page in
+  turn meant one slow delivery — a blocking enqueue toward a saturated queue — held the NEXT page too, and
+  with it the recovery of rows belonging to queues that are completely idle: the per-queue fan-out inside a
+  wave only ever protected them from each other WITHIN a page. A slot is freed by whichever wave finishes
+  FIRST, never by the oldest, or one wedged page would stop the pipeline exactly as the old await did; the
+  gate sits BEFORE the read, so a page is fetched only when there is a slot to recover it in. The cap is what
+  the memory claim above rests on, and it multiplies the concurrent re-dispatches (pages × queues ×
+  `MaxDegreeOfParallelism`); at ONE it is byte-for-byte the old behaviour, which is how the pinning test
+  reproduces the bug. **Nothing about the M7 barrier moves**: the pipeline is DRAINED before the second wave
+  starts — not merely emptied of the waves that happen to have finished — and the reader still decides the
+  durable count and the second scan's keyset position itself, in page order. A wave that FAILS ends the
+  recovery as it always did, after the waves still running have settled rather than been abandoned: one left
+  behind would go on re-dispatching rows past the summary line, and its own failure would surface as an
+  unobserved task exception.
 - **`recoveryCutoff` is STRICT (`CreatedAtUtc < cutoff`)**: the wall clock is coarse (≈15 ms on Windows), so a
   live dispatch can share the cutoff tick and a `<=` filter would re-dispatch that live row as recovery.
   Best-effort first pass — `TaskDeliveryRegistry` is the actual defense.
@@ -659,7 +674,9 @@ answered from the next period.
 
 Integration tests build a real `IHost` through `test/EverTask.Tests/TestHelpers/IsolatedIntegrationTestBase.cs`.
 The invariants above are pinned by `test/EverTask.Tests/IntegrationTests/QueueResilienceIntegrationTests.cs`,
-`SchedulerResilienceTests.cs`, `WorkerQueueResilienceTests.cs`, `MemoryStorageRecoveryFilterTests.cs` and, on a
+`SchedulerResilienceTests.cs`, `WorkerQueueResilienceTests.cs`, `RecoveryPagePipelineTests.cs` (#39: a wedged page must not hold the one behind it, the cap really is a cap,
+and the recovery still ends only when every wave it started has),
+`MemoryStorageRecoveryFilterTests.cs` and, on a
 real DB, `test/EverTask.Tests.Storage/SqlServerRecoveryIntegrationTests.cs` plus the recovery-filter section of
 `EfCore/EfCoreTaskStorageTestsBase.cs` (run by all four EF Core providers: SQLite, SQL Server, PostgreSQL, MySQL).
 The execution-vs-finalization split, the natural-successor grace and the injected clock are pinned by

@@ -248,7 +248,11 @@ Docker or Testcontainers here. Subsets filter on namespace: `--filter "FullyQual
   accounting all execute. `internal`, and shared with `EverTask.Tests.Storage` through this assembly's
   `InternalsVisibleTo` — `WorkerService` is internal, so no public signature can hand it back. Used by
   `RecoveryFinalizationFailureTests`, `RecoveryDurableScheduleBarrierTests` (the M7 barrier over a
-  multi-page backlog, where the dispatcher is the observation point) and the storage suite's L18 test.
+  multi-page backlog, where the dispatcher is the observation point), `RecoveryPagePipelineTests` and the
+  storage suite's L18 test. In the pipeline tests the dispatcher is also the GATE: a chosen row's re-dispatch
+  blocks on a `TaskCompletionSource`, which is the only honest way to wedge one page while the reader walks
+  the others. `MaxRecoveryPagesInFlight` set to 1 reproduces the pre-#39 behaviour exactly (the reader waits
+  for the wave before reading again), so that is where the RED of the fix lives.
 - `[Collection("TimingSensitiveTests")]` has NO `[CollectionDefinition]` — the bare attribute is the only
   thing serializing those classes against `parallelizeTestCollections: true` in `xunit.runner.json`.
 - Queue/recovery resilience suite: listed in `src/EverTask/CLAUDE.md`; its shared state is
