@@ -130,8 +130,12 @@ export interface TaskDetailDto extends TaskListDto {
   runUntil?: string | null;
   nextRunUtc?: string | null;
   auditLevel?: number | null; // AuditLevel enum value
+  // The FIRST page of each trail, not the whole of it. The totals below are what say there is more, and
+  // GET /tasks/{id}/status-audit | /runs-audit is where the rest is asked for.
   statusAudits: StatusAuditDto[];
   runsAudits: RunsAuditDto[];
+  statusAuditsTotalCount: number;
+  runsAuditsTotalCount: number;
   // The occurrence metadata this row carries; null on a schedule row and on an ordinary one-shot.
   occurrence?: OccurrenceInfoDto | null;
   // The standing catch-up halt of a durable schedule; null while it is running.
@@ -153,6 +157,20 @@ export interface RunsAuditDto {
   executionTimeMs: number; // Execution time in milliseconds
   status: QueuedTaskStatus;
   exception?: string | null;
+}
+
+export interface StatusAuditsResponse {
+  audits: StatusAuditDto[];
+  totalCount: number;
+  skip: number;
+  take: number;
+}
+
+export interface RunsAuditsResponse {
+  audits: RunsAuditDto[];
+  totalCount: number;
+  skip: number;
+  take: number;
 }
 
 export interface TaskFilter {

@@ -7,8 +7,8 @@ import type {
   PaginationParams,
   TasksPagedResponse,
   TaskDetailDto,
-  StatusAuditDto,
-  RunsAuditDto,
+  StatusAuditsResponse,
+  RunsAuditsResponse,
   ExecutionLogsResponse,
   TaskCountsDto,
   OccurrencesResponse
@@ -159,14 +159,18 @@ class ApiService {
     return this.client.get<TaskDetailDto>(`/tasks/${id}`);
   }
 
-  async getStatusAudit(id: string) {
+  async getStatusAudit(id: string, skip: number = 0, take: number = 100) {
     await this.initialize();
-    return this.client.get<StatusAuditDto[]>(`/tasks/${id}/status-audit`);
+    return this.client.get<StatusAuditsResponse>(`/tasks/${id}/status-audit`, {
+      params: { skip, take }
+    });
   }
 
-  async getRunsAudit(id: string) {
+  async getRunsAudit(id: string, skip: number = 0, take: number = 100) {
     await this.initialize();
-    return this.client.get<RunsAuditDto[]>(`/tasks/${id}/runs-audit`);
+    return this.client.get<RunsAuditsResponse>(`/tasks/${id}/runs-audit`, {
+      params: { skip, take }
+    });
   }
 
   async getExecutionLogs(id: string, skip: number = 0, take: number = 100, level?: string) {

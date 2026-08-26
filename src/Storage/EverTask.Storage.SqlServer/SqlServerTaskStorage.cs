@@ -378,6 +378,18 @@ public class SqlServerTaskStorage(
         RereadOnDeadlockAsync(token => base.GetRunsAudits(taskId, token), nameof(GetRunsAudits), ct);
 
     /// <inheritdoc />
+    public override Task<AuditPage<StatusAudit>> GetStatusAuditsPage(Guid taskId, int skip, int take,
+                                                                     CancellationToken ct = default) =>
+        RereadOnDeadlockAsync(token => base.GetStatusAuditsPage(taskId, skip, take, token),
+            nameof(GetStatusAuditsPage), ct);
+
+    /// <inheritdoc />
+    public override Task<AuditPage<RunsAudit>> GetRunsAuditsPage(Guid taskId, int skip, int take,
+                                                                 CancellationToken ct = default) =>
+        RereadOnDeadlockAsync(token => base.GetRunsAuditsPage(taskId, skip, take, token),
+            nameof(GetRunsAuditsPage), ct);
+
+    /// <inheritdoc />
     public override Task<int> CountActiveOccurrences(Guid parentId, CancellationToken ct = default) =>
         RereadOnDeadlockAsync(token => base.CountActiveOccurrences(parentId, token),
             nameof(CountActiveOccurrences), ct);

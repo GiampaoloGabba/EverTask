@@ -356,6 +356,56 @@ public class MemoryStorageOccurrenceContractTests
     }
 
     [Fact]
+    public async Task Should_page_the_two_trails_and_keep_the_total_and_the_order_whole()
+    {
+        // The memory twin of the paged reads (#44): same order as the unpaged one, a total that is the trail
+        // and not the page, and no entry repeated or dropped at a page boundary.
+        // The audits are told apart by their exception text, not by an id: this store keeps them on the row
+        // object and assigns them no identity at all.
+        var id  = await SeedScheduleAsync();
+        var row = NewOccurrence(id);
+
+        await _storage.Persist(row);
+
+        for (var i = 0; i < 20; i++)
+        {
+            await _storage.SetStatus(row.Id, QueuedTaskStatus.Failed,
+                new InvalidOperationException($"transition-{i:D2}"), AuditLevel.Full);
+        }
+
+        var walked = new List<string?>();
+
+        for (var skip = 0; skip < 20; skip += 5)
+        {
+            var page = await _storage.GetStatusAuditsPage(row.Id, skip, 5);
+
+            page.TotalCount.ShouldBe(20);
+            page.Audits.Length.ShouldBe(5);
+            walked.AddRange(page.Audits.Select(a => a.Exception));
+        }
+
+        walked.ShouldBe((await _storage.GetStatusAudits(row.Id)).Select(a => a.Exception).ToList(),
+            "the pages walked are exactly the trail the unpaged read answers, in the same order");
+
+        var past = await _storage.GetStatusAuditsPage(row.Id, 100, 5);
+
+        past.Audits.ShouldBeEmpty();
+        past.TotalCount.ShouldBe(20, "past the end is an empty page, not an empty trail");
+
+        for (var i = 1; i <= 6; i++)
+            await _storage.UpdateCurrentRun(id, i * 10, Cursor.AddMinutes(i), AuditLevel.Full);
+
+        var runs = await _storage.GetRunsAuditsPage(id, 2, 3);
+
+        runs.TotalCount.ShouldBe(6);
+        runs.Audits.Select(r => r.ExecutionTimeMs).ShouldBe([40d, 30d, 20d], "newest run first, from row three on");
+
+        (await _storage.GetRunsAuditsPage(id, 0, 0)).TotalCount.ShouldBe(6, "take = 0 asks for the count alone");
+        (await _storage.GetStatusAuditsPage(TestGuidGenerator.New(), 0, 5)).TotalCount
+            .ShouldBe(0, "a row nobody stored has no history");
+    }
+
+    [Fact]
     public async Task Should_store_the_canonical_occurrence_shape_whatever_the_caller_hands_over()
     {
         // The three optimized providers hardcode the shape in their INSERT column list; the stores that keep

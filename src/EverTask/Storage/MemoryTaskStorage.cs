@@ -781,6 +781,43 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
     }
 
     /// <inheritdoc />
+    public Task<AuditPage<StatusAudit>> GetStatusAuditsPage(Guid taskId, int skip, int take,
+                                                            CancellationToken ct = default)
+    {
+        lock (_pendingTasksLock)
+        {
+            var task = _pendingTasks.FirstOrDefault(t => t.Id == taskId);
+
+            if (task == null)
+                return Task.FromResult(new AuditPage<StatusAudit>([], 0));
+
+            // Same order as the unpaged read: reversed insertion order, never the timestamp.
+            var audits = task.StatusAudits;
+
+            return Task.FromResult(new AuditPage<StatusAudit>(
+                audits.Reverse().Skip(skip).Take(take).ToArray(), audits.Count));
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<AuditPage<RunsAudit>> GetRunsAuditsPage(Guid taskId, int skip, int take,
+                                                        CancellationToken ct = default)
+    {
+        lock (_pendingTasksLock)
+        {
+            var task = _pendingTasks.FirstOrDefault(t => t.Id == taskId);
+
+            if (task == null)
+                return Task.FromResult(new AuditPage<RunsAudit>([], 0));
+
+            var audits = task.RunsAudits;
+
+            return Task.FromResult(new AuditPage<RunsAudit>(
+                audits.Reverse().Skip(skip).Take(take).ToArray(), audits.Count));
+        }
+    }
+
+    /// <inheritdoc />
     public Task<int> CountActiveOccurrences(Guid parentId, CancellationToken ct = default)
     {
         lock (_pendingTasksLock)

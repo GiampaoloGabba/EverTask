@@ -65,36 +65,48 @@ public class TasksController : ControllerBase
     }
 
     /// <summary>
-    /// Get status audit history for a task.
+    /// Get one page of the status audit history of a task, newest transition first.
     /// </summary>
     /// <param name="id">The unique task identifier.</param>
+    /// <param name="skip">Number of transitions to skip, from the newest (default: 0).</param>
+    /// <param name="take">Number of transitions to return (default: 100).</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>Chronological list of status changes for the task.</returns>
+    /// <returns>The page of status changes, with the total the task's trail holds.</returns>
     /// <response code="200">Returns the status audit history.</response>
     /// <response code="401">Unauthorized - JWT token required.</response>
     [HttpGet("{id:guid}/status-audit")]
-    [ProducesResponseType(typeof(List<StatusAuditDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(StatusAuditsResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    public async Task<ActionResult<List<StatusAuditDto>>> GetStatusAudit(Guid id, CancellationToken ct)
+    public async Task<ActionResult<StatusAuditsResponse>> GetStatusAudit(
+        Guid id,
+        [FromQuery] int skip = 0,
+        [FromQuery] int take = ITaskQueryService.DefaultAuditPageSize,
+        CancellationToken ct = default)
     {
-        var result = await _taskQueryService.GetStatusAuditAsync(id, ct).ConfigureAwait(false);
+        var result = await _taskQueryService.GetStatusAuditAsync(id, skip, take, ct).ConfigureAwait(false);
         return Ok(result);
     }
 
     /// <summary>
-    /// Get execution runs audit history for a task.
+    /// Get one page of the execution runs of a task, newest run first.
     /// </summary>
     /// <param name="id">The unique task identifier.</param>
+    /// <param name="skip">Number of runs to skip, from the newest (default: 0).</param>
+    /// <param name="take">Number of runs to return (default: 100).</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>Chronological list of execution attempts with timing and outcome information.</returns>
+    /// <returns>The page of execution attempts, with the total the task's trail holds.</returns>
     /// <response code="200">Returns the execution runs audit history.</response>
     /// <response code="401">Unauthorized - JWT token required.</response>
     [HttpGet("{id:guid}/runs-audit")]
-    [ProducesResponseType(typeof(List<RunsAuditDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(RunsAuditsResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    public async Task<ActionResult<List<RunsAuditDto>>> GetRunsAudit(Guid id, CancellationToken ct)
+    public async Task<ActionResult<RunsAuditsResponse>> GetRunsAudit(
+        Guid id,
+        [FromQuery] int skip = 0,
+        [FromQuery] int take = ITaskQueryService.DefaultAuditPageSize,
+        CancellationToken ct = default)
     {
-        var result = await _taskQueryService.GetRunsAuditAsync(id, ct).ConfigureAwait(false);
+        var result = await _taskQueryService.GetRunsAuditAsync(id, skip, take, ct).ConfigureAwait(false);
         return Ok(result);
     }
 

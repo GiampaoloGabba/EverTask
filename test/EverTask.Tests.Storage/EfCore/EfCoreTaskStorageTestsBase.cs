@@ -3562,6 +3562,69 @@ public abstract class EfCoreTaskStorageTestsBase
     }
 
     [Fact]
+    public async Task GetStatusAuditsPage_should_page_the_trail_in_the_database_and_keep_the_total_whole()
+    {
+        // The paged half of the two reads above (#44). A long-lived recurring row holds one transition per
+        // state per run, so the reader that shows twenty of them must never transfer the series to do it:
+        // the count and the slice are the database's, over the (QueuedTaskId) index the table already has.
+        var cursor     = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-10));
+        var schedule   = await PersistSchedule(cursor);
+        var occurrence = NewOccurrence(schedule.Id, cursor);
+
+        await _storage.Persist(occurrence);
+
+        for (var i = 0; i < 10; i++)
+        {
+            await _storage.SetInProgress(occurrence.Id, AuditLevel.Full);
+            await _storage.SetCompleted(occurrence.Id, 10 + i, AuditLevel.Full);
+        }
+
+        var walked = new List<long>();
+
+        for (var skip = 0; skip < 20; skip += 5)
+        {
+            var page = await _storage.GetStatusAuditsPage(occurrence.Id, skip, 5);
+
+            page.TotalCount.ShouldBe(20, "the total is the whole trail, whatever the page holds");
+            page.Audits.Length.ShouldBe(5);
+            walked.AddRange(page.Audits.Select(a => a.Id));
+        }
+
+        walked.Distinct().Count().ShouldBe(20, "no page repeated or dropped an entry");
+        walked.ShouldBe((await _storage.GetStatusAudits(occurrence.Id)).Select(a => a.Id).ToList(),
+            "newest first, exactly the order the unpaged read answers");
+
+        var past = await _storage.GetStatusAuditsPage(occurrence.Id, 100, 5);
+
+        past.Audits.ShouldBeEmpty();
+        past.TotalCount.ShouldBe(20, "past the end is an empty page, not an empty trail");
+    }
+
+    [Fact]
+    public async Task GetRunsAuditsPage_should_page_the_runs_and_answer_the_count_alone_for_an_empty_page()
+    {
+        var series = await PersistSchedule(FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-10)));
+
+        for (var i = 1; i <= 6; i++)
+            await _storage.UpdateCurrentRun(series.Id, i * 10, DateTimeOffset.UtcNow.AddMinutes(i), AuditLevel.Full);
+
+        var page = await _storage.GetRunsAuditsPage(series.Id, 2, 3);
+
+        page.TotalCount.ShouldBe(6);
+        page.Audits.Select(r => r.ExecutionTimeMs).ShouldBe([40d, 30d, 20d], "newest run first, from row three on");
+
+        // A zero-row FETCH is a syntax error on some engines, not an empty result: take = 0 must never reach
+        // one, and must still answer the count.
+        var countOnly = await _storage.GetRunsAuditsPage(series.Id, 0, 0);
+
+        countOnly.Audits.ShouldBeEmpty();
+        countOnly.TotalCount.ShouldBe(6);
+
+        (await _storage.GetRunsAuditsPage(Guid.NewGuid(), 0, 10)).TotalCount
+            .ShouldBe(0, "a row nobody stored has no runs");
+    }
+
+    [Fact]
     public async Task CleanupTerminalOccurrences_should_prune_every_terminal_state_and_keep_the_schedule()
     {
         var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddDays(-30));

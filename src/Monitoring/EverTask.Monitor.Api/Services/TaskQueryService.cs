@@ -1,4 +1,4 @@
-﻿using EverTask.Abstractions;
+using EverTask.Abstractions;
 using EverTask.Monitor.Api.DTOs.Tasks;
 using EverTask.RateLimiting;
 using EverTask.Storage;
@@ -128,8 +128,11 @@ public class TaskQueryService : ITaskQueryService
         if (task == null)
             return null;
 
-        var statusAudits = await ReadStatusAuditsAsync(id, ct).ConfigureAwait(false);
-        var runsAudits   = await ReadRunsAuditsAsync(id, ct).ConfigureAwait(false);
+        // The FIRST page of each trail, not the whole of it: the two blocks answer the same reads as the two
+        // endpoints, and a schedule that has run for a year holds a transition per state per run. The totals
+        // travel with them so a consumer knows there is more and where to ask for it.
+        var statusAudits = await ReadStatusAuditsAsync(id, 0, ITaskQueryService.DefaultAuditPageSize, ct).ConfigureAwait(false);
+        var runsAudits   = await ReadRunsAuditsAsync(id, 0, ITaskQueryService.DefaultAuditPageSize, ct).ConfigureAwait(false);
 
         var facts  = TaskScheduleFacts.Read(task);
         var starts = await TaskRunTiming.RecordedStartsAsync(_storage, [task], ct).ConfigureAwait(false);
@@ -155,59 +158,85 @@ public class TaskQueryService : ITaskQueryService
             task.NextRunUtc,
             task.AuditLevel,
             task.ExecutionTimeMs,
-            statusAudits,
-            runsAudits,
+            statusAudits.Audits,
+            runsAudits.Audits,
             _rateLimiter?.GetThrottledUntil(task.Id)
         )
         {
-            ParentTaskId    = task.ParentTaskId,
-            OccurrenceMode  = facts.OccurrenceMode,
-            MisfirePolicy   = facts.MisfirePolicy,
-            TimeZoneId      = facts.TimeZoneId,
-            ScheduleVersion = ScheduleVersionOf(task),
-            NominalSlotUtc  = facts.NominalSlotUtc,
-            StartedAtUtc    = TaskRunTiming.StartOfLastRun(task, starts),
-            MisfireKind     = facts.MisfireKind,
-            Occurrence      = facts.Occurrence,
-            Halt            = facts.Halt
+            StatusAuditsTotalCount = statusAudits.TotalCount,
+            RunsAuditsTotalCount   = runsAudits.TotalCount,
+            ParentTaskId           = task.ParentTaskId,
+            OccurrenceMode         = facts.OccurrenceMode,
+            MisfirePolicy          = facts.MisfirePolicy,
+            TimeZoneId             = facts.TimeZoneId,
+            ScheduleVersion        = ScheduleVersionOf(task),
+            NominalSlotUtc         = facts.NominalSlotUtc,
+            StartedAtUtc           = TaskRunTiming.StartOfLastRun(task, starts),
+            MisfireKind            = facts.MisfireKind,
+            Occurrence             = facts.Occurrence,
+            Halt                   = facts.Halt
         };
     }
 
     /// <inheritdoc />
-    public Task<List<StatusAuditDto>> GetStatusAuditAsync(Guid id, CancellationToken ct = default) =>
-        ReadStatusAuditsAsync(id, ct);
+    public Task<StatusAuditsResponse> GetStatusAuditAsync(Guid id, int skip = 0,
+                                                          int take = ITaskQueryService.DefaultAuditPageSize,
+                                                          CancellationToken ct = default) =>
+        ReadStatusAuditsAsync(id, skip, take, ct);
 
     /// <inheritdoc />
-    public Task<List<RunsAuditDto>> GetRunsAuditAsync(Guid id, CancellationToken ct = default) =>
-        ReadRunsAuditsAsync(id, ct);
+    public Task<RunsAuditsResponse> GetRunsAuditAsync(Guid id, int skip = 0, int take = ITaskQueryService.DefaultAuditPageSize,
+                                                      CancellationToken ct = default) =>
+        ReadRunsAuditsAsync(id, skip, take, ct);
 
     /// <summary>
-    /// The row's status transitions, newest first, READ from the storage.
+    /// One page of the row's status transitions, newest first, READ from the storage.
     /// </summary>
     /// <remarks>
     /// Never off <see cref="QueuedTask.StatusAudits"/>: no storage read populates that navigation, so walking
     /// it here answered the whole history over the in-memory store and an empty list over every relational
     /// one — for a row whose audit table holds every transition it ever made.
+    /// <para>
+    /// The PAGE is the storage read, ordering and counting included, for the same reason as
+    /// <c>GetOccurrencesAsync</c>: the trail of a long-lived schedule holds one transition per state per run,
+    /// and slicing it here would transfer every one of them to show twenty.
+    /// </para>
     /// </remarks>
-    private async Task<List<StatusAuditDto>> ReadStatusAuditsAsync(Guid id, CancellationToken ct)
+    private async Task<StatusAuditsResponse> ReadStatusAuditsAsync(Guid id, int skip, int take,
+                                                                   CancellationToken ct)
     {
-        var audits = await _storage.GetStatusAudits(id, ct).ConfigureAwait(false);
+        (skip, take) = ClampPage(skip, take);
 
-        return audits
-               .Select(a => new StatusAuditDto(a.Id, a.QueuedTaskId, a.UpdatedAtUtc, a.NewStatus, a.Exception))
-               .ToList();
+        var page = await _storage.GetStatusAuditsPage(id, skip, take, ct).ConfigureAwait(false);
+
+        var audits = page.Audits
+                         .Select(a => new StatusAuditDto(a.Id, a.QueuedTaskId, a.UpdatedAtUtc, a.NewStatus,
+                             a.Exception))
+                         .ToList();
+
+        return new StatusAuditsResponse(audits, page.TotalCount, skip, take);
     }
 
-    /// <summary>The row's runs, newest first, read from the storage for the same reason.</summary>
-    private async Task<List<RunsAuditDto>> ReadRunsAuditsAsync(Guid id, CancellationToken ct)
+    /// <summary>One page of the row's runs, newest first, read from the storage for the same reason.</summary>
+    private async Task<RunsAuditsResponse> ReadRunsAuditsAsync(Guid id, int skip, int take, CancellationToken ct)
     {
-        var audits = await _storage.GetRunsAudits(id, ct).ConfigureAwait(false);
+        (skip, take) = ClampPage(skip, take);
 
-        return audits
-               .Select(a => new RunsAuditDto(a.Id, a.QueuedTaskId, a.ExecutedAt, a.ExecutionTimeMs, a.Status,
-                   a.Exception))
-               .ToList();
+        var page = await _storage.GetRunsAuditsPage(id, skip, take, ct).ConfigureAwait(false);
+
+        var audits = page.Audits
+                         .Select(a => new RunsAuditDto(a.Id, a.QueuedTaskId, a.ExecutedAt, a.ExecutionTimeMs,
+                             a.Status, a.Exception))
+                         .ToList();
+
+        return new RunsAuditsResponse(audits, page.TotalCount, skip, take);
     }
+
+    /// <summary>
+    /// Query-string values, so they are whatever a caller typed. Clamped rather than trusted: the storage
+    /// puts them in an OFFSET / FETCH clause, where a negative one is a database error and not an empty page.
+    /// </summary>
+    private static (int Skip, int Take) ClampPage(int skip, int take) => (Math.Max(0, skip), Math.Max(0, take));
 
     /// <inheritdoc />
     public async Task<ExecutionLogsResponse> GetExecutionLogsAsync(Guid taskId, int skip = 0, int take = 100, string? levelFilter = null, CancellationToken ct = default)
@@ -265,11 +294,7 @@ public class TaskQueryService : ITaskQueryService
                                                                int skip = 0, int take = 100,
                                                                CancellationToken ct = default)
     {
-        // Query-string values, so they are whatever a caller typed. Clamped here rather than trusted: the
-        // storage puts them in an OFFSET / FETCH clause, where a negative one is a database error and not an
-        // empty page.
-        skip = Math.Max(0, skip);
-        take = Math.Max(0, take);
+        (skip, take) = ClampPage(skip, take);
 
         // The PAGE is the storage read, ordering and counting included: a schedule with a year of retention
         // behind it holds hundreds of thousands of occurrence rows, and slicing them here would mean

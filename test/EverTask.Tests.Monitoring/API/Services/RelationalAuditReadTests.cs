@@ -50,9 +50,10 @@ public class RelationalAuditReadTests : IDisposable
 
         var statusAudits = await service.GetStatusAuditAsync(run.Id);
 
-        statusAudits.Select(a => a.NewStatus)
+        statusAudits.Audits.Select(a => a.NewStatus)
                     .ShouldBe([QueuedTaskStatus.Completed, QueuedTaskStatus.InProgress],
                         "the status-history tab answered [] here while the audit table held both rows");
+        statusAudits.TotalCount.ShouldBe(2);
 
         var detail = await service.GetTaskDetailAsync(run.Id);
 
@@ -76,7 +77,8 @@ public class RelationalAuditReadTests : IDisposable
 
         var runs = await new TaskQueryService(_storage).GetRunsAuditAsync(series.Id);
 
-        runs.Select(r => r.ExecutionTimeMs).ShouldBe([22d, 11d], "newest run first, from the runs table");
+        runs.Audits.Select(r => r.ExecutionTimeMs).ShouldBe([22d, 11d], "newest run first, from the runs table");
+        runs.TotalCount.ShouldBe(2);
     }
 
     [Fact]
@@ -95,6 +97,62 @@ public class RelationalAuditReadTests : IDisposable
 
         overview.AvgExecutionTimeMs.ShouldBe(200,
             "the overview tile read the same dead navigation and answered 0.0 on every relational store");
+    }
+
+    [Fact]
+    public async Task Should_page_the_status_trail_in_the_database_of_a_relational_store()
+    {
+        // The whole point of the paged read (#44): the count and the slice are the DATABASE's, over the
+        // (QueuedTaskId) index the audit table already has, so a row with a year of transitions behind it is
+        // never transferred whole to show twenty of them.
+        var row = NewRow(QueuedTaskStatus.WaitingQueue);
+        await _storage.Persist(row);
+
+        for (var i = 0; i < 10; i++)
+        {
+            await _storage.SetInProgress(row.Id, AuditLevel.Full);
+            await _storage.SetCompleted(row.Id, 10 + i, AuditLevel.Full);
+        }
+
+        var walked = new List<long>();
+
+        for (var skip = 0; skip < 20; skip += 5)
+        {
+            var page = await _storage.GetStatusAuditsPage(row.Id, skip, 5);
+
+            page.TotalCount.ShouldBe(20, "the total is the trail, not the page");
+            page.Audits.Length.ShouldBe(5);
+            walked.AddRange(page.Audits.Select(a => a.Id));
+        }
+
+        walked.ShouldBe(walked.OrderByDescending(id => id).ToList(), "newest first across the pages");
+        walked.Distinct().Count().ShouldBe(20, "no page repeated or dropped an entry");
+
+        walked.ShouldBe((await _storage.GetStatusAudits(row.Id)).Select(a => a.Id).ToList(),
+            "the paged read walks exactly the order the unpaged one answers");
+    }
+
+    [Fact]
+    public async Task Should_page_the_runs_trail_in_the_database_of_a_relational_store()
+    {
+        var series = NewRow(QueuedTaskStatus.Queued);
+        series.IsRecurring = true;
+        series.NextRunUtc  = DateTimeOffset.UtcNow.AddMinutes(1);
+
+        await _storage.Persist(series);
+
+        for (var i = 1; i <= 6; i++)
+            await _storage.UpdateCurrentRun(series.Id, i * 10, DateTimeOffset.UtcNow.AddMinutes(i), AuditLevel.Full);
+
+        var page = await _storage.GetRunsAuditsPage(series.Id, 2, 3);
+
+        page.TotalCount.ShouldBe(6);
+        page.Audits.Select(r => r.ExecutionTimeMs).ShouldBe([40d, 30d, 20d], "newest run first, from row three on");
+
+        var countOnly = await _storage.GetRunsAuditsPage(series.Id, 0, 0);
+
+        countOnly.Audits.ShouldBeEmpty();
+        countOnly.TotalCount.ShouldBe(6, "take = 0 asks for the count alone, and never as a zero-row FETCH");
     }
 
     private static QueuedTask NewRow(QueuedTaskStatus status) => new()

@@ -713,6 +713,48 @@ public interface ITaskStorage
     }
 
     /// <summary>
+    /// One page of the status transitions recorded for one row, newest first, with the total the trail holds.
+    /// </summary>
+    /// <remarks>
+    /// The paged half of <see cref="GetStatusAudits"/>, and it exists for the same reason as
+    /// <see cref="GetOccurrencesPage"/>: a long-lived recurring row accumulates one transition per state per
+    /// run, so a reader that shows the first twenty of them must not transfer the whole series to do it. The
+    /// unpaged read stays exactly what it was — the two members shipped in 4.0.0 and are frozen.
+    /// <para>
+    /// The default composes the unpaged read so a custom storage keeps working; the built-in providers
+    /// override it and let the database count and slice over the <c>(QueuedTaskId)</c> index the audit table
+    /// already has.
+    /// </para>
+    /// </remarks>
+    /// <param name="taskId">The row to answer for.</param>
+    /// <param name="skip">How many entries to skip, from the newest. Never negative.</param>
+    /// <param name="take">How many entries to return. Never negative; 0 asks for the count alone.</param>
+    /// <param name="ct">Cancellation token.</param>
+    async Task<AuditPage<StatusAudit>> GetStatusAuditsPage(Guid taskId, int skip, int take,
+                                                           CancellationToken ct = default)
+    {
+        var audits = await GetStatusAudits(taskId, ct).ConfigureAwait(false);
+
+        return new AuditPage<StatusAudit>(audits.Skip(skip).Take(take).ToArray(), audits.Length);
+    }
+
+    /// <summary>
+    /// One page of the runs recorded for one row, newest first, with the total the trail holds.
+    /// </summary>
+    /// <remarks>The <see cref="RunsAudit"/> half of <see cref="GetStatusAuditsPage"/>.</remarks>
+    /// <param name="taskId">The row to answer for.</param>
+    /// <param name="skip">How many entries to skip, from the newest. Never negative.</param>
+    /// <param name="take">How many entries to return. Never negative; 0 asks for the count alone.</param>
+    /// <param name="ct">Cancellation token.</param>
+    async Task<AuditPage<RunsAudit>> GetRunsAuditsPage(Guid taskId, int skip, int take,
+                                                       CancellationToken ct = default)
+    {
+        var audits = await GetRunsAudits(taskId, ct).ConfigureAwait(false);
+
+        return new AuditPage<RunsAudit>(audits.Skip(skip).Take(take).ToArray(), audits.Length);
+    }
+
+    /// <summary>
     /// Saves execution logs for a task. Called by WorkerExecutor after task execution.
     /// If <paramref name="logs"/> is empty, implementations should skip the database write.
     /// </summary>

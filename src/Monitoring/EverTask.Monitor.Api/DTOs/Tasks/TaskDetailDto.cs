@@ -61,6 +61,20 @@ public record TaskDetailDto(
     // Schedule and occurrence context lives in INIT properties, never as appended positional parameters:
     // appending would change the primary constructor and Deconstruct signatures of a public record (X4).
 
+    /// <summary>
+    /// How many status transitions the task's trail holds in total. <c>StatusAudits</c> carries only the
+    /// first page of it — a schedule that has run for a year holds one transition per state per run — so
+    /// this is what tells a consumer there is more, and <c>GET /tasks/{id}/status-audit</c> is where the
+    /// rest is asked for.
+    /// </summary>
+    public int StatusAuditsTotalCount { get; init; }
+
+    /// <summary>
+    /// How many runs the task's trail holds in total. The <c>RunsAudits</c> half of
+    /// <see cref="StatusAuditsTotalCount"/>.
+    /// </summary>
+    public int RunsAuditsTotalCount { get; init; }
+
     /// <inheritdoc cref="TaskListDto.ParentTaskId"/>
     public Guid? ParentTaskId { get; init; }
 

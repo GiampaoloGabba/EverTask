@@ -1,4 +1,4 @@
-﻿using System.Linq.Expressions;
+using System.Linq.Expressions;
 using EverTask.Tests.Monitoring.TestData;
 
 namespace EverTask.Tests.Monitoring.API.Services;
@@ -17,6 +17,18 @@ public class TaskQueryServiceTests
         _storageMock
             .Setup(s => s.GetLastRunStarts(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new Dictionary<Guid, DateTimeOffset>());
+
+        // Same rule for the two audit trails: a row with no history answers an empty page, never null. The
+        // tests that are ABOUT the trails override these.
+        _storageMock
+            .Setup(s => s.GetStatusAuditsPage(It.IsAny<Guid>(), It.IsAny<int>(), It.IsAny<int>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AuditPage<StatusAudit>([], 0));
+
+        _storageMock
+            .Setup(s => s.GetRunsAuditsPage(It.IsAny<Guid>(), It.IsAny<int>(), It.IsAny<int>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AuditPage<RunsAudit>([], 0));
 
         _service = new TaskQueryService(_storageMock.Object);
     }
@@ -77,23 +89,25 @@ public class TaskQueryServiceTests
         _storageMock.Setup(s => s.Get(It.IsAny<Expression<Func<QueuedTask, bool>>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync([row]);
 
-        _storageMock.Setup(s => s.GetStatusAudits(taskId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync([
+        _storageMock.Setup(s => s.GetStatusAuditsPage(taskId, It.IsAny<int>(), It.IsAny<int>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AuditPage<StatusAudit>([
                 new StatusAudit { Id = 3, QueuedTaskId = taskId, NewStatus = QueuedTaskStatus.Completed },
                 new StatusAudit { Id = 2, QueuedTaskId = taskId, NewStatus = QueuedTaskStatus.InProgress },
                 new StatusAudit { Id = 1, QueuedTaskId = taskId, NewStatus = QueuedTaskStatus.Queued }
-            ]);
+            ], 3));
 
-        _storageMock.Setup(s => s.GetRunsAudits(taskId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync([
+        _storageMock.Setup(s => s.GetRunsAuditsPage(taskId, It.IsAny<int>(), It.IsAny<int>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AuditPage<RunsAudit>([
                 new RunsAudit { Id = 2, QueuedTaskId = taskId, ExecutionTimeMs = 22 },
                 new RunsAudit { Id = 1, QueuedTaskId = taskId, ExecutionTimeMs = 11 }
-            ]);
+            ], 2));
 
-        (await _service.GetStatusAuditAsync(taskId)).Select(a => a.NewStatus)
+        (await _service.GetStatusAuditAsync(taskId)).Audits.Select(a => a.NewStatus)
             .ShouldBe([QueuedTaskStatus.Completed, QueuedTaskStatus.InProgress, QueuedTaskStatus.Queued]);
 
-        (await _service.GetRunsAuditAsync(taskId)).Select(a => a.ExecutionTimeMs).ShouldBe([22d, 11d]);
+        (await _service.GetRunsAuditAsync(taskId)).Audits.Select(a => a.ExecutionTimeMs).ShouldBe([22d, 11d]);
 
         var detail = await _service.GetTaskDetailAsync(taskId);
 
@@ -107,11 +121,18 @@ public class TaskQueryServiceTests
     {
         var taskId = Guid.NewGuid();
 
-        _storageMock.Setup(s => s.GetStatusAudits(taskId, It.IsAny<CancellationToken>())).ReturnsAsync([]);
-        _storageMock.Setup(s => s.GetRunsAudits(taskId, It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        _storageMock.Setup(s => s.GetStatusAuditsPage(taskId, It.IsAny<int>(), It.IsAny<int>(),
+            It.IsAny<CancellationToken>())).ReturnsAsync(new AuditPage<StatusAudit>([], 0));
+        _storageMock.Setup(s => s.GetRunsAuditsPage(taskId, It.IsAny<int>(), It.IsAny<int>(),
+            It.IsAny<CancellationToken>())).ReturnsAsync(new AuditPage<RunsAudit>([], 0));
 
-        (await _service.GetStatusAuditAsync(taskId)).ShouldBeEmpty();
-        (await _service.GetRunsAuditAsync(taskId)).ShouldBeEmpty();
+        var statusPage = await _service.GetStatusAuditAsync(taskId);
+        var runsPage   = await _service.GetRunsAuditAsync(taskId);
+
+        statusPage.Audits.ShouldBeEmpty();
+        statusPage.TotalCount.ShouldBe(0);
+        runsPage.Audits.ShouldBeEmpty();
+        runsPage.TotalCount.ShouldBe(0);
     }
 
     [Fact]

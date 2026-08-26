@@ -3,10 +3,10 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { TaskStatusBadge } from '@/components/common/TaskStatusBadge';
 import { JsonViewer } from '@/components/common/JsonViewer';
-import { Timeline } from '@/components/common/Timeline';
 import { ExceptionViewer } from '@/components/common/ExceptionViewer';
 import { ExecutionLogsTab } from '@/components/tasks/ExecutionLogsTab';
 import { OccurrencesTab } from '@/components/tasks/OccurrencesTab';
+import { AuditTrailTab } from '@/components/tasks/AuditTrailTab';
 import { LateBadge, MisfireBadge } from '@/components/tasks/OccurrenceBadges';
 import { TaskDetailDto, AuditLevel } from '@/types/task.types';
 import { format } from 'date-fns';
@@ -86,20 +86,6 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
   };
 
   const handlerInfo = formatHandler(task.handler);
-  const statusAudits = task.statusAudits.map(audit => ({
-    id: audit.id,
-    timestamp: audit.updatedAtUtc,
-    status: audit.newStatus,
-    exception: audit.exception,
-  }));
-
-  const runsAudits = task.runsAudits.map(audit => ({
-    id: audit.id,
-    timestamp: audit.executedAt,
-    status: audit.status,
-    exception: audit.exception,
-    executionTimeMs: audit.executionTimeMs,
-  }));
 
   const breadcrumbItems = [
     { label: 'Tasks', path: '/tasks' },
@@ -456,10 +442,10 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
           <Tabs defaultValue="status" className="w-full">
             <TabsList className={isDurableSchedule ? 'grid w-full grid-cols-4' : 'grid w-full grid-cols-3'}>
               <TabsTrigger value="status">
-                Status History ({statusAudits.length})
+                Status History ({task.statusAuditsTotalCount})
               </TabsTrigger>
               <TabsTrigger value="runs">
-                Runs History ({runsAudits.length})
+                Runs History ({task.runsAuditsTotalCount})
               </TabsTrigger>
               <TabsTrigger value="logs">
                 Execution Logs
@@ -471,22 +457,10 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
               )}
             </TabsList>
             <TabsContent value="status" className="mt-4">
-              {statusAudits.length > 0 ? (
-                <Timeline items={statusAudits} />
-              ) : (
-                <p className="text-sm text-muted-foreground text-center py-8">
-                  No status history available
-                </p>
-              )}
+              <AuditTrailTab taskId={task.id} trail="status" />
             </TabsContent>
             <TabsContent value="runs" className="mt-4">
-              {runsAudits.length > 0 ? (
-                <Timeline items={[...runsAudits].reverse()} />
-              ) : (
-                <p className="text-sm text-muted-foreground text-center py-8">
-                  No runs history available
-                </p>
-              )}
+              <AuditTrailTab taskId={task.id} trail="runs" />
             </TabsContent>
             <TabsContent value="logs" className="mt-4">
               <ExecutionLogsTab taskId={task.id} />

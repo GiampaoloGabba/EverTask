@@ -49,13 +49,29 @@ public class ApiReferenceAuditSampleTests : MonitoringTestBase
     /// The sample names only keys the DTO has, shows every key the DTO always writes, hides nothing the live
     /// payload carries, and reads newest first — the order both endpoints answer in and the prose promises.
     /// </summary>
+    /// <remarks>
+    /// Both endpoints answer a PAGE since #44 (<c>audits</c> plus the total the trail holds), so the sample
+    /// has to document the envelope as well as the entries: a consumer that reads the file writes its client
+    /// against the shape shown here, and an array where the wire sends an object costs it the whole call.
+    /// </remarks>
     private static void ShouldDocumentTheSamePayload(JsonElement sample, JsonElement live, Type dto)
     {
-        sample.ValueKind.ShouldBe(JsonValueKind.Array, "the endpoint answers a list");
-        live.ValueKind.ShouldBe(JsonValueKind.Array);
+        sample.ValueKind.ShouldBe(JsonValueKind.Object, "the endpoint answers a page, not a bare list");
+        live.ValueKind.ShouldBe(JsonValueKind.Object);
 
-        var documented = sample.EnumerateArray().ToArray();
-        var sent       = live.EnumerateArray().ToArray();
+        foreach (var key in new[] { "audits", "totalCount", "skip", "take" })
+        {
+            sample.TryGetProperty(key, out _).ShouldBeTrue($"the page carries '{key}' and the sample omits it");
+            live.TryGetProperty(key, out _).ShouldBeTrue();
+        }
+
+        var documented = sample.GetProperty("audits").EnumerateArray().ToArray();
+        var sent       = live.GetProperty("audits").EnumerateArray().ToArray();
+
+        live.GetProperty("totalCount").GetInt32()
+            .ShouldBe(sent.Length, "the whole trail fits in the default page for a task that ran once");
+        sample.GetProperty("totalCount").GetInt32()
+              .ShouldBe(documented.Length, "the sample's total is the total of the sample's own entries");
 
         documented.ShouldNotBeEmpty("a sample of an empty list documents nothing");
         sent.ShouldNotBeEmpty("the premise: the task really ran, so it has audits to answer with");

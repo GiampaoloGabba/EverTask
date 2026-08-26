@@ -1560,6 +1560,61 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                               .ConfigureAwait(false);
     }
 
+    /// <inheritdoc />
+    public virtual async Task<AuditPage<StatusAudit>> GetStatusAuditsPage(Guid taskId, int skip, int take,
+                                                                          CancellationToken ct = default)
+    {
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+
+        var query = dbContext.StatusAudit.AsNoTracking().Where(a => a.QueuedTaskId == taskId);
+
+        return await PageAsync(query, a => a.Id, skip, take, ct).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public virtual async Task<AuditPage<RunsAudit>> GetRunsAuditsPage(Guid taskId, int skip, int take,
+                                                                      CancellationToken ct = default)
+    {
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+
+        var query = dbContext.RunsAudit.AsNoTracking().Where(a => a.QueuedTaskId == taskId);
+
+        return await PageAsync(query, a => a.Id, skip, take, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The paging both audit trails share: the count and the slice are asked of the DATABASE over the
+    /// <c>(QueuedTaskId)</c> index the table already has, because a page exists so the whole trail is never
+    /// materialized — and counting it in memory would materialize it anyway.
+    /// </summary>
+    /// <remarks>
+    /// Ordered on the audit IDENTITY, never on its timestamp, for the same two reasons as the unpaged reads:
+    /// SQLite refuses a <see cref="DateTimeOffset"/> in an <c>ORDER BY</c>, and the audits of one row are
+    /// inserted in transition order, so the newest id IS the newest entry — which also makes the order
+    /// total, so a page boundary can never repeat or drop an entry.
+    /// </remarks>
+    private static async Task<AuditPage<TAudit>> PageAsync<TAudit>(IQueryable<TAudit> query,
+                                                                   Expression<Func<TAudit, long>> auditId,
+                                                                   int skip, int take, CancellationToken ct)
+        where TAudit : class
+    {
+        var total = await query.CountAsync(ct).ConfigureAwait(false);
+
+        // A page of nothing is answered without a second round trip, and never as a FETCH clause: a zero-row
+        // FETCH is a syntax error on some engines, not an empty result.
+        if (take <= 0)
+            return new AuditPage<TAudit>([], total);
+
+        var audits = await query
+                           .OrderByDescending(auditId)
+                           .Skip(skip)
+                           .Take(take)
+                           .ToArrayAsync(ct)
+                           .ConfigureAwait(false);
+
+        return new AuditPage<TAudit>(audits, total);
+    }
+
     /// <summary>Server-side mirror of <see cref="QueuedTask.IsNonTerminalStatus"/>.</summary>
     private static readonly Expression<Func<QueuedTask, bool>> NonTerminalOccurrence =
         t => t.Status == QueuedTaskStatus.WaitingQueue

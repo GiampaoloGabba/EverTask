@@ -47,6 +47,12 @@ export const useSignalRRefresh = () => {
     // schedule whose tab is open is mounted, so this refetches one query at most.
     queryClient.invalidateQueries({ queryKey: ['occurrences'] });
 
+    // The two audit trails are paged by the server too, so their pages are separate queries and the detail
+    // no longer carries them whole: without this the two tabs would sit on the transitions they were opened
+    // with while everything around them updates.
+    queryClient.invalidateQueries({ queryKey: ['statusAudits'] });
+    queryClient.invalidateQueries({ queryKey: ['runsAudits'] });
+
     // Process each event
     events.forEach((event) => {
       // If we have a specific taskId, invalidate that task's detail

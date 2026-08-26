@@ -8,6 +8,13 @@ namespace EverTask.Monitor.Api.Services;
 public interface ITaskQueryService
 {
     /// <summary>
+    /// How many audit entries a request that names no page size asks for — the two endpoints and the two
+    /// blocks of the task detail alike. A long-lived recurring row holds one transition per state per run,
+    /// so the whole trail is never the default answer.
+    /// </summary>
+    public const int DefaultAuditPageSize = 100;
+
+    /// <summary>
     /// Get paginated list of tasks with filters.
     /// </summary>
     Task<TasksPagedResponse> GetTasksAsync(TaskFilter filter, PaginationParams pagination, CancellationToken ct = default);
@@ -18,14 +25,25 @@ public interface ITaskQueryService
     Task<TaskDetailDto?> GetTaskDetailAsync(Guid id, CancellationToken ct = default);
 
     /// <summary>
-    /// Get status audit history for a task, newest transition first, read from the storage's audit trail.
+    /// Get one page of the status audit history of a task, newest transition first, read from the storage's
+    /// audit trail.
     /// </summary>
-    Task<List<StatusAuditDto>> GetStatusAuditAsync(Guid id, CancellationToken ct = default);
+    /// <param name="id">The task whose transitions are wanted.</param>
+    /// <param name="skip">Number of transitions to skip, from the newest.</param>
+    /// <param name="take">Number of transitions to return.</param>
+    /// <param name="ct">Cancellation token.</param>
+    Task<StatusAuditsResponse> GetStatusAuditAsync(Guid id, int skip = 0, int take = DefaultAuditPageSize,
+                                                   CancellationToken ct = default);
 
     /// <summary>
-    /// Get execution runs audit history for a task, newest run first, read from the storage's audit trail.
+    /// Get one page of the execution runs of a task, newest run first, read from the storage's audit trail.
     /// </summary>
-    Task<List<RunsAuditDto>> GetRunsAuditAsync(Guid id, CancellationToken ct = default);
+    /// <param name="id">The task whose runs are wanted.</param>
+    /// <param name="skip">Number of runs to skip, from the newest.</param>
+    /// <param name="take">Number of runs to return.</param>
+    /// <param name="ct">Cancellation token.</param>
+    Task<RunsAuditsResponse> GetRunsAuditAsync(Guid id, int skip = 0, int take = DefaultAuditPageSize,
+                                               CancellationToken ct = default);
 
     /// <summary>
     /// Get paginated execution logs for a task with optional level filtering.

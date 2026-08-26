@@ -68,6 +68,12 @@ Vite, Tailwind, shadcn/ui, TanStack Query (server state), Zustand (client state)
   Previous / Next: a schedule with three hundred occurrences showed the hundred most recent and nothing
   could reach the failed one at row 150. The empty state belongs to the FIRST page only — an empty page
   further in is a series that shrank under the reader, and it still needs its way back.
+  - **`AuditTrailTab` is the same rule for the detail's two audit tabs** (`trail="status" | "runs"`), which
+    the API pages too since 4.0.0. It reads the ENDPOINTS (`['statusAudits' | 'runsAudits', id, skip, take]`),
+    never `task.statusAudits` / `task.runsAudits` — those carry only the first page — while the tab LABELS
+    read `task.statusAuditsTotalCount` / `runsAuditsTotalCount`, the totals the detail reports. The runs
+    timeline keeps reading oldest-first WITHIN the page it shows; the page itself is newest-first, like the
+    endpoint.
 
 ## Layout
 

@@ -182,8 +182,8 @@ transition your transaction never made. The three optimized in-box providers tak
 EF Core base re-reads inside the transaction, which is exact only while writers are serialized, as they are
 on SQLite.
 
-The six read helpers (`GetOccurrences`, `GetOccurrencesPage`, `CountActiveOccurrences`, `GetLastRunStarts`,
-`GetStatusAudits`, `GetRunsAudits`) carry no atomicity contract, so their defaults are a correct query over `Get`. Override them for an indexed
+The eight read helpers (`GetOccurrences`, `GetOccurrencesPage`, `CountActiveOccurrences`, `GetLastRunStarts`,
+`GetStatusAudits`, `GetRunsAudits`, `GetStatusAuditsPage`, `GetRunsAuditsPage`) carry no atomicity contract, so their defaults are a correct query over `Get`. Override them for an indexed
 one. `GetOccurrencesPage` is the one worth the effort: it answers the dashboard's occurrence list, and the
 default reads the whole series to return one page of it — which on a schedule with a long retention behind it
 is hundreds of thousands of rows for a hundred. Order by slot descending, count and slice in the store, and
@@ -191,6 +191,14 @@ return both the page and the total that matches the request. All five in-box sto
 engine will order by the slot before you promise that: EF Core will not translate an `ORDER BY` over a
 `DateTimeOffset` on SQLite, so the in-box SQLite provider writes that one query as SQL instead of sorting the
 series in memory.
+
+`GetStatusAuditsPage` and `GetRunsAuditsPage` are the same argument on the other two trails: a long-lived
+recurring row records one transition per state per run, and the task detail shows twenty of them at a time.
+The defaults compose the unpaged reads — correct, and no faster than answering the whole history — so
+override them with a count and a slice over the `(QueuedTaskId)` index the audit tables already need. Order
+them exactly as your unpaged reads do (the in-box providers order on the audit IDENTITY, which is insertion
+order and therefore total, so no page boundary can repeat or drop an entry), and answer the count alone for
+`take = 0` rather than emitting a zero-row `FETCH`, which is a syntax error on some engines.
 
 `GetLastRunStarts` answers when the last run of each of a page of rows began. No column holds that.
 `LastExecutionUtc` is written on terminal transitions, so it is when a run ENDED, and a row still running has

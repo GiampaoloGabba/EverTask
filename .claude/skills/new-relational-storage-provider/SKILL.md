@@ -231,6 +231,14 @@ query materializes, so the dashboard's status-history and runs-history tabs answ
 whose audit tables hold everything. The base overrides both with one indexed query over the audit table,
 newest first — ordered by the audit's identity, never by its timestamp, exactly as above.
 
+`GetStatusAuditsPage` and `GetRunsAuditsPage` are the seventh and eighth: the paged form of the two above,
+which is what the detail's two tabs really call (a long-lived recurring row records one transition per state
+per run). Their defaults compose the unpaged reads, so they are correct and no cheaper; the base overrides
+both with a `Count` and a `Skip`/`Take` over the same `(QueuedTaskId)` index, in the same identity order —
+which, being insertion order, is total, so no page boundary repeats or drops an entry. `take = 0` answers the
+count alone and must never reach a zero-row `FETCH`: that is a syntax error on some engines, not an empty
+result.
+
 Also override `CleanupTerminalOccurrences(cutoff, preserveTasksWithLogs, ct)` if the DB cannot translate the
 `DateTimeOffset` age cutoff (the SQLite pattern) — or if it cannot be trusted with a correlated `EXISTS`
 inside a `DELETE … LIMIT`, which is the MySQL trap: the guard is silently dropped and every occurrence is
