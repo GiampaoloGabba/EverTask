@@ -182,7 +182,7 @@ public class WorkerQueue : IWorkerQueue
         // A delivery of this id is already in flight in this process (in a channel or executing):
         // idempotent no-op, single execution. This is the write-boundary defense against the
         // recovery-vs-live-dispatch double delivery.
-        if (!_deliveryRegistry.TryBegin(task.PersistenceId))
+        if (!_deliveryRegistry.TryBegin(task.PersistenceId, task.ParentTaskId))
         {
             _logger.DuplicateEnqueueSkipped(task.PersistenceId, Name);
             await DroppedDelivery.ReleaseAsync(task, _logger).ConfigureAwait(false);
@@ -284,7 +284,7 @@ public class WorkerQueue : IWorkerQueue
         // caller decides (schedulers retry shortly like QueueFull, because their slot may have
         // fired while the previous delivery of the same task was still unwinding; live dispatch
         // treats it as idempotent success).
-        if (!_deliveryRegistry.TryBegin(task.PersistenceId))
+        if (!_deliveryRegistry.TryBegin(task.PersistenceId, task.ParentTaskId))
         {
             _logger.DuplicateDeliveryNotEnqueued(task.PersistenceId, Name);
             return EnqueueResult.DuplicateInProcess;

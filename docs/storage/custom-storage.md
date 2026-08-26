@@ -54,7 +54,7 @@ writes: `TrySetQueuedIfRecoverable`, `CompleteRecurringRun`, `SetRecurringSeries
 if your backend can make the check-and-set atomic. See `src/EverTask/Storage/ITaskStorage.cs` for the
 full contract and the per-member rationale.
 
-### Two obligations that are not visible from the signatures
+### Three obligations that are not visible from the signatures
 
 **`Persist` and `UpdateTask` must store the row's timestamps at offset zero.** Both take a `QueuedTask` from
 a caller, and a caller may hand over a `DateTimeOffset.Now`: `+02:00` on a machine in Rome. Every
@@ -68,6 +68,13 @@ both methods, as the built-in stores do.
 many consecutive process starts may fail to turn a row into a delivery before it is poisoned. A row put back
 still carrying the attempts that ended it is poisoned again by its first failure, so the requeue grants none
 of the retries it exists to restore.
+
+**`UpdateTask` must write `RuntimeInfo` from the entity it is given, not leave the column alone.** That column
+holds the runtime state of a durable schedule, and the only marker in it today is a catch-up halt. The
+dispatcher reads the row before it rewrites it and hands the value straight back, so re-registering a schedule
+under its task key leaves a standing halt exactly where it was. It hands back `null` in one case: a series a
+cancel had ended and this dispatch is restarting. Skip the column there and the restarted series comes back
+still halted, so it materializes nothing until someone resumes it by hand.
 
 ## The Scheduling Clock
 

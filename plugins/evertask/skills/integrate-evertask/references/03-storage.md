@@ -137,8 +137,9 @@ finished occurrences of a durable recurring schedule in ANY terminal state (Comp
 Cancelled), which `DeleteCompletedTasksAfterRetention` does not: that one only removes completed rows
 with no audit trail left. Both skip a row that still owns execution logs while a log-retention
 window/cap is active, so a short occurrence window never cascade-deletes logs a long log window kept; the
-occurrence pass skips a row whose StatusAudit/RunsAudit rows are still inside their own window for the same
-reason, whenever an audit retention is active.
+occurrence pass skips a row whose StatusAudit rows are still inside their window whenever
+`StatusAuditRetentionDays` is set, and its RunsAudit rows whenever `RunsAuditRetentionDays` is, for the same
+reason. One guard per trail: a knob left unset prunes nothing and so holds nothing back.
 The cleanup service also exposes `AuditCleanupOptions.CleanupInterval` (default
 24h, from the `cleanupIntervalHours` arg) and `InitialDelay` (default 1 min before the first sweep).
 Requires an EF Core storage; warns + disables itself for custom non-EF storage.

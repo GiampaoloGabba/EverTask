@@ -162,7 +162,14 @@ public sealed class AuditCleanupHostedService : BackgroundService
         // against 90), so without this guard the failure history of every occurrence of every durable
         // schedule went 82 days before the window that was meant to hold it, and the cleanup line reported
         // an occurrence count and nothing else.
-        var auditRetentionActive = policy.StatusAuditRetentionDays is > 0 || policy.RunsAuditRetentionDays is > 0;
+        //
+        // ONE flag PER TRAIL, unlike the log guard above: the two log knobs prune the same rows, so either of
+        // them means "the log pass ran", while these two knobs prune different tables and each pass is
+        // conditional on its own. A single OR turned the guard on for a trail nothing was going to prune —
+        // configure RunsAuditRetentionDays alone and every occurrence kept the StatusAudit row its own
+        // materialization wrote, so OccurrenceRetentionDays deleted nothing, for ever, on every provider.
+        var preserveStatusAudits = policy.StatusAuditRetentionDays is > 0;
+        var preserveRunsAudits   = policy.RunsAuditRetentionDays is > 0;
 
         // Occurrences of a durable schedule, in ANY terminal state. Runs BEFORE the completed-task purge
         // so the two never contend for the same rows, and independently of it: a failed or cancelled
@@ -170,7 +177,8 @@ public sealed class AuditCleanupHostedService : BackgroundService
         var occurrencesDeleted = 0;
         if (policy.OccurrenceRetentionDays is > 0)
             occurrencesDeleted = await storage.CleanupTerminalOccurrences(
-                now.AddDays(-policy.OccurrenceRetentionDays.Value), logRetentionActive, auditRetentionActive, ct)
+                now.AddDays(-policy.OccurrenceRetentionDays.Value), logRetentionActive, preserveStatusAudits,
+                preserveRunsAudits, ct)
                 .ConfigureAwait(false);
 
         var tasksDeleted = 0;

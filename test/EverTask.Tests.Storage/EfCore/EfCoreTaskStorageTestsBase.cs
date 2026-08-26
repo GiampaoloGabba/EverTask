@@ -3747,7 +3747,7 @@ public abstract class EfCoreTaskStorageTestsBase
         // the cutoff has to sit just past "now" for occurrences that finished during the test to qualify.
         var deleted = await ((EfCoreTaskStorage)_storage)
             .CleanupTerminalOccurrences(DateTimeOffset.UtcNow.AddMinutes(1), preserveTasksWithLogs: false,
-                                        preserveTasksWithAudits: false);
+                                        preserveStatusAudits: false, preserveRunsAudits: false);
 
         deleted.ShouldBe(3, "the ordinary completed-task purge would have kept the failed and cancelled ones");
         (await _storage.Get(t => t.Id == pending.Id)).ShouldHaveSingleItem();
@@ -3787,7 +3787,8 @@ public abstract class EfCoreTaskStorageTestsBase
         var cutoff = DateTimeOffset.UtcNow.AddMinutes(1);
 
         var preserved = await ((EfCoreTaskStorage)_storage)
-            .CleanupTerminalOccurrences(cutoff, preserveTasksWithLogs: true, preserveTasksWithAudits: false);
+            .CleanupTerminalOccurrences(cutoff, preserveTasksWithLogs: true,
+                                        preserveStatusAudits: false, preserveRunsAudits: false);
 
         preserved.ShouldBe(1, "only the occurrence with no surviving logs may be pruned");
         (await _storage.Get(t => t.Id == withLogs.Id)).ShouldHaveSingleItem();
@@ -3797,7 +3798,8 @@ public abstract class EfCoreTaskStorageTestsBase
 
         // With no log retention active the historic cascade-on-purge behaviour stands.
         var withGuardOff = await ((EfCoreTaskStorage)_storage)
-            .CleanupTerminalOccurrences(cutoff, preserveTasksWithLogs: false, preserveTasksWithAudits: false);
+            .CleanupTerminalOccurrences(cutoff, preserveTasksWithLogs: false,
+                                        preserveStatusAudits: false, preserveRunsAudits: false);
 
         withGuardOff.ShouldBe(1);
         (await _storage.Get(t => t.Id == withLogs.Id)).ShouldBeEmpty();
@@ -3833,7 +3835,8 @@ public abstract class EfCoreTaskStorageTestsBase
         var cutoff = DateTimeOffset.UtcNow.AddMinutes(1);
 
         var preserved = await ((EfCoreTaskStorage)_storage)
-            .CleanupTerminalOccurrences(cutoff, preserveTasksWithLogs: false, preserveTasksWithAudits: true);
+            .CleanupTerminalOccurrences(cutoff, preserveTasksWithLogs: false,
+                                        preserveStatusAudits: true, preserveRunsAudits: true);
 
         preserved.ShouldBe(1, "only the occurrence with no surviving audit row may be pruned");
         (await _storage.Get(t => t.Id == audited.Id)).ShouldHaveSingleItem();
@@ -3843,7 +3846,8 @@ public abstract class EfCoreTaskStorageTestsBase
 
         // With no audit retention active the historic cascade-on-purge behaviour stands.
         var withGuardOff = await ((EfCoreTaskStorage)_storage)
-            .CleanupTerminalOccurrences(cutoff, preserveTasksWithLogs: false, preserveTasksWithAudits: false);
+            .CleanupTerminalOccurrences(cutoff, preserveTasksWithLogs: false,
+                                        preserveStatusAudits: false, preserveRunsAudits: false);
 
         withGuardOff.ShouldBe(1);
         (await _storage.Get(t => t.Id == audited.Id)).ShouldBeEmpty();
@@ -4731,6 +4735,58 @@ public abstract class EfCoreTaskStorageTestsBase
             .ShouldBe(0, "no log retention is active, so no log is protecting the row");
         _mockedDbContext.TaskExecutionLogs.Count(x => x.TaskId == withLogs.Id)
             .ShouldBe(0, "the delete cascades to the logs it owned");
+    }
+
+    [Fact]
+    public async Task Should_preserve_an_occurrence_whose_status_audits_the_status_window_kept()
+    {
+        // The audit half of the same rule, through the policy: deleting the row cascades its StatusAudit
+        // rows, and the status pass ran earlier in this very cycle, so an audit it kept must keep its row.
+        var now      = DateTimeOffset.UtcNow;
+        var schedule = DurableSchedule();
+        var audited  = OccurrenceWithStatusAudit(schedule.Id, now.AddDays(-30));
+
+        await PersistAndDetach(schedule, audited);
+
+        var policy = new AuditRetentionPolicy { StatusAuditRetentionDays = 90, OccurrenceRetentionDays = 7 };
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        _mockedDbContext.QueuedTasks.Count(x => x.Id == audited.Id)
+            .ShouldBe(1, "the occurrence still owns a transition 60 days short of its own window");
+        _mockedDbContext.StatusAudit.Count(x => x.QueuedTaskId == audited.Id).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Should_prune_an_occurrence_whose_trail_belongs_to_a_pass_this_policy_never_runs()
+    {
+        // The guard is derived PER TRAIL, and one flag for both made the window a permanent no-op: this
+        // policy prunes the runs history and keeps the status history on purpose, so the status pass never
+        // runs — yet every occurrence owns the StatusAudit row its own materialization wrote, so a guard
+        // switched on by the RUNS knob refused every occurrence for ever. Identical seeding to the test
+        // above, the other knob, the opposite outcome.
+        var now      = DateTimeOffset.UtcNow;
+        var schedule = DurableSchedule();
+        var audited  = OccurrenceWithStatusAudit(schedule.Id, now.AddDays(-30));
+
+        await PersistAndDetach(schedule, audited);
+
+        var policy = new AuditRetentionPolicy { RunsAuditRetentionDays = 30, OccurrenceRetentionDays = 7 };
+        await AuditCleanupHostedService.RunCleanupAsync((EfCoreTaskStorage)_storage, policy, now, CancellationToken.None);
+
+        _mockedDbContext.QueuedTasks.Count(x => x.Id == audited.Id)
+            .ShouldBe(0, "no status-audit pass ran, so nothing in the status trail is being held back");
+    }
+
+    /// <summary>One terminal occurrence carrying a single status transition, dated with it.</summary>
+    private QueuedTask OccurrenceWithStatusAudit(Guid scheduleId, DateTimeOffset finishedAt)
+    {
+        var occurrence = OccurrenceInState(scheduleId, finishedAt, QueuedTaskStatus.Completed);
+        var audit      = StatusAuditAt(FloorToMicroseconds(finishedAt));
+
+        audit.QueuedTaskId       = occurrence.Id;
+        occurrence.StatusAudits  = [audit];
+
+        return occurrence;
     }
 
     /// <summary>A durable schedule row: recurring, with a live cursor, and never pruned by the retention pass.</summary>

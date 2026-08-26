@@ -262,7 +262,7 @@ catch-up has stopped itself over the overflow cap — a `halt` block:
 }
 ```
 
-A halt never releases itself, not even across a restart: `ResumeSchedule` or `Reschedule` is what clears it
+A halt never releases itself, not even across a restart. An explicit schedule change is what clears it
 (see [Managing schedules at runtime](recurring-tasks/managing-tasks.md)).
 
 ---

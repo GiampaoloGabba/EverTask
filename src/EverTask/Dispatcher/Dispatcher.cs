@@ -520,7 +520,21 @@ public class Dispatcher(
                     // would tell the handler's context — and every monitoring event of the delivery — that a
                     // rescheduled series is back at version 0. It is also the compare-and-swap expectation of
                     // the finalization below, which is why it is read here, once, with the rest of the row.
-                    rowMetadata = rowMetadata with { ScheduleVersion = existingTask.ScheduleVersion };
+                    //
+                    // The runtime state travels the same way, because UpdateTask DOES write that column: a
+                    // plain re-registration hands the row's own value back, so a standing catch-up halt
+                    // survives it (M10 — only an explicit resume or reschedule releases one, and re-declaring
+                    // your schedules at startup is not an operator asking for a replay). A REVIVAL is the
+                    // exception, and the reason the column is written at all: the halt belongs to the series
+                    // the cancel ended, and carrying it into the one being started here parks a schedule that
+                    // materializes nothing — the materializer's standing-halt branch reports the halt and, by
+                    // design, does not re-park, so the registration is consumed on its first fire and every
+                    // restart repeats it.
+                    rowMetadata = rowMetadata with
+                    {
+                        ScheduleVersion = existingTask.ScheduleVersion,
+                        RuntimeInfo     = revivedSchedule == null ? existingTask.RuntimeInfo : null
+                    };
 
                     // Preserve existing NextRunUtc (even if in the past) to maintain schedule rhythm
                     if (existingTask.NextRunUtc.HasValue)
@@ -800,12 +814,21 @@ public class Dispatcher(
     /// restart before its first slot. The dispatch IS the decision to run it again, the same argument
     /// <see cref="TaskScheduleManager.RequeueFailedOccurrence"/> makes for a single occurrence, so it drops the
     /// entry and puts the row back in <see cref="QueuedTaskStatus.WaitingQueue"/> — where a brand new dispatch
-    /// would have left it. The transition is audited like any other, which is what tells an operator the
-    /// series was restarted rather than never cancelled.
+    /// would have left it, the runtime state the dispatch rewrote just above included. The transition is
+    /// audited like any other, which is what tells an operator the series was restarted rather than never
+    /// cancelled.
+    /// <para>
+    /// The entry is not simply dropped: it is the only in-process cover the occurrences the cancel already
+    /// terminalized have, so it is MOVED onto them first (see
+    /// <see cref="CoverOccurrencesTheCancelEndedAsync"/>). The two meanings it carries end at different
+    /// moments — the schedule is alive again from here, those occurrences never will be.
+    /// </para>
     /// </remarks>
     private async Task RestoreCancelledSchedule(Guid scheduleId, string taskKey, AuditLevel auditLevel,
                                                 CancellationToken ct)
     {
+        await CoverOccurrencesTheCancelEndedAsync(scheduleId, ct).ConfigureAwait(false);
+
         workerBlacklist.Remove(scheduleId);
 
         if (taskStorage != null)
@@ -815,6 +838,68 @@ public class Dispatcher(
         }
 
         logger.CancelledScheduleRedispatched(scheduleId, taskKey);
+    }
+
+    /// <summary>
+    /// Gives each occurrence of <paramref name="scheduleId"/> that the cancel left <c>Cancelled</c>, and whose
+    /// delivery is still in flight in this process, a blacklist entry of its OWN — before the schedule's entry
+    /// stops covering it.
+    /// </summary>
+    /// <remarks>
+    /// Past the enqueue boundary nothing re-reads the row: <c>SetInProgress</c> is unconditional, and all
+    /// three cancellation checks are the blacklist. A delivery sitting in a channel, or waiting seconds at the
+    /// rate-limit gate, would therefore run the OLD series' payload over a terminal <c>Cancelled</c> and
+    /// complete it, the moment the schedule's entry went. Everything BEFORE that boundary is safe without an
+    /// entry — the scheduler's enqueue goes through <c>TrySetQueuedIfRecoverable</c>, which refuses a
+    /// <c>Cancelled</c> row — so the in-flight set is the whole exposure, and it is bounded by what a channel
+    /// can hold.
+    /// <para>
+    /// The status is what decides, not the delivery: an occurrence the cancel found <c>InProgress</c> is
+    /// allowed to finish (M15), and covering it would suppress the completion of work that has already run its
+    /// side effects. A lookup that FAILED covers them all instead — "the query threw" is not an answer that
+    /// lets an occurrence of a cancelled series run, and the cost of being wrong that way is a re-execution
+    /// the at-least-once contract already covers.
+    /// </para>
+    /// </remarks>
+    private async Task CoverOccurrencesTheCancelEndedAsync(Guid scheduleId, CancellationToken ct)
+    {
+        if (taskStorage == null || DeliveryRegistry?.OccurrencesOf(scheduleId) is not { Length: > 0 } inFlight)
+            return;
+
+        QueuedTask[] rows;
+
+        try
+        {
+            rows = await taskStorage.Get(t => inFlight.Contains(t.Id), ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // The caller abandoned the dispatch: nothing is covered and nothing is uncovered either, because
+            // the schedule's entry is dropped after this and never gets there.
+            throw;
+        }
+        catch (Exception e)
+        {
+            foreach (var occurrenceId in inFlight)
+                workerBlacklist.Add(occurrenceId);
+
+            logger.OccurrencesOfRevivedScheduleLookupFailed(e, scheduleId, inFlight.Length);
+            return;
+        }
+
+        var covered = 0;
+
+        foreach (var row in rows)
+        {
+            if (row.Status != QueuedTaskStatus.Cancelled)
+                continue;
+
+            workerBlacklist.Add(row.Id);
+            covered++;
+        }
+
+        if (covered > 0)
+            logger.OccurrencesOfRevivedScheduleCovered(scheduleId, covered);
     }
 
     private ValueTask<IDisposable> AcquireTaskKeyLockAsync(string? taskKey, Guid? existingTaskId, CancellationToken ct)

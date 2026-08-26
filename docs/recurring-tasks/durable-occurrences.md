@@ -79,8 +79,10 @@ backlog.
   Kubernetes calls the same situation "too many missed start times", and for the same reason: a backlog
   nobody has looked at should not quietly turn into a flood of work. Releasing a halt is an explicit act:
   `ITaskScheduleManager.ResumeSchedule(taskKey)` clears the marker and plans the same backlog again — halting
-  again if it still overflows — and `Reschedule` clears it whatever mode it uses. Re-registering the schedule
-  under its task key does not. A halted schedule is also not put back in the scheduler: while it waits it
+  again if it still overflows — and `Reschedule` clears it whatever mode it uses. Cancelling the series and
+  dispatching it again under its key clears it too: that dispatch starts a new series, and the halt belonged
+  to the one the cancel ended. Simply re-registering the schedule under its task key does not, because
+  re-declaring your schedules on every startup is not a request to replay anything. A halted schedule is also not put back in the scheduler: while it waits it
   writes nothing and takes no worker delivery. A restart reports the halt once more and then leaves it alone.
   To replay a backlog the cap had refused, widen the caps with `Reschedule(..., RescheduleMode.RebaseFromCursor)`:
   a plain cadence carries its cursor over unchanged, so the backlog is still there when the new caps allow it.
@@ -226,9 +228,9 @@ builder.Services.AddAuditCleanup(
 It leaves the schedule row alone, and a pruned occurrence is never re-materialized: the cursor decides what
 exists, not the rows behind it. An occurrence that still owns execution logs inside their own retention window
 is kept until those expire too, so pruning occurrences never deletes logs the log retention deliberately
-preserved — and the same holds for its audit trail, which the delete would cascade as well. With a 7-day
-occurrence window and a 90-day error window, a failed occurrence keeps its place until its audit rows are
-gone.
+preserved. The same holds for an audit trail that has a window of its own, since the delete cascades those
+rows too: prune the status trail at 90 days and a failed occurrence under a 7-day window keeps its place until
+those rows are gone.
 
 The same policy carries the audit and execution-log windows; they are listed in
 [Audit & Execution-Log Retention](../configuration-reference.md#audit--execution-log-retention-addauditcleanup).

@@ -202,14 +202,14 @@ public class MySqlTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTa
 
     /// <summary>
     /// MySQL/MariaDB override of the occurrence purge, for the same reason as
-    /// <see cref="CleanupCompletedTasks"/>: its <c>preserveTasksWithLogs</c> and
-    /// <c>preserveTasksWithAudits</c> guards are correlated <c>EXISTS</c> subqueries, which a
+    /// <see cref="CleanupCompletedTasks"/>: its <c>preserveTasksWithLogs</c> and the two audit-trail guards
+    /// are correlated <c>EXISTS</c> subqueries, which a
     /// <c>DELETE … LIMIT</c> does not reliably honor here — they are dropped, and occurrences that still own
     /// execution logs or audit rows are purged, cascade-deleting what a retention window meant to keep. Same
     /// shape: resolve a bounded page of ids with a <c>SELECT</c>, delete by primary key.
     /// </summary>
     public override async Task<int> CleanupTerminalOccurrences(DateTimeOffset cutoff, bool preserveTasksWithLogs,
-                                                               bool preserveTasksWithAudits,
+                                                               bool preserveStatusAudits, bool preserveRunsAudits,
                                                                CancellationToken ct = default)
     {
         await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
@@ -224,9 +224,8 @@ public class MySqlTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTa
                               || qt.Status == QueuedTaskStatus.Failed
                               || qt.Status == QueuedTaskStatus.Cancelled)
                           && (!preserveTasksWithLogs || !dbContext.TaskExecutionLogs.Any(l => l.TaskId == qt.Id))
-                          && (!preserveTasksWithAudits
-                              || (!dbContext.StatusAudit.Any(sa => sa.QueuedTaskId == qt.Id)
-                                  && !dbContext.RunsAudit.Any(ra => ra.QueuedTaskId == qt.Id)))
+                          && (!preserveStatusAudits || !dbContext.StatusAudit.Any(sa => sa.QueuedTaskId == qt.Id))
+                          && (!preserveRunsAudits || !dbContext.RunsAudit.Any(ra => ra.QueuedTaskId == qt.Id))
                           && (qt.LastExecutionUtc ?? qt.CreatedAtUtc) < cutoff)
                 .Select(qt => qt.Id)
                 .Take(CleanupBatchSize)

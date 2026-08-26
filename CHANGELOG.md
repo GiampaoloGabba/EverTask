@@ -301,10 +301,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   schedule in any terminal state — Completed, Failed and Cancelled alike, which
   `DeleteCompletedTasksAfterRetention` does not do. It honours the same execution-log guard: with a
   log-retention window or cap active, an occurrence that still owns logs is kept, so a short
-  occurrence window never cascade-deletes logs a longer log window meant to keep. It honours the
-  audit trail the same way: with a status- or runs-audit window active, an occurrence whose audit rows
-  are still inside their own window is kept, because deleting the row cascades them. A 7-day occurrence
-  window against a 90-day error window would otherwise erase a failure on day eight.
+  occurrence window never cascade-deletes logs a longer log window meant to keep. Each audit trail gets a
+  guard of its own: with `StatusAuditRetentionDays` set, an occurrence whose status rows are still inside
+  that window is kept, and `RunsAuditRetentionDays` guards the runs trail the same way, because deleting the
+  row cascades both. A 7-day occurrence window against a 90-day error window would otherwise erase a failure
+  on day eight.
 - `EverTaskEventData` and `TaskHandlerExecutor` carry the schedule/occurrence context in new `init`
   properties. Their primary constructors and `Deconstruct` are unchanged, so existing code that
   builds or deconstructs them keeps compiling.
@@ -343,6 +344,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   series for good. The dispatch now drops that entry and puts the row back where a brand new dispatch would
   have left it, after the new definition is written and with the transition audited. A one-shot was never
   affected: a terminal row is removed and recreated under a new id.
+  - That entry is also the only thing covering the occurrences the cancel had already terminalized while
+    their delivery was past the queue boundary — sitting in a channel, or waiting at the rate-limit gate,
+    where nothing re-reads the row. Each of them gets an entry of its own before the schedule's is dropped,
+    so an occurrence the cancel confirmed terminal cannot run the old series' payload after the restart. One
+    the cancel found running is left alone and still finishes.
+  - A schedule that was HALTED when it was cancelled comes back released. The halt belonged to the series the
+    cancel ended, and a revived series that keeps it materializes nothing until someone resumes it by hand.
+    An ordinary re-registration under the same task key still leaves a standing halt exactly where it is:
+    re-declaring your schedules at startup is not a request to replay the backlog the halt stopped.
 - **A schedule's description no longer renders its bounds on the host's clock.**
   `RecurringTask.ToString()` — persisted as `QueuedTask.RecurringInfo` and shown by the dashboard — formatted
   `RunUntil` and a `SpecificRunTime` with `ToLocalTime()`, so the same definition wrote a different sentence

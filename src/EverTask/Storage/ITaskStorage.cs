@@ -337,6 +337,14 @@ public interface ITaskStorage
     /// <remarks>
     /// Carries the same UTC-normalization obligation as <see cref="Persist"/>, and for a sharper reason:
     /// this is the entry point that rewrites the schedule cursor itself.
+    /// <para>
+    /// <see cref="QueuedTask.RuntimeInfo"/> is one of the columns it writes. The caller re-registering a
+    /// schedule reads the row first and hands the runtime state back verbatim, so an ordinary re-registration
+    /// leaves a durable catch-up halt exactly where it was (M10: nothing but an explicit resume or reschedule
+    /// releases one). What the caller does NOT hand back is the halt of a series a cancel had ended and this
+    /// dispatch is bringing back: an implementation that skips the column revives that series still halted,
+    /// so it materializes nothing until someone resumes it by hand.
+    /// </para>
     /// </remarks>
     /// <param name="task">The task to update with new values.</param>
     /// <param name="ct">Optional cancellation token.</param>

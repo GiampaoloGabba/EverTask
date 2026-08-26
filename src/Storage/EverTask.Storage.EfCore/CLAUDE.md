@@ -83,10 +83,13 @@ Base EF Core storage for every relational provider; never used standalone.
   - **The AUDIT trail needs the same guard, and for a stronger reason**: `FK_StatusAudit_QueuedTasks` and
     `FK_RunsAudit_QueuedTasks` cascade on delete, so purging an occurrence destroys the transitions and runs
     under it. `CleanupCompletedTasks` has always refused a row with any audit left; the occurrence pass now
-    carries the same refusal through `preserveTasksWithAudits`, set when a status- or runs-audit window is
-    active. Seven days of occurrence retention against ninety of error retention erased a failure on day
-    eight, and the cleanup line reported an occurrence count and nothing else. Both flags are parameters
-    because SQLite and MySQL override the method, and an override that drops one silently purges what the
-    other window kept.
+    carries the same refusal through `preserveStatusAudits` / `preserveRunsAudits`, each set when its OWN
+    window is active. Seven days of occurrence retention against ninety of error retention erased a failure on
+    day eight, and the cleanup line reported an occurrence count and nothing else. **One flag per trail**,
+    unlike the log guard, whose two knobs prune the same rows: each audit pass runs only when its own knob is
+    set, so a single flag for both keeps rows for a trail nothing will prune — and every occurrence owns the
+    `StatusAudit` row its materialization wrote, so `OccurrenceRetentionDays` beside `RunsAuditRetentionDays`
+    alone deleted nothing, ever. All three are parameters because SQLite and MySQL override the method, and an
+    override that drops one silently purges what the corresponding window kept.
 - A new `ITaskStorage` method goes in `test/EverTask.Tests.Storage/EfCore/EfCoreTaskStorageTestsBase.cs` and
   then runs on all four providers. New provider: use the `new-relational-storage-provider` skill.

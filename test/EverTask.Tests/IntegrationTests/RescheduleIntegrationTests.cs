@@ -49,7 +49,8 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
     /// </remarks>
     private async Task<IHost> StartHostAsync(bool startHost = true, bool faultyScheduler = false,
                                              bool watchRegistrations = false, ITaskStorage? storage = null,
-                                             TimeProvider? clock = null)
+                                             TimeProvider? clock = null,
+                                             Action<EverTaskServiceConfiguration>? configureEverTask = null)
     {
         var recovery = new StartupRecoveryWatch();
 
@@ -83,7 +84,7 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
             b.Services.AddSingleton(_registrations);
             b.Services.AddSingleton<IScheduler>(sp => new RegistrationWatchingScheduler(
                 BuildRealScheduler(sp), sp.GetRequiredService<RegistrationWatch>()));
-        }, startHost, clock: clock);
+        }, startHost, configureEverTask, clock);
 
         if (startHost)
             await recovery.Finished.WaitAsync(TimeSpan.FromSeconds(30));
@@ -186,8 +187,13 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
         return row.Id;
     }
 
-    /// <summary>One occurrence row of <paramref name="parentId"/>, with a slot already in the past.</summary>
-    private QueuedTask NewOccurrence(Guid parentId, string marker, QueuedTaskStatus status) => new()
+    /// <summary>
+    /// One occurrence row of <paramref name="parentId"/>, with a slot already in the past. Two occurrences of
+    /// the same schedule need two different <paramref name="slotMinutesAgo"/>: the unique index on
+    /// (parent, slot) refuses the second otherwise.
+    /// </summary>
+    private QueuedTask NewOccurrence(Guid parentId, string marker, QueuedTaskStatus status,
+                                     int slotMinutesAgo = 9) => new()
     {
         Id                    = Guid.NewGuid(),
         CreatedAtUtc          = Clock.GetUtcNow().AddMinutes(-10),
@@ -196,7 +202,7 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
         Handler               = typeof(RescheduleProbeTaskHandler).AssemblyQualifiedName!,
         Status                = status,
         ParentTaskId          = parentId,
-        ScheduledExecutionUtc = Clock.GetUtcNow().AddMinutes(-9),
+        ScheduledExecutionUtc = Clock.GetUtcNow().AddMinutes(-slotMinutesAgo),
         QueueName             = QueueNames.Recurring,
         AuditLevel            = (int)AuditLevel.Full
     };
@@ -453,6 +459,146 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
 
         _recorder.Count.ShouldBeGreaterThan(before, "the series really runs again");
     }
+
+    [Fact]
+    public async Task An_occurrence_the_cancel_ended_does_not_run_when_its_schedule_is_dispatched_again()
+    {
+        // The revival drops the schedule's blacklist entry, and that entry is the ONLY in-process cover the
+        // occurrences the cancel already terminalized have: past the enqueue boundary nothing re-reads the
+        // row, and SetInProgress is unconditional. One occurrence is held inside its handler so the single
+        // consumer is busy and the other stays in the channel — the exposure the documented restart (cancel,
+        // then dispatch again under the key) used to free.
+        _recorder.Hold = true;
+
+        await StartHostAsync(startHost: false, configureEverTask: cfg => cfg.SetMaxDegreeOfParallelism(1));
+
+        var scheduleId = await SeedDurableScheduleAsync(MinuteCatchUp(10), Clock.GetUtcNow().AddHours(1),
+            "reschedule-inflight-cancel");
+
+        var first  = NewOccurrence(scheduleId, "in-flight-1", QueuedTaskStatus.Queued);
+        var second = NewOccurrence(scheduleId, "in-flight-2", QueuedTaskStatus.Queued, slotMinutesAgo: 8);
+
+        await _shared.Persist(first);
+        await _shared.Persist(second);
+
+        await Host!.StartAsync();
+
+        var deliveries = Host.Services.GetRequiredService<TaskDeliveryRegistry>();
+
+        await _recorder.Entered.WaitAsync(TimeSpan.FromSeconds(20));
+        await TaskWaitHelper.WaitForConditionAsync(() => deliveries.OccurrencesOf(scheduleId).Length == 2, 20000);
+
+        // Which of the two the single consumer took first is not the point, so the test reads it back.
+        var running = (await RowAsync(first.Id)).Status == QueuedTaskStatus.InProgress ? first.Id : second.Id;
+        var waiting = running == first.Id ? second.Id : first.Id;
+
+        (await RowAsync(running)).Status.ShouldBe(QueuedTaskStatus.InProgress);
+        (await RowAsync(waiting)).Status.ShouldBe(QueuedTaskStatus.Queued,
+            "the premise: it is past the enqueue boundary, waiting in the channel behind the busy consumer");
+
+        await Manager.CancelSchedule("reschedule-inflight-cancel");
+
+        (await RowAsync(waiting)).Status.ShouldBe(QueuedTaskStatus.Cancelled,
+            "the cancel terminalizes the pending occurrences with the schedule (M15)");
+
+        await Dispatcher.Dispatch(new RescheduleProbeTask("restarted"),
+            r => r.Schedule().Every(1).Minutes().WithDurableOccurrences(),
+            taskKey: "reschedule-inflight-cancel");
+
+        _recorder.Release();
+
+        await TaskWaitHelper.WaitForConditionAsync(() => deliveries.OccurrencesOf(scheduleId).Length == 0, 20000);
+
+        _recorder.Count.ShouldBe(1, "only the occurrence the cancel had let finish ever reached a handler");
+        (await RowAsync(waiting)).Status.ShouldBe(QueuedTaskStatus.Cancelled,
+            "an occurrence the cancel confirmed terminal must not be written back to InProgress and completed");
+        (await RowAsync(running)).Status.ShouldBe(QueuedTaskStatus.Completed,
+            "and the one it left running still finishes: covering that one too would suppress work already done");
+    }
+
+    [Fact]
+    public async Task A_halted_schedule_dispatched_again_after_a_cancel_comes_back_without_its_halt()
+    {
+        // The revival promises the row goes back where a brand new dispatch would have left it, and a brand
+        // new row carries no runtime state. A halt that survived it left the series parked on a marker the
+        // materializer reports without re-planning and without re-parking: one delivery, no occurrence, and
+        // the same thing after every restart — while the caller had just been handed a dispatch id.
+        await StartHostAsync(startHost: false);
+
+        var cursor = Clock.GetUtcNow().AddMinutes(-40);
+        var scheduleId = await SeedDurableScheduleAsync(MinuteCatchUp(5, maxPending: 5), cursor,
+            "reschedule-halted-restart");
+
+        await Host!.StartAsync();
+
+        await TaskWaitHelper.WaitUntilAsync(() => _shared.Get(t => t.Id == scheduleId),
+            rows => rows[0].RuntimeInfo != null, 20000);
+
+        (await RowAsync(scheduleId)).RuntimeInfo!.ShouldContain("Halted", Case.Insensitive,
+            "the premise: a backlog of 40 slots against a cap of 5 halts the catch-up");
+        (await OccurrencesOfAsync(scheduleId)).ShouldBeEmpty();
+
+        await Manager.CancelSchedule("reschedule-halted-restart");
+
+        (await RowAsync(scheduleId)).RuntimeInfo.ShouldNotBeNull(
+            "a cancel writes the status and leaves the marker where it is");
+
+        await Dispatcher.Dispatch(new RescheduleProbeTask("restarted"),
+            r => r.Schedule()
+                  .Every(1).Minutes()
+                  .OnMisfire(m => m.CatchUp(new CatchUpOptions(TimeSpan.FromDays(1), 1000)
+                  {
+                      MaxPendingOccurrences = 5
+                  })),
+            taskKey: "reschedule-halted-restart");
+
+        (await RowAsync(scheduleId)).RuntimeInfo.ShouldBeNull(
+            "the halt belonged to the series the cancel ended, not to the one this dispatch registers");
+
+        var occurrences = await TaskWaitHelper.WaitUntilAsync(() => OccurrencesOfAsync(scheduleId),
+            rows => rows.Length > 0, 20000);
+
+        occurrences.ShouldNotBeEmpty("the restarted series really materializes again");
+    }
+
+    [Fact]
+    public async Task A_standing_halt_survives_an_ordinary_re_registration_of_its_schedule()
+    {
+        // The complement, and the reason the revival is the only exception: re-declaring your schedules at
+        // startup is boilerplate, not an operator asking for the replay a halt exists to stop (M10). Only
+        // ResumeSchedule, Reschedule — or the cancel-then-dispatch above — release one.
+        await StartHostAsync(startHost: false);
+
+        var cursor = Clock.GetUtcNow().AddMinutes(-40);
+        var scheduleId = await SeedDurableScheduleAsync(MinuteCatchUp(5, maxPending: 5), cursor,
+            "reschedule-halted-kept");
+
+        await Host!.StartAsync();
+
+        await TaskWaitHelper.WaitUntilAsync(() => _shared.Get(t => t.Id == scheduleId),
+            rows => rows[0].RuntimeInfo != null, 20000);
+
+        await Dispatcher.Dispatch(new RescheduleProbeTask("re-registered"),
+            r => r.Schedule()
+                  .Every(1).Minutes()
+                  .OnMisfire(m => m.CatchUp(new CatchUpOptions(TimeSpan.FromDays(1), 1000)
+                  {
+                      MaxPendingOccurrences = 5
+                  })),
+            taskKey: "reschedule-halted-kept");
+
+        (await RowAsync(scheduleId)).RuntimeInfo!.ShouldContain("Halted", Case.Insensitive,
+            "a re-registration writes the definition and leaves the runtime state alone");
+
+        await Task.Delay(1500);
+
+        (await OccurrencesOfAsync(scheduleId)).ShouldBeEmpty(
+            "and the schedule stays where the halt left it: nothing is replayed");
+    }
+
+    /// <summary>The occurrence rows of a schedule, whatever state they are in.</summary>
+    private async Task<QueuedTask[]> OccurrencesOfAsync(Guid scheduleId) =>
+        await _shared.Get(t => t.ParentTaskId == scheduleId);
 
     [Fact]
     public async Task A_series_that_has_already_ended_is_an_ordinary_reschedule_target()

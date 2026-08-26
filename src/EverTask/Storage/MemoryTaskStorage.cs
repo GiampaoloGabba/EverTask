@@ -418,6 +418,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
                 existingTask.RunUntil              = task.RunUntil;
                 existingTask.NextRunUtc            = task.NextRunUtc;
                 existingTask.QueueName             = task.QueueName;
+                existingTask.RuntimeInfo           = task.RuntimeInfo;
                 existingTask.TaskKey               = task.TaskKey;
             }
             else

@@ -117,7 +117,10 @@ Docker or Testcontainers here. Subsets filter on namespace: `--filter "FullyQual
   `ResolutionGate`, whose handler blocks in its CONSTRUCTOR so a test can hold a delivery inside DI
   resolution — the stretch between the blacklist check and the `InProgress` write. **Arm it only after
   building the executor**: the dispatch path resolves the handler once already, for its per-type metadata, and
-  a gate that holds every resolution hangs the test instead of the delivery it meant to hold.
+  a gate that holds every resolution hangs the test instead of the delivery it meant to hold. A test driving
+  `DoWork` by hand also makes the `TaskDeliveryRegistry.TryBegin(id, scheduleId)` registration the enqueue
+  would have made, when what it is about needs the delivery to be findable as in flight — reviving a cancelled
+  schedule looks there for the occurrences it still has to cover. `DoWork`'s finally ends it like any other.
   `HandlerlessOccurrenceTask` has NO handler on purpose — it is a row that rebuilds its payload and then finds
   nothing to run it, the half of "unusable" that used to throw out of reconciliation. Writing a handler for it
   would quietly retire the test that pins that. `FlakyResolutionTask` is its opposite number and the reason

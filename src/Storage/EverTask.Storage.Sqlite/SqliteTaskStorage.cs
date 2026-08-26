@@ -190,7 +190,7 @@ public class SqliteTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     /// guards translate and stay server-side, exactly as in <see cref="CleanupCompletedTasks"/>.
     /// </summary>
     public override async Task<int> CleanupTerminalOccurrences(DateTimeOffset cutoff, bool preserveTasksWithLogs,
-                                                               bool preserveTasksWithAudits,
+                                                               bool preserveStatusAudits, bool preserveRunsAudits,
                                                                CancellationToken ct = default)
     {
         await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
@@ -201,9 +201,8 @@ public class SqliteTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                           || qt.Status == QueuedTaskStatus.Failed
                           || qt.Status == QueuedTaskStatus.Cancelled)
                       && (!preserveTasksWithLogs || !dbContext.TaskExecutionLogs.Any(l => l.TaskId == qt.Id))
-                      && (!preserveTasksWithAudits
-                          || (!dbContext.StatusAudit.Any(sa => sa.QueuedTaskId == qt.Id)
-                              && !dbContext.RunsAudit.Any(ra => ra.QueuedTaskId == qt.Id))))
+                      && (!preserveStatusAudits || !dbContext.StatusAudit.Any(sa => sa.QueuedTaskId == qt.Id))
+                      && (!preserveRunsAudits || !dbContext.RunsAudit.Any(ra => ra.QueuedTaskId == qt.Id)))
             .Select(qt => new { qt.Id, qt.LastExecutionUtc, qt.CreatedAtUtc })
             .ToListAsync(ct).ConfigureAwait(false);
 

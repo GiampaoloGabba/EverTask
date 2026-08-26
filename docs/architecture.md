@@ -215,7 +215,8 @@ The insert and the cursor advance are one atomic compare-and-swap on `(schedule 
 hosts racing the same slot produce one row and one advance, never two of either. The unique index on
 `(ParentTaskId, ScheduledExecutionUtc)` is what makes a slot exist exactly once. When the backlog is larger
 than the configured cap, the schedule writes a durable *halt* marker and stops instead of replaying it: the
-marker outlives restarts, and only `ResumeSchedule` or `Reschedule` clears it.
+marker outlives restarts, and only an explicit schedule change clears it: `ResumeSchedule`, `Reschedule`, or
+a dispatch that restarts the series after a cancel.
 
 See [Durable Occurrences](recurring-tasks/durable-occurrences.md) for the caps, the misfire policies and the
 events.

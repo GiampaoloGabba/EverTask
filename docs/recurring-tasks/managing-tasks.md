@@ -173,6 +173,11 @@ await dispatcher.Cancel(taskId);
 useful when the key is all the calling code has. Either way the cancellation is terminal: a cancelled
 schedule cannot be rescheduled, it has to be dispatched again.
 
+Dispatching it again under the same key starts a new series rather than resuming the old one. The occurrences
+the cancel had already terminalized stay cancelled, including the ones whose delivery had gone past the queue
+by the time the cancel arrived, and a catch-up halt the cancelled series was holding is released with it: the
+halt belonged to the series that ended.
+
 ## Retrieving Task Information
 
 ```csharp

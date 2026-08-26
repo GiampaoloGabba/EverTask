@@ -32,13 +32,23 @@ namespace EverTask.Worker;
 /// </remarks>
 public sealed class TaskDeliveryRegistry
 {
-    private readonly ConcurrentDictionary<Guid, byte> _deliveries = new();
+    private readonly ConcurrentDictionary<Guid, Guid?> _deliveries = new();
 
     /// <summary>
     /// Registers a delivery for the id. Returns false when a delivery of the same id is already
     /// in flight in this process (the caller must NOT write the task to a channel).
     /// </summary>
-    public bool TryBegin(Guid persistenceId) => _deliveries.TryAdd(persistenceId, 0);
+    public bool TryBegin(Guid persistenceId) => TryBegin(persistenceId, null);
+
+    /// <summary>
+    /// Registers a delivery, naming the durable schedule it is an occurrence of (null for everything else).
+    /// </summary>
+    /// <remarks>
+    /// The schedule is remembered so <see cref="OccurrencesOf"/> can answer: an occurrence past this boundary
+    /// carries no cancellation state of its own, and the one place that has to know which ones are exposed is
+    /// the revival of a cancelled schedule.
+    /// </remarks>
+    public bool TryBegin(Guid persistenceId, Guid? scheduleId) => _deliveries.TryAdd(persistenceId, scheduleId);
 
     /// <summary>
     /// Ends the delivery for the id. Must be called exactly once per successful
@@ -48,6 +58,13 @@ public sealed class TaskDeliveryRegistry
 
     /// <summary>Returns whether a delivery of the id is currently in flight in this process.</summary>
     public bool IsDelivering(Guid persistenceId) => _deliveries.ContainsKey(persistenceId);
+
+    /// <summary>
+    /// The occurrences of <paramref name="scheduleId"/> whose delivery is in flight right now — the ones past
+    /// the enqueue boundary, where no storage predicate is asked about them any more.
+    /// </summary>
+    public Guid[] OccurrencesOf(Guid scheduleId) =>
+        [.. _deliveries.Where(d => d.Value == scheduleId).Select(d => d.Key)];
 
     /// <summary>Current number of in-flight deliveries (diagnostics).</summary>
     public int Count => _deliveries.Count;

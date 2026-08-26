@@ -694,17 +694,24 @@ public class WorkerExecutor(
 
             executionContext = PublishExecutionContext(task, handler, injectors);
 
-            // A cancel of the SCHEDULE that landed while this delivery was resolving its handler has ALREADY
-            // written Cancelled on this occurrence's row (M15 cancels the pending occurrences together with
-            // their schedule, in one transaction). SetInProgress below is unconditional, so without asking
-            // again here it would write straight over that terminal status and the occurrence would run and
-            // complete. Handler resolution is the wide window the two earlier checks cannot cover: they sit
-            // before the rate-limit gate, and this one is the last question before the transition.
-            // The entry never covers this delivery alone, so it is not consumed — it keeps covering the
-            // siblings behind it.
-            if (IsScheduleCancelled(task, out var cancelledSchedule))
+            // A cancel that landed while this delivery was waiting at the rate-limit gate or resolving its
+            // handler has ALREADY written Cancelled on this occurrence's row (M15 cancels the pending
+            // occurrences together with their schedule, in one transaction). SetInProgress below is
+            // unconditional, so without asking again here it would write straight over that terminal status
+            // and the occurrence would run and complete. That window is everything the two earlier checks
+            // cannot cover — they both sit before the gate, whose in-slot wait lasts seconds by design — and
+            // this is the last question before the transition.
+            // BOTH halves are asked, exactly as at the queue boundary: an occurrence is covered by its
+            // schedule's entry, and by one of its own when a cancel addressed it directly or when the revival
+            // of its schedule moved the cover onto it. Only the entry that covers THIS delivery alone is
+            // consumed; the schedule's keeps covering the siblings behind it.
+            if (IsOccurrenceCancelled(task, out var cancelledSchedule))
             {
-                RegisterOccurrenceOfCancelledSchedule(task, cancelledSchedule);
+                if (cancelledSchedule is { } scheduleId)
+                    RegisterOccurrenceOfCancelledSchedule(task, scheduleId);
+                else
+                    RegisterCancellationSignaled(task);
+
                 return;
             }
 
@@ -1077,10 +1084,7 @@ public class WorkerExecutor(
     {
         if (workerBlacklist.IsBlacklisted(task.PersistenceId))
         {
-            RegisterEvent(LogLevel.Information, SeverityLevel.Information, task, null, null, task.PersistenceId,
-                static (l, id, _) => l.TaskCancellationSignaled(id),
-                static id => string.Create(CultureInfo.InvariantCulture,
-                    $"Task with id {id} is signaled to be cancelled and will not be executed"));
+            RegisterCancellationSignaled(task);
 
             // Consumed only when the entry covers THIS delivery alone. A durable schedule's own entry is
             // also the only thing covering the occurrences it already produced — they carry none of their
@@ -1106,6 +1110,12 @@ public class WorkerExecutor(
         return true;
     }
 
+    private void RegisterCancellationSignaled(TaskHandlerExecutor task) =>
+        RegisterEvent(LogLevel.Information, SeverityLevel.Information, task, null, null, task.PersistenceId,
+            static (l, id, _) => l.TaskCancellationSignaled(id),
+            static id => string.Create(CultureInfo.InvariantCulture,
+                $"Task with id {id} is signaled to be cancelled and will not be executed"));
+
     private void RegisterOccurrenceOfCancelledSchedule(TaskHandlerExecutor task, Guid scheduleId) =>
         RegisterEvent(LogLevel.Information, SeverityLevel.Information, task, null, null,
             (OccurrenceId: task.PersistenceId, ScheduleId: scheduleId),
@@ -1125,6 +1135,35 @@ public class WorkerExecutor(
         scheduleId = task.ParentTaskId ?? Guid.Empty;
 
         return task.ParentTaskId.HasValue && workerBlacklist.IsBlacklisted(scheduleId);
+    }
+
+    /// <summary>
+    /// Whether this delivery is an occurrence that has been cancelled — by its schedule (
+    /// <paramref name="cancelledSchedule"/> names it) or by an entry of its own (null).
+    /// </summary>
+    /// <remarks>
+    /// An occurrence gets one of its own from a <c>Cancel</c> addressed at it directly, and from the revival
+    /// of its schedule, which moves the cover off the schedule and onto the occurrences the cancel had already
+    /// terminalized. Only THAT entry is consumed here: it covers this delivery and nothing else.
+    /// </remarks>
+    private bool IsOccurrenceCancelled(TaskHandlerExecutor task, out Guid? cancelledSchedule)
+    {
+        cancelledSchedule = null;
+
+        if (task.ParentTaskId is not { } scheduleId)
+            return false;
+
+        if (workerBlacklist.IsBlacklisted(task.PersistenceId))
+        {
+            workerBlacklist.Remove(task.PersistenceId);
+            return true;
+        }
+
+        if (!workerBlacklist.IsBlacklisted(scheduleId))
+            return false;
+
+        cancelledSchedule = scheduleId;
+        return true;
     }
 
     /// <summary>

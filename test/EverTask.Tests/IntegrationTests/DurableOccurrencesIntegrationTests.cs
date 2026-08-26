@@ -46,7 +46,8 @@ public class DurableOccurrencesIntegrationTests : IsolatedIntegrationTestBase
             clock);
 
     private async Task<Guid> SeedScheduleAsync(RecurringTask definition, DateTimeOffset cursor,
-                                               int currentRunCount = 0, string queueName = QueueNames.Recurring)
+                                               int currentRunCount = 0, string queueName = QueueNames.Recurring,
+                                               string? taskKey = null)
     {
         var row = new QueuedTask
         {
@@ -64,6 +65,7 @@ public class DurableOccurrencesIntegrationTests : IsolatedIntegrationTestBase
             MaxRuns         = definition.MaxRuns,
             RunUntil        = definition.RunUntil,
             QueueName       = queueName,
+            TaskKey         = taskKey,
             AuditLevel      = (int)AuditLevel.Full
         };
 
@@ -1591,6 +1593,91 @@ public class DurableOccurrencesIntegrationTests : IsolatedIntegrationTestBase
         after.Status.ShouldBe(QueuedTaskStatus.Cancelled,
             "the schedule's cancellation is asked again right before the transition, so nothing writes over it");
         gate.Handled.ShouldBe(0, "and the handler of a cancelled occurrence never runs");
+    }
+
+    [Fact]
+    public async Task An_occurrence_the_cancel_ended_is_not_freed_by_the_dispatch_that_revives_its_schedule()
+    {
+        // The test above, one step further: the operator does not stop at the cancel but restarts the series
+        // the documented way — dispatch it again under its own task key. That revival drops the SCHEDULE's
+        // blacklist entry, which is the only thing covering a delivery already past the pre-gate check, so the
+        // last question before SetInProgress had nothing left to find: the occurrence the cancel had confirmed
+        // terminal ran the old series' payload and completed it, over the row's Cancelled.
+        var gate = new ResolutionGate();
+
+        await CreateIsolatedHostWithBuilderAsync(b =>
+            {
+                b.Services.AddSingleton<ITaskStorage>(_shared);
+                b.Services.AddSingleton(_recorder);
+                b.Services.AddSingleton(gate);
+            },
+            startHost: false);
+
+        // Far in the future: the only delivery in this test is the one it drives by hand, and the revived
+        // series has nothing due either.
+        var scheduleId = await SeedScheduleAsync(MinuteCatchUp(TimeSpan.FromHours(1), 20),
+            DateTimeOffset.UtcNow.AddMinutes(30), taskKey: "durable-revived-in-resolution");
+
+        var occurrence = new QueuedTask
+        {
+            Id                    = Guid.NewGuid(),
+            CreatedAtUtc          = DateTimeOffset.UtcNow.AddMinutes(-5),
+            Type                  = typeof(SlowResolutionTask).AssemblyQualifiedName!,
+            Request               = EverTaskJson.Serialize(new SlowResolutionTask("revived")),
+            Handler               = typeof(SlowResolutionTaskHandler).AssemblyQualifiedName!,
+            Status                = QueuedTaskStatus.Queued,
+            ParentTaskId          = scheduleId,
+            ScheduledExecutionUtc = DateTimeOffset.UtcNow.AddMinutes(-1),
+            QueueName             = QueueNames.Recurring,
+            AuditLevel            = (int)AuditLevel.Full
+        };
+        await _shared.Persist(occurrence);
+
+        var worker   = Host!.Services.GetRequiredService<IEverTaskWorkerExecutor>();
+        var executor = await BuildExecutorAsync(occurrence);
+
+        // WorkerQueue registers every delivery it lets through, naming the schedule it belongs to, and that
+        // registration is how a revival finds the occurrences it still has to cover. This delivery is driven
+        // by hand, so the test makes the same registration the enqueue would have made; DoWork's finally ends
+        // it exactly as it does for a queued one.
+        Host.Services.GetRequiredService<TaskDeliveryRegistry>()
+            .TryBegin(occurrence.Id, scheduleId)
+            .ShouldBeTrue();
+
+        // Armed only now: building the executor resolves the handler once for its metadata.
+        gate.Arm();
+
+        var delivery = Task.Run(() => worker.DoWork(executor, CancellationToken.None).AsTask());
+
+        try
+        {
+            await gate.Entered.WaitAsync(TimeSpan.FromSeconds(30));
+
+            await Dispatcher.Cancel(scheduleId);
+
+            (await _shared.Get(t => t.Id == occurrence.Id))[0].Status.ShouldBe(QueuedTaskStatus.Cancelled,
+                "the premise: the cancel reached the row while the delivery was still resolving");
+
+            await Dispatcher.Dispatch(new DurableProbeTask("restarted"),
+                r => r.Schedule().Every(1).Minutes().WithDurableOccurrences(),
+                taskKey: "durable-revived-in-resolution");
+
+            WorkerBlacklist.IsBlacklisted(scheduleId).ShouldBeFalse(
+                "the other premise: reviving the schedule really does drop the entry that covered it");
+        }
+        finally
+        {
+            // A failure above must report itself, not hang the test host behind a delivery nobody released.
+            gate.Release();
+        }
+
+        await delivery.WaitAsync(TimeSpan.FromSeconds(30));
+
+        var after = (await _shared.Get(t => t.Id == occurrence.Id))[0];
+
+        after.Status.ShouldBe(QueuedTaskStatus.Cancelled,
+            "the cover moved onto the occurrence before the schedule's entry went, so nothing writes over it");
+        gate.Handled.ShouldBe(0, "and the handler of an occurrence its own cancel ended never runs");
     }
 
     // ---- What MaxRuns counts (M14) ----------------------------------------------------------------

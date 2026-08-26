@@ -115,4 +115,17 @@ internal static partial class DispatcherLog
                   "cancelled: its cancellation entry is dropped and the row goes back to WaitingQueue, which " +
                   "is where a brand new dispatch would have left it")]
     public static partial void CancelledScheduleRedispatched(this ILogger logger, Guid scheduleId, string taskKey);
+
+    [LoggerMessage(EventId = 1023, Level = LogLevel.Information,
+        Message = "Reviving schedule {ScheduleId} moved the cancellation onto {Count} occurrence(s) of it " +
+                  "still in flight: the schedule's entry stops covering them, and each one now carries its " +
+                  "own so the cancel that ended it still holds")]
+    public static partial void OccurrencesOfRevivedScheduleCovered(this ILogger logger, Guid scheduleId, int count);
+
+    [LoggerMessage(EventId = 1024, Level = LogLevel.Warning,
+        Message = "Could not read the occurrences of schedule {ScheduleId} still in flight while reviving it: " +
+                  "all {Count} of them are treated as cancelled, because dropping the schedule's entry with " +
+                  "no answer would let an occurrence the cancel ended run")]
+    public static partial void OccurrencesOfRevivedScheduleLookupFailed(this ILogger logger, Exception exception,
+                                                                        Guid scheduleId, int count);
 }

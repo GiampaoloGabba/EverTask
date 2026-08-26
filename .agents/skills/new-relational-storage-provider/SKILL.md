@@ -126,6 +126,12 @@ procedure OR PL/SQL). **Invariants that MUST hold (verify with tests):**
 - **`RequeueTerminal` clears `RecoveryDispatchFailureCount` as well as `Exception`.** That counter bounds how
   many consecutive process starts may fail to turn a row into a delivery before it is poisoned, so a row put
   back still carrying the attempts that ended it is poisoned again by its first failure.
+- **`UpdateTask` writes `RuntimeInfo` from the entity**, like every other column it takes. That column holds a
+  durable schedule's runtime state, and the only marker in it today is a catch-up halt. The dispatcher reads
+  the row before it rewrites it and hands the value back unchanged, so re-registering a schedule under its
+  task key leaves a standing halt where it was; it hands back `null` only for a series a cancel had ended and
+  this dispatch is restarting. Leave the column out and that restarted series comes back still halted, and
+  materializes nothing until someone resumes it by hand.
 
 ### Durable occurrences: not optional if you advertise them
 
@@ -248,13 +254,17 @@ which, being insertion order, is total, so no page boundary repeats or drops an 
 count alone and must never reach a zero-row `FETCH`: that is a syntax error on some engines, not an empty
 result.
 
-Also override `CleanupTerminalOccurrences(cutoff, preserveTasksWithLogs, preserveTasksWithAudits, ct)` if the
-DB cannot translate the `DateTimeOffset` age cutoff (the SQLite pattern) — or if it cannot be trusted with a
-correlated `EXISTS` inside a `DELETE … LIMIT`, which is the MySQL trap: the guards are silently dropped and
+Also override
+`CleanupTerminalOccurrences(cutoff, preserveTasksWithLogs, preserveStatusAudits, preserveRunsAudits, ct)` if
+the DB cannot translate the `DateTimeOffset` age cutoff (the SQLite pattern) — or if it cannot be trusted with
+a correlated `EXISTS` inside a `DELETE … LIMIT`, which is the MySQL trap: the guards are silently dropped and
 every occurrence is purged, cascade-deleting the `TaskExecutionLog` rows the log window kept AND the
-`StatusAudit` / `RunsAudit` rows the audit windows kept. **Both guards** are shared with
-`CleanupCompletedTasks` for the same reason — the occurrence window is typically 7 days against an error
-window of 90 — so whichever shape you pick, pick it for both methods and carry both flags.
+`StatusAudit` / `RunsAudit` rows the audit windows kept. The log guard is shared with `CleanupCompletedTasks`
+for the same reason — the occurrence window is typically 7 days against an error window of 90 — so whichever
+shape you pick, pick it for both methods. The two audit flags are separate because the two trails are pruned
+by two knobs and each pass runs only when its own knob is set: one flag for both keeps a row for a trail
+nothing will ever prune, and since every occurrence owns the `StatusAudit` row of its own materialization,
+that is a window that deletes nothing at all. Carry all three.
 
 ## STEP 3 — Packaging & docs checklist (do NOT skip — "in every form")
 

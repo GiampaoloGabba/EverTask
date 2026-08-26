@@ -249,7 +249,7 @@ public sealed class CatchUpRecoveryIntegrationTests : IsolatedIntegrationTestBas
 
         var deleted = await ((EfCoreTaskStorage)Storage)
             .CleanupTerminalOccurrences(DateTimeOffset.UtcNow.AddMinutes(1), preserveTasksWithLogs: false,
-                                        preserveTasksWithAudits: false);
+                                        preserveStatusAudits: false, preserveRunsAudits: false);
 
         deleted.ShouldBe(replayed.Length, "the premise: every replayed occurrence really was pruned");
         (await OccurrencesOfAsync(scheduleId)).ShouldBeEmpty();

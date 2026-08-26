@@ -20,6 +20,22 @@ in-memory storage.
     `WaitingQueue` (where a brand new dispatch leaves it) AFTER the new definition is written, and the
     transition is audited. A one-shot needs none of this: a terminal row is removed and recreated under a new
     id.
+    - **The entry is MOVED, not dropped.** It carries two meanings that end at different moments: the
+      schedule is alive again from here, the occurrences the cancel already terminalized never will be, and
+      that same entry is the only thing covering the ones past the enqueue boundary — a delivery in a channel
+      or waiting seconds at the rate-limit gate, where nothing re-reads the row and `SetInProgress` is
+      unconditional. `CoverOccurrencesTheCancelEndedAsync` gives each of them an entry of its OWN first, and
+      it asks the row rather than the registry which ones qualify: an occurrence the cancel found `InProgress`
+      is left to finish (M15), and covering it would suppress a completion whose side effects have already
+      run. The in-flight set comes from `TaskDeliveryRegistry.OccurrencesOf` — everything before that boundary
+      is safe without an entry, because the scheduler's enqueue goes through `TrySetQueuedIfRecoverable`,
+      which refuses a `Cancelled` row.
+    - **A revival is also the one thing that clears a standing catch-up halt.** `UpdateTask` writes
+      `RuntimeInfo`, and the dispatcher hands the row's own value back for an ORDINARY re-registration, so a
+      halt survives one (M10: re-declaring your schedules at startup is not an operator asking for the replay
+      the halt exists to stop). A revived series gets `null`, because the halt belonged to the series the
+      cancel ended: carrying it over parks a schedule the materializer reports and does not re-park, so the
+      registration is consumed on its first fire and every restart repeats it.
 - **Immediate dispatches are LAZY**: the wrapper resolves a short-lived metadata handler in a disposable scope
   and the worker resolves the executing instance in its per-task scope. Never resolve an eager transient
   handler from the dispatcher's root provider — it pins `IAsyncDisposable` instances until shutdown.
@@ -374,12 +390,14 @@ the definition opted in.
   storage, but an occurrence already parked in the scheduler or already in a channel carries no entry of its
   own: without the parent check in `WorkerQueue.IsCancelled` its enqueue would write `Queued` over the
   `Cancelled` the cancel had just persisted, and `DoWorkGuarded` would run it. It is asked a THIRD time in
-  `DoWorkCore`, right before `SetInProgress`: handler resolution sits between the entry check and that write
-  and takes as long as the handler's dependencies do, and the transition is unconditional — a cancel landing
-  in there would put a row `CancelSchedule` had just marked `Cancelled` back into `InProgress`, run it and
-  complete it. None of the three CONSUMES the entry — it has to keep covering the siblings behind this one.
-  That includes the SCHEDULE's own dropped delivery: a mid-catch-up schedule has its own row in the queue
-  too, and consuming the entry there destroyed the only cover its occurrences had.
+  `DoWorkCore`, right before `SetInProgress`: the rate-limit gate's in-slot wait and the handler's resolution
+  both sit between the entry check and that write — seconds, by design — and the transition is unconditional,
+  so a cancel landing in there would put a row `CancelSchedule` had just marked `Cancelled` back into
+  `InProgress`, run it and complete it. The third check asks BOTH halves, exactly as the queue boundary does:
+  an occurrence is covered by its schedule's entry and by one of its own, which it gets from a `Cancel`
+  addressed at it directly and from the revival of its schedule. Only the entry that covers THIS delivery
+  alone is consumed; the SCHEDULE's never is — it has to keep covering the siblings behind this one, and that
+  includes its own dropped delivery, since a mid-catch-up schedule has a row in the queue too.
 - **`Cancel` asks for occurrences TWICE, and the second time is the one that matters.** Its two steps are a
   classification (are there occurrences to cascade to?) and a write, and a materializer that had claimed the
   schedule row before the first read had not inserted its occurrence yet — so the cancel saw nothing to
