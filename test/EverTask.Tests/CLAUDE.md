@@ -13,6 +13,13 @@ Docker or Testcontainers here. Subsets filter on namespace: `--filter "FullyQual
   `WaitForTaskStatusAsync(storage, taskId, expectedStatus, timeoutMs)` — storage FIRST, timeout an `int` in ms.
 - `TestTaskStateManager` is keyed by a `string taskKey`, not by task id, and only records (`RecordStart`,
   `RecordCompletion`, `IncrementCounter`, `GetState`) — no wait method; pair it with `WaitForCounterAsync`.
+- `StartupRecoveryWatch` (registered as `IEverTaskLogger<WorkerService>`) is how a test orders itself AFTER
+  the host's startup recovery: it completes on the recovery's own terminal log line. Recovery captures its
+  cutoff when it BEGINS, on a thread pool thread, so a row dispatched between `StartAsync` returning and that
+  moment is re-dispatched like any leftover — one extra handler resolution, one extra registration, for the
+  very id the test is working on. Any test counting resolutions, registrations or deliveries has to wait for
+  it (`MemoryLeakRegressionTests`' exact 2-resolutions gate read 3 without it, but only when another test had
+  warmed the process up first). `RescheduleIntegrationTests` keeps a private copy of the same watch.
 
 ## Gotchas
 
