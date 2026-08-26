@@ -5,38 +5,31 @@ using Microsoft.Extensions.DependencyInjection;
 namespace EverTask.Monitor.Api.Middleware;
 
 /// <summary>
-/// The outer shield of the monitoring surface: IP whitelist and JWT, decided by
-/// <see cref="MonitoringAccessPolicy"/>.
+/// Shields the disabled management prefix before it can reach MVC. Access itself — the IP whitelist and the
+/// JWT — is decided by <see cref="MonitoringAccessPolicy"/> INSIDE routing.
 /// </summary>
 /// <remarks>
-/// It reads <c>Request.Path</c> as the pipeline sees it HERE, which is before a host's <c>UsePathBase</c> has
-/// moved the base out of it — so on such a host this middleware matches nothing and every check silently
-/// passes. That is why the same policy is enforced again inside routing, by
-/// <see cref="MonitoringAccessFilter"/> for the controllers and <see cref="MonitoringEndpointGuard"/> for
-/// the hub and the dashboard files, and why nothing security-critical may rest on this middleware alone.
+/// This middleware is registered by a startup filter, so it runs before everything the host adds, and the
+/// two things an access decision depends on are both host business: <c>UsePathBase</c> moves the base out of
+/// <c>Request.Path</c> (#46) and <c>UseForwardedHeaders</c> rewrites <c>Connection.RemoteIpAddress</c> (#47).
+/// Deciding here would mean judging a path the surface does not have and an address the proxy owns — the
+/// second would refuse every request of a correctly configured proxied host. So the decision belongs where
+/// both have already happened: <see cref="MonitoringAccessFilter"/> for the controllers,
+/// <see cref="MonitoringEndpointGuard"/> for the hub and the dashboard files.
 /// </remarks>
 public class JwtAuthenticationMiddleware(RequestDelegate next)
 {
     /// <summary>Invokes the middleware.</summary>
     public async Task InvokeAsync(HttpContext context)
     {
-        var path   = context.Request.Path;
         var policy = context.RequestServices.GetRequiredService<MonitoringAccessPolicy>();
 
-        // The write surface does not exist while it is switched off. Answering 404 here as well as in the
-        // filter keeps it from reaching MVC at all on the ordinary pipeline.
-        if (policy.IsDisabledManagementPath(path))
+        // Path-only, so it stays true whatever the host does to the address: while the write surface is off,
+        // it does not exist, and keeping it out of MVC entirely costs nothing.
+        if (policy.IsDisabledManagementPath(context.Request.Path))
         {
             context.Response.StatusCode = 404;
             await context.Response.WriteAsync("Not found").ConfigureAwait(false);
-            return;
-        }
-
-        var access = policy.Evaluate(context, path);
-
-        if (access != MonitoringAccess.Allowed)
-        {
-            await MonitoringAccessPolicy.RefuseAsync(context, access).ConfigureAwait(false);
             return;
         }
 

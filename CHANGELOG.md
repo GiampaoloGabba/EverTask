@@ -474,6 +474,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **BREAKING — the monitoring IP whitelist no longer honors `X-Forwarded-For` (#47).**
+  `AllowedIpAddresses` was compared against the address in that header whenever one was present, and the
+  header was believed unconditionally: any direct caller could send a whitelisted address and walk through
+  the whitelist, on the API, on the SignalR hub and on the dashboard files alike — which no JWT covers. The
+  whitelist was advisory, not a boundary. The client address is now `Connection.RemoteIpAddress` and nothing
+  else.
+  **What to do:** a host that is NOT behind a reverse proxy needs no change. A host that IS must let ASP.NET
+  Core rewrite the address before the request is routed — `Configure<ForwardedHeadersOptions>` with
+  `ForwardedHeaders.XForwardedFor` and `KnownProxies` / `KnownNetworks`, then `app.UseForwardedHeaders()`
+  before `UseRouting()`. Naming the trusted peers is the whole point: that is what decides whether the header
+  may be believed, and it is a decision only the host can make. See
+  [AllowedIpAddresses](docs/configuration-reference.md#allowedipaddresses).
+- **The monitoring protections now hold under `app.UsePathBase(...)` (#46).** They were enforced by a
+  middleware that runs before the host's own, so it read `Request.Path` before the path base was taken out of
+  it: on such a host every layer was skipped at once — the read endpoints (`/tasks`, `/dashboard/*`,
+  `/queues`, `/statistics/*`, whose payloads carry serialized requests and exception messages) answered
+  anonymously, the IP whitelist never ran, and an anonymous SignalR handshake was granted a connection. The
+  IP whitelist and the JWT are now decided inside routing, where the path is the one routing resolved and the
+  address is the one the host's forwarded-headers configuration produced. The monitoring CORS policy still
+  keys off the pre-`UsePathBase` path, which is a functional limitation and not a protection.
 - **Magic-link token no longer travels in the URL (#22).** New `POST /api/auth/magic` takes the
   token in the request body; the dashboard reads it from the URL fragment
   (`/evertask-monitoring/magic#token=...`, never sent to the server), scrubs it from the address

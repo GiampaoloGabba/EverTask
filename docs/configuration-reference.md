@@ -1652,19 +1652,37 @@ options.AllowedIpAddresses = new[]
 **Features:**
 - Supports **IPv4** and **IPv6** addresses
 - Supports **CIDR notation** (e.g., `192.168.0.0/24`)
-- Checks `X-Forwarded-For` header first (reverse proxy support)
+- The client address is `Connection.RemoteIpAddress` — **no header is trusted** (see below)
 - Returns **403 Forbidden** if IP not in whitelist
 - IP check runs **before authentication** (more efficient)
 
 **Security Notes:**
 - Empty array = **allow all IPs** (default, suitable for internal networks)
 - Always configure in production when exposed to internet
-- Works with reverse proxies (nginx, IIS, etc.)
-- Protects both API and SignalR hub endpoints
+- Protects the API, the SignalR hub and the dashboard files (which no JWT covers)
 - More efficient than firewall rules at application level
 
-**Reverse Proxy Configuration:**
-When behind a reverse proxy, ensure `X-Forwarded-For` header is set:
+**Behind a reverse proxy** (changed in 4.0.0 — see below)
+
+The whitelist compares the address of the connection EverTask actually sees. Behind a proxy that address is
+the proxy's, so the host must let ASP.NET Core replace it first, with the standard
+[forwarded headers middleware](https://learn.microsoft.com/aspnet/core/host-and-deploy/proxy-load-balancer):
+
+```csharp
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor;
+    // Only these peers may be believed. Without them nothing is forwarded.
+    options.KnownProxies.Add(IPAddress.Parse("10.0.0.7"));
+    // options.KnownNetworks.Add(new IPNetwork(IPAddress.Parse("10.0.0.0"), 8));
+});
+
+var app = builder.Build();
+app.UseForwardedHeaders();   // before UseRouting
+```
+
+and the proxy must send the header:
+
 ```nginx
 # Nginx example
 location /evertask-monitoring {
@@ -1672,6 +1690,12 @@ location /evertask-monitoring {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 }
 ```
+
+> **BREAKING (4.0.0), security.** Before 4.0.0 EverTask read `X-Forwarded-For` itself and believed it
+> unconditionally, so **any** direct caller could bypass the whitelist by sending a whitelisted address in
+> that header (issue #47). It no longer reads the header at all. If you are behind a proxy and relied on the
+> old behavior, configure `UseForwardedHeaders` as above — with `KnownProxies` or `KnownNetworks` set, which
+> is what decides whether the header may be believed. Hosts not behind a proxy need no change.
 
 #### MagicLinkToken
 

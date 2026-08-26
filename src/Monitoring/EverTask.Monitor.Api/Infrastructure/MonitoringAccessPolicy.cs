@@ -34,10 +34,11 @@ internal enum MonitoringAccess
 /// belongs to, the IP whitelist and the JWT check.
 /// </summary>
 /// <remarks>
-/// It judges a path that is RELATIVE to the path base, which is what routing resolved and therefore where
-/// the surface really is. <c>JwtAuthenticationMiddleware</c> runs before a host's <c>UsePathBase</c> and can
-/// only hand it a path that still carries the base, so the middleware is an outer shield and the
-/// endpoint-level enforcement (the MVC filter and the endpoint guard) is what actually protects the surface.
+/// It is evaluated only INSIDE routing — <see cref="MonitoringAccessFilter"/> for the controllers,
+/// <see cref="MonitoringEndpointGuard"/> for everything else — because both of its inputs are the host's to
+/// change: the path a request really has after <c>UsePathBase</c> (#46) and the address it really comes from
+/// after <c>UseForwardedHeaders</c> (#47). Evaluated any earlier it would judge a path the surface does not
+/// have and an address that belongs to the proxy.
 /// </remarks>
 internal sealed class MonitoringAccessPolicy(EverTaskApiOptions options, IJwtTokenService jwtTokenService)
 {
@@ -126,22 +127,19 @@ internal sealed class MonitoringAccessPolicy(EverTaskApiOptions options, IJwtTok
                    : null;
     }
 
-    private static IPAddress ClientIpOf(HttpContext context)
-    {
-        // Check X-Forwarded-For header first (reverse proxy scenario)
-        var forwardedFor = context.Request.Headers["X-Forwarded-For"].FirstOrDefault();
-
-        if (!string.IsNullOrEmpty(forwardedFor))
-        {
-            var ips = forwardedFor.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-            if (ips.Length > 0 && IPAddress.TryParse(ips[0], out var forwardedIp))
-                return forwardedIp;
-        }
-
-        // Fallback to direct connection IP, or ::1 (localhost IPv6) if null (test scenarios)
-        return context.Connection.RemoteIpAddress ?? IPAddress.IPv6Loopback;
-    }
+    /// <summary>
+    /// The address the connection really came from — never a header.
+    /// </summary>
+    /// <remarks>
+    /// This used to read <c>X-Forwarded-For</c> and trust it, which any direct caller can set: the whitelist
+    /// was advisory rather than a boundary (#47). A host behind a reverse proxy makes the header true by
+    /// configuring <c>UseForwardedHeaders</c> with its <c>KnownProxies</c>, which rewrites this address
+    /// before the request is routed — the framework's own answer, and the only one that knows which peer may
+    /// be believed.
+    /// </remarks>
+    private static IPAddress ClientIpOf(HttpContext context) =>
+        // ::1 when there is no connection address at all, as in a test server.
+        context.Connection.RemoteIpAddress ?? IPAddress.IPv6Loopback;
 
     private bool IsIpAllowed(IPAddress clientIp)
     {

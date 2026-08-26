@@ -126,6 +126,13 @@ Enforced inside routing since 4.0+, so the whitelist, the JWT and the hub handsh
 `app.UsePathBase(...)` — before that a path base skipped every one of them (issue #46). CORS is the
 exception: its branch still keys off the pre-`UsePathBase` path.
 
+`AllowedIpAddresses` compares `Connection.RemoteIpAddress` and **does not read `X-Forwarded-For`**
+(breaking in 4.0: it used to trust the header, so anyone could spoof a whitelisted address — issue #47).
+Behind a reverse proxy, wire the framework's own middleware and let it rewrite the address:
+`Configure<ForwardedHeadersOptions>` with `ForwardedHeaders.XForwardedFor` + `KnownProxies`/`KnownNetworks`,
+then `app.UseForwardedHeaders()` before `UseRouting()`. Without `KnownProxies` nothing is forwarded, which
+is the point: only a peer you named may be believed.
+
 Magic link when `MagicLinkToken` is set (4.0+): hand users
 `https://host/evertask-monitoring/magic#token=<MagicLinkToken>`. The fragment never reaches the
 server; the dashboard exchanges it with `POST /api/auth/magic` `{token}`. Never generate a

@@ -25,18 +25,26 @@ REST API + embedded React dashboard, all under the fixed `/evertask-monitoring` 
 - **`Infrastructure/MonitoringAccessPolicy` is the ONE place that decides access** — which surface a path is
   (`None`/`Ui`/`Api`/`Hub`, matched with `StartsWithSegments`, never a string prefix), the IP whitelist (403)
   BEFORE the JWT (401 + `WWW-Authenticate`), and the anonymous skips
-  (`{ApiBasePath}/config|auth/login|auth/validate|auth/magic`). Three callers share it and none of them
-  re-implements a path test: `JwtAuthenticationMiddleware`, `MonitoringAccessFilter` (controllers) and
-  `MonitoringEndpointGuard` (everything else).
-- **The policy is enforced INSIDE routing, because the middleware cannot see the real path (#46).** A host
-  that calls `app.UsePathBase("/tenant")` moves the base out of `Request.Path` only after the startup
-  filter's middleware has run, so on such a host every layer of it missed at once: reads answered 200
-  anonymously, the IP whitelist never ran, and an anonymous hub negotiate got a connection id. What protects
-  the surface is therefore the pair that runs where routing already resolved the path — `MonitoringAccessFilter`
-  on every monitoring controller (attached by `RoutePrefixConvention`, `Order` before the management gate so
-  a blocked IP never reaches a write decision) and `MonitoringEndpointGuard` on everything that is not MVC.
-  The middleware stays as an outer shield for the ordinary pipeline; nothing security-critical may rest on it
-  alone.
+  (`{ApiBasePath}/config|auth/login|auth/validate|auth/magic`). Its two callers share it and neither
+  re-implements a path test: `MonitoringAccessFilter` (controllers) and `MonitoringEndpointGuard`
+  (everything else).
+  - **The client address is `Connection.RemoteIpAddress`, never a header (#47).** It used to read
+    `X-Forwarded-For` and believe it, so any direct caller could send a whitelisted address and walk in —
+    the whitelist was advisory, not a boundary. A proxied host makes the header true with
+    `UseForwardedHeaders` + `KnownProxies`, which rewrites the address before routing; that is a BREAKING
+    change in 4.0.0 and is in the changelog and in the `AllowedIpAddresses` docs.
+- **The policy is enforced ONLY INSIDE routing, because both its inputs are the host's to change.** The path
+  after `app.UsePathBase("/tenant")` (#46) and the address after `app.UseForwardedHeaders()` (#47) are both
+  produced by middleware the host registers, which runs AFTER the startup filter's own. Deciding earlier
+  judged a path the surface does not have — reads answered 200 anonymously, the whitelist never ran, an
+  anonymous hub negotiate got a connection id — and would now also judge an address that belongs to the
+  proxy, refusing every request of a correctly configured proxied host. So the enforcement is
+  `MonitoringAccessFilter` on every monitoring controller (attached by `RoutePrefixConvention`, `Order`
+  before the management gate so a blocked IP never reaches a write decision) and `MonitoringEndpointGuard`
+  on everything that is not MVC. `JwtAuthenticationMiddleware` decides nothing any more: all it does is 404
+  the disabled management prefix, which is a path-only test and therefore safe there.
+  - The cost of that choice: an endpoint under the monitoring prefix that EverTask did not map (a host
+    mapping its own route there) is not covered. The policy protects the endpoints we map, not the prefix.
   - The guard is a convention on the **route group with an empty prefix** that `MapEverTaskApi` maps the hub,
     the dashboard files, the OpenAPI document and the companion packages' endpoints into. A group, because
     `MapEverTaskMonitorHub` returns `IEndpointRouteBuilder` and exposes no convention builder of its own;

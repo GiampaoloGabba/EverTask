@@ -83,15 +83,10 @@ public class PathBaseProtectionTests
     [Fact]
     public async Task Should_apply_the_ip_whitelist_under_a_path_base_on_the_api_and_on_the_dashboard()
     {
-        // The whitelist is the layer that covers the dashboard files too, which no JWT protects.
-        await using var factory = new MonitoringTestWebAppFactory(pathBase: PathBase, configureOptions: options =>
-        {
-            options.AllowedIpAddresses = [AllowedIp];
-            options.EnableUI           = true;
-        });
-
-        using var blocked = factory.CreateClient();
-        blocked.DefaultRequestHeaders.Add("X-Forwarded-For", "203.0.113.9");
+        // The whitelist is the layer that covers the dashboard files too, which no JWT protects. The address
+        // is the CONNECTION's, so the test sets that rather than a header (#47).
+        await using var blockedHost = WhitelistedHost(IPAddress.Parse("203.0.113.9"));
+        using var blocked = blockedHost.CreateClient();
 
         foreach (var url in new[] { $"{PathBase}{Monitoring}/api/tasks", $"{PathBase}{Monitoring}" })
         {
@@ -99,12 +94,26 @@ public class PathBaseProtectionTests
             response.StatusCode.ShouldBe(HttpStatusCode.Forbidden, $"{url} is behind the whitelist");
         }
 
-        using var allowed = factory.CreateClient();
-        allowed.DefaultRequestHeaders.Add("X-Forwarded-For", AllowedIp);
+        await using var allowedHost = WhitelistedHost(IPAddress.Parse(AllowedIp));
+        using var allowed = allowedHost.CreateClient();
 
         var fromWhitelist = await allowed.GetAsync($"{PathBase}{Monitoring}/api/tasks");
         fromWhitelist.StatusCode.ShouldBe(HttpStatusCode.OK, "the whitelisted address still gets in");
     }
+
+    /// <summary>A host under the path base whose whitelist holds <see cref="AllowedIp"/>, seen from <paramref name="from"/>.</summary>
+    private static MonitoringTestWebAppFactory WhitelistedHost(IPAddress from) =>
+        new(pathBase: PathBase,
+            configureOptions: options =>
+            {
+                options.AllowedIpAddresses = [AllowedIp];
+                options.EnableUI           = true;
+            },
+            configurePipeline: app => app.Use((context, next) =>
+            {
+                context.Connection.RemoteIpAddress = from;
+                return next(context);
+            }));
 
     [Fact]
     public async Task Should_refuse_an_anonymous_hub_handshake_under_a_path_base()
@@ -149,10 +158,14 @@ public class PathBaseProtectionTests
         // The guard is attached by ROUTE, so a host endpoint that happens to share the pipeline keeps
         // answering anonymously — the monitoring policy is not the host's policy.
         await using var factory = new MonitoringTestWebAppFactory(requireAuthentication: true, pathBase: PathBase,
-            configureOptions: options => options.AllowedIpAddresses = [AllowedIp]);
+            configureOptions: options => options.AllowedIpAddresses = [AllowedIp],
+            configurePipeline: app => app.Use((context, next) =>
+            {
+                context.Connection.RemoteIpAddress = IPAddress.Parse("203.0.113.9");
+                return next(context);
+            }));
 
         using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("X-Forwarded-For", "203.0.113.9");
 
         var host = await client.GetAsync($"{PathBase}/HostSample/ping");
 
