@@ -587,7 +587,11 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
             if (task == null || task.Status is not (QueuedTaskStatus.Failed or QueuedTaskStatus.Cancelled))
                 return Task.FromResult(false);
 
-            task.Exception = null;
+            // The failure counter goes with the exception: a requeue is the way back from a poison, and a row
+            // that came back carrying the attempts that ended it is poisoned again by its first failure,
+            // without one of the retries the ceiling exists to grant.
+            task.Exception                    = null;
+            task.RecoveryDispatchFailureCount = null;
             TransitionLocked(task, QueuedTaskStatus.Queued, auditLevel);
             return Task.FromResult(true);
         }

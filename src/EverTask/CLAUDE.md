@@ -334,7 +334,15 @@ the definition opted in.
     identical from here, so after a failed rebuild the container is asked the question that separates them —
     is anything registered for this task at all? — and only a "no" is final. Ending an occurrence on a
     transient activation failure drops work no handler ever saw, without one of the retries its policy
-    promises; it keeps its slot of the budget instead, and the next run looks again.
+    promises; it keeps its slot of the budget instead, and the next run looks again — but only
+    `MaxOccurrenceRebuildAttempts` times. A constructor that throws EVERY time is a misconfiguration, not an
+    outage, and an unbounded "look again" held the series for the life of the process. The ceiling is the
+    row's own `RecoveryDispatchFailureCount`, incremented and cleared exactly as the recovery's L18 does it
+    (a rebuild that succeeds clears what it burned, so the count is CONSECUTIVE failures), and reaching it
+    ends the row through the same confirmed poison — with its own EventId (1825) and its own event sentence,
+    because "cannot be rebuilt from its row" sends an operator after a type or a payload that are both fine.
+    `RequeueTerminal` clears the counter with the exception for the same reason: a row that came back
+    carrying the attempts that ended it would be poisoned again by its first failure.
   - **Only a CONFIRMED terminal state frees capacity.** `SetStatus` is best-effort on every relational
     provider — it logs its own failed write and returns — so the row is re-read before the slot is counted
     free. Taking the call's return as the answer let a swallowed write leave the old occurrence alive while a

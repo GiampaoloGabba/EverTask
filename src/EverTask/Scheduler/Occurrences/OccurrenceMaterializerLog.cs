@@ -106,9 +106,10 @@ internal static partial class OccurrenceMaterializerLog
     [LoggerMessage(EventId = 1817, Level = LogLevel.Warning,
         Message = "Occurrence {OccurrenceId} of schedule {ParentId} could not be rebuilt right now, but a " +
                   "handler for it IS registered: it keeps its slot of the schedule's budget and is looked at " +
-                  "again on the next run, instead of being ended for a failure that may not last")]
+                  "again on the next run, instead of being ended for a failure that may not last " +
+                  "(attempt {Attempts} of {MaxAttempts})")]
     public static partial void OccurrenceRebuildDeferred(this ILogger logger, Exception exception, Guid occurrenceId,
-                                                         Guid parentId);
+                                                         Guid parentId, int attempts, int maxAttempts);
 
     [LoggerMessage(EventId = 1818, Level = LogLevel.Warning,
         Message = "Occurrence {OccurrenceId} of schedule {ParentId} cannot be rebuilt from its row and could " +
@@ -152,6 +153,17 @@ internal static partial class OccurrenceMaterializerLog
                   "{Elapsed}")]
     public static partial void CatchUpCompleted(this ILogger logger, Guid parentId, int materialized,
                                                 TimeSpan elapsed);
+
+    // The other end of 1817: the same failure, seen often enough that "it may not last" stops being true.
+    // Its own id and its own sentence, because the fix is a different one — a handler that never builds is a
+    // misconfiguration to correct and requeue, not a dependency to wait for.
+    [LoggerMessage(EventId = 1825, Level = LogLevel.Error,
+        Message = "Occurrence {OccurrenceId} of schedule {ParentId} could not be rebuilt in {Attempts} " +
+                  "consecutive run(s) and has been marked Failed: a handler for it is registered but does not " +
+                  "build, and left non-terminal it would hold a slot of the schedule's concurrency budget for " +
+                  "ever")]
+    public static partial void OccurrenceRebuildExhausted(this ILogger logger, Exception exception,
+                                                          Guid occurrenceId, Guid parentId, int attempts);
 
     [LoggerMessage(EventId = 1822, Level = LogLevel.Debug,
         Message = "Re-park of schedule {ParentId} at {NextRunUtc:O} was refused: version {ScheduleVersion} is " +

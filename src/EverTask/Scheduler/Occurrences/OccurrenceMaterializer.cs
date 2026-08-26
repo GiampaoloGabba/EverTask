@@ -63,6 +63,19 @@ internal sealed class OccurrenceMaterializer
     /// </remarks>
     private const int MaxServedSlotsPerRun = 500;
 
+    /// <summary>
+    /// How many consecutive runs may fail to rebuild an occurrence before the failure stops being read as
+    /// transient and the row is ended (F6).
+    /// </summary>
+    /// <remarks>
+    /// The twin of <c>WorkerService.MaxRecoveryDispatchAttempts</c>, and deliberately the same default and the
+    /// same durable counter: both bound the number of times one row is allowed to fail to become a delivery
+    /// before the verdict on it is final. Settable for the tests that have to reach the ceiling, exactly like
+    /// its recovery counterpart; it is not a public option, because the number is the same answer to the same
+    /// question and a host that wants to move it has nothing to weigh it against.
+    /// </remarks>
+    internal int MaxOccurrenceRebuildAttempts { get; set; } = 5;
+
     public OccurrenceMaterializer(IServiceScopeFactory scopeFactory, IServiceProvider serviceProvider,
                                   IScheduler scheduler, EverTaskServiceConfiguration options,
                                   IScheduleEvaluator evaluator,
@@ -859,6 +872,8 @@ internal sealed class OccurrenceMaterializer
 
             if (rebuild.Executor is null)
             {
+                int? exhaustedAfter = null;
+
                 // Registered but not activatable right now — a scoped dependency that timed out, a
                 // connection that was not there — is NOT a verdict on the row: it is the same transient
                 // failure the retry policy exists for, and ending the occurrence on it would drop work no
@@ -866,8 +881,24 @@ internal sealed class OccurrenceMaterializer
                 // operational retry looks again.
                 if (!rebuild.Permanent)
                 {
-                    _logger.OccurrenceRebuildDeferred(rebuild.Failure!, child.Id, parentId);
-                    continue;
+                    // But not for ever (F6). A constructor that throws EVERY time is a misconfiguration, not
+                    // an outage, and "look again next run" then holds the series for the life of the process
+                    // — under the default budget of one, a schedule that materializes nothing ever again
+                    // while every run leaves the same warning that no write ever closes. The bound is the
+                    // row's own L18 counter, the one the recovery poisons a re-dispatch with: the same
+                    // question (how many times may this row fail to become a delivery?) answered the same
+                    // way, on a column that already exists per row. A storage that does not persist it
+                    // answers 0 for ever and keeps exactly the unbounded behaviour it had before.
+                    var attempts = await storage.IncrementRecoveryFailure(child.Id, ct).ConfigureAwait(false);
+
+                    if (attempts < MaxOccurrenceRebuildAttempts)
+                    {
+                        _logger.OccurrenceRebuildDeferred(rebuild.Failure!, child.Id, parentId, attempts,
+                            MaxOccurrenceRebuildAttempts);
+                        continue;
+                    }
+
+                    exhaustedAfter = attempts;
                 }
 
                 // Only a CONFIRMED terminal state frees capacity. SetStatus is best-effort on every
@@ -875,7 +906,7 @@ internal sealed class OccurrenceMaterializer
                 // the strength of having called it would let the run create a successor while the old row is
                 // still alive, over a budget that says one.
                 if (await FailUnusableOccurrenceAsync(storage, executorForEvents, child, parentId, rebuild.Failure!,
-                            auditLevel, ct)
+                            exhaustedAfter, auditLevel, ct)
                         .ConfigureAwait(false))
                 {
                     active--;
@@ -885,6 +916,12 @@ internal sealed class OccurrenceMaterializer
             }
 
             var executor = rebuild.Executor;
+
+            // The same L18 hygiene a successful re-dispatch does: a rebuild that healed leaves no failures
+            // behind for a later transient one to inherit and tip over the ceiling with. Conditional, so the
+            // ordinary reconciliation of a healthy row still costs no write.
+            if ((child.RecoveryDispatchFailureCount ?? 0) > 0)
+                await storage.ClearRecoveryFailure(child.Id, ct).ConfigureAwait(false);
 
             // Lost: a cancel, or a delivery that picked it up between the read and this write. Either way the
             // occurrence has an owner again and this run must not hand it to the scheduler a second time.
@@ -904,10 +941,16 @@ internal sealed class OccurrenceMaterializer
     /// Ends an occurrence whose row cannot be turned back into a task, so the series is not held behind
     /// something nothing can deliver.
     /// </summary>
+    /// <param name="exhaustedAfter">
+    /// The number of consecutive runs that failed to rebuild the row, when THAT is what ended it (F6), and
+    /// null when the verdict was final on the first look. The two are the same write and two different
+    /// sentences: one names a build nothing can fix, the other a handler that is there and never builds.
+    /// </param>
     /// <remarks>
     /// The verdict cannot change while the process lives: the type is gone, its persisted payload does not
     /// deserialize against this build, or nothing here registers a handler for it, and re-reading the same
-    /// row answers the same thing every minute. Left
+    /// row answers the same thing every minute. A rebuild that keeps failing with a handler registered gets
+    /// here too, but only after <see cref="MaxOccurrenceRebuildAttempts"/> runs have said the same thing. Left
     /// non-terminal it would go on consuming a slot of the schedule's concurrency budget, which at the default
     /// budget of one is a series that never materializes another occurrence. <c>Failed</c> is the state M13
     /// gives an occurrence that cannot run — the series moves on, the row keeps the reason it carries, and
@@ -926,7 +969,8 @@ internal sealed class OccurrenceMaterializer
     /// </returns>
     private async Task<bool> FailUnusableOccurrenceAsync(ITaskStorage storage, TaskHandlerExecutor executorForEvents,
                                                          QueuedTask child, Guid parentId, Exception reason,
-                                                         AuditLevel auditLevel, CancellationToken ct)
+                                                         int? exhaustedAfter, AuditLevel auditLevel,
+                                                         CancellationToken ct)
     {
         await storage.SetStatus(child.Id, QueuedTaskStatus.Failed, reason, auditLevel, null, ct)
                      .ConfigureAwait(false);
@@ -937,20 +981,28 @@ internal sealed class OccurrenceMaterializer
         var written = (await storage.Get(t => t.Id == child.Id, ct).ConfigureAwait(false)).FirstOrDefault();
         var ended   = written is null || !QueuedTask.IsNonTerminalStatus(written.Status);
 
-        if (ended)
-            _logger.OccurrenceRowUnusable(reason, child.Id, parentId);
-        else
+        if (!ended)
             _logger.OccurrenceTerminalizationLost(reason, child.Id, parentId, written!.Status);
+        else if (exhaustedAfter is { } attempts)
+            _logger.OccurrenceRebuildExhausted(reason, child.Id, parentId, attempts);
+        else
+            _logger.OccurrenceRowUnusable(reason, child.Id, parentId);
 
         if (WorkerExecutor is not { HasEventSubscribers: true } worker)
             return ended;
 
+        // Why the row ended, in the event too: "cannot be rebuilt from its row" sends an operator to look for
+        // a type or a payload, which is not what a handler that never builds needs.
+        var cause = exhaustedAfter is { } burned
+            ? string.Create(CultureInfo.InvariantCulture, $"could not be rebuilt in {burned} consecutive run(s)")
+            : "cannot be rebuilt from its row";
+
         worker.PublishExternalEvent(executorForEvents, SeverityLevel.Error,
             ended
                 ? string.Create(CultureInfo.InvariantCulture,
-                    $"Occurrence {child.Id} of schedule {parentId} cannot be rebuilt from its row and was marked Failed: {reason.Message}")
+                    $"Occurrence {child.Id} of schedule {parentId} {cause} and was marked Failed: {reason.Message}")
                 : string.Create(CultureInfo.InvariantCulture,
-                    $"Occurrence {child.Id} of schedule {parentId} cannot be rebuilt from its row and could not be marked Failed (it is still {written!.Status}): {reason.Message}"));
+                    $"Occurrence {child.Id} of schedule {parentId} {cause} and could not be marked Failed (it is still {written!.Status}): {reason.Message}"));
 
         return ended;
     }

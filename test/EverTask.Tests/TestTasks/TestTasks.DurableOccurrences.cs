@@ -166,6 +166,20 @@ public sealed class ActivationFaultGate
     /// <summary>Makes the next <paramref name="times"/> activations throw.</summary>
     public void FailNext(int times) => Volatile.Write(ref _remaining, times);
 
+    /// <summary>
+    /// Makes every activation throw until <see cref="Release"/> is called — the dependency that is not coming
+    /// back on its own, rather than the one that is away for a moment.
+    /// </summary>
+    /// <remarks>
+    /// Counting the activations of a whole run instead would pin how many times the reconciliation happens to
+    /// build a handler (the rebuild, then the probe that asks whether anything is registered at all), which is
+    /// not what a test about the number of RUNS is saying.
+    /// </remarks>
+    public void FailUntilReleased() => Volatile.Write(ref _remaining, int.MaxValue);
+
+    /// <summary>Lets activations through again.</summary>
+    public void Release() => Volatile.Write(ref _remaining, 0);
+
     /// <summary>Called from the handler's CONSTRUCTOR, which is where a dependency is built.</summary>
     public void Enter()
     {

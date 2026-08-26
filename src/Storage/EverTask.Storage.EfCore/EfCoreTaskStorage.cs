@@ -1173,14 +1173,19 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
         await using var transaction = await efContext.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
 
-        // Identity, history and audit trail survive: only the status and the recorded error are reset.
+        // Identity, history and audit trail survive: only the status, the recorded error and the failure
+        // counter are reset. The counter goes with the error for the same reason it exists — a row requeued
+        // still carrying the attempts that poisoned it is poisoned again by its first failure, with none of
+        // the retries the ceiling grants.
         var rows = await dbContext.QueuedTasks
                                   .Where(t => t.Id == taskId
                                               && (t.Status == QueuedTaskStatus.Failed
                                                   || t.Status == QueuedTaskStatus.Cancelled))
                                   .ExecuteUpdateAsync(s => s
                                                            .SetProperty(t => t.Status, QueuedTaskStatus.Queued)
-                                                           .SetProperty(t => t.Exception, (string?)null), ct)
+                                                           .SetProperty(t => t.Exception, (string?)null)
+                                                           .SetProperty(t => t.RecoveryDispatchFailureCount,
+                                                               (int?)null), ct)
                                   .ConfigureAwait(false);
 
         if (rows == 0)

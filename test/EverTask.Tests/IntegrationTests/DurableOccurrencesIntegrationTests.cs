@@ -691,6 +691,135 @@ public class DurableOccurrencesIntegrationTests : IsolatedIntegrationTestBase
     }
 
     [Fact]
+    public async Task An_occurrence_that_never_rebuilds_is_failed_once_it_has_burned_its_rebuild_attempts()
+    {
+        // What the branch above costs when the failure is NOT transient (F6/#41): a constructor that throws
+        // every time is a misconfiguration, not an outage, and "look again on the next run" then holds the
+        // occurrence non-terminal for the whole life of the process — under the default budget of one, a
+        // series that never materializes anything again while every run leaves the same warning no write ever
+        // closes. The bound is the row's own recovery-failure counter, the one that already bounds a
+        // re-dispatch the recovery cannot make.
+        var gate = new ActivationFaultGate();
+
+        await CreateIsolatedHostWithBuilderAsync(b =>
+            {
+                b.Services.AddSingleton<ITaskStorage>(_shared);
+                b.Services.AddSingleton(_recorder);
+                b.Services.AddSingleton(gate);
+            },
+            startHost: false);
+
+        var cursor     = DateTimeOffset.UtcNow.AddMinutes(-3);
+        var scheduleId = await SeedScheduleAsync(MinuteCatchUp(TimeSpan.FromHours(1), 20), cursor);
+
+        var stranded = new QueuedTask
+        {
+            Id                    = Guid.NewGuid(),
+            CreatedAtUtc          = DateTimeOffset.UtcNow.AddMinutes(-20),
+            Type                  = typeof(FlakyResolutionTask).AssemblyQualifiedName!,
+            Request               = EverTaskJson.Serialize(new FlakyResolutionTask("never-builds")),
+            Handler               = typeof(FlakyResolutionTaskHandler).AssemblyQualifiedName!,
+            Status                = QueuedTaskStatus.Queued,
+            ParentTaskId          = scheduleId,
+            ScheduledExecutionUtc = DateTimeOffset.UtcNow.AddMinutes(-20),
+            QueueName             = QueueNames.Recurring,
+            AuditLevel            = (int)AuditLevel.Full
+        };
+        await _shared.Persist(stranded);
+
+        var materializer = Host!.Services.GetRequiredService<OccurrenceMaterializer>();
+        materializer.MaxOccurrenceRebuildAttempts = 3;
+
+        gate.FailUntilReleased();
+
+        for (var run = 1; run < materializer.MaxOccurrenceRebuildAttempts; run++)
+        {
+            await materializer.RunAsync(scheduleId, null);
+
+            (await _shared.Get(t => t.Id == stranded.Id))[0].Status.ShouldBe(QueuedTaskStatus.Queued,
+                $"run {run} is still inside the ceiling: a failure that may not last is not a verdict on the row");
+
+            (await OccurrencesOfAsync(scheduleId)).ShouldHaveSingleItem().Id.ShouldBe(stranded.Id,
+                "and while it is not a verdict the occurrence keeps the only slot of a budget of one");
+        }
+
+        await materializer.RunAsync(scheduleId, null);
+
+        var ended = (await _shared.Get(t => t.Id == stranded.Id))[0];
+
+        ended.Status.ShouldBe(QueuedTaskStatus.Failed,
+            "a handler that never builds is a misconfiguration, and the row that reports it is ended like any " +
+            "other one nothing can deliver instead of stalling the series for ever");
+        ended.Exception.ShouldNotBeNull(
+            "and it keeps the reason, which is what makes a requeue the way back once the wiring is fixed");
+
+        (await OccurrencesOfAsync(scheduleId)).Select(o => o.ScheduledExecutionUtc).ShouldContain(cursor,
+            "the same run then spends the slot of the budget it just freed: the series moves on");
+    }
+
+    [Fact]
+    public async Task A_rebuild_that_finally_succeeds_clears_the_attempts_it_had_burned()
+    {
+        // The ceiling counts CONSECUTIVE failures, and that is the whole reason it is safe: a dependency that
+        // is away for a minute now and then would otherwise walk its occurrence to the ceiling one outage at
+        // a time and end work no handler ever refused.
+        var gate = new ActivationFaultGate();
+
+        await CreateIsolatedHostWithBuilderAsync(b =>
+            {
+                b.Services.AddSingleton<ITaskStorage>(_shared);
+                b.Services.AddSingleton(_recorder);
+                b.Services.AddSingleton(gate);
+            },
+            startHost: false);
+
+        var cursor     = DateTimeOffset.UtcNow.AddMinutes(-3);
+        var scheduleId = await SeedScheduleAsync(MinuteCatchUp(TimeSpan.FromHours(1), 20), cursor);
+
+        var stranded = new QueuedTask
+        {
+            Id                    = Guid.NewGuid(),
+            CreatedAtUtc          = DateTimeOffset.UtcNow.AddMinutes(-20),
+            Type                  = typeof(FlakyResolutionTask).AssemblyQualifiedName!,
+            Request               = EverTaskJson.Serialize(new FlakyResolutionTask("heals")),
+            Handler               = typeof(FlakyResolutionTaskHandler).AssemblyQualifiedName!,
+            Status                = QueuedTaskStatus.Queued,
+            ParentTaskId          = scheduleId,
+            ScheduledExecutionUtc = DateTimeOffset.UtcNow.AddMinutes(-20),
+            QueueName             = QueueNames.Recurring,
+            AuditLevel            = (int)AuditLevel.Full
+        };
+        await _shared.Persist(stranded);
+
+        var materializer = Host!.Services.GetRequiredService<OccurrenceMaterializer>();
+
+        gate.FailUntilReleased();
+
+        await materializer.RunAsync(scheduleId, null);
+        await materializer.RunAsync(scheduleId, null);
+
+        (await _shared.Get(t => t.Id == stranded.Id))[0].RecoveryDispatchFailureCount.ShouldBe(2,
+            "the attempts are counted on the row, so they survive the restart the process may not");
+
+        gate.Release();
+
+        await materializer.RunAsync(scheduleId, null);
+
+        var healed = (await _shared.Get(t => t.Id == stranded.Id))[0];
+
+        healed.Status.ShouldNotBe(QueuedTaskStatus.Failed,
+            "the dependency is back, so the occurrence is handed on — the ceiling was never reached");
+        (healed.RecoveryDispatchFailureCount ?? 0).ShouldBe(0,
+            "and the failures it had burned are cleared: two outages a week apart must not add up to a verdict");
+
+        var scheduler  = Host.Services.GetRequiredService<IScheduler>();
+        var deliveries = Host.Services.GetRequiredService<TaskDeliveryRegistry>();
+
+        (scheduler.IsScheduled(stranded.Id) || deliveries.IsDelivering(stranded.Id)).ShouldBeTrue(
+            "the occurrence is parked again, or already on its way");
+    }
+
+    [Fact]
     public async Task A_status_write_that_never_landed_does_not_free_the_slot_it_was_meant_to_free()
     {
         // SetStatus is best-effort on every relational provider: it logs its own failed transition and returns

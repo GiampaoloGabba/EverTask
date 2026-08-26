@@ -472,9 +472,15 @@ public interface ITaskStorage
             $"{nameof(CancelSchedule)} atomically and set {nameof(SupportsDurableOccurrences)} to true.");
 
     /// <summary>
-    /// Puts a terminal row (<c>Failed</c> or <c>Cancelled</c>) back into <c>Queued</c>, clearing its error
-    /// while keeping its identity, history and audit trail. Refuses anything that is not terminal.
+    /// Puts a terminal row (<c>Failed</c> or <c>Cancelled</c>) back into <c>Queued</c>, clearing its error and
+    /// its <see cref="QueuedTask.RecoveryDispatchFailureCount"/> while keeping its identity, history and audit
+    /// trail. Refuses anything that is not terminal.
     /// </summary>
+    /// <remarks>
+    /// The failure counter is cleared with the error because this call is the way back from a poison: a row
+    /// requeued still carrying the attempts that ended it would be poisoned again by its first failure,
+    /// without one of the retries the attempt ceiling exists to grant.
+    /// </remarks>
     /// <returns>True when the row was requeued.</returns>
     Task<bool> RequeueTerminal(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default) =>
         throw new NotSupportedException(
