@@ -457,6 +457,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed dead code (`JwtAuthenticationMiddleware.IsReadOnlyRequest`,
   `ServiceCollectionExtensions.GenerateRandomSecret`).
 
+### Fixed (monitoring behind a path base, #46)
+
+- **Monitoring authentication (IP whitelist, JWT, SignalR hub) now holds when the application is hosted
+  under a path base** (`app.UsePathBase(...)`). The checks are evaluated inside routing, on the path routing
+  resolved. The defect pre-dates 4.0.0, so hosts serving the dashboard under a path base on 3.x should
+  upgrade. The monitoring CORS policy is still keyed off the path before the base is applied, which is a
+  functional limitation and not a protection.
+
 ### Fixed (`ValueTask` contract on two public extension points, #33)
 
 - **The scoped `ITaskStoreDbContext` registration no longer blocks on a `ValueTask`.** Every provider's
@@ -486,14 +494,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before `UseRouting()`. Naming the trusted peers is the whole point: that is what decides whether the header
   may be believed, and it is a decision only the host can make. See
   [AllowedIpAddresses](docs/configuration-reference.md#allowedipaddresses).
-- **The monitoring protections now hold under `app.UsePathBase(...)` (#46).** They were enforced by a
-  middleware that runs before the host's own, so it read `Request.Path` before the path base was taken out of
-  it: on such a host every layer was skipped at once — the read endpoints (`/tasks`, `/dashboard/*`,
-  `/queues`, `/statistics/*`, whose payloads carry serialized requests and exception messages) answered
-  anonymously, the IP whitelist never ran, and an anonymous SignalR handshake was granted a connection. The
-  IP whitelist and the JWT are now decided inside routing, where the path is the one routing resolved and the
-  address is the one the host's forwarded-headers configuration produced. The monitoring CORS policy still
-  keys off the pre-`UsePathBase` path, which is a functional limitation and not a protection.
 - **Magic-link token no longer travels in the URL (#22).** New `POST /api/auth/magic` takes the
   token in the request body; the dashboard reads it from the URL fragment
   (`/evertask-monitoring/magic#token=...`, never sent to the server), scrubs it from the address
