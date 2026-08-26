@@ -38,15 +38,13 @@ public class BackwardCompatibilityScheduleDriftTests : IsolatedIntegrationTestBa
 
         await Storage.UpdateTask(queuedTask);
 
-        // Act: Wait for the task to be picked up and executed
-        await TaskWaitHelper.WaitForConditionAsync(
-            () => StateManager.GetCounter(nameof(TestTaskRecurringSeconds)) >= 1,
-            timeoutMs: 5000); // 5 seconds should be enough for 2-second interval
+        // Act: wait for the RUN to be recorded on the row, not for the handler's counter. The handler
+        // bumps its counter from inside Handle, while CurrentRunCount is written after it returns
+        // (QueueNextOccourrence -> CompleteRecurringRun, a storage round trip further on): a read taken
+        // on the counter alone lands between the two and sees CurrentRunCount still at 0.
+        var updatedTask = await WaitForRecurringRunsAsync(taskId, expectedRuns: 1, timeoutMs: 10000);
 
         // Assert: Task should have been deserialized and rescheduled correctly
-        var updatedTasks = await Storage.GetAll();
-        var updatedTask = updatedTasks.FirstOrDefault(t => t.Id == taskId);
-
         updatedTask.ShouldNotBeNull();
         updatedTask.IsRecurring.ShouldBeTrue();
         updatedTask.CurrentRunCount?.ShouldBeGreaterThanOrEqualTo(1);
@@ -78,15 +76,11 @@ public class BackwardCompatibilityScheduleDriftTests : IsolatedIntegrationTestBa
 
         await Storage.UpdateTask(queuedTask);
 
-        // Act: Wait for execution
-        await TaskWaitHelper.WaitForConditionAsync(
-            () => StateManager.GetCounter(nameof(TestTaskRecurringSeconds)) >= 1,
-            timeoutMs: 5000);
+        // Act: wait for the run to be recorded on the row (the handler's counter is bumped before
+        // CurrentRunCount is written — see the first test in this class)
+        var updatedTask = await WaitForRecurringRunsAsync(taskId, expectedRuns: 1, timeoutMs: 10000);
 
         // Assert: Task should still execute and reschedule
-        var updatedTasks = await Storage.GetAll();
-        var updatedTask = updatedTasks.FirstOrDefault(t => t.Id == taskId);
-
         updatedTask.ShouldNotBeNull();
         updatedTask.CurrentRunCount?.ShouldBeGreaterThanOrEqualTo(1);
         updatedTask.NextRunUtc.ShouldNotBeNull();
@@ -153,15 +147,12 @@ public class BackwardCompatibilityScheduleDriftTests : IsolatedIntegrationTestBa
 
         await Storage.UpdateTask(queuedTask);
 
-        // Act: Let the task execute with new logic
-        await TaskWaitHelper.WaitForConditionAsync(
-            () => StateManager.GetCounter(nameof(TestTaskRecurringSeconds)) >= 2,
-            timeoutMs: 8000);
+        // Act: let the task execute with new logic, and wait for the two runs to be RECORDED — the
+        // handler's counter reaches 2 before the second CurrentRunCount write lands (see the first
+        // test in this class)
+        var updatedTask = await WaitForRecurringRunsAsync(taskId, expectedRuns: 2, timeoutMs: 15000);
 
         // Assert: New logic should take over after first execution
-        var updatedTasks = await Storage.GetAll();
-        var updatedTask = updatedTasks.FirstOrDefault(t => t.Id == taskId);
-
         updatedTask.ShouldNotBeNull();
         updatedTask.CurrentRunCount?.ShouldBeGreaterThanOrEqualTo(2);
 
@@ -172,14 +163,14 @@ public class BackwardCompatibilityScheduleDriftTests : IsolatedIntegrationTestBa
             .Take(2)
             .ToList();
 
-        if (completedRuns.Count >= 2)
-        {
-            var interval = (completedRuns[1].ExecutedAt - completedRuns[0].ExecutedAt).TotalSeconds;
+        // The wait above already demanded two completed runs on the row, so this is never skipped
+        completedRuns.Count.ShouldBe(2);
 
-            // Should maintain 2-second interval
-            interval.ShouldBeGreaterThan(1.5);
-            interval.ShouldBeLessThan(3);
-        }
+        var interval = (completedRuns[1].ExecutedAt - completedRuns[0].ExecutedAt).TotalSeconds;
+
+        // Should maintain 2-second interval
+        interval.ShouldBeGreaterThan(1.5);
+        interval.ShouldBeLessThan(3);
     }
 
     [Fact]
