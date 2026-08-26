@@ -16,7 +16,11 @@ namespace EverTask.Tests.IntegrationTests;
 /// </remarks>
 public class ScheduleManagementValidationTests : IsolatedIntegrationTestBase
 {
+    private const string ProviderKey              = "probe";
+    private const string DeterministicProviderKey = "probe-deterministic";
+
     private readonly RescheduleRecorder _recorder = new();
+    private readonly OccurrenceProviderProbe _probe = new();
 
     private static CapabilityBlindStorage Blind(bool versioning, bool durable) =>
         new(Mock.Of<IEverTaskLogger<MemoryTaskStorage>>(), versioning, durable);
@@ -26,6 +30,13 @@ public class ScheduleManagementValidationTests : IsolatedIntegrationTestBase
         {
             b.Services.AddSingleton(storage);
             b.Services.AddSingleton(_recorder);
+
+            // The manager runs a new definition through the same provider gate a dispatch does, so the host
+            // needs the same two providers a dispatch would find: one that promises nothing about answering
+            // twice the same way, and one that does.
+            b.Services.AddSingleton(_probe);
+            b.AddOccurrenceProvider<ProbeOccurrenceProvider>(ProviderKey)
+             .AddOccurrenceProvider<DeterministicProbeProvider>(DeterministicProviderKey);
         }, startHost: false);
 
     private ITaskScheduleManager Manager => Host!.Services.GetRequiredService<ITaskScheduleManager>();
@@ -176,6 +187,73 @@ public class ScheduleManagementValidationTests : IsolatedIntegrationTestBase
 
         (await blind.Get(t => t.Id == id))[0].Status.ShouldBe(QueuedTaskStatus.Cancelled);
     }
+
+    // ---- The provider gate, on the manager's own branch -------------------------------------------
+
+    [Fact]
+    public async Task A_reschedule_onto_a_key_no_provider_answers_to_is_refused()
+    {
+        // The manager builds a definition the same way a dispatch does, and an unregistered key is the same
+        // verdict on both: configuration, not transience. It does not heal by waiting, so refusing it while
+        // the caller still holds the call is the only place it can be reported — committed instead, it would
+        // be a row whose every next-run question fails until somebody poisons it.
+        var blind = Blind(versioning: true, durable: true);
+
+        await StartHostAsync(blind);
+
+        var id = await Dispatcher.Dispatch(new RescheduleProbeTask("unknown-provider"),
+            r => r.Schedule().Every(1).Hours(), taskKey: "validation-unknown-provider");
+
+        var refusal = await Should.ThrowAsync<ArgumentException>(() =>
+            Manager.Reschedule("validation-unknown-provider",
+                r => r.Schedule().UseOccurrenceProvider("nobody-registers-this")));
+
+        refusal.Message.ShouldContain("nobody-registers-this");
+        refusal.Message.ShouldContain(ProviderKey, Case.Sensitive, "the message names what IS registered");
+
+        var row = (await blind.Get(t => t.Id == id))[0];
+        row.ScheduleVersion.ShouldBe(0, "the refusal comes before the compare-and-swap, so nothing was written");
+        row.RecurringTask!.ShouldNotContain("Provider", Case.Insensitive);
+    }
+
+    [Fact]
+    public async Task A_reschedule_keeping_only_the_newest_slots_needs_a_provider_that_answers_the_same_way_twice()
+    {
+        // The other half of the gate, and the one a dispatch pins on its own side: SkipOldest finds where the
+        // newest slots of a backlog begin by PROBING the grid at instants it never returned, so a calendar
+        // that may answer differently the second time would replay the wrong ones. It is decided here, where
+        // the caller is holding the call, and never on the recovery path — reading IsDeterministic means
+        // building the provider, and a container hiccup must not poison a series.
+        var blind = Blind(versioning: true, durable: true);
+
+        await StartHostAsync(blind);
+
+        var id = await Dispatcher.Dispatch(new RescheduleProbeTask("skip-oldest"),
+            r => r.Schedule().Every(1).Hours(), taskKey: "validation-skip-oldest");
+
+        var refusal = await Should.ThrowAsync<InvalidOperationException>(() =>
+            Manager.Reschedule("validation-skip-oldest",
+                r => r.Schedule().UseOccurrenceProvider(ProviderKey).OnMisfire(m => m.CatchUp(KeepNewest))));
+
+        refusal.Message.ShouldContain(nameof(INextOccurrenceProvider.IsDeterministic));
+
+        (await blind.Get(t => t.Id == id))[0].ScheduleVersion
+            .ShouldBe(0, "and again nothing was written: the refusal precedes the compare-and-swap");
+
+        // The control, so the refusal is about the PROVIDER and not about the policy: the very same catch-up
+        // over the provider that does promise it goes through.
+        var result = await Manager.Reschedule("validation-skip-oldest",
+            r => r.Schedule().UseOccurrenceProvider(DeterministicProviderKey).OnMisfire(m => m.CatchUp(KeepNewest)));
+
+        result.ScheduleVersion.ShouldBe(1);
+        (await blind.Get(t => t.Id == id))[0].RecurringTask!.ShouldContain(DeterministicProviderKey);
+    }
+
+    /// <summary>The one catch-up policy that has to probe the grid, and therefore the one that needs a promise.</summary>
+    private static CatchUpOptions KeepNewest => new(TimeSpan.FromHours(1), 5)
+    {
+        OverflowPolicy = CatchUpOverflowPolicy.SkipOldest
+    };
 
     // ---- No storage at all ------------------------------------------------------------------------
 

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Threading.Channels;
 using EverTask.Configuration;
 using EverTask.Handler;
 using EverTask.Logger;
@@ -17,9 +18,15 @@ namespace EverTask.Tests.IntegrationTests;
 /// which drops the scope. These tests walk the exits of <c>DoWorkGuarded</c> that never reach
 /// <c>DoWorkCore</c> nor the terminal rejection, where the release used to be missing: each one leaves a
 /// handler and every scoped dependency built with it (in a real application, a DbContext and its pooled
-/// connection) alive forever, one per dropped delivery. The last one covers the terminal rejection's
+/// connection) alive forever, one per dropped delivery. One of them covers the terminal rejection's
 /// recurring branch, which is not about whether the scope is released but about WHEN: it has to happen
 /// before the series schedules its next occurrence.
+/// <para>
+/// The last four walk the exits BEFORE the worker: a delivery the ENQUEUE boundary drops never becomes a
+/// delivery at all, so <c>DoWork</c>'s finally is never entered and the same scope is stranded. Those drops
+/// are ordinary operation, not an edge case — startup recovery racing a live dispatch is the very race the
+/// delivery registry exists to stop, and it produces one refused eager executor every time it happens.
+/// </para>
 /// </summary>
 public class EagerHandlerScopeReleaseTests : IsolatedIntegrationTestBase
 {
@@ -30,7 +37,8 @@ public class EagerHandlerScopeReleaseTests : IsolatedIntegrationTestBase
     /// with 50 ms granularity. The scheduler is the real one, wrapped so the tests can see WHEN a task was
     /// handed to it relative to the scope releases.
     /// </summary>
-    private async Task<IHost> CreateEagerScopeHostAsync(int channelCapacity = 5, int maxDegreeOfParallelism = 3) =>
+    private async Task<IHost> CreateEagerScopeHostAsync(int channelCapacity = 5, int maxDegreeOfParallelism = 3,
+                                                        Action<EverTaskServiceBuilder>? configureBuilder = null) =>
         await CreateIsolatedHostWithBuilderAsync(b =>
             {
                 b.AddMemoryStorage();
@@ -45,6 +53,8 @@ public class EagerHandlerScopeReleaseTests : IsolatedIntegrationTestBase
                         sp.GetRequiredService<IEverTaskLogger<PeriodicTimerScheduler>>(),
                         TimeSpan.FromMilliseconds(50)),
                     _state)));
+
+                configureBuilder?.Invoke(b);
             },
             configureEverTask: cfg => cfg.SetChannelOptions(channelCapacity)
                                          .SetMaxDegreeOfParallelism(maxDegreeOfParallelism)
@@ -84,7 +94,8 @@ public class EagerHandlerScopeReleaseTests : IsolatedIntegrationTestBase
     /// </summary>
     private TaskHandlerExecutor CreateEagerExecutor<TTask>(TTask task, Guid persistenceId,
                                                            RateLimitPolicy? policy = null,
-                                                           string? rateLimitKey = null)
+                                                           string? rateLimitKey = null,
+                                                           string queueName = QueueNames.Default)
         where TTask : IEverTask
     {
         var handlerScope = Host!.Services.GetRequiredService<IServiceScopeFactory>().CreateAsyncScope();
@@ -101,7 +112,7 @@ public class EagerHandlerScopeReleaseTests : IsolatedIntegrationTestBase
             handler.OnStarted,
             handler.OnCompleted,
             persistenceId,
-            QueueNames.Default,
+            queueName,
             TaskKey: null,
             AuditLevel.Full,
             policy,
@@ -293,5 +304,142 @@ public class EagerHandlerScopeReleaseTests : IsolatedIntegrationTestBase
         await originalDelivery;
 
         await AssertEveryScopeReleasedAsync(2, "the original releases its scope through DoWorkCore's finally");
+    }
+
+    [Fact]
+    public async Task Should_release_the_eager_handler_scope_when_a_duplicate_enqueue_is_skipped()
+    {
+        // One consumer, held by the blocking handler for the whole test: the id under test stays registered
+        // in the delivery registry, which is what makes every later enqueue of it a duplicate.
+        await CreateEagerScopeHostAsync(maxDegreeOfParallelism: 1);
+
+        var taskId = GuidGenerator.NewDatabaseFriendly();
+        var queue  = (EverTask.Worker.WorkerQueue)WorkerQueue;
+
+        var live = CreateEagerExecutor(new EagerScopeBlockingTask(0), taskId);
+        await queue.Queue(live);
+        (await _state.Entered.WaitAsync(TimeSpan.FromSeconds(5))).ShouldBeTrue();
+
+        // Startup recovery whose page read raced this live dispatch: a SECOND eager executor of the same
+        // row, refused at the write boundary. Ordinary operation — the recovery cutoff is a best-effort
+        // first pass and the registry is the actual defense — so its executor is dropped on every restart
+        // that overlaps a live delivery.
+        var recovered = CreateEagerExecutor(new EagerScopeBlockingTask(1), taskId);
+
+        _state.Created.ShouldBe(2, "one owned scope per executor built above");
+        _state.Disposed.ShouldBe(0, "the live delivery is still executing inside its scope");
+
+        await queue.QueueForRecovery(recovered);
+
+        _state.Disposed.ShouldBe(1, "the refused enqueue is the last hand that ever holds that scope");
+
+        // The same refusal through the other door: a live dispatch of an id already in flight, which the
+        // queue manager reports as idempotent success and then drops.
+        var redispatched = CreateEagerExecutor(new EagerScopeBlockingTask(2), taskId);
+
+        (await Host!.Services.GetRequiredService<IWorkerQueueManager>().TryEnqueue(null, redispatched))
+            .ShouldBeTrue("a delivery already in flight is idempotent success, not a failure");
+
+        _state.Disposed.ShouldBe(2, "the manager is the last hand there: nothing retries that instance");
+
+        _state.Gate.Release();
+
+        _state.Executed.ShouldNotContain(1, "a duplicate enqueue must never produce a second execution");
+        _state.Executed.ShouldNotContain(2, "nor must a duplicate live dispatch");
+
+        await AssertEveryScopeReleasedAsync(3, "the live delivery releases its own through DoWorkCore");
+    }
+
+    [Fact]
+    public async Task Should_release_the_eager_handler_scope_when_a_cancelled_delivery_is_never_enqueued()
+    {
+        await CreateEagerScopeHostAsync();
+
+        var queue = (EverTask.Worker.WorkerQueue)WorkerQueue;
+
+        // Cancelled between the dispatch that built the executor and the enqueue: the queue drops it at its
+        // own blacklist check, before the registry and before storage.
+        var blockingId  = GuidGenerator.NewDatabaseFriendly();
+        var scheduledId = GuidGenerator.NewDatabaseFriendly();
+
+        WorkerBlacklist.Add(blockingId);
+        WorkerBlacklist.Add(scheduledId);
+
+        var blocking  = CreateEagerExecutor(new EagerScopeBlockingTask(0), blockingId);
+        var scheduled = CreateEagerExecutor(new EagerScopeBlockingTask(1), scheduledId);
+
+        _state.Created.ShouldBe(2, "one owned scope per executor built above");
+
+        // Both doors: the blocking enqueue a dispatch takes, and the non-blocking one a fired slot takes.
+        await queue.Queue(blocking);
+        (await queue.TryQueue(scheduled)).ShouldBe(EnqueueResult.Discarded);
+
+        _state.Disposed.ShouldBe(2, "a cancelled delivery is dropped for good, at either door");
+        _state.Executed.ShouldBeEmpty("a cancelled task must not execute");
+    }
+
+    [Fact]
+    public async Task Should_release_the_eager_handler_scope_when_the_row_finished_before_the_enqueue()
+    {
+        await CreateEagerScopeHostAsync();
+
+        var queue = (EverTask.Worker.WorkerQueue)WorkerQueue;
+
+        // The row terminally finished after the recovery page read it, or after the scheduler registered its
+        // slot: both enqueues transition CONDITIONALLY, and a refused transition drops the executor.
+        var recovered = CreateEagerExecutor(new EagerScopeBlockingTask(0), GuidGenerator.NewDatabaseFriendly());
+        var fired     = CreateEagerExecutor(new EagerScopeBlockingTask(1), GuidGenerator.NewDatabaseFriendly());
+
+        foreach (var executor in new[] { recovered, fired })
+        {
+            var row = executor.ToQueuedTask(Clock.GetUtcNow());
+            row.Status = QueuedTaskStatus.Completed;
+            await Storage.Persist(row);
+        }
+
+        _state.Created.ShouldBe(2, "one owned scope per executor built above");
+
+        await queue.QueueForRecovery(recovered);
+        (await queue.TryQueueForRecovery(fired)).ShouldBe(EnqueueResult.Discarded);
+
+        _state.Disposed.ShouldBe(2, "nothing is left to deliver a row that already finished");
+        _state.Executed.ShouldBeEmpty("a task that already completed must not run again");
+    }
+
+    [Fact]
+    public async Task Should_release_the_eager_handler_scope_when_the_channel_evicts_the_delivery()
+    {
+        // A Drop* full mode never rejects a write: it silently evicts another queued task, which is the one
+        // shape where an executor already accepted by the queue is still never delivered.
+        await CreateEagerScopeHostAsync(configureBuilder: b => b.AddQueue("evicting", q =>
+        {
+            q.SetMaxDegreeOfParallelism(1);
+            q.SetChannelOptions(new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropOldest });
+        }));
+
+        var queue = Host!.Services.GetRequiredService<IWorkerQueueManager>().GetQueue("evicting");
+
+        // The consumer of that queue is held by the first task, so the channel really holds the second.
+        await queue.Queue(CreateEagerExecutor(new EagerScopeBlockingTask(0),
+            GuidGenerator.NewDatabaseFriendly(), queueName: "evicting"));
+        (await _state.Entered.WaitAsync(TimeSpan.FromSeconds(5))).ShouldBeTrue();
+
+        var evicted = CreateEagerExecutor(new EagerScopeBlockingTask(1), GuidGenerator.NewDatabaseFriendly(),
+            queueName: "evicting");
+        await queue.Queue(evicted);
+
+        // Capacity 1: this write evicts the one above.
+        await queue.Queue(CreateEagerExecutor(new EagerScopeBlockingTask(2),
+            GuidGenerator.NewDatabaseFriendly(), queueName: "evicting"));
+
+        // The eviction callback is synchronous, so the release it starts is not: wait for it rather than
+        // reading a count that may be one instruction early.
+        await TaskWaitHelper.WaitForConditionAsync(() => _state.Disposed >= 1, timeoutMs: 5000);
+
+        _state.Disposed.ShouldBe(1, "only the evicted copy is gone; the other two are alive");
+        _state.Executed.ShouldNotContain(1, "the evicted delivery never runs in this process");
+
+        _state.Gate.Release();
+        _state.Gate.Release();
     }
 }

@@ -103,4 +103,8 @@ internal static partial class EfCoreStorageLog
 
     [LoggerMessage(EventId = 2024, Level = LogLevel.Critical, Message = "Unable to remove task {TaskId}")]
     public static partial void TaskRemoveFailed(this ILogger logger, Exception exception, Guid taskId);
+
+    [LoggerMessage(EventId = 2025, Level = LogLevel.Warning,
+        Message = "Read {Operation} was chosen as deadlock victim, rerunning it (attempt {Attempt})")]
+    public static partial void RereadAfterDeadlock(this ILogger logger, string operation, int attempt);
 }

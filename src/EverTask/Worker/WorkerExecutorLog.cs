@@ -55,8 +55,9 @@ internal static partial class WorkerExecutorLog
     public static partial void RecurringSeriesCancelled(this ILogger logger, Guid taskId);
 
     [LoggerMessage(EventId = 1210, Level = LogLevel.Information,
-        Message = "Task {TaskId} skipped {SkippedCount} missed occurrence(s) to maintain schedule")]
-    public static partial void MissedOccurrencesSkipped(this ILogger logger, Guid taskId, int skippedCount);
+        Message = "Task {TaskId} skipped {SkippedCount} missed occurrence(s) (exact count: {IsExact}) to maintain schedule")]
+    public static partial void MissedOccurrencesSkipped(this ILogger logger, Guid taskId, int skippedCount,
+                                                        bool isExact);
 
     [LoggerMessage(EventId = 1232, Level = LogLevel.Warning,
         Message = "The run of recurring task {TaskId} was recorded without its compare-and-swap: the schedule " +
@@ -105,6 +106,15 @@ internal static partial class WorkerExecutorLog
     [LoggerMessage(EventId = 1228, Level = LogLevel.Error,
         Message = "Materialization of durable schedule {TaskId} failed; the schedule is re-parked for a retry")]
     public static partial void ScheduleMaterializationFailed(this ILogger logger, Exception exception, Guid taskId);
+
+    [LoggerMessage(EventId = 1238, Level = LogLevel.Debug,
+        Message = "Schedule {TaskId} was asked to retry its occurrence provider, but {Reason}")]
+    public static partial void ScheduleRetryAbandoned(this ILogger logger, Guid taskId, string reason);
+
+    [LoggerMessage(EventId = 1239, Level = LogLevel.Error,
+        Message = "The occurrence provider retry of schedule {TaskId} failed; the series waits for the next " +
+                  "startup recovery")]
+    public static partial void ScheduleRetryFailed(this ILogger logger, Exception exception, Guid taskId);
 
     [LoggerMessage(EventId = 1211, Level = LogLevel.Error, Message = "Unable to publish event {Message}")]
     public static partial void EventPublishFailed(this ILogger logger, Exception exception, string message);
@@ -196,4 +206,24 @@ internal static partial class WorkerExecutorLog
     [LoggerMessage(EventId = 1225, Level = LogLevel.Error, SkipEnabledCheck = true,
         Message = "Error occurred executing task with id {TaskId}")]
     public static partial void TaskExecutionFailed(this ILogger logger, Exception? exception, Guid taskId);
+
+    [LoggerMessage(EventId = 1237, Level = LogLevel.Warning, SkipEnabledCheck = true,
+        Message = "Occurrence provider '{ProviderKey}' could not answer for schedule {TaskId} ({Failures} " +
+                  "consecutive failure(s)): nothing was written and the schedule is parked to ask again at " +
+                  "{RetryAtUtc:O}")]
+    public static partial void ScheduleAdvanceDeferredByProvider(this ILogger logger, Exception? exception,
+                                                                 string providerKey, Guid taskId, int failures,
+                                                                 DateTimeOffset retryAtUtc);
+
+    [LoggerMessage(EventId = 1240, Level = LogLevel.Debug,
+        Message = "Next occurrence of schedule {TaskId} was not computed: the host is stopping. Nothing was " +
+                  "written and startup recovery asks the grid again")]
+    public static partial void ScheduleAdvanceAbandonedOnShutdown(this ILogger logger, Guid taskId);
+
+    [LoggerMessage(EventId = 1241, Level = LogLevel.Error,
+        Message = "Schedule {TaskId} could not be parked to ask the occurrence provider '{ProviderKey}' " +
+                  "again: nothing was written and the series stays where it is until the next startup " +
+                  "recovery")]
+    public static partial void ProviderRetryParkFailed(this ILogger logger, Exception? exception, Guid taskId,
+                                                       string providerKey);
 }

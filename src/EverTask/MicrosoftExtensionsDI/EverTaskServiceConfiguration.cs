@@ -1,5 +1,6 @@
 ﻿using EverTask.Configuration;
 using EverTask.RateLimiting;
+using EverTask.Scheduler.Occurrences;
 using EverTask.Scheduler.Recurring;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -78,6 +79,20 @@ public class EverTaskServiceConfiguration
     internal int MaterializationConcurrency => Math.Max(1, _materializationConcurrency ?? MaxDegreeOfParallelism);
 
     internal TimeSpan BacklogRetryInterval { get; private set; } = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// The occurrence providers registered with <c>AddOccurrenceProvider&lt;T&gt;(key)</c>, by key. A schedule
+    /// persists the key alone, so this is what turns it back into an implementation (V2).
+    /// </summary>
+    /// <remarks>
+    /// Ordinal comparison: the key is an identifier the application chooses and a row carries verbatim, so
+    /// "Business-Days" and "business-days" are two keys — a culture-sensitive match would resolve a row to a
+    /// provider its author did not name.
+    /// </remarks>
+    internal Dictionary<string, Type> OccurrenceProviders { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>How long a schedule waits before asking a failed occurrence provider again (V4).</summary>
+    internal OccurrenceProviderRetryOptions OccurrenceProviderRetry { get; } = new();
 
     /// <summary>
     /// Upper bound of <see cref="SetBacklogRetryInterval"/>. The interval is added to a UTC instant on every
@@ -434,6 +449,35 @@ public class EverTaskServiceConfiguration
         }
 
         BacklogRetryInterval = interval;
+        return this;
+    }
+
+    /// <summary>
+    /// Sets how long a schedule waits before asking its <see cref="INextOccurrenceProvider"/> again, when the
+    /// provider could not answer.
+    /// </summary>
+    /// <param name="configure">Action to configure the backoff (initial and maximum).</param>
+    /// <returns>The configuration instance for method chaining.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="configure"/> is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Either bound is not positive, or is longer than a day.</exception>
+    /// <remarks>
+    /// A provider failure is treated as transient — the database a calendar is read from being briefly down
+    /// must not end a series — so the schedule writes nothing, keeps its cursor and is parked again after this
+    /// wait. It doubles at each consecutive failure of the same schedule, up to <c>MaxBackoff</c>, and one
+    /// answer resets it.
+    /// <code>
+    /// opt.SetOccurrenceProviderRetry(r =>
+    /// {
+    ///     r.InitialBackoff = TimeSpan.FromSeconds(30);
+    ///     r.MaxBackoff     = TimeSpan.FromMinutes(5);
+    /// });
+    /// </code>
+    /// </remarks>
+    public EverTaskServiceConfiguration SetOccurrenceProviderRetry(Action<OccurrenceProviderRetryOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+
+        configure(OccurrenceProviderRetry);
         return this;
     }
 

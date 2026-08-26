@@ -43,6 +43,37 @@ public interface IIntervalSchedulerBuilder
     /// <inheritdoc cref="IBuildableSchedulerBuilder.BackfillFrom"/>
     IIntervalSchedulerBuilder BackfillFrom(DateTimeOffset startUtc) =>
         throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <summary>
+    /// Takes this schedule's occurrences from a registered <see cref="INextOccurrenceProvider"/> instead of
+    /// from a cron expression or an interval — for the calendars the fluent API cannot express (business days,
+    /// a holiday table, hours the application keeps in its own database).
+    /// </summary>
+    /// <param name="key">
+    /// The key the provider was registered under with <c>AddOccurrenceProvider&lt;T&gt;(key)</c>. Only the key
+    /// is persisted, never a type name.
+    /// </param>
+    /// <param name="config">
+    /// An opaque string handed back to the provider on every call, for a schedule that needs to say WHICH
+    /// calendar it means. EverTask never reads it; versioning its format is the provider's business.
+    /// </param>
+    /// <returns>The builder, for the bounds and the misfire policy.</returns>
+    /// <exception cref="ArgumentException">
+    /// The key is empty, or — when the schedule is built — no provider is registered under it.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when the schedule is built: a provider replaces the grid, so it cannot be combined with a cron
+    /// expression or an interval.
+    /// </exception>
+    /// <remarks>
+    /// Everything else works as it does for any other schedule: <c>RunUntil</c>, <c>MaxRuns</c>, the misfire
+    /// policies and durable occurrences all go through the same seam. The two exceptions are stated where they
+    /// apply — <see cref="CatchUpOverflowPolicy.SkipOldest"/> needs
+    /// <see cref="INextOccurrenceProvider.IsDeterministic"/>, and
+    /// <see cref="RescheduleMode.RebaseFromCursor"/> is refused because a provider exposes no nominal period.
+    /// </remarks>
+    IBuildableSchedulerBuilder UseOccurrenceProvider(string key, string? config = null) =>
+        throw SchedulerBuilderDefaults.NotImplemented();
 }
 
 /// <summary>

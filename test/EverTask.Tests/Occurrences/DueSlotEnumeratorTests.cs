@@ -630,12 +630,13 @@ public class DueSlotEnumeratorTests
     }
 
     [Fact]
-    public async Task Should_not_probe_a_backlog_for_a_plan_that_may_create_nothing()
+    public async Task Should_ask_the_grid_nothing_for_a_plan_that_may_create_nothing()
     {
-        // The newest slot of a backlog — the end of the range a misfire carries — is found by bisecting the
-        // instant axis, and every probe walks the grid. It is stamped on the rows the plan grants, so a plan
-        // whose window is already full has nobody to tell: it was paying dozens of walks, at every operational
-        // retry, to close a range that went straight into an empty slot list.
+        // Two costs a full window used to pay for nothing. The newest slot of a backlog — the end of the range
+        // a misfire carries — is found by bisecting the instant axis, and it is stamped on rows this plan does
+        // not grant; and the count of what is owed is the CAP decision, which is about whether a replay may
+        // start, and a run with no budget starts none. Both come back at every operational retry, for as long
+        // as the occurrence holding the budget runs, and over a grid of round trips both are queries.
         var counting   = new CountingEvaluator(ScheduleEvaluator.Default);
         var enumerator = new DueSlotEnumerator(counting, Threshold);
         var schedule   = MinuteSchedule(CatchUp(TimeSpan.FromDays(1), 5_000, maxPending: 1));
@@ -649,11 +650,40 @@ public class DueSlotEnumeratorTests
 
         full.Slots.ShouldBeEmpty();
         full.StopReason.ShouldBe(DueSlotStopReason.WindowFull);
-        whenFull.ShouldBe(1, "one count of the backlog, which IS the decision, and nothing else");
+        full.NextCursorUtc.ShouldBe(cursor, "and the backlog stays exactly where it is");
+        whenFull.ShouldBe(0, "nothing it could still measure changes what a run with no budget does");
 
         open.Misfire.ShouldNotBeNull();
         whenOpen.ShouldBeGreaterThan(10,
-            "the premise: closing that range really does cost a bisection, and the plan above skipped it");
+            "the premise: deciding this backlog really does cost a count and a bisection, and the plan above " +
+            "paid neither");
+    }
+
+    [Fact]
+    public async Task Should_stop_bisecting_at_the_first_probe_that_names_the_slot()
+    {
+        // An instant with exactly N due slots after it HAS the slot we want as its successor, so the search is
+        // over the moment a probe counts N — narrowing to the tick after that only spends probes. It is free
+        // on this grid and two round trips a probe on an occurrence provider, which is where the whole
+        // 64-probe budget was being spent on every plan.
+        var counting   = new CountingEvaluator(ScheduleEvaluator.Default);
+        var enumerator = new DueSlotEnumerator(counting, Threshold);
+        var schedule   = MinuteSchedule(CatchUp(TimeSpan.FromDays(1), 5, CatchUpOverflowPolicy.SkipOldest, 5));
+        var cursor     = Now.AddMinutes(-500);
+
+        var plan = await enumerator.PlanAsync(schedule, cursor, Now, 0, activeOccurrences: 0);
+
+        plan.Slots.ShouldBe([
+            Now.AddMinutes(-4), Now.AddMinutes(-3), Now.AddMinutes(-2), Now.AddMinutes(-1), Now
+        ]);
+        plan.Losses.ShouldHaveSingleItem().Reason.ShouldBe(SlotLossReason.CatchUpOverflow);
+        plan.Losses[0].Count.ShouldBe(496);
+        plan.Misfire!.Value.MissedThroughUtc.ShouldBe(Now);
+
+        // Two bisections (where the kept window begins, and where the backlog it describes ends) over a range
+        // of 500 minutes measured in ticks are about 38 probes each when they run to the end.
+        counting.Calls.ShouldBeLessThan(64,
+            "the search ends at the probe that has the answer, not at the tick that proves it is the last one");
     }
 
     [Theory]
@@ -1006,47 +1036,60 @@ public class DueSlotEnumeratorTests
         public ValueTask<NextRunResult> CalculateNextValidRunAsync(
             RecurringTask definition, DateTimeOffset scheduledTime, int currentRun, DateTimeOffset nowUtc,
             DateTimeOffset? referenceTime = null, bool isRecovery = false, bool computeSkippedCount = true,
-            CancellationToken ct = default)
+            ScheduleIdentity identity = default, CancellationToken ct = default)
         {
             Interlocked.Increment(ref _calls);
             return inner.CalculateNextValidRunAsync(definition, scheduledTime, currentRun, nowUtc, referenceTime,
-                isRecovery, computeSkippedCount, ct);
+                isRecovery, computeSkippedCount, identity, ct);
         }
 
         public ValueTask<DateTimeOffset?> NextAfterAsync(RecurringTask definition, DateTimeOffset anchor,
-                                                         DateTimeOffset after, CancellationToken ct = default)
+                                                         DateTimeOffset after, ScheduleIdentity identity = default,
+                                                         CancellationToken ct = default)
         {
             Interlocked.Increment(ref _calls);
-            return inner.NextAfterAsync(definition, anchor, after, ct);
+            return inner.NextAfterAsync(definition, anchor, after, identity, ct);
         }
 
         public ValueTask<int> CountMissedAsync(RecurringTask definition, DateTimeOffset anchor, DateTimeOffset after,
-                                               int cap, CancellationToken ct = default)
+                                               int cap, ScheduleIdentity identity = default,
+                                               CancellationToken ct = default)
         {
             Interlocked.Increment(ref _calls);
-            return inner.CountMissedAsync(definition, anchor, after, cap, ct);
+            return inner.CountMissedAsync(definition, anchor, after, cap, identity, ct);
         }
 
         public ValueTask<bool> IsOccurrenceStillCurrentAsync(RecurringTask definition, DateTimeOffset occurrence,
-                                                             DateTimeOffset nowUtc, CancellationToken ct = default)
+                                                             DateTimeOffset nowUtc,
+                                                             ScheduleIdentity identity = default,
+                                                             CancellationToken ct = default)
         {
             Interlocked.Increment(ref _calls);
-            return inner.IsOccurrenceStillCurrentAsync(definition, occurrence, nowUtc, ct);
+            return inner.IsOccurrenceStillCurrentAsync(definition, occurrence, nowUtc, identity, ct);
         }
 
         public ValueTask<DateTimeOffset?> NextGridOccurrenceAfterAsync(
-            RecurringTask definition, DateTimeOffset occurrence, CancellationToken ct = default)
+            RecurringTask definition, DateTimeOffset occurrence, ScheduleIdentity identity = default,
+            CancellationToken ct = default)
         {
             Interlocked.Increment(ref _calls);
-            return inner.NextGridOccurrenceAfterAsync(definition, occurrence, ct);
+            return inner.NextGridOccurrenceAfterAsync(definition, occurrence, identity, ct);
+        }
+
+        public ValueTask<DateTimeOffset?> FirstOccurrenceOnOrAfterAsync(
+            RecurringTask definition, DateTimeOffset instant, ScheduleIdentity identity = default,
+            CancellationToken ct = default)
+        {
+            Interlocked.Increment(ref _calls);
+            return inner.FirstOccurrenceOnOrAfterAsync(definition, instant, identity, ct);
         }
 
         public ValueTask<IReadOnlyList<DateTimeOffset>> EnumerateDueSlotsAsync(
             RecurringTask definition, DateTimeOffset cursor, DateTimeOffset nowUtc, int cap,
-            CancellationToken ct = default)
+            ScheduleIdentity identity = default, CancellationToken ct = default)
         {
             Interlocked.Increment(ref _calls);
-            return inner.EnumerateDueSlotsAsync(definition, cursor, nowUtc, cap, ct);
+            return inner.EnumerateDueSlotsAsync(definition, cursor, nowUtc, cap, identity, ct);
         }
     }
 }

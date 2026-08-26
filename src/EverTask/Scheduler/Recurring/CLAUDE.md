@@ -183,6 +183,21 @@ Fluent builder (`Builder/RecurringTaskBuilder.cs`) + occurrence math (`Recurring
       time either — read on the new zone. Both definitions agree on the selectors, because `SameGrid`
       compares exactly them.
 
+19. **A provider REPLACES the grid; it never refines one** (V1/V2, `ProviderSettings`). `RecurringTask.Provider`
+    carries the registration KEY and an opaque config string — never a type name, which a rename would orphan
+    — and is `[JsonIgnore(WhenWritingNull)]` like every other member added after 3.11. `Validate` refuses it
+    beside any interval or cron: cron already wins silently over the intervals (gotcha 1), and a second silent
+    winner would make a schedule mean something nobody wrote. A provider definition is `Calendar`
+    (the zone id travels to the provider, which is what reads its calendar on it), its `PeriodKind` is `None`
+    (so `ScheduleRebase` refuses it exactly like cron), and `IsUniformGrid` is false.
+    - **The arithmetic never answers for it.** `GetNextOccurrence` throws instead: with no interval and no
+      cron the cascade returns "no occurrence, ever", which every primitive here would report as a finished
+      series. The provider grid is asynchronous and lives behind `IScheduleEvaluator` — see
+      `src/EverTask/CLAUDE.md`.
+    - **`PlanNextRun` / `SelectNextRun` are the split that lets both grids share `CalculateNextRun`**: the
+      first-run configuration, the bounds and the realignment are decided once, and only the grid step in
+      between differs. Keep new rules in those two halves rather than in either caller.
+
 Builder and per-interval tests: `test/EverTask.Tests/RecurringTests/Builders/` and `.../Intervals/`.
 Rebase: `RecurringTests/ScheduleRebaseTests.cs` (a day kept across a Rome → Kiritimati move, the periods
 that hold several slots, and the refusals).

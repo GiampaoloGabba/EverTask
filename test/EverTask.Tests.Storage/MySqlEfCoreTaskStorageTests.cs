@@ -1,4 +1,5 @@
 #if !NET8_0
+using System.Diagnostics;
 using EverTask.Abstractions;
 using EverTask.Storage;
 using EverTask.Storage.EfCore;
@@ -51,6 +52,7 @@ public class MySqlEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsyncLif
                     .WithDatabase(Database)
                     .Build();
                 _mariaDbContainer.StartAsync().GetAwaiter().GetResult();
+                WaitUntilServerAcceptsConnections(_mariaDbContainer.GetConnectionString());
                 _containerInitialized = true;
             }
         }
@@ -81,6 +83,40 @@ public class MySqlEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsyncLif
 
         _dbContext   = serviceProvider.GetService<ITaskStoreDbContext>()!;
         _taskStorage = serviceProvider.GetRequiredService<ITaskStorage>();
+    }
+
+    /// <summary>
+    /// Blocks until the server answers on the mapped port, which is where the tests reach it.
+    /// </summary>
+    /// <remarks>
+    /// The module's wait strategy runs INSIDE the container, and the MariaDB entrypoint answers it with the
+    /// temporary server it starts to initialize the data directory — that one is replaced by a restart, and a
+    /// connection from the host landing in the restart window is refused with "Unable to connect to any of the
+    /// specified MySQL hosts". It costs the whole class one test (whichever ran first) and passes on the
+    /// re-run, so it reads as flakiness. The readiness that matters is the one the tests use.
+    /// </remarks>
+    private static void WaitUntilServerAcceptsConnections(string connectionString)
+    {
+        var elapsed = Stopwatch.StartNew();
+
+        while (true)
+        {
+            try
+            {
+                using var connection = new MySqlConnection(connectionString);
+                connection.Open();
+
+                using var command = connection.CreateCommand();
+                command.CommandText = "SELECT 1";
+                command.ExecuteScalar();
+
+                return;
+            }
+            catch (MySqlException) when (elapsed.Elapsed < TimeSpan.FromSeconds(60))
+            {
+                Thread.Sleep(250);
+            }
+        }
     }
 
     [Fact]

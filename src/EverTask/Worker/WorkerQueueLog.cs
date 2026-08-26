@@ -66,4 +66,8 @@ internal static partial class WorkerQueueLog
     [LoggerMessage(EventId = 1314, Level = LogLevel.Warning,
         Message = "Queue '{QueueName}' not found, falling back to 'default' queue")]
     public static partial void QueueNotFoundFallingBackToDefault(this ILogger logger, string queueName);
+
+    [LoggerMessage(EventId = 1315, Level = LogLevel.Error,
+        Message = "Error releasing the eager handler scope of dropped delivery {TaskId}")]
+    public static partial void DroppedDeliveryReleaseFailed(this ILogger logger, Exception exception, Guid taskId);
 }

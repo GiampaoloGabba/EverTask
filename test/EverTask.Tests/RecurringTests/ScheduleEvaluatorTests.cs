@@ -161,6 +161,36 @@ public class ScheduleEvaluatorTests
     }
 
     [Fact]
+    public async Task The_skip_forward_count_says_whether_it_is_a_total_or_a_lower_bound()
+    {
+        // The realignment past a downtime reports how many runs it cost, and that number reaches a log line
+        // and a monitoring event. A grid that counts by division answers the real total however long the
+        // outage was; a WALKED one stops at its own bound, and the difference has to travel with the number
+        // instead of leaving an operator to read "10,001 runs lost" as a fact.
+        var uniform = new RecurringTask { SecondInterval = new SecondInterval(1) };
+        var walked  = new RecurringTask { CronInterval = new CronInterval("* * * * *") };
+
+        var now = Anchor.AddDays(92);
+
+        var byDivision = await Evaluator.CalculateNextValidRunAsync(uniform, Anchor, 1, now, isRecovery: true);
+
+        byDivision.SkippedCount.ShouldBeGreaterThan(1_000_000, "three months of a one-second grid, counted");
+        byDivision.SkippedCountIsExact.ShouldBeTrue("a subtraction has no bound to stop at");
+
+        var byWalking = await Evaluator.CalculateNextValidRunAsync(walked, Anchor, 1, now, isRecovery: true);
+
+        byWalking.SkippedCount.ShouldBe(10_001, "one past the walk's own bound, which is where it stops");
+        byWalking.SkippedCountIsExact.ShouldBeFalse("so the number is 'at least this many' and says so");
+
+        // And a walk that finishes inside its bound is a real total, like every count below it.
+        var inside = await Evaluator.CalculateNextValidRunAsync(walked, Anchor, 1, Anchor.AddMinutes(30),
+            isRecovery: true);
+
+        inside.SkippedCount.ShouldBe(31);
+        inside.SkippedCountIsExact.ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task The_capped_count_matches_the_uncapped_one_below_the_cap()
     {
         var task  = new RecurringTask { DayInterval = new DayInterval(1, []) { OnTimes = [new TimeOnly(9, 0)] } };

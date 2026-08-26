@@ -266,6 +266,55 @@ r => r.Schedule().EveryDay().AtTime(new TimeOnly(3,0)).WithDurableOccurrences()
 - Occurrences are rows: set `OccurrenceRetentionDays` in the audit-cleanup policy (`03-storage.md`) for any
   schedule that runs often.
 
+## Occurrence providers (a calendar the builder cannot express)
+
+When the grid lives in the application — business days minus a holiday table, opening hours, "the day after
+each invoicing cycle closes" — register an `INextOccurrenceProvider` and let the schedule take its slots from
+it. Everything else keeps working over it: misfire policies, durable occurrences, `InTimeZone`, `MaxRuns`,
+skip-forward, the schedule manager.
+
+```csharp
+public sealed class BusinessDaysProvider(HolidayRepository holidays) : INextOccurrenceProvider
+{
+    public bool IsDeterministic => true;   // needed only by CatchUpOverflowPolicy.SkipOldest
+
+    public async ValueTask<DateTimeOffset?> GetNextOccurrenceAsync(NextOccurrenceRequest request,
+                                                                   CancellationToken ct)
+    {
+        // STRICTLY after request.AfterUtc, in UTC; null ends the series.
+        // Asked about arbitrary instants, not only the ones already returned.
+    }
+}
+
+services.AddEverTask(...)
+        .AddSqlServerStorage(cs)
+        .AddOccurrenceProvider<BusinessDaysProvider>("business-days");
+
+await dispatcher.Dispatch(new SendReminderTask(),
+    r => r.Schedule().UseOccurrenceProvider("business-days", config: "{\"calendar\":\"IT\"}")
+          .InTimeZone("Europe/Rome"),
+    taskKey: "reminder");
+```
+
+- The KEY is persisted on every row that uses it, never a type name: renaming it orphans those schedules.
+  `config` is opaque — EverTask never reads it — so version its format yourself.
+- Exclusive with every interval and with cron: a provider REPLACES the grid instead of refining it.
+- The provider is resolved in a fresh scope per call (register it yourself for another lifetime), so it may
+  depend on a DbContext. Keep it fast: it sits on the path of every advance, and measuring a backlog costs
+  several questions.
+- `TimeZoneId` travels in the request and nothing is converted for you: a calendar meaning "07:00 in Rome"
+  resolves the zone itself.
+- Unknown key = configuration error: `ArgumentException` at dispatch, terminal poison at recovery.
+  A provider that THROWS is transient: nothing is written, the schedule is re-parked after the backoff of
+  `SetOccurrenceProviderRetry` (1 min doubling to 15 by default), a warning event is published, and the
+  recovery poison counter is not touched. It surfaces as `OccurrenceProviderException` only where a caller
+  is holding the call: a dispatch, and `ITaskScheduleManager.Reschedule`/`ReevaluateSchedule`, which ask the
+  provider to decide the new cursor — catch it there and retry, nothing was written.
+- A provider failure on the question asked AFTER a run leaves that run unwritten: the slot may run again when
+  the schedule comes back (at-least-once, like every other EverTask handler).
+- `RescheduleMode.RebaseFromCursor` is refused (no nominal period); `ReevaluateSchedule(taskKey)` is how the
+  application says its calendar changed.
+
 ## Wizard decision points
 
 1. One-shot vs recurring → dispatch overload.
@@ -286,3 +335,6 @@ r => r.Schedule().EveryDay().AtTime(new TimeOnly(3,0)).WithDurableOccurrences()
     setting, an on-call action)? → `ITaskScheduleManager`, not a re-dispatch: `Reschedule` with
     `RebaseFromCursor` when only the hour or the zone moves and today's run must stay today's,
     `RecalculateFromNow` otherwise.
+11. Can the schedule be written as an interval or a cron expression at all? A calendar the application owns
+    (business days, holidays, opening hours) → `AddOccurrenceProvider<T>("key")` +
+    `.UseOccurrenceProvider("key", config?)`, and `ReevaluateSchedule` when that calendar changes.

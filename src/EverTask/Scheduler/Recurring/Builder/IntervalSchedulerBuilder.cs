@@ -99,4 +99,16 @@ public class IntervalSchedulerBuilder(RecurringTask task, TimeProvider? timeProv
         ScheduleModifiers.BackfillFrom(task, startUtc);
         return this;
     }
+
+    public IBuildableSchedulerBuilder UseOccurrenceProvider(string key, string? config = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+
+        task.Provider = new ProviderSettings { Key = key, Config = config };
+
+        // The BUILDABLE builder, not this one: a provider replaces the grid, so the interval methods that
+        // follow it would be refused by Validate anyway (a provider and an interval are exclusive), and
+        // ending the chain here is what says so at compile time instead.
+        return new BuildableSchedulerBuilder(task, timeProvider);
+    }
 }

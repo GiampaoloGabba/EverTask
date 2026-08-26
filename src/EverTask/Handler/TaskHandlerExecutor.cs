@@ -73,6 +73,28 @@ public record TaskHandlerExecutor(
     internal bool ExecutionTimeIsReservedSlot { get; init; }
 
     /// <summary>
+    /// True when this delivery exists only to ask a schedule's grid AGAIN — an
+    /// <see cref="INextOccurrenceProvider"/> that could not answer (V4) — and must not run the handler.
+    /// </summary>
+    /// <remarks>
+    /// Internal and set in exactly one place, the provider re-park. What the schedule owes is decided from the
+    /// ROW when the retry fires, which is the whole point: the question the provider left unanswered is which
+    /// slot is due, so parking an ordinary delivery would run one nobody has decided about.
+    /// </remarks>
+    internal bool IsScheduleRetry { get; init; }
+
+    /// <summary>
+    /// On a <see cref="IsScheduleRetry"/> delivery: the slot the interrupted decision was about, since
+    /// <see cref="ExecutionTime"/> now holds the instant the retry FIRES at.
+    /// </summary>
+    /// <remarks>
+    /// It exists for the one host that has nowhere else to read it: with a storage the retry re-reads the row
+    /// and the cursor there is the answer, but a storage-less series (F18) lives entirely on its delivery, and
+    /// re-deciding from the retry instant instead of from the slot would silently skip everything in between.
+    /// </remarks>
+    internal DateTimeOffset? ScheduleRetryFromUtc { get; init; }
+
+    /// <summary>
     /// What the persisted ROW states about this delivery when it is an occurrence — its slot and its run of
     /// the series — or null when the delivery is not one.
     /// </summary>

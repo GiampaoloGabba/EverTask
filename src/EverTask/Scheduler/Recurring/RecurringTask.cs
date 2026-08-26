@@ -66,6 +66,19 @@ public class RecurringTask
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public DateTimeOffset? BackfillFromUtc { get; set; }
 
+    /// <summary>
+    /// The registered <see cref="INextOccurrenceProvider"/> this schedule takes its occurrences from, or
+    /// <c>null</c> for the built-in grid (V2).
+    /// </summary>
+    /// <remarks>
+    /// Omitted from the JSON while it is null, for the same byte-parity reason as the members above. It is
+    /// EXCLUSIVE with every built-in interval and with cron: a provider does not refine a grid, it replaces
+    /// one. Only the key and the opaque config travel with the row — never a type name, which a rename would
+    /// orphan.
+    /// </remarks>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ProviderSettings? Provider { get; set; }
+
     private TimeZoneInfo? _zone;
     private string?       _zoneId;
 
@@ -88,17 +101,19 @@ public class RecurringTask
     /// <remarks>
     /// The DOMINANT selector decides, coarsest first, because that is the unit inside which the finer ones only
     /// choose a position: a monthly schedule that also names a time of day still belongs to its month. Cron is
-    /// <see cref="SchedulePeriodKind.None"/> — an expression states no period anything could rely on — and an
-    /// hour cadence that selects hours belongs to the day those hours are counted in.
+    /// <see cref="SchedulePeriodKind.None"/> — an expression states no period anything could rely on — and so
+    /// is a provider, for the same reason and more so: nothing outside it knows what its calendar even means.
+    /// An hour cadence that selects hours belongs to the day those hours are counted in.
     /// </remarks>
     [JsonIgnore]
     internal SchedulePeriodKind PeriodKind =>
-        !string.IsNullOrEmpty(CronInterval?.CronExpression) ? SchedulePeriodKind.None
-        : MonthInterval != null                             ? SchedulePeriodKind.Month
-        : WeekInterval != null                              ? SchedulePeriodKind.Week
-        : DayInterval != null                               ? SchedulePeriodKind.Day
-        : HourInterval is { OnHours.Length: > 0 }           ? SchedulePeriodKind.Day
-                                                            : SchedulePeriodKind.Instant;
+        Provider != null                                     ? SchedulePeriodKind.None
+        : !string.IsNullOrEmpty(CronInterval?.CronExpression) ? SchedulePeriodKind.None
+        : MonthInterval != null                               ? SchedulePeriodKind.Month
+        : WeekInterval != null                                ? SchedulePeriodKind.Week
+        : DayInterval != null                                 ? SchedulePeriodKind.Day
+        : HourInterval is { OnHours.Length: > 0 }             ? SchedulePeriodKind.Day
+                                                              : SchedulePeriodKind.Instant;
 
     /// <summary>
     /// The resolved <see cref="TimeZoneId"/>, cached, or null when the schedule carries none.
@@ -157,10 +172,12 @@ public class RecurringTask
     /// <summary>
     /// True when the grid is anchored to a wall clock or a calendar rather than being a constant step in
     /// elapsed time (T5). Day, week and month intervals always are: each of them snaps its result to a time
-    /// of day, and a time of day only means something on some clock.
+    /// of day, and a time of day only means something on some clock. So is a provider: its calendar is
+    /// whatever the application says it is, and it is handed the zone id to read it on.
     /// </summary>
     private bool IsCalendarAnchored() =>
-        !string.IsNullOrEmpty(CronInterval?.CronExpression)
+        Provider != null
+     || !string.IsNullOrEmpty(CronInterval?.CronExpression)
      || MonthInterval != null
      || WeekInterval != null
      || DayInterval != null
@@ -173,7 +190,16 @@ public class RecurringTask
     /// after a recovery deserialize so corrupt schedule metadata is routed to the TERMINAL poison path (B1)
     /// instead of throwing downstream at next-run (a bounded per-restart failure) or producing a wrong schedule.
     /// </summary>
-    public void Validate()
+    public void Validate() => Validate(null);
+
+    /// <inheritdoc cref="Validate()"/>
+    /// <param name="providers">
+    /// The registered occurrence providers, when the caller can reach them: the key a provider-driven schedule
+    /// names is then checked here too, so a dispatch is refused with the key in the message and a persisted row
+    /// naming a key this build no longer registers takes the terminal poison route instead of failing at every
+    /// next-run for ever. Null skips that one check — the grid itself refuses the key when it is asked.
+    /// </param>
+    internal void Validate(Occurrences.OccurrenceProviderRegistry? providers)
     {
         // The tolerant enum converter maps an unknown numeric value through verbatim rather than failing the
         // whole payload; enforcing the defined set is this method's job (B2). Without it an out-of-range mode
@@ -193,8 +219,37 @@ public class RecurringTask
         WeekInterval?.Validate();
         MonthInterval?.Validate();
 
+        ValidateProvider(providers);
         ValidateTimeZone();
         ValidateMisfire();
+    }
+
+    /// <summary>
+    /// V2: a provider REPLACES the grid, so it cannot sit beside one, and the key it names has to resolve.
+    /// </summary>
+    /// <remarks>
+    /// Exclusivity is refused rather than resolved by precedence. Cron already wins silently over every
+    /// interval (that namespace's gotcha 1), and adding a second silent winner on top of it would make a
+    /// schedule that names both mean something nobody wrote.
+    /// </remarks>
+    private void ValidateProvider(Occurrences.OccurrenceProviderRegistry? providers)
+    {
+        if (Provider is not { } provider)
+            return;
+
+        provider.Validate();
+
+        if (!string.IsNullOrEmpty(CronInterval?.CronExpression) || SecondInterval != null || MinuteInterval != null
+         || HourInterval != null || DayInterval != null || WeekInterval != null || MonthInterval != null)
+        {
+            throw new InvalidOperationException(
+                $"The schedule takes its occurrences from the provider '{provider.Key}' AND names a built-in " +
+                "interval or cron expression. A provider replaces the grid instead of refining it: use one or " +
+                "the other.");
+        }
+
+        if (providers != null && !providers.IsRegistered(provider.Key))
+            throw providers.UnknownKey(provider.Key);
     }
 
     /// <summary>
@@ -300,17 +355,33 @@ public class RecurringTask
     {
         collapsedSlots = 0;
 
-        if (currentRun >= MaxRuns) return null;
+        var plan = PlanNextRun(current, currentRun, isRecovery, nowUtc);
+
+        if (plan.IsFinal)
+            return plan.Answer;
+
+        var next = GetNextOccurrence(plan.BaseTime, out var gridCollapsed);
+
+        return SelectNextRun(plan, next, gridCollapsed, out collapsedSlots);
+    }
+
+    /// <summary>
+    /// Everything <see cref="CalculateNextRun(DateTimeOffset,int,bool,DateTimeOffset?,out int)"/> decides
+    /// BEFORE it asks the grid: the termination bounds, the first-run configuration, and which instant the
+    /// grid is then asked about.
+    /// </summary>
+    /// <remarks>
+    /// Split out so a grid that answers ASYNCHRONOUSLY — a schedule whose occurrences come from an
+    /// <see cref="INextOccurrenceProvider"/> — reuses this decision instead of restating it. The two halves
+    /// meet again in <see cref="SelectNextRun"/>; nothing between them touches the grid.
+    /// </remarks>
+    internal NextRunPlan PlanNextRun(DateTimeOffset current, int currentRun, bool isRecovery, DateTimeOffset? nowUtc)
+    {
+        if (currentRun >= MaxRuns) return NextRunPlan.Final(null);
 
         current = current.ToUniversalTime();
 
-        if (RunUntil <= current) return null;
-
-        // The first occurrence (RunNow / SpecificRunTime / InitialDelay) must be validated against
-        // RunUntil too — only subsequent occurrences were, so a first run beyond RunUntil would fire
-        // anyway (CU8).
-        DateTimeOffset? FirstRunOrNull(DateTimeOffset? candidate) =>
-            candidate.HasValue && RunUntil.HasValue && candidate.Value >= RunUntil.Value ? null : candidate;
+        if (RunUntil <= current) return NextRunPlan.Final(null);
 
         DateTimeOffset? runtime = null;
 
@@ -331,7 +402,7 @@ public class RecurringTask
             else if (InitialDelay.HasValue)
             {
                 // InitialDelay always takes precedence - it defines the absolute first run time
-                return FirstRunOrNull(current.Add(InitialDelay.Value));
+                return NextRunPlan.Final(FirstRunOrNull(current.Add(InitialDelay.Value)));
             }
         }
 
@@ -341,34 +412,49 @@ public class RecurringTask
         var baseTime = (currentRun == 0 && runtime.HasValue && runtime.Value < current)
             ? runtime.Value
             : current;
-        var next = GetNextOccurrence(baseTime, out var gridCollapsed);
 
-        // The first-run branches below can answer with `runtime` instead of the grid's slot. A collapse count
-        // belonging to a slot nobody ends up scheduling would be a lie, so only the paths that really return
-        // `next` report one.
-        if (currentRun > 0)
+        return new NextRunPlan(false, null, baseTime, runtime, current, currentRun);
+    }
+
+    /// <summary>
+    /// The other half: what the schedule's next run is, given the grid's answer for
+    /// <see cref="NextRunPlan.BaseTime"/>.
+    /// </summary>
+    /// <param name="plan">What <see cref="PlanNextRun"/> decided.</param>
+    /// <param name="next">The grid's occurrence strictly after the plan's base time.</param>
+    /// <param name="gridCollapsed">How many nominal slots a DST transition folded into it.</param>
+    /// <param name="collapsedSlots">
+    /// The collapse count of the occurrence really returned — zero whenever a first-run instant wins over the
+    /// grid's slot, because a count belonging to a slot nobody schedules would be a lie.
+    /// </param>
+    internal DateTimeOffset? SelectNextRun(in NextRunPlan plan, DateTimeOffset? next, int gridCollapsed,
+                                           out int collapsedSlots)
+    {
+        collapsedSlots = 0;
+
+        if (plan.CurrentRun > 0)
         {
             collapsedSlots = gridCollapsed;
             return next;
         }
 
-        if (next == null) return FirstRunOrNull(runtime);
+        if (next == null) return FirstRunOrNull(plan.Runtime);
 
         // For RunNow or SpecificRunTime, use runtime if:
         // 1. It's in the future (always use future SpecificRunTime)
         // 2. It's in the recent past (within 20 seconds) AND before next interval
         // No arbitrary gap required - the user explicitly requested this runtime
-        if (runtime.HasValue)
+        if (plan.Runtime is { } runtime)
         {
             // If runtime is in the future, always use it
-            if (runtime.Value > current)
+            if (runtime > plan.Current)
             {
                 return FirstRunOrNull(runtime);
             }
 
             // If runtime is in the recent past, use it only if it's before next interval
             var runtimeIsBeforeNext = runtime < next;
-            var notTooFarInPast = runtime.Value > current.AddSeconds(-20);
+            var notTooFarInPast = runtime > plan.Current.AddSeconds(-20);
 
             if (runtimeIsBeforeNext && notTooFarInPast)
             {
@@ -379,6 +465,14 @@ public class RecurringTask
         collapsedSlots = gridCollapsed;
         return next;
     }
+
+    /// <summary>
+    /// The first occurrence (RunNow / SpecificRunTime / InitialDelay) must be validated against
+    /// <see cref="RunUntil"/> too — only subsequent occurrences were, so a first run beyond it would fire
+    /// anyway (CU8).
+    /// </summary>
+    private DateTimeOffset? FirstRunOrNull(DateTimeOffset? candidate) =>
+        candidate.HasValue && RunUntil.HasValue && candidate.Value >= RunUntil.Value ? null : candidate;
 
     /// <summary>
     /// Calculates the minimum interval for this recurring task.
@@ -469,6 +563,17 @@ public class RecurringTask
     private DateTimeOffset? GetNextOccurrence(DateTimeOffset current, out int collapsedSlots)
     {
         collapsedSlots = 0;
+
+        // The single door into the arithmetic grid, which is why the refusal lives here: with no interval and
+        // no cron the cascade below answers "no occurrence, ever" for a provider-driven schedule, and every
+        // primitive on this class would then quietly report a series that has ended. A provider grid is
+        // asynchronous and is reached through IScheduleEvaluator; nothing inside the library asks this one.
+        if (Provider is { } provider)
+        {
+            throw new NotSupportedException(
+                $"This schedule takes its occurrences from the provider '{provider.Key}', which answers " +
+                "asynchronously: ask the schedule evaluator instead of the definition's own arithmetic.");
+        }
 
         var zone = GoverningZone;
 
@@ -817,6 +922,19 @@ public class RecurringTask
         string.IsNullOrEmpty(CronInterval?.CronExpression) && IsUniformGrid();
 
     /// <summary>
+    /// Whether <paramref name="count"/> — a <see cref="CountMissedOccurrences"/> answer taken WITHOUT a cap —
+    /// is the real total or only a lower bound.
+    /// </summary>
+    /// <remarks>
+    /// The uncapped ask is the one that falls back to the walk's own bound, so its answer can stop short with
+    /// nothing on the number itself to say so. This is the one place that rule is written down, because the
+    /// bound is private and the callers that REPORT the count (the skip-forward log line and its monitoring
+    /// event) are the ones that must not present a truncated walk as a total.
+    /// </remarks>
+    internal bool IsExactUncappedCount(int count) =>
+        CountsMissedInConstantTime() || count <= MaxSkipCountIterations;
+
+    /// <summary>
     /// Number of occurrences missed in <c>(anchor, after]</c>, reported for LOGGING ONLY (Option B: it
     /// never consumes the <see cref="MaxRuns"/> budget). Uniform grids count in O(1) by division;
     /// calendar/cron schedules walk the real schedule, bounded.
@@ -901,6 +1019,10 @@ public class RecurringTask
         // after the previous one on every day but the two the zone changes offset on. The walk is the only
         // answer there. Elapsed grids and plain-UTC calendars keep the arithmetic they always had.
         if (GoverningZone != null) return false;
+
+        // A provider names no cadence at all, so it can never be a fixed progression — and the O(1) jump would
+        // measure a "step" by asking it twice.
+        if (Provider != null) return false;
 
         if (!string.IsNullOrEmpty(CronInterval?.CronExpression)) return false;
         if (MonthInterval != null) return false;
@@ -999,6 +1121,14 @@ public class RecurringTask
         if (parts.Count > 0)
             parts.Add("then");
 
+        if (Provider != null)
+        {
+            parts.Add(Provider.Describe());
+            AppendBounds(parts);
+            AppendModifiers(parts);
+            return string.Join(" ", parts);
+        }
+
         if (CronInterval != null)
         {
             parts.Add("Use Cron expression:");
@@ -1063,15 +1193,20 @@ public class RecurringTask
                 parts.Add($"in {string.Join(" - ", MonthInterval.OnMonths)}");
         }
 
+        AppendBounds(parts);
+        AppendModifiers(parts);
+
+        return string.Join(" ", parts);
+    }
+
+    /// <summary>The termination bounds, which read the same whatever produced the occurrences.</summary>
+    private void AppendBounds(List<string> parts)
+    {
         if (RunUntil != null)
             parts.Add($"until {RunUntil.Value.ToLocalTime():yyyy-MM-dd HH:mm:ss}");
 
         if (MaxRuns != null)
             parts.Add($"up to {MaxRuns} times");
-
-        AppendModifiers(parts);
-
-        return string.Join(" ", parts);
     }
 
     /// <summary>

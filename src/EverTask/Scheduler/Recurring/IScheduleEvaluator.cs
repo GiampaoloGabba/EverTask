@@ -5,11 +5,11 @@ namespace EverTask.Scheduler.Recurring;
 /// the recovery all go through it instead of calling the occurrence math directly.
 /// </summary>
 /// <remarks>
-/// The built-in implementation is a synchronous wrapper over the pure primitives on
-/// <see cref="RecurringTask"/> — every method completes without ever yielding. The asynchronous shape exists
-/// because a later phase resolves occurrences through a user-supplied provider, which may do real I/O; adding
-/// that branch here then costs nothing at the call sites, which are already written against a
-/// <see cref="ValueTask{TResult}"/>.
+/// For a built-in schedule the implementation is a synchronous wrapper over the pure primitives on
+/// <see cref="RecurringTask"/> — every method completes without ever yielding. The asynchronous shape is what
+/// a schedule whose occurrences come from an <see cref="INextOccurrenceProvider"/> needs: that grid is real
+/// I/O, and it answers here so that every caller — misfire policies, durable occurrences, skip-forward, the
+/// schedule manager — works with a provider without knowing one exists.
 /// </remarks>
 internal interface IScheduleEvaluator
 {
@@ -20,14 +20,15 @@ internal interface IScheduleEvaluator
     ValueTask<NextRunResult> CalculateNextValidRunAsync(
         RecurringTask definition, DateTimeOffset scheduledTime, int currentRun, DateTimeOffset nowUtc,
         DateTimeOffset? referenceTime = null, bool isRecovery = false, bool computeSkippedCount = true,
-        CancellationToken ct = default);
+        ScheduleIdentity identity = default, CancellationToken ct = default);
 
     /// <summary>
     /// First real occurrence strictly after <paramref name="after"/>, anchored on the known occurrence
     /// <paramref name="anchor"/>. Honours the termination bounds: null once the series has ended.
     /// </summary>
     ValueTask<DateTimeOffset?> NextAfterAsync(
-        RecurringTask definition, DateTimeOffset anchor, DateTimeOffset after, CancellationToken ct = default);
+        RecurringTask definition, DateTimeOffset anchor, DateTimeOffset after, ScheduleIdentity identity = default,
+        CancellationToken ct = default);
 
     /// <summary>
     /// Number of occurrences in <c>[anchor, after]</c>, bounded at <paramref name="cap"/><c> + 1</c>. Reported
@@ -35,14 +36,15 @@ internal interface IScheduleEvaluator
     /// </summary>
     ValueTask<int> CountMissedAsync(
         RecurringTask definition, DateTimeOffset anchor, DateTimeOffset after, int cap,
-        CancellationToken ct = default);
+        ScheduleIdentity identity = default, CancellationToken ct = default);
 
     /// <summary>
     /// True while <paramref name="occurrence"/> is still the current slot, i.e. its bounded successor has not
     /// come due at <paramref name="nowUtc"/>.
     /// </summary>
     ValueTask<bool> IsOccurrenceStillCurrentAsync(
-        RecurringTask definition, DateTimeOffset occurrence, DateTimeOffset nowUtc, CancellationToken ct = default);
+        RecurringTask definition, DateTimeOffset occurrence, DateTimeOffset nowUtc,
+        ScheduleIdentity identity = default, CancellationToken ct = default);
 
     /// <summary>
     /// The natural successor of <paramref name="occurrence"/> on the grid, IGNORING <c>RunUntil</c> and
@@ -50,7 +52,16 @@ internal interface IScheduleEvaluator
     /// simply ended", which the bounded successor collapses into the same null.
     /// </summary>
     ValueTask<DateTimeOffset?> NextGridOccurrenceAfterAsync(
-        RecurringTask definition, DateTimeOffset occurrence, CancellationToken ct = default);
+        RecurringTask definition, DateTimeOffset occurrence, ScheduleIdentity identity = default,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// The first occurrence at or ON <paramref name="instant"/> — the one question the grid answers
+    /// inclusively, and the cursor a backfilled durable schedule starts from (M11).
+    /// </summary>
+    ValueTask<DateTimeOffset?> FirstOccurrenceOnOrAfterAsync(
+        RecurringTask definition, DateTimeOffset instant, ScheduleIdentity identity = default,
+        CancellationToken ct = default);
 
     /// <summary>
     /// The slots that have already come due at <paramref name="nowUtc"/>, oldest first: the schedule's own
@@ -69,5 +80,5 @@ internal interface IScheduleEvaluator
     /// </remarks>
     ValueTask<IReadOnlyList<DateTimeOffset>> EnumerateDueSlotsAsync(
         RecurringTask definition, DateTimeOffset cursor, DateTimeOffset nowUtc, int cap,
-        CancellationToken ct = default);
+        ScheduleIdentity identity = default, CancellationToken ct = default);
 }

@@ -57,8 +57,18 @@ public static class ServiceCollectionExtensions
         // clock by design — they are not scheduling decisions.
         services.TryAddSingleton(TimeProvider.System);
 
-        // The single seam every component asks about a schedule's occurrence grid.
-        services.TryAddSingleton<IScheduleEvaluator, ScheduleEvaluator>();
+        // The occurrence providers an application registers, and the per-schedule backoff of one that could
+        // not answer. Both are per host, and both are read by the evaluator below.
+        services.TryAddSingleton<OccurrenceProviderRegistry>();
+        services.TryAddSingleton<OccurrenceProviderRetryRegistry>();
+        services.TryAddSingleton<ProviderScheduleGrid>();
+
+        // The single seam every component asks about a schedule's occurrence grid. Constructed explicitly, as
+        // the components below are: its provider grid is an optional constructor parameter (the fallback
+        // instance for hand-wired components has none), and letting the container choose between the two
+        // would silently build the one that cannot answer for a provider-driven schedule.
+        services.TryAddSingleton<IScheduleEvaluator>(sp =>
+            new ScheduleEvaluator(sp.GetRequiredService<ProviderScheduleGrid>()));
 
         // Ambient execution context. Singleton on purpose (C3): an eager handler's dependency graph is built
         // in the DISPATCHER's scope, so a scoped accessor would be invisible to exactly the services that
@@ -179,6 +189,7 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<IEverTaskLogger<TaskScheduleManager>>(),
                 sp.GetRequiredService<TimeProvider>(),
                 sp.GetService<ITaskStorage>(),
+                sp.GetService<OccurrenceProviderRegistry>(),
                 sp.GetService<OccurrenceMaterializer>(),
                 sp.GetService<IGateInvalidationRegistry>(),
                 sp.GetService<IEverTaskWorkerExecutor>(),

@@ -15,6 +15,9 @@ builder.Services.AddEverTask(opt =>
        .RegisterTasksFromAssembly(typeof(Program).Assembly);
 })
 .AddMemoryStorage()
+// The calendar of a schedule the fluent API cannot express: business days at 09:00, holidays skipped.
+// Schedules name it by KEY, which is all that gets persisted.
+.AddOccurrenceProvider<BusinessDaysProvider>("business-days")
 .AddMonitoringApi(options =>
 {
     options.EnableUI             = true;
@@ -81,6 +84,17 @@ await dispatcher.Dispatch(
     taskBuilder => taskBuilder.Schedule().EveryDay().MaxRuns(3)
 );
 Console.WriteLine("✓ Dispatched daily recurring task (max 3 runs)");
+
+// Recurring task whose grid comes from the application's own calendar
+await dispatcher.Dispatch(
+    new SampleTaskRequest("Business-days task - Hello at 09:00 in Rome, weekends and holidays skipped"),
+    taskBuilder => taskBuilder.Schedule()
+                              .UseOccurrenceProvider("business-days")
+                              .InTimeZone("Europe/Rome")
+                              .MaxRuns(3),
+    taskKey: "business-days-sample"
+);
+Console.WriteLine("✓ Dispatched business-days task (occurrence provider, max 3 runs)");
 
 Console.WriteLine();
 Console.WriteLine("All example tasks dispatched!");

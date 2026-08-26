@@ -1,7 +1,9 @@
 ﻿using System.Collections.Concurrent;
+using System.Globalization;
 using System.Linq.Expressions;
 using EverTask.Configuration;
 using EverTask.RateLimiting;
+using EverTask.Scheduler.Occurrences;
 using EverTask.Scheduler.Recurring.Builder;
 
 namespace EverTask.Dispatcher;
@@ -45,6 +47,10 @@ public class Dispatcher(
     private TimeProvider? _timeProvider;
     private ScheduleVersionRegistry? _scheduleVersions;
     private bool _scheduleVersionsResolved;
+    private OccurrenceProviderRegistry? _providers;
+    private bool _providersResolved;
+    private OccurrenceProviderRetryRegistry? _providerRetries;
+    private bool _providerRetriesResolved;
 
     /// <summary>
     /// The single seam for every question about the occurrence grid. Falls back to the built-in evaluator
@@ -102,6 +108,43 @@ public class Dispatcher(
             }
 
             return _scheduleVersions;
+        }
+    }
+
+    /// <summary>
+    /// The occurrence providers this host registered, or null in a hand-wired container that never called
+    /// <c>AddEverTask</c>. A schedule that names one is refused there rather than dispatched blind.
+    /// </summary>
+    private OccurrenceProviderRegistry? Providers
+    {
+        get
+        {
+            if (!_providersResolved)
+            {
+                _providers         = serviceProvider.GetService<OccurrenceProviderRegistry>();
+                _providersResolved = true;
+            }
+
+            return _providers;
+        }
+    }
+
+    /// <summary>
+    /// The consecutive provider failures this host is holding per schedule. Read only to FORGET a schedule
+    /// that will not ask again: the entry of one cancelled mid-outage would otherwise outlive the process's
+    /// interest in it, exactly like a published schedule version.
+    /// </summary>
+    private OccurrenceProviderRetryRegistry? ProviderRetries
+    {
+        get
+        {
+            if (!_providerRetriesResolved)
+            {
+                _providerRetries         = serviceProvider.GetService<OccurrenceProviderRetryRegistry>();
+                _providerRetriesResolved = true;
+            }
+
+            return _providerRetries;
         }
     }
 
@@ -166,8 +209,11 @@ public class Dispatcher(
 
         // A schedule that will not run again stops being a version this process publishes a lower bound for
         // (S4). Nothing depends on the entry surviving a cancel, and leaving one behind per cancelled schedule
-        // is the only way the registry could grow without bound.
+        // is the only way the registry could grow without bound. Its provider backoff goes the same way and
+        // for the same reason: a schedule cancelled while its calendar was down never gets the answer that
+        // would have cleared it.
         ScheduleVersions?.Remove(taskId);
+        ProviderRetries?.Forget(taskId);
 
         // Persist Cancelled LAST so it is the final write of the cancel: any SetQueued a racing enqueue
         // managed to issue before the blacklist took effect is overwritten by Cancelled.
@@ -260,6 +306,62 @@ public class Dispatcher(
                   "non-atomic emulation to fall back to. Use a built-in provider, or implement them.");
     }
 
+    /// <summary>
+    /// Refuses a provider-driven schedule this host cannot run: an unregistered key, or a policy the provider
+    /// does not support. Shared with the runtime schedule manager, which accepts a definition the same way.
+    /// </summary>
+    /// <remarks>
+    /// The key check is also in <see cref="RecurringTask.Validate(OccurrenceProviderRegistry)"/>, which is what
+    /// poisons a persisted row naming a key this build no longer registers; here it is what refuses the
+    /// dispatch while the caller is still holding it. The determinism check lives ONLY here, deliberately: it
+    /// resolves the provider to ask, and doing that inside the validation every recovery runs would turn a
+    /// container hiccup into a poisoned schedule.
+    /// <para>
+    /// Which is why it is a DISPATCH-time gate and nothing else: on the recovery path there is no caller to
+    /// refuse, the row is already written, and neither of the two things this can throw is an
+    /// <see cref="OccurrenceProviderException"/> — so both would escape the transient catch, reach the
+    /// recovery's own failure counter and poison the series after a handful of restarts. That is the outcome
+    /// the ratification of this gate (decisions §3.7) says cannot happen: a row carrying
+    /// <see cref="CatchUpOverflowPolicy.SkipOldest"/> over a provider that no longer declares itself
+    /// deterministic keeps running and bisects as a deterministic grid would, and a container that cannot
+    /// build the provider yet costs a retry, not a series.
+    /// </para>
+    /// </remarks>
+    internal static async ValueTask RequireProviderSupportAsync(RecurringTask recurring,
+                                                                OccurrenceProviderRegistry? providers,
+                                                                bool isRecovery = false)
+    {
+        if (recurring.Provider is not { } provider)
+            return;
+
+        if (providers is null)
+        {
+            throw new ArgumentException(
+                $"The schedule takes its occurrences from the provider '{provider.Key}', but this container " +
+                "registers none. Register it with AddOccurrenceProvider<T>(key) on the EverTask builder.",
+                nameof(recurring));
+        }
+
+        if (!providers.IsRegistered(provider.Key))
+            throw providers.UnknownKey(provider.Key);
+
+        if (isRecovery)
+            return;
+
+        if (recurring.Misfire is not { Policy: MisfirePolicy.CatchUp, OverflowPolicy: CatchUpOverflowPolicy.SkipOldest })
+            return;
+
+        if (!await providers.IsDeterministicAsync(provider.Key).ConfigureAwait(false))
+        {
+            throw new InvalidOperationException(
+                $"The catch-up policy of this schedule keeps only the most recent occurrences, which means " +
+                $"finding where they begin by probing the grid — and the provider '{provider.Key}' does not " +
+                $"declare {nameof(INextOccurrenceProvider.IsDeterministic)}, so probing it twice may answer " +
+                "twice differently. Override IsDeterministic => true if the calendar really is stable, or use " +
+                $"{nameof(CatchUpOverflowPolicy)}.{nameof(CatchUpOverflowPolicy.Halt)}.");
+        }
+    }
+
     /// <inheritdoc />
     public async Task<Guid> ExecuteDispatch(IEverTask task, CancellationToken ct = default, Guid? existingTaskId = null, string? taskKey = null) =>
         await ExecuteDispatch(task, null, null, null, ct, existingTaskId, taskKey, null).ConfigureAwait(false);
@@ -314,7 +416,9 @@ public class Dispatcher(
         // already validated its own through RecoveredTaskFactory, so this only ever re-checks a clean one
         // there. Without it a corrupt interval, or an OccurrenceMode outside the defined values, is read as
         // valid all the way down to IsScheduleOnly, which only ever compares against Durable.
-        recurring?.Validate();
+        // The registry is handed over so an unregistered provider key is refused here too, with the key in the
+        // message, instead of at the first grid question.
+        recurring?.Validate(Providers);
 
         // A durable schedule needs the atomic occurrence operations, and there is no half-atomic emulation to
         // degrade to: a storage without them would leave occurrences without their cursor advance, or the
@@ -322,6 +426,9 @@ public class Dispatcher(
         // materialization hours later on a background thread.
         if (recurring is { OccurrenceMode: OccurrenceMode.Durable })
             RequireDurableOccurrenceSupport(taskStorage);
+
+        if (recurring != null)
+            await RequireProviderSupportAsync(recurring, Providers, isRecovery).ConfigureAwait(false);
 
         // Serialize the read-decide-write of this taskKey against concurrent dispatches (held for the
         // whole dispatch, including the enqueue). No-op when there is no taskKey, no storage, or the id
@@ -430,6 +537,7 @@ public class Dispatcher(
                         // clear, and the clause costs a dictionary lookup on a path that already talks to
                         // storage.
                         ScheduleVersions?.Remove(existingTask.Id);
+                        ProviderRetries?.Forget(existingTask.Id);
                     }
                     // If task is in progress, return existing ID (cannot modify running task)
                     else if (existingTask.Status is QueuedTaskStatus.InProgress)
@@ -467,111 +575,60 @@ public class Dispatcher(
 
         if (recurring != null)
         {
-            // A DURABLE schedule's cursor belongs to the materializer, which owns every decision about a slot
-            // that came due — the grace window, the skip-forward and the finalization below are all the inline
-            // path's answers to a misfire, and applying them here would silently consume the backlog the
-            // misfire policy exists to replay. The row keeps the cursor it has; parking it at a past cursor
-            // simply fires it now.
-            if (recurring.IsDurable && existingNextRunUtc.HasValue)
+            // Who is asking, in the terms a provider is given them: the row when there is one, the key that
+            // outlives it either way, and the run this dispatch is about to be.
+            var identity = new ScheduleIdentity(existingTaskId ?? Guid.Empty, taskKey,
+                (existingCurrentRunCount ?? currentRun ?? 0) + 1);
+
+            RecurringRunDecision decision;
+
+            try
             {
-                nextRun       = existingNextRunUtc;
-                executionTime = nextRun;
-                logger.UsingPreservedNextRun(nextRun, existingTaskId);
+                decision = await DecideRecurringRunAsync(recurring, isRecovery, existingNextRunUtc,
+                                   existingCurrentRunCount, executionTime, existingTaskId, currentRun, nowUtc,
+                                   identity, ct)
+                               .ConfigureAwait(false);
             }
-            // If we have a valid existing NextRunUtc from a task with TaskKey
-            else if (existingNextRunUtc.HasValue)
+            catch (OccurrenceProviderException failure) when (isRecovery && existingTaskId is { } scheduleId)
             {
-                // If NextRunUtc is still in the future, use it directly
-                if (existingNextRunUtc.Value > nowUtc)
-                {
-                    nextRun = existingNextRunUtc;
-                    executionTime = nextRun;
-                    logger.UsingPreservedNextRun(nextRun, existingTaskId);
-                }
-                // L16: on recovery, if the pending occurrence slipped into the past but is still the CURRENT
-                // one (the next occurrence is not due yet), execute IT now instead of skipping it — a short
-                // downtime across a scheduled occurrence must not silently lose it. Calendar-exact: uses the
-                // real next occurrence, not the flat GetMinimumInterval heuristic, which is wrong for
-                // OnDays/Month/Week (too narrow drops a just-due slot; too wide runs a stale one) — U4/U5.
-                //
-                // X3: the successor is the NATURAL one — computed ignoring RunUntil/MaxRuns. The bounded
-                // successor returns null both when the slot is still current AND when the series has simply
-                // ended, and reading that null as "current forever" is what used to execute a months-old
-                // slot at restart. Ignoring the bounds separates the two: "no successor yet" now really means
-                // the grid produced none, which grants no grace at all.
-                else if (isRecovery &&
-                         await IsSlipedOccurrenceStillCurrentAsync(recurring, existingNextRunUtc.Value, nowUtc, ct)
-                             .ConfigureAwait(false))
-                {
-                    nextRun       = existingNextRunUtc;
-                    executionTime = nextRun;
-                    logger.RecoveryExecutingSlippedOccurrence(nextRun, existingTaskId);
-                }
-                else
-                {
-                    // NextRunUtc is (well) in the past - skip forward while preserving rhythm. On the
-                    // recovery path the initial-run config must NOT be re-applied (L25-firstrun).
-                    var result = await Evaluator.CalculateNextValidRunAsync(
-                        recurring,
-                        existingNextRunUtc.Value,
-                        existingCurrentRunCount ?? 0,
-                        nowUtc,
-                        isRecovery: isRecovery,
-                        ct: ct).ConfigureAwait(false);
+                // V4: the calendar this schedule reads could not answer, which is transient by contract — the
+                // application's own database being briefly down must not end a series. Nothing is written, so
+                // the row keeps its cursor and stays recoverable, and the schedule is parked to ask again
+                // after the backoff. The provider's own exception is caught HERE and never rethrown: the
+                // recovery's generic catch counts a failure against the poison budget, so a source down
+                // across five restarts would otherwise mark the series Failed for ever.
+                await ParkProviderRetryAsync(task, recurring, failure, scheduleId, taskKey, auditLevel,
+                        rowMetadata, nowUtc)
+                    .ConfigureAwait(false);
 
-                    if (result.NextRun == null)
-                    {
-                        // A legitimately exhausted series: every remaining occurrence falls past RunUntil,
-                        // so there is nothing left to run. Finalize the recovered row terminally (Completed,
-                        // NextRunUtc cleared, no extra run counted) and do NOT re-dispatch. Throwing here
-                        // would turn a normal end-of-series into a recovery error — and, combined with a
-                        // stale NextRunUtc, a per-restart poison (the row keeps coming back recoverable).
-                        // Fail-fast on a genuinely malformed expression stays on the new-task path below.
-                        logger.RecoverySeriesExhausted(existingTaskId);
-
-                        if (taskStorage != null && existingTaskId.HasValue)
-                            await FinalizeExhaustedSeriesAsync(taskStorage, existingTaskId.Value,
-                                existingNextRunUtc.Value, existingStatus, rowMetadata.ScheduleVersion,
-                                auditLevel ?? serviceConfiguration.DefaultAuditLevel, ct)
-                                .ConfigureAwait(false);
-
-                        return existingTaskId ?? Guid.Empty;
-                    }
-
-                    nextRun = result.NextRun;
-                    executionTime = nextRun;
-                    logger.CalculatedNextRunFromPast(nextRun, existingTaskId, existingNextRunUtc, result.SkippedCount);
-                }
+                // And the caller is told it was DEFERRED rather than dispatched. Answering with the schedule
+                // id reads as a dispatch that worked, which is how a recovery came to clear an L18 counter a
+                // previous restart had really earned: nothing about this row was proved by an outage of its
+                // calendar, so nothing about it may be forgotten either.
+                throw new ScheduleDeferredByProviderException(scheduleId, failure);
             }
-            else if (recurring.BackfillFromUtc is { } backfillFrom && !isRecovery)
+
+            if (decision.SeriesExhausted)
             {
-                // An explicit backfill starts the cursor in the past, on the first occurrence at or after the
-                // instant the caller named (M11). The replay it triggers is still bounded by the misfire
-                // policy's own caps — this only decides where the schedule starts counting from.
-                nextRun = recurring.FirstOccurrenceOnOrAfter(backfillFrom.ToUniversalTime())
-                          ?? throw new ArgumentException(
-                              "The schedule has no occurrence at or after the requested backfill start.",
-                              nameof(recurring));
+                // A legitimately exhausted series: every remaining occurrence falls past RunUntil, so there is
+                // nothing left to run. Finalize the recovered row terminally (Completed, NextRunUtc cleared, no
+                // extra run counted) and do NOT re-dispatch. Throwing here would turn a normal end-of-series
+                // into a recovery error — and, combined with a stale NextRunUtc, a per-restart poison (the row
+                // keeps coming back recoverable). Fail-fast on a genuinely malformed expression stays on the
+                // new-task path inside the decision.
+                logger.RecoverySeriesExhausted(existingTaskId);
 
-                executionTime = nextRun;
+                if (taskStorage != null && existingTaskId.HasValue && existingNextRunUtc.HasValue)
+                    await FinalizeExhaustedSeriesAsync(taskStorage, existingTaskId.Value,
+                            existingNextRunUtc.Value, existingStatus, rowMetadata.ScheduleVersion,
+                            auditLevel ?? serviceConfiguration.DefaultAuditLevel, ct)
+                        .ConfigureAwait(false);
+
+                return existingTaskId ?? Guid.Empty;
             }
-            else
-            {
-                // New task - calculate from current time
-                var scheduledTime = (existingTaskId != null && executionTime.HasValue)
-                    ? executionTime.Value
-                    : nowUtc;
 
-                var result = await Evaluator
-                                   .CalculateNextValidRunAsync(recurring, scheduledTime, currentRun ?? 0, nowUtc, ct: ct)
-                                   .ConfigureAwait(false);
-
-                if (result.NextRun == null)
-                    throw new ArgumentException("Invalid scheduler recurring expression", nameof(recurring));
-
-                nextRun = result.NextRun;
-                executionTime = nextRun;
-            }
+            nextRun       = decision.NextRun;
+            executionTime = nextRun;
         }
 
         var taskType = task.GetType();
@@ -761,6 +818,214 @@ public class Dispatcher(
         return true;
     }
 
+    /// <summary>Where a recurring dispatch stands: its next run, or the fact that the series is over.</summary>
+    /// <param name="NextRun">The occurrence to park, meaningless when the series is exhausted.</param>
+    /// <param name="SeriesExhausted">
+    /// True when a RECOVERED series has no occurrence left inside its bounds: the caller finalizes the row
+    /// instead of re-dispatching it.
+    /// </param>
+    private readonly record struct RecurringRunDecision(DateTimeOffset? NextRun, bool SeriesExhausted);
+
+    /// <summary>
+    /// The occurrence a recurring dispatch parks: the preserved cursor, the grace window, the skip-forward,
+    /// the backfill start or the first run of a brand-new schedule.
+    /// </summary>
+    /// <remarks>
+    /// Extracted whole so the ONE thing that can fail transiently here — a grid that comes from an
+    /// <see cref="INextOccurrenceProvider"/>, which is real I/O — has a single boundary its caller can catch
+    /// at (V4). Every branch is the one it always was.
+    /// </remarks>
+    private async Task<RecurringRunDecision> DecideRecurringRunAsync(
+        RecurringTask recurring, bool isRecovery, DateTimeOffset? existingNextRunUtc, int? existingCurrentRunCount,
+        DateTimeOffset? executionTime, Guid? existingTaskId, int? currentRun, DateTimeOffset nowUtc,
+        ScheduleIdentity identity, CancellationToken ct)
+    {
+        // A DURABLE schedule's cursor belongs to the materializer, which owns every decision about a slot
+        // that came due — the grace window, the skip-forward and the finalization are all the inline path's
+        // answers to a misfire, and applying them here would silently consume the backlog the misfire policy
+        // exists to replay. The row keeps the cursor it has; parking it at a past cursor simply fires it now.
+        if (recurring.IsDurable && existingNextRunUtc.HasValue)
+        {
+            logger.UsingPreservedNextRun(existingNextRunUtc, existingTaskId);
+            return new RecurringRunDecision(existingNextRunUtc, false);
+        }
+
+        // If we have a valid existing NextRunUtc from a task with TaskKey
+        if (existingNextRunUtc.HasValue)
+        {
+            // If NextRunUtc is still in the future, use it directly
+            if (existingNextRunUtc.Value > nowUtc)
+            {
+                logger.UsingPreservedNextRun(existingNextRunUtc, existingTaskId);
+                return new RecurringRunDecision(existingNextRunUtc, false);
+            }
+
+            // L16: on recovery, if the pending occurrence slipped into the past but is still the CURRENT
+            // one (the next occurrence is not due yet), execute IT now instead of skipping it — a short
+            // downtime across a scheduled occurrence must not silently lose it. Calendar-exact: uses the
+            // real next occurrence, not the flat GetMinimumInterval heuristic, which is wrong for
+            // OnDays/Month/Week (too narrow drops a just-due slot; too wide runs a stale one) — U4/U5.
+            //
+            // X3: the successor is the NATURAL one — computed ignoring RunUntil/MaxRuns. The bounded
+            // successor returns null both when the slot is still current AND when the series has simply
+            // ended, and reading that null as "current forever" is what used to execute a months-old
+            // slot at restart. Ignoring the bounds separates the two: "no successor yet" now really means
+            // the grid produced none, which grants no grace at all.
+            if (isRecovery &&
+                await IsSlipedOccurrenceStillCurrentAsync(recurring, existingNextRunUtc.Value, nowUtc, identity, ct)
+                    .ConfigureAwait(false))
+            {
+                logger.RecoveryExecutingSlippedOccurrence(existingNextRunUtc, existingTaskId);
+                return new RecurringRunDecision(existingNextRunUtc, false);
+            }
+
+            // NextRunUtc is (well) in the past - skip forward while preserving rhythm. On the
+            // recovery path the initial-run config must NOT be re-applied (L25-firstrun).
+            var recovered = await Evaluator.CalculateNextValidRunAsync(
+                recurring,
+                existingNextRunUtc.Value,
+                existingCurrentRunCount ?? 0,
+                nowUtc,
+                isRecovery: isRecovery,
+                identity: identity,
+                ct: ct).ConfigureAwait(false);
+
+            if (recovered.NextRun == null)
+                return new RecurringRunDecision(null, true);
+
+            logger.CalculatedNextRunFromPast(recovered.NextRun, existingTaskId, existingNextRunUtc,
+                recovered.SkippedCount, recovered.SkippedCountIsExact);
+
+            return new RecurringRunDecision(recovered.NextRun, false);
+        }
+
+        if (recurring.BackfillFromUtc is { } backfillFrom && !isRecovery)
+        {
+            // An explicit backfill starts the cursor in the past, on the first occurrence at or after the
+            // instant the caller named (M11). The replay it triggers is still bounded by the misfire
+            // policy's own caps — this only decides where the schedule starts counting from.
+            var backfilled = await Evaluator
+                                   .FirstOccurrenceOnOrAfterAsync(recurring, backfillFrom.ToUniversalTime(),
+                                       identity, ct)
+                                   .ConfigureAwait(false);
+
+            return new RecurringRunDecision(
+                backfilled ?? throw new ArgumentException(
+                    "The schedule has no occurrence at or after the requested backfill start.", nameof(recurring)),
+                false);
+        }
+
+        // New task - calculate from current time
+        var scheduledTime = (existingTaskId != null && executionTime.HasValue)
+            ? executionTime.Value
+            : nowUtc;
+
+        var result = await Evaluator
+                           .CalculateNextValidRunAsync(recurring, scheduledTime, currentRun ?? 0, nowUtc,
+                               identity: identity, ct: ct)
+                           .ConfigureAwait(false);
+
+        if (result.NextRun == null)
+            throw new ArgumentException("Invalid scheduler recurring expression", nameof(recurring));
+
+        return new RecurringRunDecision(result.NextRun, false);
+    }
+
+    /// <summary>
+    /// Parks a recovered schedule whose occurrence provider could not answer, so it asks again after the
+    /// backoff instead of waiting for the next restart (V4).
+    /// </summary>
+    /// <remarks>
+    /// The registration is a SCHEDULE RETRY, not a delivery: when it fires, the worker re-reads the row and
+    /// re-runs this very decision. Parking an ordinary delivery instead would execute a slot nobody has
+    /// decided about yet — the grace window is exactly the question the provider did not answer.
+    /// <para>
+    /// It cannot fail silently: there is no poller behind it, so a re-park that throws leaves the series
+    /// waiting for a restart and has to be said out loud, with the monitoring event beside the log line.
+    /// </para>
+    /// </remarks>
+    private async Task ParkProviderRetryAsync(IEverTask task, RecurringTask recurring,
+                                              OccurrenceProviderException failure, Guid scheduleId, string? taskKey,
+                                              AuditLevel? auditLevel, DispatchRowMetadata rowMetadata,
+                                              DateTimeOffset nowUtc)
+    {
+        var retryAt = nowUtc + failure.RetryAfter;
+
+        TaskHandlerExecutor? built = null;
+
+        try
+        {
+            var executor = await CreateCachedWrapper(task.GetType())
+                                 .Handle(task, retryAt, recurring, serviceProvider,
+                                     auditLevel ?? serviceConfiguration.DefaultAuditLevel, scheduleId, taskKey,
+                                     useLazyExecutor: true, rowMetadata)
+                                 .ConfigureAwait(false);
+
+            built = executor;
+
+            // Conditional, like every other re-park: a reschedule may have committed a newer definition and
+            // parked it while the provider was failing, and that registration owns the row now.
+            if (!scheduler.TrySchedule(executor with { IsScheduleRetry = true }, retryAt))
+            {
+                // Refused: this recovery parked nothing. Either a newer definition owns the row — so the
+                // series is not the one waiting on a provider any more — or the scheduler is stopping and
+                // startup recovery finds the row again. Announcing it as "parked to ask again" is the one
+                // sentence that is not true in either case.
+                logger.ProviderRetryParkRefused(scheduleId, retryAt);
+                return;
+            }
+
+            // Said only once the registration is really in, log line and event alike — the same order
+            // WorkerExecutor.DeferScheduleForProvider keeps, and for the same reason: before that point the
+            // sentence is a promise the very next line can break.
+            logger.RecoveryDeferredByProvider(failure, failure.ProviderKey, scheduleId,
+                failure.ConsecutiveFailures, retryAt);
+
+            PublishProviderRetryEvent(executor, failure, scheduleId, retryAt);
+        }
+        catch (Exception e)
+        {
+            logger.ProviderRetryParkFailed(e, scheduleId);
+
+            // V4(2): the re-park is what makes this schedule come back at all, and nothing polls behind it —
+            // so a failure here is not a log line, it is the series stopping until the next restart. The
+            // executor is whatever was built before the throw: without one there is no task identity to hang
+            // an event on, and the log line is all this can say.
+            PublishProviderParkFailedEvent(built, e, scheduleId, failure);
+        }
+    }
+
+    /// <summary>Tells a monitoring subscriber that a schedule waiting on its provider is parked nowhere.</summary>
+    private void PublishProviderParkFailedEvent(TaskHandlerExecutor? executor, Exception parkFailure,
+                                                Guid scheduleId, OccurrenceProviderException failure)
+    {
+        if (executor is not { } target ||
+            serviceProvider.GetService<IEverTaskWorkerExecutor>() is not { HasEventSubscribers: true } worker)
+        {
+            return;
+        }
+
+        worker.PublishExternalEvent(target, SeverityLevel.Error,
+            string.Create(CultureInfo.InvariantCulture,
+                $"Schedule {scheduleId} could not be parked to ask the occurrence provider " +
+                $"'{failure.ProviderKey}' again: nothing was written and the series stays where it is " +
+                $"until the next startup recovery"), parkFailure);
+    }
+
+    /// <summary>Tells a monitoring subscriber that a schedule is waiting on its provider, and for how long.</summary>
+    private void PublishProviderRetryEvent(TaskHandlerExecutor executor, OccurrenceProviderException failure,
+                                           Guid scheduleId, DateTimeOffset retryAt)
+    {
+        if (serviceProvider.GetService<IEverTaskWorkerExecutor>() is not { HasEventSubscribers: true } worker)
+            return;
+
+        worker.PublishExternalEvent(executor, SeverityLevel.Warning,
+            string.Create(CultureInfo.InvariantCulture,
+                $"Occurrence provider '{failure.ProviderKey}' could not answer for schedule {scheduleId} " +
+                $"({failure.ConsecutiveFailures} consecutive failure(s)): nothing was written and the schedule " +
+                $"is parked to ask again at {retryAt:O}"), failure);
+    }
+
     /// <summary>
     /// Recovery grace window: true when the stored, already-past slot is still the one to run.
     /// </summary>
@@ -771,9 +1036,11 @@ public class Dispatcher(
     /// grants no grace: the slot goes through the ordinary skip-forward, which finalizes an exhausted series.
     /// </remarks>
     private async ValueTask<bool> IsSlipedOccurrenceStillCurrentAsync(
-        RecurringTask recurring, DateTimeOffset slot, DateTimeOffset nowUtc, CancellationToken ct)
+        RecurringTask recurring, DateTimeOffset slot, DateTimeOffset nowUtc, ScheduleIdentity identity,
+        CancellationToken ct)
     {
-        var successor = await Evaluator.NextGridOccurrenceAfterAsync(recurring, slot, ct).ConfigureAwait(false);
+        var successor = await Evaluator.NextGridOccurrenceAfterAsync(recurring, slot, identity, ct)
+                                       .ConfigureAwait(false);
         return successor.HasValue && successor.Value > nowUtc;
     }
 

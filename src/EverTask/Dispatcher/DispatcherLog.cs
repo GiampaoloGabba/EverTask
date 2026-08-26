@@ -60,9 +60,10 @@ internal static partial class DispatcherLog
     public static partial void RecoverySeriesExhausted(this ILogger logger, Guid? taskId);
 
     [LoggerMessage(EventId = 1012, Level = LogLevel.Information,
-        Message = "Calculated NextRunUtc {NextRun} for task {TaskId} from past NextRunUtc {PastNextRun} (skipped {SkippedCount})")]
+        Message = "Calculated NextRunUtc {NextRun} for task {TaskId} from past NextRunUtc {PastNextRun} (skipped {SkippedCount}, exact count: {IsExact})")]
     public static partial void CalculatedNextRunFromPast(this ILogger logger, DateTimeOffset? nextRun, Guid? taskId,
-                                                         DateTimeOffset? pastNextRun, int skippedCount);
+                                                         DateTimeOffset? pastNextRun, int skippedCount,
+                                                         bool isExact);
 
     [LoggerMessage(EventId = 1013, Level = LogLevel.Debug, Message = "Persisting Task: {Type}")]
     public static partial void PersistingTask(this ILogger logger, string type);
@@ -88,4 +89,24 @@ internal static partial class DispatcherLog
                   "the next startup recovery")]
     public static partial void OccurrenceLookupForCancelFailed(this ILogger logger, Exception exception,
                                                                Guid taskId);
+
+    [LoggerMessage(EventId = 1019, Level = LogLevel.Warning,
+        Message = "Recovery of schedule {ScheduleId} deferred: the occurrence provider '{ProviderKey}' could " +
+                  "not answer ({Failures} consecutive failure(s)). Nothing was written and the schedule is " +
+                  "parked to ask again at {RetryAtUtc:O}")]
+    public static partial void RecoveryDeferredByProvider(this ILogger logger, Exception exception,
+                                                          string providerKey, Guid scheduleId, int failures,
+                                                          DateTimeOffset retryAtUtc);
+
+    [LoggerMessage(EventId = 1020, Level = LogLevel.Error,
+        Message = "Could not park schedule {ScheduleId} for its occurrence provider retry: the series stays " +
+                  "where it is until the next startup recovery")]
+    public static partial void ProviderRetryParkFailed(this ILogger logger, Exception exception, Guid scheduleId);
+
+    [LoggerMessage(EventId = 1021, Level = LogLevel.Debug,
+        Message = "Park of schedule {ScheduleId} at {RetryAtUtc:O} for its occurrence provider retry was " +
+                  "refused: a newer definition owns this row's parking, or the scheduler is stopping. " +
+                  "Nothing was parked by this recovery")]
+    public static partial void ProviderRetryParkRefused(this ILogger logger, Guid scheduleId,
+                                                        DateTimeOffset retryAtUtc);
 }

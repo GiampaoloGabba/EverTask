@@ -18,6 +18,7 @@ Schedule recurring tasks with a type-safe fluent API or cron, from an hourly job
 - **Execution Limits**: MaxRuns and RunUntil for time-limited tasks
 - **Time Zones**: Read a calendar schedule on a real clock, daylight saving included
 - **Durable Occurrences**: One row per occurrence, with misfire policies that replay what a downtime missed
+- **Occurrence Providers**: Take the grid from your own calendar when no interval or cron can express it
 - **Persistent Schedules**: Recurring tasks survive application restarts
 
 ## Quick Examples
@@ -59,6 +60,10 @@ Use cron expressions for maximum scheduling flexibility. Learn the syntax, commo
 
 ### [Time Zones](time-zones.md)
 Run a calendar schedule on a real clock with `InTimeZone`, set a default zone for the whole application, and see what happens on the two days a year a local hour is skipped or repeated.
+
+### [Occurrence Providers](occurrence-providers.md)
+Take the occurrence grid from your own calendar — business days, a holiday table, opening hours — when no
+interval or cron expression can express it, and keep every other feature working over it.
 
 ### [Idempotent Task Registration](idempotent-registration.md)
 Prevent duplicate recurring tasks using task keys. Learn about update behavior, startup registration patterns, and dynamic configuration.

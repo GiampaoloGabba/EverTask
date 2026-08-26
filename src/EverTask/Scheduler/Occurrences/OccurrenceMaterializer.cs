@@ -38,6 +38,8 @@ internal sealed class OccurrenceMaterializer
     private readonly ConcurrentDictionary<Guid, DateTimeOffset> _haltReported = new();
 
     private IEverTaskWorkerExecutor? _workerExecutor;
+    private OccurrenceProviderRetryRegistry? _providerRetries;
+    private bool _providerRetriesResolved;
     private int _inspectionWarned;
 
     /// <summary>How often a schedule that is already halted repeats its event, so a stuck one stays visible
@@ -96,6 +98,14 @@ internal sealed class OccurrenceMaterializer
         {
             await RunAsync(parentId, null, ct).ConfigureAwait(false);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // The host is stopping. The kick is the FAST path back to the materializer, never the only one:
+            // nothing is written by a run that could not finish, and the operational retry and startup
+            // recovery both bring the schedule back. Reporting it as a materialization failure would make
+            // every occurrence that ends during a shutdown say the schedule broke.
+            _logger.MaterializationSkipped(parentId, "the host is stopping");
+        }
         catch (Exception e)
         {
             _logger.MaterializationFailed(e, parentId);
@@ -149,6 +159,14 @@ internal sealed class OccurrenceMaterializer
                     {
                         throw;
                     }
+                    catch (OccurrenceProviderException failure)
+                    {
+                        // The schedule's calendar could not answer, which is transient by contract (V4).
+                        // Nothing was written — a plan that cannot be computed writes nothing — so the row
+                        // keeps its cursor and comes back after the provider's own backoff instead of the
+                        // ordinary operational retry.
+                        await DeferForProviderAsync(parentId, executor, failure, ct).ConfigureAwait(false);
+                    }
                     catch (Exception ex)
                     {
                         // Whoever holds the gate has ALSO taken over the re-park of every run it absorbed:
@@ -158,7 +176,8 @@ internal sealed class OccurrenceMaterializer
                         // delivery — until the process was restarted. The operational retry is armed here,
                         // whichever entry point happens to be holding the gate.
                         _logger.MaterializationFailed(ex, parentId);
-                        await ReParkAfterFailureAsync(parentId, executor, ct).ConfigureAwait(false);
+                        await ReParkAfterFailureAsync(parentId, executor, _options.BacklogRetryInterval, ct)
+                            .ConfigureAwait(false);
                     }
                     finally
                     {
@@ -200,7 +219,8 @@ internal sealed class OccurrenceMaterializer
         }
 
         var now       = _timeProvider.GetUtcNow();
-        var recovered = RecoveredTaskFactory.FromRow(row);
+        var recovered = RecoveredTaskFactory.FromRow(row,
+            scope.ServiceProvider.GetService<OccurrenceProviderRegistry>());
 
         if (recovered.Recurring is { IsDurable: false } inline)
         {
@@ -260,8 +280,11 @@ internal sealed class OccurrenceMaterializer
         // them — a slot that already has a row is walked past inside the pass below — but nothing about the
         // decision changes while that happens, which is why re-deciding it per walked slot bought nothing and
         // cost a full count and a full bisection over the remaining backlog apiece.
+        var identity = new ScheduleIdentity(parentId, row.TaskKey, snapshot.CurrentRunCount + 1);
+
         var plan = await _enumerator
-                         .PlanAsync(definition, snapshot.CursorUtc, now, snapshot.CurrentRunCount, active, ct)
+                         .PlanAsync(definition, snapshot.CursorUtc, now, snapshot.CurrentRunCount, active, identity,
+                             ct)
                          .ConfigureAwait(false);
 
         foreach (var loss in plan.Losses)
@@ -274,7 +297,7 @@ internal sealed class OccurrenceMaterializer
         }
 
         var pass = await MaterializeAsync(scope.ServiceProvider, storage, snapshot, definition, recovered, executor,
-            plan, auditLevel, now, ct).ConfigureAwait(false);
+            plan, auditLevel, now, identity, ct).ConfigureAwait(false);
 
         if (pass.Finalized)
         {
@@ -283,8 +306,10 @@ internal sealed class OccurrenceMaterializer
             // A durable series ends HERE and nowhere else — the cursor is nulled in the same commit that
             // writes the terminal status, so it never passes through QueueNextOccourrence, which is where an
             // inline series drops its published lower bound (S4). Without this the entry of every durable
-            // schedule an operator had rescheduled outlived the series for the life of the process.
+            // schedule an operator had rescheduled outlived the series for the life of the process. The
+            // provider backoff of a schedule that will not ask again goes with it, for the same reason.
             _scheduleVersions.Remove(parentId);
+            ProviderRetries?.Forget(parentId);
 
             DropGate(parentId);
             return;
@@ -386,20 +411,24 @@ internal sealed class OccurrenceMaterializer
             return;
         }
 
+        TaskHandlerExecutor? built = null;
+
         try
         {
-            var cursor   = row.NextRunUtc!.Value;
-            var executor = await BuildScheduleExecutorAsync(provider, recovered, row, inline, cursor)
-                               .ConfigureAwait(false);
+            var cursor = row.NextRunUtc!.Value;
 
-            if (_scheduler.TrySchedule(executor, cursor))
-                _logger.ScheduleReparked(row.Id, cursor);
+            built = await BuildScheduleExecutorAsync(provider, recovered, row, inline, cursor)
+                        .ConfigureAwait(false);
+
+            RePark(built, row.Id, cursor);
         }
         catch (Exception ex)
         {
             // Nothing else parks this row from here, so a failure has to be visible: the series waits for
-            // startup recovery.
+            // startup recovery, and a subscriber is told rather than left to read the log.
             _logger.ReparkAfterFailureFailed(ex, row.Id);
+
+            PublishReParkFailedEvent(built, row.Id, ex);
         }
     }
 
@@ -424,7 +453,7 @@ internal sealed class OccurrenceMaterializer
     private async Task<MaterializationPass> MaterializeAsync(
         IServiceProvider provider, ITaskStorage storage, ScheduleSnapshot snapshot, RecurringTask definition,
         RecoveredTask recovered, TaskHandlerExecutor executorForEvents, DueSlotPlan plan, AuditLevel auditLevel,
-        DateTimeOffset now, CancellationToken ct)
+        DateTimeOffset now, ScheduleIdentity identity, CancellationToken ct)
     {
         var parentId  = snapshot.Id;
         var version   = snapshot.ScheduleVersion;
@@ -464,7 +493,8 @@ internal sealed class OccurrenceMaterializer
             else if (planned && !plan.RunBudgetEndsSeries)
                 newCursor = plan.NextCursorUtc;
             else
-                newCursor = await _enumerator.NextSlotAfterAsync(definition, slot, ct).ConfigureAwait(false);
+                newCursor = await _enumerator.NextSlotAfterAsync(definition, slot, identity, ct)
+                                             .ConfigureAwait(false);
 
             var occurrence = await BuildOccurrenceAsync(provider, recovered.Task!, snapshot, slot, runNumber,
                 MisfireAfterWalking(plan, slot, now, served), auditLevel, definition.TimeZoneId)
@@ -492,7 +522,8 @@ internal sealed class OccurrenceMaterializer
                 // where the series then ends, in that commit. Only a grid with nothing left after this slot
                 // ends it here.
                 var next = newCursor
-                           ?? await _enumerator.NextSlotAfterAsync(definition, slot, ct).ConfigureAwait(false);
+                           ?? await _enumerator.NextSlotAfterAsync(definition, slot, identity, ct)
+                                               .ConfigureAwait(false);
 
                 if (next is not { } pastTakenSlot)
                 {
@@ -639,50 +670,126 @@ internal sealed class OccurrenceMaterializer
     /// the EverTask-owned scope of the delivery that is ending, exactly as the ordinary re-park does. Never
     /// throws — this is already the failure path, and its caller is holding the per-schedule gate.
     /// </remarks>
-    private async Task ReParkAfterFailureAsync(Guid parentId, TaskHandlerExecutor? parentExecutor,
-                                               CancellationToken ct)
+    private async Task<ReParkOutcome> ReParkAfterFailureAsync(Guid parentId, TaskHandlerExecutor? parentExecutor,
+                                                              TimeSpan delay, CancellationToken ct)
     {
+        TaskHandlerExecutor? built = null;
+
         try
         {
-            var retryAt = _timeProvider.GetUtcNow() + _options.BacklogRetryInterval;
+            var retryAt = _timeProvider.GetUtcNow() + delay;
 
             if (parentExecutor is { } delivered)
             {
-                RePark(delivered.ToLazy(), parentId, retryAt);
-                return;
+                built = delivered.ToLazy();
+
+                // A refusal parked NOTHING, so it hands back the same empty outcome as a row there was
+                // nothing to park for: the sentence "parked to ask again" is exactly what must not be said
+                // over it.
+                return RePark(built, parentId, retryAt) ? new ReParkOutcome(built, null) : default;
             }
 
             using var scope = _scopeFactory.CreateScope();
 
             if (scope.ServiceProvider.GetService<ITaskStorage>() is not { } storage)
-                return;
+                return default;
 
             var row = (await storage.Get(t => t.Id == parentId, ct).ConfigureAwait(false)).FirstOrDefault();
 
             if (row is null || !row.IsRecurring || row.Status == QueuedTaskStatus.Cancelled ||
                 row.NextRunUtc is null)
-                return;
+                return default;
 
             var recovered = RecoveredTaskFactory.FromRow(row);
 
             if (recovered.Recurring is not { IsDurable: true } definition || recovered.Task is null)
-                return;
+                return default;
 
-            var executor = await BuildScheduleExecutorAsync(scope.ServiceProvider, recovered, row, definition,
+            built = await BuildScheduleExecutorAsync(scope.ServiceProvider, recovered, row, definition,
                 row.NextRunUtc.Value).ConfigureAwait(false);
 
-            RePark(executor, parentId, retryAt);
+            return RePark(built, parentId, retryAt) ? new ReParkOutcome(built, null) : default;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             // Shutdown: the row keeps its cursor and startup recovery parks it again.
+            return default;
         }
         catch (Exception ex)
         {
             // Nothing else can arm the retry from here, so this is the one place the situation is visible:
-            // the schedule stays unparked until the next restart, and that has to be said out loud.
+            // the schedule stays unparked until the next restart, and that has to be said out loud — a log
+            // line AND the monitoring event, because there is no poller behind this and a log file is not
+            // where a dashboard looks (V4(2)).
             _logger.ReparkAfterFailureFailed(ex, parentId);
+
+            PublishReParkFailedEvent(built ?? parentExecutor, parentId, ex);
+
+            return new ReParkOutcome(built, ex);
         }
+    }
+
+    /// <summary>What a re-park after a failed run left behind.</summary>
+    /// <param name="Executor">
+    /// The executor the schedule was parked with, when the registration was really made. Null on the exits
+    /// that park nothing — a row that is gone, cancelled or no longer durable, and a registration the
+    /// scheduler REFUSED because a newer definition owns the row or because it is shutting down.
+    /// </param>
+    /// <param name="Failure">
+    /// The exception that stopped the re-park, when it failed. Null both when it succeeded and when there was
+    /// nothing to park, which are the two cases a caller must not report as a schedule left in the air.
+    /// </param>
+    private readonly record struct ReParkOutcome(TaskHandlerExecutor? Executor, Exception? Failure);
+
+    /// <summary>Tells a monitoring subscriber that a schedule is parked nowhere until the next restart.</summary>
+    private void PublishReParkFailedEvent(TaskHandlerExecutor? executor, Guid parentId, Exception failure)
+    {
+        if (executor is not { } target || WorkerExecutor is not { HasEventSubscribers: true } worker)
+            return;
+
+        worker.PublishExternalEvent(target, SeverityLevel.Error,
+            string.Create(CultureInfo.InvariantCulture,
+                $"Schedule {parentId} could not be re-parked after a failed materialization: it is parked " +
+                $"nowhere and only the next startup recovery brings it back"), failure);
+    }
+
+    /// <summary>
+    /// Hands a schedule whose occurrence provider could not answer back to the scheduler, after the backoff
+    /// that failure has earned (V4).
+    /// </summary>
+    /// <remarks>
+    /// The ordinary operational retry would do the same thing on the wrong clock: the provider's backoff grows
+    /// with its consecutive failures, so a source that is down for an hour is asked a handful of times instead
+    /// of sixty. Nothing is written either way — a plan that could not be computed materialized nothing — so
+    /// the row keeps its cursor and a crash costs only the wait.
+    /// </remarks>
+    private async Task DeferForProviderAsync(Guid parentId, TaskHandlerExecutor? parentExecutor,
+                                             OccurrenceProviderException failure, CancellationToken ct)
+    {
+        var retryAt = _timeProvider.GetUtcNow() + failure.RetryAfter;
+
+        var outcome = await ReParkAfterFailureAsync(parentId, parentExecutor, failure.RetryAfter, ct)
+                          .ConfigureAwait(false);
+
+        // Said only once the registration is really in, log line and event alike: before that point "parked to
+        // ask again" is a promise the very next line can break. A re-park that FAILED has already reported
+        // itself, as an error and not as this warning; a re-park the scheduler REFUSED hands back no executor
+        // and is silent here for the same reason — this run parked nothing, and whether the row is waiting on
+        // anything at all is now somebody else's business.
+        if (outcome.Failure != null || outcome.Executor is not { } executor)
+            return;
+
+        _logger.MaterializationDeferredByProvider(failure, parentId, failure.ProviderKey,
+            failure.ConsecutiveFailures, retryAt);
+
+        if (WorkerExecutor is not { HasEventSubscribers: true } worker)
+            return;
+
+        worker.PublishExternalEvent(executor, SeverityLevel.Warning,
+            string.Create(CultureInfo.InvariantCulture,
+                $"Occurrence provider '{failure.ProviderKey}' could not answer for schedule {parentId} " +
+                $"({failure.ConsecutiveFailures} consecutive failure(s)): nothing was materialized and the " +
+                $"schedule is parked to ask again at {retryAt:O}"), failure);
     }
 
     /// <summary>
@@ -959,10 +1066,20 @@ internal sealed class OccurrenceMaterializer
     /// reschedule may have committed a newer definition and parked it in the meantime: replacing that
     /// registration latest-wins would hand the row back to a definition nobody owns any more.
     /// </remarks>
-    private void RePark(TaskHandlerExecutor executor, Guid parentId, DateTimeOffset at)
+    /// <returns>
+    /// False when the scheduler refused the registration — a newer definition owns the row's parking, or the
+    /// scheduler is shutting down. Nothing was parked either way, so no caller may report this row as parked.
+    /// </returns>
+    private bool RePark(TaskHandlerExecutor executor, Guid parentId, DateTimeOffset at)
     {
         if (_scheduler.TrySchedule(executor with { ExecutionTime = at }, at))
+        {
             _logger.ScheduleReparked(parentId, at);
+            return true;
+        }
+
+        _logger.ScheduleReparkRefused(parentId, at, executor.ScheduleVersion);
+        return false;
     }
 
     /// <summary>
@@ -976,6 +1093,7 @@ internal sealed class OccurrenceMaterializer
     private void DropGate(Guid parentId)
     {
         _haltReported.TryRemove(parentId, out _);
+        _enumerator.Forget(parentId);
 
         if (_gates.TryGetValue(parentId, out var gate))
             _gates.TryRemove(new KeyValuePair<Guid, ScheduleGate>(parentId, gate));
@@ -983,6 +1101,24 @@ internal sealed class OccurrenceMaterializer
 
     private IEverTaskWorkerExecutor? WorkerExecutor =>
         _workerExecutor ??= _serviceProvider.GetService<IEverTaskWorkerExecutor>();
+
+    /// <summary>
+    /// The consecutive provider failures this host holds per schedule, resolved only to FORGET a series that
+    /// has ended. Absent in a container that registers no occurrence providers.
+    /// </summary>
+    private OccurrenceProviderRetryRegistry? ProviderRetries
+    {
+        get
+        {
+            if (!_providerRetriesResolved)
+            {
+                _providerRetries         = _serviceProvider.GetService<OccurrenceProviderRetryRegistry>();
+                _providerRetriesResolved = true;
+            }
+
+            return _providerRetries;
+        }
+    }
 
     private void PublishOccurrenceEvent(TaskHandlerExecutor occurrence, Guid parentId, DateTimeOffset slot,
                                         int runNumber)

@@ -309,12 +309,13 @@ public class ConsumerCompatibilityTests : IsolatedIntegrationTestBase
     /// <remarks>
     /// <para>
     /// <c>InTimeZone</c> was added to eight of these interfaces as a default interface member precisely so an
-    /// application that implements them — wrapping the fluent API, or replacing it — would keep compiling. The
-    /// probes above build schedules with EverTask's own builders, which say nothing about that: it is the
-    /// OUTSIDE implementation that a new abstract member would break, and only one compiled against the old
-    /// metadata can show it. The CLR builds that type's interface map against today's interfaces, so
-    /// constructing it is the assertion; the throws after it are the second half, that each of the eight
-    /// declarations really has a reachable default body rather than a hole.
+    /// application that implements them — wrapping the fluent API, or replacing it — would keep compiling, and
+    /// every member added since (<c>OnMisfire</c>, <c>WithDurableOccurrences</c>, <c>BackfillFrom</c>,
+    /// <c>UseOccurrenceProvider</c>) arrived the same way. The probes above build schedules with EverTask's own
+    /// builders, which say nothing about that: it is the OUTSIDE implementation that a new abstract member
+    /// would break, and only one compiled against the old metadata can show it. The CLR builds that type's
+    /// interface map against today's interfaces, so constructing it is the assertion; the throws after it are
+    /// the second half, that each declaration really has a reachable default body rather than a hole.
     /// </para>
     /// <para>
     /// <see cref="NotSupportedException"/> and not silence: a builder that accepted a zone and dropped it
@@ -341,6 +342,14 @@ public class ConsumerCompatibilityTests : IsolatedIntegrationTestBase
         Should.Throw<NotSupportedException>(() => ((IMonthlySchedulerBuilder)builder).InTimeZone(rome));
         Should.Throw<NotSupportedException>(() => ((IBuildableSchedulerBuilder)builder).InTimeZone(rome));
         Should.Throw<NotSupportedException>(() => ((IBuildableSchedulerBuilder)builder).InTimeZone("Europe/Rome"));
+
+        // Every member added after the baseline, not only the zone ones: each is its own declaration, so each
+        // is its own chance to have arrived abstract and broken the type load of an outside implementation.
+        Should.Throw<NotSupportedException>(() => ((IIntervalSchedulerBuilder)builder).OnMisfire(_ => { }));
+        Should.Throw<NotSupportedException>(() => ((IIntervalSchedulerBuilder)builder).WithDurableOccurrences());
+        Should.Throw<NotSupportedException>(() => ((IIntervalSchedulerBuilder)builder).BackfillFrom(DateTimeOffset.UtcNow));
+        Should.Throw<NotSupportedException>(
+            () => ((IIntervalSchedulerBuilder)builder).UseOccurrenceProvider("business-days", "{\"v\":1}"));
     }
 
     /// <summary>

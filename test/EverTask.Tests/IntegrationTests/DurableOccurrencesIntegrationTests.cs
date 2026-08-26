@@ -1838,11 +1838,13 @@ public class DurableOccurrencesIntegrationTests : IsolatedIntegrationTestBase
         // non-terminal, and under the default budget of one that schedule never moves again — unless the next
         // run notices and rescues it.
         var dropped = new ScheduleDropOnce();
+        var log     = new RecordingLogger<OccurrenceMaterializer>();
 
         await CreateIsolatedHostWithBuilderAsync(b =>
             {
                 b.Services.AddSingleton<ITaskStorage>(_shared);
                 b.Services.AddSingleton(_recorder);
+                b.Services.AddSingleton<IEverTaskLogger<OccurrenceMaterializer>>(log);
                 b.Services.Replace(ServiceDescriptor.Singleton<IScheduler>(sp => new SchedulingFaultInjector(
                     new PeriodicTimerScheduler(
                         sp.GetRequiredService<IWorkerQueueManager>(),
@@ -1872,8 +1874,15 @@ public class DurableOccurrencesIntegrationTests : IsolatedIntegrationTestBase
         // No restart, no kick: the next run of the same materializer is what must find it.
         await materializer.RunAsync(scheduleId, null);
 
-        scheduler.IsScheduled(occurrence.Id).ShouldBeTrue(
+        log.Count(1804).ShouldBe(1,
             "an occurrence that exists but is parked nowhere is stale, and reconciliation is what rescues it");
+
+        // The slot is already past, so the scheduler this run handed it to may have dispatched it within its
+        // own check interval: what has to hold afterwards is that SOMETHING carries it again, parked or in
+        // flight — asserting the registration alone reads a state the scheduler is entitled to consume.
+        var deliveries = Host.Services.GetRequiredService<TaskDeliveryRegistry>();
+        (scheduler.IsScheduled(occurrence.Id) || deliveries.IsDelivering(occurrence.Id)).ShouldBeTrue(
+            "the rescue hands the occurrence back to the scheduler, it does not merely note it down");
     }
 
     [Fact]
@@ -2377,35 +2386,45 @@ public class DurableOccurrencesIntegrationTests : IsolatedIntegrationTestBase
         public ValueTask<NextRunResult> CalculateNextValidRunAsync(
             RecurringTask definition, DateTimeOffset scheduledTime, int currentRun, DateTimeOffset nowUtc,
             DateTimeOffset? referenceTime = null, bool isRecovery = false, bool computeSkippedCount = true,
-            CancellationToken ct = default) =>
+            ScheduleIdentity identity = default, CancellationToken ct = default) =>
             inner.CalculateNextValidRunAsync(definition, scheduledTime, currentRun, nowUtc, referenceTime, isRecovery,
-                computeSkippedCount, ct);
+                computeSkippedCount, identity, ct);
 
         public ValueTask<DateTimeOffset?> NextAfterAsync(RecurringTask definition, DateTimeOffset anchor,
-                                                         DateTimeOffset after, CancellationToken ct = default) =>
-            inner.NextAfterAsync(definition, anchor, after, ct);
+                                                         DateTimeOffset after, ScheduleIdentity identity = default,
+                                                         CancellationToken ct = default) =>
+            inner.NextAfterAsync(definition, anchor, after, identity, ct);
 
         public ValueTask<int> CountMissedAsync(RecurringTask definition, DateTimeOffset anchor, DateTimeOffset after,
-                                               int cap, CancellationToken ct = default)
+                                               int cap, ScheduleIdentity identity = default,
+                                               CancellationToken ct = default)
         {
             Interlocked.Increment(ref _counts);
-            return inner.CountMissedAsync(definition, anchor, after, cap, ct);
+            return inner.CountMissedAsync(definition, anchor, after, cap, identity, ct);
         }
 
         public ValueTask<bool> IsOccurrenceStillCurrentAsync(RecurringTask definition, DateTimeOffset occurrence,
-                                                             DateTimeOffset nowUtc, CancellationToken ct = default) =>
-            inner.IsOccurrenceStillCurrentAsync(definition, occurrence, nowUtc, ct);
+                                                             DateTimeOffset nowUtc,
+                                                             ScheduleIdentity identity = default,
+                                                             CancellationToken ct = default) =>
+            inner.IsOccurrenceStillCurrentAsync(definition, occurrence, nowUtc, identity, ct);
 
         public ValueTask<DateTimeOffset?> NextGridOccurrenceAfterAsync(
-            RecurringTask definition, DateTimeOffset occurrence, CancellationToken ct = default) =>
-            inner.NextGridOccurrenceAfterAsync(definition, occurrence, ct);
+            RecurringTask definition, DateTimeOffset occurrence, ScheduleIdentity identity = default,
+            CancellationToken ct = default) =>
+            inner.NextGridOccurrenceAfterAsync(definition, occurrence, identity, ct);
+
+        public ValueTask<DateTimeOffset?> FirstOccurrenceOnOrAfterAsync(
+            RecurringTask definition, DateTimeOffset instant, ScheduleIdentity identity = default,
+            CancellationToken ct = default) =>
+            inner.FirstOccurrenceOnOrAfterAsync(definition, instant, identity, ct);
 
         public ValueTask<IReadOnlyList<DateTimeOffset>> EnumerateDueSlotsAsync(
             RecurringTask definition, DateTimeOffset cursor, DateTimeOffset nowUtc, int cap,
-            CancellationToken ct = default)
+            ScheduleIdentity identity = default, CancellationToken ct = default)
         {
             Interlocked.Increment(ref _plans);
-            return inner.EnumerateDueSlotsAsync(definition, cursor, nowUtc, cap, ct);
+            return inner.EnumerateDueSlotsAsync(definition, cursor, nowUtc, cap, identity, ct);
         }
     }
 

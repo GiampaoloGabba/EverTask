@@ -2,7 +2,7 @@
 layout: default
 title: Managing Recurring Tasks
 parent: Recurring Tasks
-nav_order: 7
+nav_order: 8
 ---
 
 # Managing Recurring Tasks
@@ -70,7 +70,8 @@ month, is what the rebase keeps. It is deliberately narrow:
 
 - the two definitions must have the same shape — same cadence, same weekday and month selectors, same period
   kind. What may change is the time of day, the zone, the bounds and the misfire settings;
-- a cron schedule states no nominal period and is refused;
+- a cron schedule states no nominal period and is refused, and so does a schedule whose occurrences come from
+  an occurrence provider;
 - a period the new definition has no slot in is refused too, rather than answered from the next period — and
   so is one that holds fewer slots than the cursor had already passed, since there is no position to land on.
 

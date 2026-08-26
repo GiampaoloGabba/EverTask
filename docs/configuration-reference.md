@@ -342,6 +342,72 @@ opt.SetBacklogRetryInterval(TimeSpan.FromSeconds(15))
   the schedule then sits parked nowhere at all.
 - See [Recurring Tasks › Durable Occurrences](recurring-tasks/durable-occurrences.md).
 
+### SetOccurrenceProviderRetry
+
+Sets how long a schedule waits before asking an `INextOccurrenceProvider` that could not answer again.
+
+**Signature:**
+```csharp
+SetOccurrenceProviderRetry(Action<OccurrenceProviderRetryOptions> configure)
+```
+
+**Options:**
+- `InitialBackoff` (TimeSpan): the wait after the first failure. Default: 1 minute.
+- `MaxBackoff` (TimeSpan): the longest wait the doubling reaches. Default: 15 minutes.
+
+Both must be positive and at most one day; anything else throws `ArgumentOutOfRangeException`. A `MaxBackoff`
+below `InitialBackoff` simply makes every wait that long.
+
+**Examples:**
+```csharp
+// A calendar read from a local table recovers in seconds, so waiting a minute is waiting for nothing
+opt.SetOccurrenceProviderRetry(retry =>
+{
+    retry.InitialBackoff = TimeSpan.FromSeconds(30);
+    retry.MaxBackoff     = TimeSpan.FromMinutes(5);
+})
+```
+
+**Notes:**
+- A provider that throws is treated as TRANSIENT: the database a calendar is read from being briefly down
+  must not end a series. Nothing is written — the row keeps its cursor and stays recoverable — and the
+  schedule is parked to ask again after this wait.
+- The wait doubles at each consecutive failure of the SAME schedule, up to `MaxBackoff`, and one answer
+  resets it. The counter is in memory and per host: a restart starts over at `InitialBackoff`, which costs
+  nothing, because the row was never written.
+- The startup-recovery poison counter is not touched by a provider failure. A calendar down across five
+  restarts would otherwise mark the series `Failed` for ever.
+- An unregistered provider key is NOT covered by this: it is a configuration error, refused at dispatch with
+  `ArgumentException` and poisoned at recovery like a corrupt cron expression.
+- See [Recurring Tasks › Occurrence Providers](recurring-tasks/occurrence-providers.md).
+
+### AddOccurrenceProvider&lt;T&gt;
+
+Registers an occurrence provider under the key schedules name it by. It is a method on the
+`EverTaskServiceBuilder` (what `AddEverTask` returns), not on the configuration object.
+
+**Signature:**
+```csharp
+AddOccurrenceProvider<TProvider>(string key) where TProvider : class, INextOccurrenceProvider
+```
+
+**Examples:**
+```csharp
+services.AddEverTask(opt => opt.RegisterTasksFromAssembly(typeof(Program).Assembly))
+        .AddSqlServerStorage(connectionString)
+        .AddOccurrenceProvider<BusinessDaysProvider>("business-days");
+```
+
+**Notes:**
+- `TProvider` is registered as **scoped** with `TryAdd`, so an application that wants another lifetime (a
+  singleton holding a cached calendar) registers it itself and keeps that registration. It is resolved in a
+  fresh scope for every question.
+- The KEY is what every schedule using the provider persists — never a type name, which a rename would
+  orphan. Treat it as part of the durable contract; it is matched ordinally.
+- Registering the same type under the same key twice is a no-op, so a registration that runs at every startup
+  is idempotent. A DIFFERENT type under a key already taken throws `ArgumentException`.
+- See [Recurring Tasks › Occurrence Providers](recurring-tasks/occurrence-providers.md).
+
 ### Audit & Execution-Log Retention (`AddAuditCleanup`)
 
 Configure automatic retention to prevent unbounded growth of the audit and execution-log tables. Retention is enforced by the optional `AuditCleanupHostedService`, registered with **`AddAuditCleanup(policy, cleanupIntervalHours)`**, the single entry-point that actually applies the policy.
@@ -2029,6 +2095,8 @@ The `Action<IRecurringTaskBuilder>` overload of `Dispatch` configures a recurrin
 
 **Time zone:** `.InTimeZone(TimeZoneInfo)` / `.InTimeZone(string)`, accepted before the interval (on `Schedule()`), on the interval builder itself (`EveryDay().InTimeZone(z).AtTime(...)`) and after the final refinement: every position but between `Every(n)` and its unit. The id may be IANA or Windows; the IANA form is what gets persisted, inside the schedule definition, with no new column. It governs **calendar-anchored** schedules only: days, weeks and months (cadences included: `Every(3).Days()` lands on local midnight), `AtTime`/`AtTimes`, weekday and month selectors, cron. On a plain cadence (`Every(n).Seconds/Minutes/Hours`, with `AtSecond`/`AtMinute`) it throws `InvalidOperationException` when the schedule is built: an elapsed step is the same set of instants in every zone. An unresolvable id, or a zone with no IANA id, throws `ArgumentException` at build; an id that stops resolving later is poisoned at recovery like a corrupt cron. Across daylight saving, a skipped local time fires at the gap's exit (several slots inside one gap produce one occurrence) and a repeated one fires on its first pass. Global default: [`SetDefaultScheduleTimeZone`](#setdefaultscheduletimezone). Full rules: [Time Zones](recurring-tasks/time-zones.md).
 
+**Occurrence provider:** `.UseOccurrenceProvider(string key, string? config = null)` on `Schedule()`, for a calendar no interval and no cron can express. The grid then comes from the `INextOccurrenceProvider` registered as [`AddOccurrenceProvider<T>(key)`](#addoccurrenceprovidert), which answers "which occurrence comes strictly after this instant" in UTC; `null` ends the series. **Exclusive** with every interval and with cron — a provider replaces the grid instead of refining it, and naming both throws `InvalidOperationException` at build. Only the key and the opaque `config` string are persisted (never a type name), and the schedule's `InTimeZone` id travels to the provider, which is what reads the calendar on it. Everything else applies unchanged: misfire policies, durable occurrences, `MaxRuns`/`RunUntil`, the skip-forward after a downtime, and `ReevaluateSchedule` as the way to say the calendar changed. Two exceptions: `CatchUpOverflowPolicy.SkipOldest` needs `IsDeterministic => true` on the provider (refused at dispatch otherwise) and `RescheduleMode.RebaseFromCursor` is refused, because a provider exposes no nominal period. An unknown key is a configuration error (`ArgumentException` at dispatch, terminal poison at recovery); a provider that throws is transient — nothing is written, the schedule is re-parked after [`SetOccurrenceProviderRetry`](#setoccurrenceproviderretry)'s backoff, and it surfaces as `OccurrenceProviderException` only where a caller is holding the call: a dispatch, and the `ITaskScheduleManager` methods that decide a new cursor (`Reschedule`, `ReevaluateSchedule`). Full rules: [Occurrence Providers](recurring-tasks/occurrence-providers.md).
+
 **Limits:** `.RunUntil(DateTimeOffset)` (must be future) and `.MaxRuns(int)` (counts real executions only; occurrences skipped to realign after downtime do not consume the budget). Stops at whichever is reached first. On a **durable** schedule `MaxRuns` counts materializations instead — an occurrence that later fails or is cancelled still spent a run, because the schedule did produce it.
 
 **Durable occurrences:** `.WithDurableOccurrences()`, `.OnMisfire(Action<IMisfirePolicyBuilder>)` and `.BackfillFrom(DateTimeOffset)`, accepted in the same positions as `InTimeZone`. They turn every due slot into its own one-shot row — its own status, retries, audit trail and rate-limit budget — and the schedule row stops running the handler.
@@ -2077,7 +2145,7 @@ public class ScheduleAdmin(ITaskScheduleManager schedules)
 `RebaseFromCursor` keeps the schedule inside the calendar period it was already in. The day, week or month the old cursor fell in is read on the old definition's clock, and the new cursor is the new definition's occurrence at the same POSITION inside that period, read on the new one. That is what preserves the logical date when the time of day or the zone changes. Position matters as soon as a period holds more than one slot: with `OnDays(Monday, Wednesday).AtTimes(09:00, 15:00)`, a cursor standing on the afternoon run rebases onto the new afternoon time and never back onto the morning one that has already run — which would replay it and spend one more of `MaxRuns`, where `RecalculateFromNow` on the same definition answers the later slot. It is refused, with `InvalidOperationException` and no write, when:
 
 - the two definitions have different shapes (a different cadence, different weekday or month selectors, a different period kind — only the time of day, the zone, `RunUntil`/`MaxRuns` and the misfire settings may move);
-- either side is a cron schedule, which states no nominal period;
+- either side is a cron schedule or a schedule driven by an occurrence provider, neither of which states a nominal period;
 - the period holds no slot of the new definition, or fewer slots than the cursor had already passed, so there is no position to land on. A rebase never crosses into the next period: doing so would skip a period of work or replay one;
 - the new definition's bounds are already past. `RunUntil` and `MaxRuns` are what an operator changes to wind a series down, and the period arithmetic applies neither: a plain cadence keeps its cursor verbatim and the day-carrying cadences place their slot by hand, so neither ever asks the grid, which is the only thing that applies `RunUntil`. Both bounds are checked here instead. A definition one mode would refuse is refused by the other too, rather than running one occurrence past the end just set.
 

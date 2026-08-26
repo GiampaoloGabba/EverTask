@@ -1,4 +1,5 @@
 ﻿using EverTask.Configuration;
+using EverTask.Scheduler.Occurrences;
 using Microsoft.Extensions.Hosting;
 
 namespace EverTask.Worker;
@@ -200,6 +201,11 @@ public class WorkerService(
         using var scope       = serviceScopeFactory.CreateScope();
         var       taskStorage = scope.ServiceProvider.GetService<ITaskStorage>();
 
+        // Resolved once for the whole recovery: it is what turns "this row names provider X" into "nothing
+        // answers to X in this build", which is corrupt schedule metadata and takes the terminal poison route
+        // like an unparseable cron — instead of failing at every next-run of every restart.
+        var providers = scope.ServiceProvider.GetService<OccurrenceProviderRegistry>();
+
         if (taskStorage == null)
         {
             logger.PersistenceNotActive();
@@ -263,7 +269,7 @@ public class WorkerService(
             // Rebuild every row ONCE, up front: the durable/ordinary split below needs the deserialized
             // schedule, and doing it here keeps a single decode per row instead of one per decision.
             var prepared = pendingTasks
-                           .Select(row => new PreparedRow(row, RecoveredTaskFactory.FromRow(row)))
+                           .Select(row => new PreparedRow(row, RecoveredTaskFactory.FromRow(row, providers)))
                            .ToArray();
 
             if (durableSchedules == 0)
@@ -335,7 +341,7 @@ public class WorkerService(
                 var schedules = page
                                 .Where(row => row.CreatedAtUtc < recoveryCutoff
                                               && !string.IsNullOrEmpty(row.RecurringTask))
-                                .Select(row => new PreparedRow(row, RecoveredTaskFactory.FromRow(row)))
+                                .Select(row => new PreparedRow(row, RecoveredTaskFactory.FromRow(row, providers)))
                                 .Where(p => p.Recovered.IsDurableSchedule);
 
                 await RecoverWaveAsync(schedules).ConfigureAwait(false);
@@ -508,6 +514,16 @@ public class WorkerService(
                     // Host shutdown: leave the task in its recoverable status so the next
                     // startup picks it up again. Marking it Failed here would lose it.
                     throw;
+                }
+                catch (ScheduleDeferredByProviderException)
+                {
+                    // V4: the schedule's occurrence provider could not answer, so the dispatcher wrote
+                    // nothing and parked the row to ask again — it has already said so, as a log line and a
+                    // monitoring event. The row IS back in the scheduler, which is what this loop exists to
+                    // achieve, so it counts as recovered; what must not happen is the L18 line above. An
+                    // outage of somebody else's calendar neither proves this row healthy nor adds a failure
+                    // to it, so a counter a previous restart really earned is left exactly where it was.
+                    Interlocked.Increment(ref recovered);
                 }
                 catch (Exception ex)
                 {

@@ -1,4 +1,7 @@
-﻿using EverTask.Storage;
+﻿using System.Collections.Concurrent;
+using EverTask.Abstractions;
+using EverTask.Logger;
+using EverTask.Storage;
 using EverTask.Storage.EfCore;
 using EverTask.Storage.SqlServer;
 using EverTask.Tests.Storage.EfCore;
@@ -18,8 +21,12 @@ public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsyn
     private ITaskStoreDbContext _dbContext = null!;
     private ITaskStorage _taskStorage = null!;
     private Respawner? _respawner;
+    private readonly RecordingLogger<SqlServerTaskStorage> _storageLog = new();
     private string _connectionString = "";
     private static readonly object _lock = new();
+
+    /// <summary>EfCoreStorageLog.RereadAfterDeadlock — the storage saying it ran a read again.</summary>
+    private const int RereadAfterDeadlockEventId = 2025;
 
     public async Task InitializeAsync()
     {
@@ -38,6 +45,9 @@ public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsyn
         services.AddLogging();
         services.AddEverTask(opt => opt.RegisterTasksFromAssembly(typeof(SqlServerEfCoreTaskStorageTests).Assembly))
                 .AddSqlServerStorage(_connectionString, opt => opt.AutoApplyMigrations = true);
+
+        // Last registration wins: the storage keeps the EventIds it writes where a test can read them.
+        services.AddSingleton<IEverTaskLogger<SqlServerTaskStorage>>(_storageLog);
 
         var serviceProvider = services.BuildServiceProvider();
 
@@ -213,6 +223,139 @@ public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsyn
         var definition = await ScalarAsync<string>(connection,
             "SELECT OBJECT_DEFINITION(OBJECT_ID('[EverTask].[usp_MaterializeOccurrence]'))");
         definition.ShouldContain("SET XACT_ABORT ON");
+    }
+
+    /// <summary>
+    /// A read that SQL Server picks as the deadlock victim is re-run instead of thrown at the caller.
+    /// </summary>
+    /// <remarks>
+    /// The collision is the real one, not a simulated one. <c>RetrievePending</c> walks
+    /// IX_QueuedTasks_Recovery in (CreatedAtUtc, Id) order and looks each row up in the clustered index —
+    /// nonclustered first, clustered second — while <c>usp_SetTaskStatus</c> writes the clustered row first
+    /// and the two indexes carrying Status after it. Two lock orders, one cycle, and the engine kills
+    /// whichever side wrote nothing: the read. Any other read queued on the same clustered row can be
+    /// picked instead, which is how a poll of unrelated rows ends up as the victim of a recovery the caller
+    /// never asked about.
+    /// The storage's own rerun log is what proves the scenario really happened: a run in which nothing
+    /// collided FAILS rather than passing without having tested anything.
+    /// </remarks>
+    [Fact]
+    public async Task Should_rerun_a_read_that_sql_server_picked_as_the_deadlock_victim()
+    {
+        var storage = GetStorage();
+        var ids     = await SeedRecoverableRowsAsync(200);
+
+        // The whole point is to stop as soon as the engine HAS deadlocked; the timeout is only the
+        // guarantee that a machine on which nothing collides still ends the test.
+        using var pressure = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var readFailures = new ConcurrentQueue<Exception>();
+
+        // The nonclustered-then-clustered side: the startup-recovery page, unchanged.
+        async Task RecoveryReads()
+        {
+            while (!pressure.IsCancellationRequested)
+            {
+                try
+                {
+                    await storage.RetrievePending(DateTimeOffset.UtcNow, null, null, 200, pressure.Token);
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception e) { readFailures.Enqueue(e); }
+            }
+        }
+
+        // The clustered-then-nonclustered side: the status write of a task being executed. Audits are off
+        // so the pressure - and the cleanup after it - stays on the one table the cycle is about.
+        // Each write runs to completion (CancellationToken.None): usp_SetTaskStatus owns a transaction, and
+        // cancelling one mid-flight leaves it open on a pooled connection, holding the locks the cleanup of
+        // this test then waits for.
+        async Task StatusWrites()
+        {
+            while (!pressure.IsCancellationRequested)
+            {
+                foreach (var id in ids)
+                {
+                    if (pressure.IsCancellationRequested) break;
+
+                    await storage.SetStatus(id, QueuedTaskStatus.InProgress, null, AuditLevel.None);
+                    await storage.SetStatus(id, QueuedTaskStatus.Queued, null, AuditLevel.None);
+                }
+            }
+        }
+
+        // The bystander: a caller reading rows of its own, queued behind the same clustered row. This is
+        // the one that failed in the multi-host suite - a poll that asked about nothing the cycle involved.
+        async Task BystanderReads()
+        {
+            while (!pressure.IsCancellationRequested)
+            {
+                try
+                {
+                    await storage.Get(t => t.Status == QueuedTaskStatus.InProgress, pressure.Token);
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception e) { readFailures.Enqueue(e); }
+            }
+        }
+
+        async Task StopOnceItHasDeadlocked()
+        {
+            while (!pressure.IsCancellationRequested)
+            {
+                try
+                {
+                    await Task.Delay(200, pressure.Token);
+                }
+                catch (OperationCanceledException) { return; }
+
+                if (_storageLog.Count(RereadAfterDeadlockEventId) >= 2)
+                    await pressure.CancelAsync();
+            }
+        }
+
+        await Task.WhenAll(
+            RecoveryReads(), RecoveryReads(), RecoveryReads(),
+            StatusWrites(), StatusWrites(), StatusWrites(), StatusWrites(),
+            BystanderReads(), BystanderReads(),
+            StopOnceItHasDeadlocked());
+
+        readFailures.ShouldBeEmpty(
+            "a read has nothing to undo and nothing to reconcile: being chosen as the deadlock victim is the " +
+            "engine asking it to run again, not a failure to hand the caller");
+
+        _storageLog.Count(RereadAfterDeadlockEventId).ShouldBeGreaterThan(0,
+            "nothing collided, so this run proves nothing about what happens when something does");
+    }
+
+    /// <summary>Rows a recovery page returns, enough that it resolves them through the index.</summary>
+    private async Task<Guid[]> SeedRecoverableRowsAsync(int count)
+    {
+        var ids = Enumerable.Range(0, count).Select(_ => TestGuidGenerator.NewForSqlServer()).ToArray();
+        var now = DateTimeOffset.UtcNow;
+
+        var values = string.Join(", ", ids.Select((_, i) =>
+            $"(@Id{i}, @Created{i}, 0, 'deadlock-probe', '[]', 'deadlock-probe', 0, 0, 'default', 0, 'Queued', 0)"));
+
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = new SqlCommand(
+            $"""
+             INSERT INTO [{_dbContext.Schema}].[QueuedTasks]
+                 (Id, CreatedAtUtc, ExecutionTimeMs, Type, Request, Handler, IsRecurring, CurrentRunCount,
+                  QueueName, AuditLevel, Status, ScheduleVersion)
+             VALUES {values}
+             """, connection);
+
+        for (var i = 0; i < ids.Length; i++)
+        {
+            command.Parameters.AddWithValue($"@Id{i}", ids[i]);
+            command.Parameters.AddWithValue($"@Created{i}", now.AddMinutes(i - count));
+        }
+
+        await command.ExecuteNonQueryAsync();
+
+        return ids;
     }
 
 #if NET10_0

@@ -33,6 +33,12 @@ namespace EverTask.Abstractions;
 /// considered fired and may finish under the definition it started with — its advance still applies the new
 /// one.
 /// </para>
+/// <para>
+/// A schedule whose grid comes from an <see cref="INextOccurrenceProvider"/> is asked that provider here, so
+/// a provider that cannot answer surfaces as an <see cref="OccurrenceProviderException"/> to the CALLER
+/// rather than being retried in the background — the same as at a dispatch, and for the same reason: there is
+/// a caller holding the call, and nothing has been written. Retrying the call is the whole recovery.
+/// </para>
 /// </remarks>
 public interface ITaskScheduleManager
 {
@@ -52,6 +58,13 @@ public interface ITaskScheduleManager
     /// no occurrence left to run; or <see cref="RescheduleMode.RebaseFromCursor"/> cannot map the cursor —
     /// because the two definitions have different shapes, or because the period holds no valid slot.
     /// </exception>
+    /// <exception cref="OccurrenceProviderException">
+    /// The schedule takes its occurrences from an <see cref="INextOccurrenceProvider"/> and that provider
+    /// could not answer while the new cursor was being decided. Nothing was written, and the failure is
+    /// transient by contract, so the call can simply be made again. Deciding a cursor means asking the grid,
+    /// which is why this is the second place such a failure reaches application code — a dispatch is the
+    /// other.
+    /// </exception>
     Task<ScheduleUpdateResult> Reschedule(string taskKey, Action<IRecurringTaskBuilder> configure,
                                           RescheduleMode mode = RescheduleMode.RecalculateFromNow,
                                           CancellationToken ct = default);
@@ -70,6 +83,11 @@ public interface ITaskScheduleManager
     /// To release a halted or late catch-up while KEEPING that backlog, call <see cref="ResumeSchedule"/>.
     /// </para>
     /// </remarks>
+    /// <exception cref="OccurrenceProviderException">
+    /// The very case this call exists for, when the calendar it is asking about is unreachable: the schedule's
+    /// <see cref="INextOccurrenceProvider"/> could not answer, so nothing was written and the call can be made
+    /// again. The schedule keeps running on the cursor it already had.
+    /// </exception>
     Task<ScheduleUpdateResult> ReevaluateSchedule(string taskKey, CancellationToken ct = default);
 
     /// <summary>

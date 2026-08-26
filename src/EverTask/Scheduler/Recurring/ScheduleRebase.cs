@@ -253,8 +253,12 @@ internal static class ScheduleRebase
     {
         if (current.PeriodKind == SchedulePeriodKind.None || replacement.PeriodKind == SchedulePeriodKind.None)
         {
+            var shape = current.Provider != null || replacement.Provider != null
+                            ? "A schedule whose occurrences come from a provider"
+                            : "A cron schedule";
+
             throw new InvalidOperationException(
-                "A cron schedule exposes no nominal period, so its cursor cannot be rebased onto another " +
+                $"{shape} exposes no nominal period, so its cursor cannot be rebased onto another " +
                 "definition. Reschedule with RescheduleMode.RecalculateFromNow instead.");
         }
 

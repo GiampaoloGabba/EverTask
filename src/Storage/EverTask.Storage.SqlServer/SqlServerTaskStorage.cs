@@ -1,5 +1,6 @@
 ﻿using System.Data;
 using System.Globalization;
+using System.Linq.Expressions;
 using EverTask.Abstractions;
 using EverTask.Logger;
 using Microsoft.Data.SqlClient;
@@ -287,4 +288,105 @@ public class SqlServerTaskStorage(
                    ? ScheduleCasResult.Applied
                    : ScheduleCasResult.VersionMismatch;
     }
+
+    // ---- Reads chosen as deadlock victims ---------------------------------------------------------
+    // SQL Server takes shared locks to read, and a read that resolves a row through a nonclustered index
+    // takes them in the OPPOSITE order to a write: the read locks the index entry and then the clustered
+    // row it points at, while an UPDATE locks the clustered row and then every index entry that has to
+    // follow it. The startup recovery page is exactly that kind of read -- it walks IX_QueuedTasks_Recovery
+    // in (CreatedAtUtc, Id) order and looks the rows up in the clustered index -- and it runs while
+    // occurrences and tasks are already executing and writing their Status, which IX_QueuedTasks_Recovery
+    // and IX_QueuedTasks_Status both carry. The cycle that pair forms is a genuine deadlock, and the engine
+    // resolves it by killing whichever transaction is cheapest to roll back: a read, having written
+    // nothing, is always cheaper than the write it collided with, and any OTHER read queued behind the
+    // same clustered row can be picked instead. So the victim is a read that never asked for anything but
+    // a consistent answer.
+    //
+    // The answer SQL Server gives with error 1205 is "Rerun the transaction", and for a read that is
+    // literally all it takes: a read has no effect to undo and no state to reconcile, so re-running it is
+    // indistinguishable from having asked a moment later. What is NOT acceptable is the alternative --
+    // letting 1205 out of the storage -- because on the recovery path it aborts the whole startup recovery
+    // (WorkerService logs RecoveryFailed and the rest of the backlog waits for the next restart).
+    // This applies to SQL Server alone: PostgreSQL and MySQL answer plain reads from a consistent snapshot
+    // and take no shared locks, and SQLite serializes writers outright.
+    //
+    // Writes are deliberately NOT re-run here. Each of them is a compare-and-swap or a single-transaction
+    // procedure whose caller already knows what to do with a lost race, and re-running one behind its
+    // caller's back would decide that for it.
+
+    /// <summary>SQL Server error 1205 — "was deadlocked on lock resources … Rerun the transaction".</summary>
+    private const int DeadlockVictim = 1205;
+
+    /// <summary>How many times a read is run in total before a deadlock is allowed to surface.</summary>
+    private const int MaxReadAttempts = 3;
+
+    /// <summary>Grows per attempt so two readers that collided do not immediately collide again.</summary>
+    private static readonly TimeSpan RereadDelay = TimeSpan.FromMilliseconds(25);
+
+    /// <inheritdoc />
+    public override Task<QueuedTask[]> Get(Expression<Func<QueuedTask, bool>> where,
+                                           CancellationToken ct = default) =>
+        RereadOnDeadlockAsync(token => base.Get(where, token), nameof(Get), ct);
+
+    /// <inheritdoc />
+    public override Task<QueuedTask[]> GetAll(CancellationToken ct = default) =>
+        RereadOnDeadlockAsync(base.GetAll, nameof(GetAll), ct);
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Only the clock-carrying overload is overridden: overriding the legacy one would make the base take
+    /// this provider for a pre-4.0 storage and route every call through it, dropping the caller's
+    /// <paramref name="nowUtc"/> (P9). The core calls this overload exclusively.
+    /// </remarks>
+    public override Task<QueuedTask[]> RetrievePending(DateTimeOffset nowUtc, DateTimeOffset? lastCreatedAt,
+                                                       Guid? lastId, int take, CancellationToken ct = default) =>
+        RereadOnDeadlockAsync(token => base.RetrievePending(nowUtc, lastCreatedAt, lastId, take, token),
+            nameof(RetrievePending), ct);
+
+    /// <inheritdoc />
+    public override Task<int> GetCurrentRunCount(Guid taskId) =>
+        RereadOnDeadlockAsync(_ => base.GetCurrentRunCount(taskId), nameof(GetCurrentRunCount),
+            CancellationToken.None);
+
+    /// <inheritdoc />
+    public override Task<QueuedTask?> GetByTaskKey(string taskKey, CancellationToken ct = default) =>
+        RereadOnDeadlockAsync(token => base.GetByTaskKey(taskKey, token), nameof(GetByTaskKey), ct);
+
+    /// <inheritdoc />
+    public override Task<QueuedTask[]> GetOccurrences(Guid parentId, bool nonTerminalOnly = false,
+                                                      CancellationToken ct = default) =>
+        RereadOnDeadlockAsync(token => base.GetOccurrences(parentId, nonTerminalOnly, token),
+            nameof(GetOccurrences), ct);
+
+    /// <inheritdoc />
+    public override Task<int> CountActiveOccurrences(Guid parentId, CancellationToken ct = default) =>
+        RereadOnDeadlockAsync(token => base.CountActiveOccurrences(parentId, token),
+            nameof(CountActiveOccurrences), ct);
+
+    /// <summary>Runs a read, re-running it while SQL Server keeps picking it as the deadlock victim.</summary>
+    private async Task<T> RereadOnDeadlockAsync<T>(Func<CancellationToken, Task<T>> read, string operation,
+                                                   CancellationToken ct)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await read(ct).ConfigureAwait(false);
+            }
+            catch (Exception e) when (attempt < MaxReadAttempts && IsDeadlockVictim(e))
+            {
+                logger.RereadAfterDeadlock(operation, attempt);
+
+                await Task.Delay(RereadDelay * attempt, ct).ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whether the failure is the engine reporting this session as the deadlock victim, wherever in the
+    /// exception chain it landed — a query surfaces it bare, a <c>SaveChanges</c> wraps it.
+    /// </summary>
+    private static bool IsDeadlockVictim(Exception exception) =>
+        exception is SqlException { Number: DeadlockVictim }
+        || (exception.InnerException is { } inner && IsDeadlockVictim(inner));
 }

@@ -81,6 +81,9 @@ public class WorkerExecutor(
     private ScheduleVersionRegistry? _scheduleVersions;
     private bool _scheduleVersionsResolved;
 
+    private OccurrenceProviderRetryRegistry? _providerRetries;
+    private bool _providerRetriesResolved;
+
     private OccurrenceMaterializer? Materializer
     {
         get
@@ -108,6 +111,25 @@ public class WorkerExecutor(
             _scheduleVersionsResolved = true;
 
             return _scheduleVersions;
+        }
+    }
+
+    /// <summary>
+    /// The consecutive provider failures this host holds per schedule, resolved only to FORGET a series that
+    /// has ended — the same lifetime as its published version.
+    /// </summary>
+    private OccurrenceProviderRetryRegistry? ProviderRetries
+    {
+        get
+        {
+            if (_providerRetriesResolved)
+                return _providerRetries;
+
+            using var scope = serviceScopeFactory.CreateScope();
+            _providerRetries         = scope.ServiceProvider.GetService<OccurrenceProviderRetryRegistry>();
+            _providerRetriesResolved = true;
+
+            return _providerRetries;
         }
     }
 
@@ -306,8 +328,16 @@ public class WorkerExecutor(
                 // the operational retry. KickAsync is non-throwing by contract, but REACHING it is not —
                 // resolving the materializer builds a scope and a service — which is why the try is around
                 // the whole statement and not inside the kick.
+                //
+                // With THIS delivery's token, for the same reason the advance takes it: the kick re-plans the
+                // schedule, and since phase 6 that grid may be an INextOccurrenceProvider doing real I/O.
+                // Without it a calendar that never answers holds the consumer slot, this delivery's registry
+                // entry — so the occurrence stays "in delivery" and its schedule's budget of one is spent for
+                // ever — and the host's shutdown, none of which the kick is allowed to cost: nothing is
+                // written by a plan that could not be computed, and the operational retry and startup
+                // recovery both bring the schedule back.
                 if (task.ParentTaskId is { } scheduleId && Materializer is { } materializer)
-                    await materializer.KickAsync(scheduleId, CancellationToken.None).ConfigureAwait(false);
+                    await materializer.KickAsync(scheduleId, serviceToken).ConfigureAwait(false);
             }
             catch (Exception e)
             {
@@ -340,6 +370,15 @@ public class WorkerExecutor(
         // schedule the caller has just changed.
         if (IsSupersededSchedule(task))
             return;
+
+        // A delivery that exists only to ask the grid again: an occurrence provider could not answer, so
+        // nothing was decided and nothing was written (V4). It re-reads the ROW and re-runs the decision it
+        // could not make; running the handler here would execute a slot nobody has chosen yet.
+        if (task.IsScheduleRetry)
+        {
+            await RetryScheduleDecisionAsync(task, serviceToken).ConfigureAwait(false);
+            return;
+        }
 
         // A DURABLE schedule row runs no handler at all: its slot firing means "materialize what is due".
         // Before the gate, deliberately — the rate limit belongs to the OCCURRENCES, per key, and letting a
@@ -426,6 +465,96 @@ public class WorkerExecutor(
         finally
         {
             _inFlightTasks.TryRemove(task.PersistenceId, out _);
+        }
+    }
+
+    /// <summary>
+    /// Asks a schedule's grid again, after an <see cref="INextOccurrenceProvider"/> could not answer (V4).
+    /// </summary>
+    /// <remarks>
+    /// It re-dispatches the ROW through the recovery path, which is the one that knows how to choose between
+    /// the grace window and a skip-forward — and choosing between them is exactly what the provider left
+    /// unanswered. Nothing is written here: a provider still down re-parks the schedule again, with the longer
+    /// backoff its consecutive failures have earned, and a crash in between costs only the wait, since the row
+    /// still carries the cursor it had.
+    /// <para>
+    /// With NO storage there is no row to re-read, and a series still runs (F18: the run counter is in
+    /// memory). Everything the interrupted decision needs is then on the delivery itself — the slot it was
+    /// about, the definition, the run number — so the retry re-runs that advance instead of the recovery
+    /// decision. Abandoning it there is what left a storage-less provider series stopped for good.
+    /// </para>
+    /// </remarks>
+    private async ValueTask RetryScheduleDecisionAsync(TaskHandlerExecutor task, CancellationToken serviceToken)
+    {
+        try
+        {
+            using var scope = serviceScopeFactory.CreateScope();
+
+            var storage = scope.ServiceProvider.GetService<ITaskStorage>();
+
+            if (storage == null)
+            {
+                // Back to the delivery the failed advance was: the slot it was about, and neither of the two
+                // retry marks — what this advance parks is the next OCCURRENCE, and one still carrying them
+                // would decide again instead of running the handler.
+                var resumed = task with
+                {
+                    ExecutionTime        = task.ScheduleRetryFromUtc ?? task.ExecutionTime,
+                    IsScheduleRetry      = false,
+                    ScheduleRetryFromUtc = null
+                };
+
+                await QueueNextOccourrence(resumed, 0, null, serviceToken).ConfigureAwait(false);
+
+                return;
+            }
+
+            if (scope.ServiceProvider.GetService<ITaskDispatcherInternal>() is not { } dispatcher)
+            {
+                logger.ScheduleRetryAbandoned(task.PersistenceId, "no dispatcher is registered");
+                return;
+            }
+
+            var row = (await storage.Get(t => t.Id == task.PersistenceId, serviceToken).ConfigureAwait(false))
+                .FirstOrDefault();
+
+            // Gone, cancelled or finished under the wait: there is no decision left to retry.
+            if (row is null || !row.IsRecurring || row.Status == QueuedTaskStatus.Cancelled ||
+                row.NextRunUtc is null)
+            {
+                logger.ScheduleRetryAbandoned(task.PersistenceId, "the schedule is no longer waiting for a slot");
+                return;
+            }
+
+            var recovered = RecoveredTaskFactory.FromRow(row,
+                scope.ServiceProvider.GetService<OccurrenceProviderRegistry>());
+
+            if (recovered.Task is null || recovered.Recurring is not { } definition)
+            {
+                // The VERDICT on a row nothing can rebuild belongs to startup recovery, which owns the bounded
+                // retry and the terminal poison; here it is only the reason this retry stops.
+                logger.ScheduleRetryAbandoned(task.PersistenceId, "the row cannot be rebuilt by this build");
+                return;
+            }
+
+            await dispatcher.ExecuteDispatch(recovered.Task, row.NextRunUtc, definition, row.CurrentRunCount,
+                    serviceToken, row.Id, row.TaskKey, recovered.AuditLevel, isRecovery: true,
+                    recovered.RowMetadata)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (serviceToken.IsCancellationRequested)
+        {
+            // Shutdown: the row keeps its cursor and startup recovery asks the provider again.
+        }
+        catch (ScheduleDeferredByProviderException)
+        {
+            // The provider failed AGAIN: the dispatcher has already parked the next attempt and said so, as a
+            // log line and a monitoring event. It is the normal answer to a calendar that is still down, and
+            // reporting it as a retry that failed would blame this delivery for doing exactly its job.
+        }
+        catch (Exception e)
+        {
+            logger.ScheduleRetryFailed(e, task.PersistenceId);
         }
     }
 
@@ -713,8 +842,9 @@ public class WorkerExecutor(
             // A rate-limit deferral must NOT schedule the next recurring occurrence: the
             // CURRENT occurrence is still parked in the scheduler (run-count integrity)
             if (!rateLimitDeferred)
-                await QueueNextOccourrence(task, executionTime, taskStorage, markCompleted: recurringRunCompleted,
-                        countsAsRun: skippedOccurrenceSlot == null, skipAheadTo: skippedOccurrenceSlot)
+                await QueueNextOccourrence(task, executionTime, taskStorage, serviceToken,
+                        markCompleted: recurringRunCompleted, countsAsRun: skippedOccurrenceSlot == null,
+                        skipAheadTo: skippedOccurrenceSlot)
                     .ConfigureAwait(false);
 
             // Last, so handler disposal and the lifecycle callbacks above still read the context of the
@@ -858,7 +988,8 @@ public class WorkerExecutor(
 
                 // Skipped occurrence: advance the schedule without consuming the MaxRuns budget, skipping
                 // ahead to the limiter's next available slot instead of grinding occurrence by occurrence.
-                await QueueNextOccourrence(task, 0, taskStorage, countsAsRun: false, skipAheadTo: gateResult.SlotUtc)
+                await QueueNextOccourrence(task, 0, taskStorage, serviceToken, countsAsRun: false,
+                        skipAheadTo: gateResult.SlotUtc)
                     .ConfigureAwait(false);
                 return;
             }
@@ -1457,7 +1588,15 @@ public class WorkerExecutor(
             ? aggregate.InnerExceptions[^1]
             : ex;
 
-    private async Task QueueNextOccourrence(TaskHandlerExecutor task, double executionTimeMs, ITaskStorage? taskStorage,
+    /// <param name="ct">
+    /// The service token of the delivery this advance closes. It reaches the GRID, which since phase 6 may be
+    /// an <see cref="INextOccurrenceProvider"/> doing real I/O: without it a provider that never returns holds
+    /// a worker consumer, its delivery's registry entry and the host's shutdown for ever. The storage writes
+    /// below deliberately do NOT take it — a shutdown must not cost the advance of a run that already
+    /// happened.
+    /// </param>
+    private async Task QueueNextOccourrence(TaskHandlerExecutor task, double executionTimeMs,
+                                            ITaskStorage? taskStorage, CancellationToken ct,
                                             bool markCompleted = false, bool countsAsRun = true,
                                             DateTimeOffset? skipAheadTo = null)
     {
@@ -1540,14 +1679,40 @@ public class WorkerExecutor(
             skipAheadTo = null;
 
         var runNumber = countsAsRun ? currentRun + 1 : currentRun;
-        var result = await Evaluator.CalculateNextValidRunAsync(
-            task.RecurringTask, scheduledTime, runNumber, nowUtc,
-            referenceTime: countsAsRun ? null : skipAheadTo, isRecovery: !countsAsRun,
-            computeSkippedCount: countsAsRun).ConfigureAwait(false);
 
-        // Log skipped occurrences if any
+        NextRunResult result;
+
+        try
+        {
+            result = await Evaluator.CalculateNextValidRunAsync(
+                task.RecurringTask, scheduledTime, runNumber, nowUtc,
+                referenceTime: countsAsRun ? null : skipAheadTo, isRecovery: !countsAsRun,
+                computeSkippedCount: countsAsRun,
+                identity: new ScheduleIdentity(task.PersistenceId, task.TaskKey, runNumber + 1), ct: ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Shutdown reached the grid before it answered. Exactly the shape a provider failure leaves —
+            // nothing written, the cursor where it was — and startup recovery is what asks again.
+            logger.ScheduleAdvanceAbandonedOnShutdown(task.PersistenceId);
+            return;
+        }
+        catch (OccurrenceProviderException failure)
+        {
+            // The schedule's calendar could not answer, which is transient by contract (V4). Nothing is
+            // written — not even the run that just happened, whose completion needs the cursor this call was
+            // computing — so the row keeps the state a crash between a side effect and its storage write
+            // leaves, and the at-least-once contract covers the replay. What must not happen is the series
+            // stopping: it is parked to ask again after the backoff.
+            DeferScheduleForProvider(task, failure, nowUtc);
+            return;
+        }
+
+        // Log skipped occurrences if any, saying whether the number is the real total: a walked grid — and
+        // above all a provider grid, where each step is a round trip — counts under a bound.
         if (result.SkippedCount > 0)
-            logger.MissedOccurrencesSkipped(task.PersistenceId, result.SkippedCount);
+            logger.MissedOccurrencesSkipped(task.PersistenceId, result.SkippedCount, result.SkippedCountIsExact);
 
         // T6: the slots a daylight-saving transition folded into this one occurrence. They cost one run, not
         // one each, so the only place their number ever shows up is here.
@@ -1583,7 +1748,7 @@ public class WorkerExecutor(
                         // from here would put the old grid back. Its owner is SUPPOSED to have parked it —
                         // and a re-park that failed is the one case that brings this delivery here at all, so
                         // the schedule is parked from the row instead of being left in no scheduler at all.
-                        await ReparkFromRowAsync(advance.Rebased, runNumber + 1).ConfigureAwait(false);
+                        await ReparkFromRowAsync(advance.Rebased, runNumber + 1, ct).ConfigureAwait(false);
                         return;
                     }
                 }
@@ -1646,7 +1811,7 @@ public class WorkerExecutor(
             // Only the series-END writes here; a skip that continues still writes nothing (no-storage-write skip).
             if (!countsAsRun && taskStorage != null &&
                 !await FinalizeSkippedSeriesAsync(task, executionTimeMs, currentRun, rowCursor, rowStatus,
-                     taskStorage, current).ConfigureAwait(false))
+                     taskStorage, current, ct).ConfigureAwait(false))
             {
                 // The row belongs to a definition this delivery knows nothing about: it keeps its cursor, its
                 // published lower bound and whatever the new owner parked for it.
@@ -1655,8 +1820,76 @@ public class WorkerExecutor(
 
             // A schedule that will not run again is no longer a version this process publishes a lower bound
             // for (S4): the entry is dropped here and on cancellation, which are the two ways a series ends.
+            // Its provider backoff, if it had one, has the same lifetime.
             ScheduleVersions?.Remove(task.PersistenceId);
+            ProviderRetries?.Forget(task.PersistenceId);
         }
+    }
+
+    /// <summary>
+    /// Parks a schedule whose occurrence provider could not answer, so the advance is retried after the
+    /// backoff instead of waiting for a restart (V4).
+    /// </summary>
+    /// <remarks>
+    /// The registration is a SCHEDULE RETRY, not the next occurrence: which slot comes next is precisely what
+    /// the provider did not say, and parking an ordinary delivery would run the handler on a slot nobody
+    /// chose. Conditional like every other re-park — a reschedule that has already parked a newer definition
+    /// owns the row now — and the event is published beside the log line, because there is no poller behind
+    /// this and a schedule waiting on its calendar has to be visible.
+    /// <para>
+    /// Two details. The retry CARRIES the slot this delivery was about (<c>ScheduleRetryFromUtc</c>) while its
+    /// <c>ExecutionTime</c> becomes the instant it fires at: the decision it comes back to make is "what
+    /// follows the slot that just ran", and on a host with no storage that slot exists nowhere but on the
+    /// delivery. And the event saying the schedule "is parked to ask again" is published only once the
+    /// registration is really in — announcing it first left a subscriber with a promise the very next line
+    /// could break, and no event at all for the break (V4(2)).
+    /// </para>
+    /// </remarks>
+    private void DeferScheduleForProvider(TaskHandlerExecutor task, OccurrenceProviderException failure,
+                                          DateTimeOffset nowUtc)
+    {
+        var retryAt = nowUtc + failure.RetryAfter;
+
+        try
+        {
+            var retry = task.ToLazy() with
+            {
+                ExecutionTime        = retryAt,
+                IsScheduleRetry      = true,
+                ScheduleRetryFromUtc = task.ExecutionTime
+            };
+
+            if (!scheduler.TrySchedule(retry, retryAt))
+            {
+                // A newer definition owns the row's parking now: this schedule is not the one waiting on a
+                // provider any more, and saying so would describe a series nobody is running.
+                logger.NextOccurrenceRefusedBySuccessor(task.PersistenceId, task.ScheduleVersion);
+                return;
+            }
+        }
+        catch (Exception e)
+        {
+            // The re-park IS what brings this schedule back, and nothing polls behind it: a failure here ends
+            // the series until the next restart, so it is an error event and not only a log line.
+            RegisterEvent(LogLevel.Error, SeverityLevel.Error, task, e, null,
+                (TaskId: task.PersistenceId, failure.ProviderKey),
+                static (l, a, ex) => l.ProviderRetryParkFailed(ex, a.TaskId, a.ProviderKey),
+                static a => string.Create(CultureInfo.InvariantCulture,
+                    $"Schedule {a.TaskId} could not be parked to ask the occurrence provider " +
+                    $"'{a.ProviderKey}' again: nothing was written and the series stays where it is " +
+                    $"until the next startup recovery"));
+
+            return;
+        }
+
+        RegisterEvent(LogLevel.Warning, SeverityLevel.Warning, task, failure, null,
+            (TaskId: task.PersistenceId, failure.ProviderKey, failure.ConsecutiveFailures, RetryAt: retryAt),
+            static (l, a, e) => l.ScheduleAdvanceDeferredByProvider(e!, a.ProviderKey, a.TaskId,
+                a.ConsecutiveFailures, a.RetryAt),
+            static a => string.Create(CultureInfo.InvariantCulture,
+                $"Occurrence provider '{a.ProviderKey}' could not answer for schedule {a.TaskId} " +
+                $"({a.ConsecutiveFailures} consecutive failure(s)): nothing was written and the schedule is " +
+                $"parked to ask again at {a.RetryAt:O}"));
     }
 
     /// <summary>
@@ -1681,7 +1914,7 @@ public class WorkerExecutor(
     private async Task<bool> FinalizeSkippedSeriesAsync(TaskHandlerExecutor task, double executionTimeMs,
                                                         int currentRun, DateTimeOffset? expectedCursorUtc,
                                                         QueuedTaskStatus expectedStatus, ITaskStorage taskStorage,
-                                                        QueuedTask? row)
+                                                        QueuedTask? row, CancellationToken ct)
     {
         // A schedule nobody can address, or a storage without the compare-and-swap, keeps the historical
         // unconditional write byte for byte.
@@ -1708,7 +1941,7 @@ public class WorkerExecutor(
         var rebased = (await taskStorage.Get(t => t.Id == task.PersistenceId).ConfigureAwait(false))
             .FirstOrDefault();
 
-        await ReparkFromRowAsync(rebased, currentRun + 1).ConfigureAwait(false);
+        await ReparkFromRowAsync(rebased, currentRun + 1, ct).ConfigureAwait(false);
         return false;
     }
 
@@ -1848,7 +2081,14 @@ public class WorkerExecutor(
     /// before this advance incremented it on some providers and after it on the ones that hand back live
     /// entities.
     /// </param>
-    private async Task ReparkFromRowAsync(QueuedTask? row, int nextRunNumber)
+    /// <param name="ct">
+    /// The service token of the delivery this park closes. A durable row is parked by the MATERIALIZER, which
+    /// re-plans the schedule and may therefore ask an <see cref="INextOccurrenceProvider"/> doing real I/O:
+    /// without the token a calendar that never answers holds this consumer, this delivery's registry entry and
+    /// the host's shutdown for ever. Nothing is written by a plan that could not be computed, so a park the
+    /// shutdown cancels costs only the wait — startup recovery parks the row again.
+    /// </param>
+    private async Task ReparkFromRowAsync(QueuedTask? row, int nextRunNumber, CancellationToken ct)
     {
         // Nothing to park: the advance never reached a row it could read, or the series has ended.
         if (row is not { NextRunUtc: { } cursor })
@@ -1873,11 +2113,16 @@ public class WorkerExecutor(
                                            .ConfigureAwait(false);
 
             if (definition.IsDurable && Materializer is { } materializer)
-                await materializer.RunAsync(row.Id, executor, CancellationToken.None).ConfigureAwait(false);
+                await materializer.RunAsync(row.Id, executor, ct).ConfigureAwait(false);
             else if (!scheduler.TrySchedule(executor, cursor))
                 return;
 
             logger.ScheduleReparkedFromRow(row.Id, cursor);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Shutdown, which is not a failure to report: nothing was written, the row keeps its cursor and
+            // startup recovery parks it again.
         }
         catch (Exception e)
         {

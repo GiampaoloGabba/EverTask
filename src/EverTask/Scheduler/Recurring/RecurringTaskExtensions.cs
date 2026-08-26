@@ -10,7 +10,11 @@ public static class RecurringTaskExtensions
     /// Tolerance in seconds for near-immediate executions.
     /// Prevents RunNow or just-scheduled tasks from being treated as "in the past".
     /// </summary>
-    private const int ToleranceSeconds = 1;
+    /// <remarks>
+    /// Internal rather than private because the provider grid applies the SAME rule to the same decision: two
+    /// copies of it would let a provider-driven schedule realign where a built-in one does not.
+    /// </remarks>
+    internal const int ToleranceSeconds = 1;
 
     /// <summary>
     /// Calculates the next valid run time for a recurring task, automatically skipping
@@ -106,7 +110,13 @@ public static class RecurringTaskExtensions
         var skipped     = computeSkippedCount ? recurringTask.CountMissedOccurrences(countAnchor, now) : 0;
 
         // The realignment answers through NextOccurrenceStrictlyAfter, which reports no collapse of its own:
-        // what travels on is the count of the occurrence the schedule had actually reached.
-        return new NextRunResult(next, skipped) { CollapsedSlotCount = collapsedSlots };
+        // what travels on is the count of the occurrence the schedule had actually reached. The count is the
+        // uncapped one, so a downtime longer than the walk's own bound answers "at least this many" and says
+        // so rather than reaching a log line dressed as a total.
+        return new NextRunResult(next, skipped)
+        {
+            CollapsedSlotCount  = collapsedSlots,
+            SkippedCountIsExact = recurringTask.IsExactUncappedCount(skipped)
+        };
     }
 }

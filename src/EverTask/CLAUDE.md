@@ -58,6 +58,16 @@ in-memory storage.
   cancelled by shutdown) strand one scope, and every scoped dependency inside it, per dropped delivery: the
   executor is dead on all of them, because whatever they continue into is a `ToLazy()` copy that drops the
   scope. Never enumerate those paths one by one — that enumeration is exactly what kept missing them.
+- **The ENQUEUE boundary is the other half of that rule** (`Worker/DroppedDelivery`): a delivery the queue
+  refuses never becomes one, so `DoWork`'s finally is never entered and the same scope is stranded — and
+  these are not edge cases. Startup recovery racing a live dispatch is the race the delivery registry exists
+  to stop, and it hands `WorkerQueue` one refused eager executor every time it happens; the same goes for a
+  cancel landing between dispatch and enqueue, a row that terminally finished since it was read, and a Drop*
+  eviction. **Only a TERMINAL drop releases**: `QueueFull` and `DuplicateInProcess` come back out of
+  `TryQueueCore` untouched because both schedulers re-park and retry the very same instance, and disposing
+  there would run the next delivery on a disposed handler. Whoever turns one of those into a verdict releases
+  it instead — `WorkerQueueManager.TryEnqueue`, which reports `DuplicateInProcess` as idempotent success and
+  throws on `QueueFull`. Exception paths never release: the schedulers read them as a full queue.
 - **`Attempt` moves only when an attempt is admitted INTO the handler**, and is rolled back to it when
   `ExecuteTask` unwinds: `OnRetry` publishes the attempt about to start, and that retry can still be
   abandoned — a cancel inside the callback or during the delay, or the `ThrottleRetries` gate turning it
@@ -168,6 +178,13 @@ the definition opted in.
   version it decided from, so two runs racing end with one winner and one re-read. The per-schedule gate is a
   contention optimization on top of that, and it COALESCES: a run that finds the gate taken sets a pending
   flag the holder re-checks before releasing, so a kick is never simply dropped.
+  - **Every one of them hands it the CALLER's token**, the kick and `ReparkFromRowAsync` included: a run
+    re-plans the schedule, and since phase 6 that grid may be an `INextOccurrenceProvider` doing real I/O.
+    `CancellationToken.None` there let a calendar that never answers hold the delivery's registry entry —
+    the occurrence stays "in delivery", so a budget of one is spent for ever — plus the worker consumer and
+    the host's shutdown. A kick the shutdown cancels is not a failure and is not logged as one: nothing is
+    written by a plan that could not be computed, and the operational retry and startup recovery both bring
+    the schedule back.
 - **It never throws at its callers, and a failed run re-parks the schedule itself.** The re-park is armed
   INSIDE the per-schedule gate, so it covers the runs the holder absorbed: a schedule's own delivery that
   finds the gate taken returns without parking the row, and if the holder (a kick) then failed silently the
@@ -483,11 +500,123 @@ happened and has to be recorded.
 ## Occurrence grid: one seam
 
 `IScheduleEvaluator` (internal, `ScheduleEvaluator`) is what the dispatcher, the worker and the recovery ask
-about a schedule's grid — never the occurrence math directly. Today it is a synchronous wrapper over the pure
-primitives on `RecurringTask`; the asynchronous shape is there because occurrences will later come from a
-user-supplied provider that may do I/O. Its two grid questions that no primitive answered before are
-`NextGridOccurrenceAfterAsync` (the natural successor, bounds ignored — the recovery grace window) and
-`EnumerateDueSlotsAsync` (the slots already owed at a given now, oldest first, under a MANDATORY cap).
+about a schedule's grid — never the occurrence math directly. For a built-in definition it is a synchronous
+wrapper over the pure primitives on `RecurringTask`; the asynchronous shape is what a schedule driven by an
+`INextOccurrenceProvider` needs, since that grid is real I/O. Its two grid questions that no primitive
+answered before are `NextGridOccurrenceAfterAsync` (the natural successor, bounds ignored — the recovery grace
+window) and `EnumerateDueSlotsAsync` (the slots already owed at a given now, oldest first, under a MANDATORY
+cap).
+
+- **A provider grid answers through the same seam, so nothing above it branches** (`ProviderScheduleGrid`).
+  The parts of the schedule math that are not the grid step — the first-run configuration, the termination
+  bounds, the realignment past a downtime — are REUSED through `RecurringTask.PlanNextRun` /
+  `SelectNextRun`, never mirrored: two copies of "is this first run RunNow or the grid's slot" would drift.
+  The arithmetic entry point (`GetNextOccurrence`) THROWS for a provider definition instead of answering,
+  because with no interval and no cron the cascade would report "no occurrence, ever" and every primitive
+  would read that as a series that has ended.
+- **A provider failure is transient and writes NOTHING** (V4). It is wrapped in `OccurrenceProviderException`
+  with the backoff its schedule has earned (`OccurrenceProviderRetryRegistry`, doubling per consecutive
+  failure, reset by one answer), and each caller parks its row rather than acting on a grid it does not have:
+  the dispatcher's recovery branch re-parks a `IsScheduleRetry` delivery (which re-reads the row and re-runs
+  the DECISION — parking an ordinary delivery would execute a slot nobody chose yet), `QueueNextOccourrence`
+  does the same for a failed advance, and the materializer re-parks the schedule row on the provider's
+  backoff instead of the operational one. It must never reach the recovery's generic catch, whose L18 counter
+  would poison the row after a few restarts of a database outage. An UNREGISTERED key is the opposite verdict
+  — configuration, not transience — so it is an `ArgumentException` at dispatch and a terminal poison at
+  recovery, through `RecurringTask.Validate(registry)`.
+  - **"Writes nothing" includes the QUEUE boundary.** A retry delivery is the one enqueue that skips
+    `TrySetQueuedIfRecoverable` (`WorkerQueue.TryQueueCore`): it runs no handler and decides nothing, so the
+    `Queued` transition and the `StatusAudit` row it used to write were a state write per retry, for as long
+    as the outage lasted — over a row whose whole point is to look untouched. The recoverable check is not
+    lost, only moved to where the retry can act on it: `RetryScheduleDecisionAsync` re-reads the row and
+    abandons a schedule that was cancelled, removed or finished under the wait.
+  - **A deferral is a THIRD dispatch outcome** (`ScheduleDeferredByProviderException`, internal), and the
+    recovery loop catches it apart from both the success and the failure. Returning the schedule id said the
+    dispatch had worked, so `WorkerService` cleared the L18 counter a previous restart had really earned;
+    letting the provider's own exception out said it had failed, which is the poison V4(1) forbids. Neither
+    is true of a calendar outage, so the counter is neither cleared nor incremented, and the row still counts
+    as recovered — it IS back in the scheduler. The schedule-retry delivery catches it too, where it means
+    "still down", not a retry that failed.
+  - **Nothing that can only be decided by RESOLVING a provider runs on the recovery path.**
+    `Dispatcher.RequireProviderSupportAsync` keeps its key check everywhere (a dictionary lookup, and the
+    ratified poison route) but returns before the `SkipOldest` determinism probe when `isRecovery` — that
+    probe builds a scope and an object, and neither the `InvalidOperationException` it throws for a
+    non-deterministic provider nor a constructor that cannot reach its database yet is an
+    `OccurrenceProviderException`, so both would sail past the V4 catch into the recovery's L18 counter and
+    poison the series after five restarts. It is a gate for a caller holding a dispatch or a reschedule; a
+    persisted row carrying `SkipOldest` over a provider that stopped declaring itself deterministic keeps
+    running and bisects as a deterministic grid would (decisions §3.7).
+  - **A re-park that FAILED is an error EVENT, not only a log line** (V4's second mandatory condition):
+    nothing polls behind it, so the series stops until a restart, and a subscriber that was told "parked to
+    ask again at …" must not be the last thing it hears. The three sites say it the same way —
+    `Dispatcher.ParkProviderRetryAsync`, `OccurrenceMaterializer.ReParkAfterFailureAsync` (whose
+    `ReParkOutcome` is what keeps `DeferForProviderAsync` from publishing the success sentence over it) and
+    `WorkerExecutor.DeferScheduleForProvider`.
+  - **"Parked to ask again" is said only once the registration is IN**, log line and event alike, on all
+    three. A throw is not the only way to park nothing: `TrySchedule` also ANSWERS false — a newer definition
+    owns the row, or the scheduler is stopping — and reading that as a park announced a schedule that was in
+    no scheduler, no queue and no delivery. A refusal reports itself instead (`ProviderRetryParkRefused` 1021,
+    `ScheduleReparkRefused` 1822) and says nothing else, because whether the row is waiting on anything at
+    all is then somebody else's business.
+  - **The retry delivery carries the slot it was about BESIDE the instant it fires at**, because those are
+    two different instants and it needs both. `WorkerExecutor.DeferScheduleForProvider` re-parks
+    `task.ToLazy()` with `ExecutionTime = retryAt` — what the scheduler is handed — and the interrupted
+    slot on `TaskHandlerExecutor.ScheduleRetryFromUtc`, internal like the flag itself. With storage the
+    question is answered by the row's cursor and the carried slot is never read, which is why the recovery
+    re-park (`Dispatcher.ParkProviderRetryAsync`, reached only on `isRecovery`) sets the flag alone. With NO
+    storage the delivery is the only place that slot exists, so `RetryScheduleDecisionAsync` re-runs the
+    advance from `ScheduleRetryFromUtc ?? ExecutionTime`: deciding from the instant it fired at would
+    silently skip everything in between, and abandoning the retry there stopped a storage-less series (F18,
+    in-memory run counter) for good on the first hiccup of its calendar. It drops BOTH marks first, or the
+    occurrence that advance parks would come back to decide again instead of running the handler.
+- **The advance is the one place a provider failure costs something**: the run that just happened cannot be
+  written either, because the write and the next cursor are one operation. The row is left exactly as a crash
+  between a side effect and its storage write leaves it, and the at-least-once contract covers the replay.
+- **Every walk over a provider grid is bounded by round trips, not by patience.**
+  `ProviderScheduleGrid.DiagnosticCapFor` is the ONE rule and every diagnostic count goes through it —
+  `DueSlotEnumerator`'s drop counts and `TaskScheduleManager`'s discarded backlog alike — so a provider walks
+  at most `MaxDiagnosticWalk` and the number says it is a lower bound, exactly as a walked calendar count
+  does. A count that feeds a DECISION keeps the caller's own cap whatever the grid is (see the "one count,
+  one bound" rule above), which is why a large `MaxOccurrences` really does cost that many questions over a
+  provider: it is the price of telling "more than the cap" from "exactly the cap", and it is documented as
+  the knob to size. The `SkipOldest` bisection stops at the first probe that counts exactly N — that instant's
+  successor IS the answer — instead of narrowing to the tick and spending all 64 probes every time.
+  - **The skip-forward count is one of those, and it says so too** (`NextRunResult.SkippedCountIsExact`). It
+    is the number of runs a downtime cost, and it reaches a log line and a monitoring event: a grid that
+    counts by division answers the real total however long the outage was, a walked one stops at
+    `MaxSkipCountIterations`, and a provider one at `MaxDiagnosticWalk` — where "251" against a backlog of
+    thousands is simply a wrong number in an operator's incident log. The flag defaults to `true`, which is
+    what every count below its bound answers, so the built-in path is byte-identical.
+  - **Its two bounds must not MULTIPLY.** Bounding the probes says nothing about what a probe costs, and each
+    one counts up to the cap one round trip at a time: probes × cap is an order of magnitude above the cap the
+    docs tell an application to size. The probes walk the same stretch of chain, so `FindNthSlotFromEndAsync`
+    remembers it (provider grids only — a built-in one counts by division or walks in memory) and no instant
+    is asked about twice. What one search costs is then one question per slot it looks at, never more than
+    walking the backlog once. It is sound for exactly the grids `SkipOldest` accepts: a provider that would
+    answer differently the second time is refused at dispatch. `ProviderScheduleGrid.CountCeiling` is shared
+    with that walk so the memoized count and the grid's own answer the same question identically.
+  - **A cap bounds an EPISODE, so the count that decides it is taken once per episode, not once per run.**
+    "Is the backlog bigger than the cap?" costs one question per slot — counting a chain has no cheaper
+    answer — and a serial replay plans once per occurrence, so re-asking it made a replay quadratic in its own
+    backlog: 360 owed slots cost 360 queries to materialize the first, 359 for the second, before a row was
+    written. `DueSlotEnumerator.MeasureBacklogAsync` keeps what a run measured and the next run CONTINUES it,
+    asking only about the stretch that came due since — which is what a schedule keeping up owes anyway — so
+    the numbers are the ones a full walk would give (the cap decision, the count stamped on the row and its
+    exactness) and the newest slot comes with them, which is the misfire's own bisection gone too. It is a
+    reading of a chain, so everything about it is guarded: provider grids only (a built-in one divides or
+    walks in memory), continued only when this run resumes at exactly the cursor the last plan left on the
+    same grid, dropped if the count was ever a lower bound or if the grid no longer owes the slot the cursor
+    names, and re-taken from scratch after `MaxContinuedMeasurements` because a provider may answer
+    differently the second time.
+  - **And a plan that may create nothing measures nothing.** `PlanCatchUpAsync` takes the early exit its two
+    siblings already had, one step later: the age window drops slots without needing capacity, materializing
+    one does not. The only decision it defers is the halt, which is about whether a REPLAY may start — a run
+    with no budget starts none, and the next run that has one halts instead. What it saves is the whole walk,
+    at every operational retry, for as long as the occurrence holding the budget runs.
+- **The provider's scope is disposed ASYNCHRONOUSLY** (`CreateAsyncScope`, both resolution sites). A scoped
+  dependency that implements only `IAsyncDisposable` — a DbContext, a repository — makes a synchronous
+  disposal throw, and that throw lands inside the try that classifies provider failures: the schedule would
+  re-park for ever over a provider that answered every question correctly.
 
 ## Tests
 
@@ -521,9 +650,12 @@ implementation passes anything smaller); the byte-identical default by
 `LegacyMinimalTaskStorage` exists to be COMPILED: it breaks the day a new storage member stops being default).
 The once-per-delivery release of the owned eager scope is pinned by
 `IntegrationTests/EagerHandlerScopeReleaseTests.cs`, one test per exit that reaches neither `DoWorkCore` nor
-the terminal rejection, each counting the disposals of a SCOPED probe injected into the handler; its last
-test pins the ORDER on the rejection's recurring branch, by wrapping the real scheduler and noting how many
-scopes had been released when the next occurrence was handed to it. What a handler reads about its own
+the terminal rejection, each counting the disposals of a SCOPED probe injected into the handler; one of them
+pins the ORDER on the rejection's recurring branch, by wrapping the real scheduler and noting how many
+scopes had been released when the next occurrence was handed to it. Its last four walk the ENQUEUE boundary
+instead, driving the real `WorkerQueue` and `WorkerQueueManager` with hand-built eager executors — the only
+way to hold an id in flight and hand the queue a second executor of it on purpose, which is what startup
+recovery does by accident on every restart that overlaps a live delivery. What a handler reads about its own
 delivery — an occurrence's schedule, slot and run number included — is pinned by
 `IntegrationTests/ExecutionContextIntegrationTests.cs`, and the row-to-executor half of it by
 `RecoveredTaskFactoryTests.cs`.

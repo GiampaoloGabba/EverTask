@@ -2,7 +2,7 @@
 layout: default
 title: Idempotent Task Registration
 parent: Recurring Tasks
-nav_order: 6
+nav_order: 7
 ---
 
 # Idempotent Task Registration

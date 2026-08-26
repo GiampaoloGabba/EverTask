@@ -100,6 +100,47 @@ public class EverTaskServiceBuilder
     }
 
     /// <summary>
+    /// Registers an <see cref="INextOccurrenceProvider"/> under <paramref name="key"/>, so a schedule can take
+    /// its occurrences from it with <c>UseOccurrenceProvider(key, config)</c>.
+    /// </summary>
+    /// <typeparam name="TProvider">The implementation. Registered as scoped unless it is already registered.</typeparam>
+    /// <param name="key">
+    /// What schedules name it by. It is what gets PERSISTED on every row that uses the provider, so treat it
+    /// as part of the durable contract: renaming it orphans the schedules that carry the old one. Matched
+    /// ordinally.
+    /// </param>
+    /// <returns>The service builder for method chaining.</returns>
+    /// <exception cref="ArgumentException">
+    /// The key is empty, or a DIFFERENT implementation is already registered under it.
+    /// </exception>
+    /// <remarks>
+    /// The provider is resolved from a fresh scope on every call, so it may depend on scoped services — a
+    /// DbContext holding the holiday table is the ordinary case. Registering the same type under the same key
+    /// twice is a no-op, which keeps a registration that runs on every startup idempotent.
+    /// </remarks>
+    public EverTaskServiceBuilder AddOccurrenceProvider<TProvider>(string key)
+        where TProvider : class, INextOccurrenceProvider
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+
+        if (_configuration.OccurrenceProviders.TryGetValue(key, out var registered) &&
+            registered != typeof(TProvider))
+        {
+            throw new ArgumentException(
+                $"The occurrence provider key '{key}' is already registered for {registered.Name}. A key is " +
+                "persisted on every schedule that uses it, so it can only mean one thing.", nameof(key));
+        }
+
+        _configuration.OccurrenceProviders[key] = typeof(TProvider);
+
+        // TryAdd: an application that wants its provider on another lifetime (a singleton holding a cached
+        // calendar) registers it itself and keeps that registration.
+        Services.TryAddScoped<TProvider>();
+
+        return this;
+    }
+
+    /// <summary>
     /// Creates the recurring queue with default settings if it doesn't exist.
     /// This is called automatically when any recurring task is dispatched.
     /// </summary>

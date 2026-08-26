@@ -95,9 +95,15 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
                     switch (await targetQueue.TryQueue(task, cancellationToken).ConfigureAwait(false))
                     {
                         case EnqueueResult.Enqueued:
+                            return true;
                         case EnqueueResult.DuplicateInProcess: // already in flight: idempotent success
+                            // This is where the executor's life ends, so the eager scope it carries is
+                            // released here: the queue hands DuplicateInProcess back untouched because a
+                            // SCHEDULER would retry the same instance, and this caller never does.
+                            await DroppedDelivery.ReleaseAsync(task, _logger).ConfigureAwait(false);
                             return true;
                         case EnqueueResult.QueueFull:
+                            await DroppedDelivery.ReleaseAsync(task, _logger).ConfigureAwait(false);
                             throw new QueueFullException(targetQueueName, task.PersistenceId);
                         default: // Discarded (blacklisted): nothing to enqueue, not an error
                             return false;
@@ -110,6 +116,7 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
                         case EnqueueResult.Enqueued:
                             return true;
                         case EnqueueResult.DuplicateInProcess: // already in flight: must NOT be re-routed
+                            await DroppedDelivery.ReleaseAsync(task, _logger).ConfigureAwait(false);
                             return true;
                         case EnqueueResult.Discarded: // blacklisted: must not be re-routed
                             return false;
@@ -127,6 +134,8 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
                             _logger.EnqueuedToDefaultFallback(task.PersistenceId);
                             return true;
                         }
+
+                        await DroppedDelivery.ReleaseAsync(task, _logger).ConfigureAwait(false);
 
                         throw new QueueFullException(targetQueueName, task.PersistenceId,
                             "Target queue is full and default queue is unavailable");

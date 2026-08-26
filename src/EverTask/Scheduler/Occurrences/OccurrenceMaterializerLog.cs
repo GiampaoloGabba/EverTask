@@ -124,9 +124,24 @@ internal static partial class OccurrenceMaterializerLog
     public static partial void OccurrencesDroppedByOverflow(this ILogger logger, Guid parentId, int skippedCount,
                                                             bool isExact, DateTimeOffset fromUtc);
 
+    [LoggerMessage(EventId = 1821, Level = LogLevel.Warning,
+        Message = "Materialization of schedule {ParentId} deferred: the occurrence provider '{ProviderKey}' " +
+                  "could not answer ({Failures} consecutive failure(s)). Nothing was written and the schedule " +
+                  "is parked to ask again at {RetryAtUtc:O}")]
+    public static partial void MaterializationDeferredByProvider(this ILogger logger, Exception exception,
+                                                                 Guid parentId, string providerKey, int failures,
+                                                                 DateTimeOffset retryAtUtc);
+
     [LoggerMessage(EventId = 1820, Level = LogLevel.Warning,
         Message = "Schedule {ParentId} dropped {SkippedCount} due slot(s) (exact count: {IsExact}) from " +
                   "{FromUtc:O}: the skip policy does not replay a slot that is no longer the current one")]
     public static partial void OccurrencesSkippedByPolicy(this ILogger logger, Guid parentId, int skippedCount,
                                                           bool isExact, DateTimeOffset fromUtc);
+
+    [LoggerMessage(EventId = 1822, Level = LogLevel.Debug,
+        Message = "Re-park of schedule {ParentId} at {NextRunUtc:O} was refused: version {ScheduleVersion} is " +
+                  "not what owns this row's parking any more, or the scheduler is stopping. Nothing was " +
+                  "parked by this run")]
+    public static partial void ScheduleReparkRefused(this ILogger logger, Guid parentId, DateTimeOffset nextRunUtc,
+                                                     int scheduleVersion);
 }

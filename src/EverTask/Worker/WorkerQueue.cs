@@ -90,6 +90,11 @@ public class WorkerQueue : IWorkerQueue
     {
         _deliveryRegistry.End(dropped.PersistenceId);
 
+        // The evicted copy will never be delivered, so this is the last hand that holds its EAGER handler
+        // scope (L27). Fire-and-forget for the same reason as the revert below: the drop callback is
+        // synchronous, and the eviction decision is already made either way.
+        _ = DroppedDelivery.ReleaseAsync(dropped, _logger).AsTask();
+
         // A Drop* full mode evicted a persisted task whose storage row is still Queued (it looks
         // enqueued forever and never runs in this process). Revert it to WaitingQueue so startup
         // recovery rescues it. Best-effort fire-and-forget — the channel drop callback is synchronous.
@@ -165,8 +170,14 @@ public class WorkerQueue : IWorkerQueue
     {
         ArgumentNullException.ThrowIfNull(task);
 
+        // Every refusal below drops THIS executor for good — the blocking enqueue has no "try again"
+        // result and no caller retries the same instance — so each one is also the last chance to release
+        // the eager handler scope it carries (DroppedDelivery).
         if (IsCancelled(task))
+        {
+            await DroppedDelivery.ReleaseAsync(task, _logger).ConfigureAwait(false);
             return;
+        }
 
         // A delivery of this id is already in flight in this process (in a channel or executing):
         // idempotent no-op, single execution. This is the write-boundary defense against the
@@ -174,6 +185,7 @@ public class WorkerQueue : IWorkerQueue
         if (!_deliveryRegistry.TryBegin(task.PersistenceId))
         {
             _logger.DuplicateEnqueueSkipped(task.PersistenceId, Name);
+            await DroppedDelivery.ReleaseAsync(task, _logger).ConfigureAwait(false);
             return;
         }
 
@@ -189,6 +201,7 @@ public class WorkerQueue : IWorkerQueue
                     {
                         _deliveryRegistry.End(task.PersistenceId);
                         _logger.RecoveryEnqueueSkipped(task.PersistenceId);
+                        await DroppedDelivery.ReleaseAsync(task, _logger).ConfigureAwait(false);
                         return;
                     }
                 }
@@ -248,8 +261,14 @@ public class WorkerQueue : IWorkerQueue
     {
         ArgumentNullException.ThrowIfNull(task);
 
+        // Discarded is terminal for this executor — every caller consumes the registration on it — so the
+        // eager handler scope it carries is released here. QueueFull and DuplicateInProcess below are NOT:
+        // both schedulers re-park and retry the very same instance (DroppedDelivery).
         if (IsCancelled(task))
+        {
+            await DroppedDelivery.ReleaseAsync(task, _logger).ConfigureAwait(false);
             return EnqueueResult.Discarded;
+        }
 
         // Fast path: skip the storage round-trips below while the queue is saturated.
         // Callers that retry (scheduler backoff) would otherwise churn the storage on every attempt.
@@ -274,7 +293,15 @@ public class WorkerQueue : IWorkerQueue
         // Mark as Queued BEFORE writing: once the task is in the channel a consumer can execute it
         // immediately, and a late SetQueued would overwrite InProgress/Completed (causing a duplicate
         // re-execution at the next startup recovery).
-        if (_taskStorage != null)
+        //
+        // EXCEPT for a schedule retry (V4). That delivery runs no handler: it re-reads the row and re-runs
+        // the decision an occurrence provider could not answer, and V4's promise is that a schedule waiting
+        // on its calendar has NOTHING written for it — the row keeps the status and the cursor an outage
+        // found it in, which is the whole reason a crash during one costs only the wait. A Queued transition
+        // plus a StatusAudit row per retry, for ever, is a state write; and the recoverable check it comes
+        // with is not lost, only moved to where the retry can act on it — RetryScheduleDecisionAsync re-reads
+        // the row and abandons a schedule that was cancelled, removed or finished under the wait.
+        if (_taskStorage != null && !task.IsScheduleRetry)
         {
             try
             {
@@ -287,6 +314,7 @@ public class WorkerQueue : IWorkerQueue
                     {
                         _deliveryRegistry.End(task.PersistenceId);
                         _logger.SchedulerEnqueueSkipped(task.PersistenceId);
+                        await DroppedDelivery.ReleaseAsync(task, _logger).ConfigureAwait(false);
                         return EnqueueResult.Discarded;
                     }
                 }

@@ -20,7 +20,10 @@ Docker or Testcontainers here. Subsets filter on namespace: `--filter "FullyQual
   `ProcessScheduledTasksAsync` in their constructor, so an already-due occurrence (e.g. `RunNow()`) can reach
   the worker queue and be marked `Queued` right after `Dispatch` returns — only the consumers wait for
   `Host.StartAsync()`. Use `WaitForTaskAcceptedAsync` (or assert `ShouldBeOneOf(WaitingQueue, Queued)`);
-  asserting `WaitingQueue` alone is flaky under load.
+  asserting `WaitingQueue` alone is flaky under load. A REGISTRATION is the same trap read from the other
+  side: hand the scheduler a slot already past — every reconciled occurrence — and it consumes the
+  registration within its check interval, so the rescue is `IsScheduled(id) || deliveries.IsDelivering(id)`
+  (the delivery registration is taken at enqueue and, with no consumer started, never released).
 - **Driving the clock**: pass `clock: new FakeTimeProvider(instant)` to either `CreateIsolatedHost…` overload.
   The base registers it AFTER `AddEverTask` — which uses `TryAddSingleton(TimeProvider.System)`, so an earlier
   registration would lose — and exposes it as `Clock`. Seed rows from `Clock.GetUtcNow()` rather than
@@ -54,8 +57,9 @@ Docker or Testcontainers here. Subsets filter on namespace: `--filter "FullyQual
   Its `BaselineScheduleBuilders.cs` is the same proof for the fluent API: one type implementing all ten
   schedule builder interfaces as the baseline declared them, so constructing it builds an interface map
   against TODAY's interfaces and an `InTimeZone` that had arrived abstract would fail the type load. The test
-  then calls all eight `InTimeZone` slots on it and expects `NotSupportedException` — the default bodies are
-  reachable, and they refuse rather than drop the zone.
+  then calls all eight `InTimeZone` slots on it — plus every member added since (`OnMisfire`,
+  `WithDurableOccurrences`, `BackfillFrom`, `UseOccurrenceProvider`) — and expects `NotSupportedException`: the
+  default bodies are reachable, and they refuse rather than silently drop what they were given.
   Its `BaselineHandlers.cs` carries the other half: two handlers built when neither `SetExecutionContext` nor
   `EverTaskHandler<T>.Context` existed — one implementing `IEverTaskHandler<T>` directly, one deriving from
   the base class — dispatched on a REAL host by
@@ -168,6 +172,62 @@ Docker or Testcontainers here. Subsets filter on namespace: `--filter "FullyQual
   under it. Its double is `TestHelpers/CapabilityBlindStorage` — `MemoryTaskStorage` re-implementing
   `ITaskStorage` to answer whatever the test asks for the two capability flags, the only way to reach those
   refusals without a mock that would break the host.
+- **Occurrence providers**: the grid answers are pinned by `Occurrences/OccurrenceProviderGridTests` — a REAL
+  container (`ServiceCollection` + `AddEverTask` + `AddOccurrenceProvider`), no host, because those tests are
+  about what the evaluator answers and not about deliveries — and the wiring by
+  `IntegrationTests/OccurrenceProviderIntegrationTests` on a real host over one shared `MemoryTaskStorage`.
+  What a test steers is `TestTasks.OccurrenceProviders.cs`'s `OccurrenceProviderProbe`: a SINGLETON the
+  scoped provider depends on, which is the shape a real provider has (the implementation is built per call,
+  the table it reads outlives it). Its `Answer` defaults to a grid anchored on the epoch — deterministic and
+  answerable for ANY instant, the two things the contract demands — and `Fault`/`FailNextCalls` produce an
+  outage a test does not have to time. Backoffs are configured down to a second in that suite: the behaviour
+  under test is that a stalled schedule comes back on its own, not how long it waits.
+  Three more shapes on that probe, each for a failure the calendar itself never sees. `Hang` holds the
+  provider inside the call until the CALLER's token ends it, and `CancelledWaits` is the only proof the
+  advance handed it one at all — without a token, stopping the host waits out its own timeout and looks
+  identical to a clean shutdown. `FailNextConstructions` breaks `FragileProbeProvider`'s CONSTRUCTOR, which
+  is the provider the docs recommend (it caches its calendar) failing because its database is not up yet:
+  building it is not a question, so it must not be a poisoned schedule either. And `AsyncOnlyCalendar` — a
+  scoped dependency implementing only `IAsyncDisposable`, which is what a DbContext is — is what makes the
+  provider's scope throw ON DISPOSAL, after the answer: assert the ANSWER there, since a synchronous
+  disposal is reported as a provider that failed.
+  Two assertions in that suite are about COST rather than behaviour, and both need a bounded grid to be
+  exact: a provider that answers `null` past a chosen last slot is what lets a catch-up test say "exactly
+  five occurrences" instead of "at least four" while the wall clock keeps adding slots underneath it.
+  `ReParkRefusingScheduler` is the real `PeriodicTimerScheduler` with every re-park of a stalled schedule
+  refused, armed by the probe's own `Fault` so the calendar and the scheduler fail in the same instant — the
+  only ordering in which the "parked to ask again" event could still be published over a schedule that is
+  parked nowhere. It refuses in BOTH shapes (`byThrowing`): an exception, and the answer `false` that
+  `TrySchedule` gives when a newer definition owns the row — that second one is not an error anywhere, so a
+  test that only throws never reaches the branch that reads it as a park. Its `Refusing` switch is what gives
+  those tests a control run: the same schedule, the same failure, one re-park refused and the next accepted.
+  Both refusal tests assert on the LOG (`TestHelpers/RecordingLogger<T>`, registered for the one component
+  that speaks) rather than on the monitoring event beside it: the log line is written synchronously in the
+  branch under test, while publishing is fire-and-forget, so "no event yet" would pass on a broken build that
+  simply had not published one. The cost of a plan over a provider is `Occurrences/OccurrenceProviderGridTests`,
+  where `probe.Calls` is the whole assertion — a `SkipOldest` search that re-asks the same instants costs
+  probes × cap, and the bound it must stay under is the number of slots the backlog holds. Its "What a replay
+  costs" region is the same assertion over a WHOLE replay, and the comparison is what makes it honest: the
+  identical replay is driven twice, once with a planner per run (which remembers nothing, and is the shape
+  that re-walked its backlog per occurrence) and once with the one the host holds, and the two must answer the
+  same slots, counts and exactness — `ReplayAsync` returns every plan as a `PlannedRun` so the lists are
+  compared as wholes — while the second asks a fraction of the questions. The host-level half is
+  `OccurrenceProviderIntegrationTests.A_replay_asks_the_calendar_about_each_slot_once_…`, which is the only
+  place the materializer's own enumerator is proven to be the one that lives across runs; both need a BOUNDED
+  calendar (the probe answers `null` past a chosen last slot) or the wall clock keeps adding slots underneath
+  the count.
+  What the provider surface REFUSES is `Occurrences/OccurrenceProviderRegistrationValidationTests` — a blank
+  key on either side (`AddOccurrenceProvider`, `UseOccurrenceProvider`), a key already taken by another
+  implementation, a retry knob with no callback — plus the one call that must NOT refuse: the same type under
+  the same key twice, which is what keeps a registration that runs on every startup idempotent.
+  `ProviderScopeLedger` is what makes "a fresh scope per call" observable at all: a reused scope answers every
+  question just as correctly, so the ledger counts WHICH calendar answered and how many were released, and
+  `AsyncOnlyCalendar` records itself through it.
+  The two V4 promises that are about what is NOT written need a seeded row to be visible: an `InProgress`
+  schedule (the shape a failed inline advance leaves) that stays `InProgress` with no `StatusAudit` across
+  several retry deliveries, and a row seeded with a non-zero `RecoveryDispatchFailureCount` that still carries
+  it after a deferred recovery. Both have a control on the same row with the calendar back, because the
+  interesting half of each is an absence.
 - **Running startup recovery without a host**: `TestHelpers/RecoveryHarness.CreateRecoveryService(storage, …)`
   builds the REAL `WorkerService` around a storage you choose, so pagination, the two waves and the L18
   accounting all execute. `internal`, and shared with `EverTask.Tests.Storage` through this assembly's

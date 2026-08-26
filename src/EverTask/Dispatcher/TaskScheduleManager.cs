@@ -34,6 +34,7 @@ internal sealed class TaskScheduleManager(
     IEverTaskLogger<TaskScheduleManager> logger,
     TimeProvider timeProvider,
     ITaskStorage? storage = null,
+    OccurrenceProviderRegistry? providers = null,
     OccurrenceMaterializer? materializer = null,
     IGateInvalidationRegistry? gateInvalidation = null,
     IEverTaskWorkerExecutor? workerExecutor = null,
@@ -44,6 +45,12 @@ internal sealed class TaskScheduleManager(
     /// result, never to a decision, so a lower bound reported AS a lower bound is the right answer — and a
     /// three-month one-second backlog must not be enumerated to produce it.
     /// </summary>
+    /// <remarks>
+    /// It is the bound for a grid walked IN MEMORY. Over an occurrence provider each step is a round trip
+    /// against the application's own calendar, so the same count uses the far smaller bound
+    /// <see cref="ProviderScheduleGrid.MaxDiagnosticWalk"/> — see
+    /// <see cref="ProviderScheduleGrid.DiagnosticCapFor"/>.
+    /// </remarks>
     private const int DiscardedBacklogCountCap = 10_000;
 
     /// <inheritdoc />
@@ -261,7 +268,9 @@ internal sealed class TaskScheduleManager(
         var previousVersion = row.ScheduleVersion;
         var previousCursor  = row.NextRunUtc;
 
-        var definition = configure is null ? current : Build(configure, store);
+        var definition = configure is null
+                             ? current
+                             : await BuildAsync(configure, store).ConfigureAwait(false);
         var now        = timeProvider.GetUtcNow();
         var cursor     = await DecideCursorAsync(row, current, definition, mode, keepCursor,
                                  storedDefinition: configure is null, now, ct)
@@ -351,7 +360,7 @@ internal sealed class TaskScheduleManager(
     /// <summary>
     /// Builds the new definition from the caller's chain, under the same rules a dispatch applies to it.
     /// </summary>
-    private RecurringTask Build(Action<IRecurringTaskBuilder> configure, ITaskStorage store)
+    private async ValueTask<RecurringTask> BuildAsync(Action<IRecurringTaskBuilder> configure, ITaskStorage store)
     {
         // The scheduling clock, like every other builder: RunNow and the RunUntil guards resolve on it.
         var builder = new RecurringTaskBuilder(timeProvider);
@@ -360,12 +369,17 @@ internal sealed class TaskScheduleManager(
         var definition = builder.RecurringTask;
 
         ScheduleTimeZone.ApplyDefault(definition, options.DefaultScheduleTimeZoneId);
-        definition.Validate();
+        definition.Validate(providers);
 
         // Refused here, where the caller is still holding the call, for the same reason a dispatch refuses it:
         // there is no half-atomic emulation of the occurrence operations to degrade to.
         if (definition.IsDurable)
             Dispatcher.RequireDurableOccurrenceSupport(store);
+
+        // Same door a dispatch goes through: an unregistered provider key, or a catch-up that probes a grid
+        // the provider does not promise to answer twice the same way. The caller is holding this call, so the
+        // determinism probe applies here exactly as at a dispatch.
+        await Dispatcher.RequireProviderSupportAsync(definition, providers).ConfigureAwait(false);
 
         return definition;
     }
@@ -411,7 +425,9 @@ internal sealed class TaskScheduleManager(
         // consumed when the schedule was dispatched.
         var next = await evaluator
                          .CalculateNextValidRunAsync(definition, now, row.CurrentRunCount ?? 0, now,
-                             isRecovery: storedDefinition, ct: ct)
+                             isRecovery: storedDefinition,
+                             identity: new ScheduleIdentity(row.Id, row.TaskKey, (row.CurrentRunCount ?? 0) + 1),
+                             ct: ct)
                          .ConfigureAwait(false);
 
         return next.NextRun;
@@ -435,12 +451,16 @@ internal sealed class TaskScheduleManager(
             return (0, true);
         }
 
-        var count = await evaluator.CountMissedAsync(current, owed, now, DiscardedBacklogCountCap, ct)
-                                   .ConfigureAwait(false);
+        var cap = ProviderScheduleGrid.DiagnosticCapFor(current, DiscardedBacklogCountCap);
+
+        var count = await evaluator
+                          .CountMissedAsync(current, owed, now, cap,
+                              new ScheduleIdentity(row.Id, row.TaskKey, (row.CurrentRunCount ?? 0) + 1), ct)
+                          .ConfigureAwait(false);
 
         // The count stops one past the cap, so anything above it is a lower bound and says so rather than
         // being reported as a total.
-        return (count, count <= DiscardedBacklogCountCap);
+        return (count, count <= cap);
     }
 
     /// <summary>

@@ -20,6 +20,12 @@ real engines.
 
 - Docker is available on this dev machine and the images are pre-pulled — check `docker info` before reporting
   it missing; only a first pull of the ~1.7 GB mssql image is slow.
+- **MariaDB is ready twice.** Its entrypoint answers the module's in-container wait strategy with the
+  temporary server it starts to initialize the data directory, then restarts the real one, and a connection
+  from the HOST landing in that window is refused ("Unable to connect to any of the specified MySQL hosts").
+  It costs whichever test ran first and passes on the re-run, so it reads as flakiness.
+  `MySqlEfCoreTaskStorageTests.WaitUntilServerAcceptsConnections` closes it by probing the mapped port — the
+  endpoint the tests actually use — before the migrations run.
 - Every container-backed class carries `[Collection("DatabaseTests")]` and there is **no
   `[CollectionDefinition]`** anywhere: the bare attribute is the only thing serializing them against
   `parallelizeTestCollections: true` in `xunit.runner.json`, so the shared static containers are never started
@@ -51,6 +57,16 @@ real engines.
   single-active-host LIMIT — two hosts really do deliver the same occurrence twice. That second assertion is
   the contract of 4.0 written down, and it is what the distributed-execution-lease epic will invert; do not
   "fix" it.
+- **`SqlServerEfCoreTaskStorageTests.Should_rerun_a_read_that_sql_server_picked_as_the_deadlock_victim`
+  builds the collision, it does not simulate it**: three `RetrievePending` loops (nonclustered index, then
+  clustered key lookup) against four `SetStatus` loops (clustered row, then the two indexes carrying
+  `Status`), plus two plain `Get` polls standing in for the caller that gets picked as the victim without
+  being part of the cycle. The proof the run really collided is the storage's own EventId 2025, read through
+  a `RecordingLogger<SqlServerTaskStorage>` registered over the DI logger — the test stops as soon as it
+  counts two, so it costs a second or two, and a run where nothing collided FAILS rather than passing
+  vacuously. The status writes pass `CancellationToken.None` on purpose: `usp_SetTaskStatus` owns a
+  transaction, and cancelling one mid-flight strands it open on a pooled connection, holding the very locks
+  the Respawn cleanup then waits 30 s for.
 - **Schema is asserted from the CATALOG, per provider** (`Should_have_the_durable_occurrence_schema_on_queued_tasks`
   in each provider class): the unique index and its SQL Server-only filter, `IX_QueuedTasks_ParentTaskId`,
   `CK_QueuedTasks_OccurrenceSlot`, the non-cascading self FK, and the four new procedures on SQL Server and
