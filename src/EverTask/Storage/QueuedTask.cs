@@ -174,6 +174,31 @@ public class QueuedTask
         ExecutionTimeMs              = 0;
         RecoveryDispatchFailureCount = null;
     }
+
+    /// <summary>
+    /// Rewrites every timestamp on this row to the SAME INSTANT at offset zero, so what a store persists
+    /// never depends on the offset the caller happened to be carrying.
+    /// </summary>
+    /// <remarks>
+    /// Applied by every storage at the public write entry points, <c>Persist</c> and <c>UpdateTask</c> (F1).
+    /// SQLite keeps a <see cref="DateTimeOffset"/> as ISO-8601 TEXT with the offset written inside it, so
+    /// equality and ordering there are REPRESENTATIONAL: <c>10:00+02:00</c> and <c>08:00+00:00</c> are one
+    /// instant and two different strings. Each cursor compare-and-swap
+    /// (<c>MaterializeOccurrence</c>, <c>TrySetRecurringSeriesCompleted</c>, <c>TryHaltSchedule</c>) already
+    /// normalizes its own operands, so the stored value was the one side of the comparison still free to
+    /// disagree — a row written with a non-zero offset lost every one of them, for ever. The dispatch pipeline
+    /// hands UTC over on every path, which is why only a direct call on <see cref="ITaskStorage"/> could
+    /// produce such a row. On the providers that compare instants this changes nothing but the offset a
+    /// round-trip reports.
+    /// </remarks>
+    public void NormalizeTimestampsToUtc()
+    {
+        CreatedAtUtc          = CreatedAtUtc.ToUniversalTime();
+        LastExecutionUtc      = LastExecutionUtc?.ToUniversalTime();
+        ScheduledExecutionUtc = ScheduledExecutionUtc?.ToUniversalTime();
+        RunUntil              = RunUntil?.ToUniversalTime();
+        NextRunUtc            = NextRunUtc?.ToUniversalTime();
+    }
 }
 
 public class StatusAudit

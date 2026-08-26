@@ -37,6 +37,11 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
     /// <inheritdoc />
     public Task Persist(QueuedTask task, CancellationToken ct = default)
     {
+        // Instants compare the same here whatever their offset, but the contract is the relational one:
+        // a row that round-trips at +02:00 here and at +00:00 on a real provider is a test that passes in
+        // memory and fails on SQLite (F1).
+        task.NormalizeTimestampsToUtc();
+
         logger.TaskPersisted(task.Type);
 
         lock (_pendingTasksLock)
@@ -392,6 +397,8 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
 
     public Task UpdateTask(QueuedTask task, CancellationToken ct = default)
     {
+        task.NormalizeTimestampsToUtc();
+
         logger.UpdatingTask(task.Id, task.TaskKey);
 
         lock (_pendingTasksLock)

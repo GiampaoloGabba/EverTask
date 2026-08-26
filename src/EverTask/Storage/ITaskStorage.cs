@@ -45,6 +45,12 @@ public interface ITaskStorage
     /// <summary>
     /// Persists a task in the queue.
     /// </summary>
+    /// <remarks>
+    /// An implementation MUST store the row's timestamps at offset zero
+    /// (<see cref="QueuedTask.NormalizeTimestampsToUtc"/>): a store that compares them as text, as SQLite
+    /// does, otherwise reads the same instant written at a different offset as a different value, and every
+    /// cursor compare-and-swap against that row loses (F1).
+    /// </remarks>
     /// <param name="executor">The queued task to be persisted.</param>
     /// <param name="ct">Optional cancellation token.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
@@ -322,6 +328,10 @@ public interface ITaskStorage
     /// <summary>
     /// Updates an existing task in storage.
     /// </summary>
+    /// <remarks>
+    /// Carries the same UTC-normalization obligation as <see cref="Persist"/>, and for a sharper reason:
+    /// this is the entry point that rewrites the schedule cursor itself.
+    /// </remarks>
     /// <param name="task">The task to update with new values.</param>
     /// <param name="ct">Optional cancellation token.</param>
     /// <returns>A task representing the asynchronous operation.</returns>

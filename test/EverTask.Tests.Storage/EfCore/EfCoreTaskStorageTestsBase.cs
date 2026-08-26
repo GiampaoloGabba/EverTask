@@ -3094,6 +3094,63 @@ public abstract class EfCoreTaskStorageTestsBase
         (await _storage.Get(t => t.Id == schedule.Id))[0].RuntimeInfo.ShouldNotBeNull().ShouldContain("Halted");
     }
 
+    /// <summary>
+    /// F1/#37. SQLite keeps a <c>DateTimeOffset</c> as ISO-8601 TEXT with the offset written inside it, so
+    /// there equality is representational: <c>10:00+02:00</c> and <c>08:00+00:00</c> are one instant and two
+    /// different strings. The three cursor compare-and-swaps normalize their own operands to UTC, so a
+    /// schedule row written through the public storage API at <c>+02:00</c> — which only a direct call can
+    /// produce, the dispatch pipeline always hands UTC over — used to lose every one of them, for ever.
+    /// <c>Persist</c> normalizes the row instead, which is the fix that holds on every provider.
+    /// </summary>
+    [Fact]
+    public async Task The_cursor_compare_and_swaps_should_match_a_cursor_persisted_at_a_non_utc_offset()
+    {
+        var utcCursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var localCursor = utcCursor.ToOffset(TimeSpan.FromHours(2));
+
+        // One schedule per operation: each of the three ends the state the next one would need.
+        var toMaterialize = await PersistSchedule(localCursor);
+        var toFinalize    = await PersistSchedule(localCursor);
+        var toHalt        = await PersistSchedule(localCursor);
+
+        (await _storage.MaterializeOccurrence(toMaterialize.Id, 0, utcCursor,
+             NewOccurrence(toMaterialize.Id, utcCursor), FloorToMicroseconds(utcCursor.AddMinutes(5)),
+             AuditLevel.Full))
+            .ShouldBe(OccurrenceMaterializationOutcome.Created);
+
+        (await _storage.TrySetRecurringSeriesCompleted(toFinalize.Id, utcCursor, QueuedTaskStatus.Queued, 0, 0,
+             AuditLevel.Full)).ShouldBeTrue();
+
+        // A halt leaves the cursor where it is, so this row still carries what Persist wrote.
+        (await _storage.TryHaltSchedule(toHalt.Id, 0, utcCursor, QueuedTaskStatus.Queued,
+             "{\"Halted\":{\"Reason\":\"cap\"}}")).ShouldBeTrue();
+
+        (await _storage.Get(t => t.Id == toHalt.Id))[0].NextRunUtc.ShouldNotBeNull().Offset
+            .ShouldBe(TimeSpan.Zero, "storage stores the instant, not the caller's offset");
+    }
+
+    /// <summary>
+    /// The other half of F1/#37: <c>UpdateTask</c> is the public entry point that rewrites the cursor itself,
+    /// so a cursor moved there at a non-zero offset must still be the one a compare-and-swap matches.
+    /// </summary>
+    [Fact]
+    public async Task UpdateTask_should_normalize_a_cursor_written_at_a_non_utc_offset()
+    {
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+        var moved    = FloorToMicroseconds(cursor.AddMinutes(5));
+
+        var row = (await _storage.Get(t => t.Id == schedule.Id))[0];
+        row.NextRunUtc = moved.ToOffset(TimeSpan.FromHours(2));
+        await _storage.UpdateTask(row);
+
+        (await _storage.TryHaltSchedule(schedule.Id, 0, moved, QueuedTaskStatus.Queued,
+             "{\"Halted\":{\"Reason\":\"cap\"}}")).ShouldBeTrue();
+
+        (await _storage.Get(t => t.Id == schedule.Id))[0].NextRunUtc.ShouldNotBeNull().Offset
+            .ShouldBe(TimeSpan.Zero);
+    }
+
     [Fact]
     public async Task UpdateCurrentRun_with_a_stale_schedule_version_should_report_VersionMismatch()
     {

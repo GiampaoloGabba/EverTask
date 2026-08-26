@@ -14,7 +14,10 @@ Refer to the root CLAUDE.md for project-wide rules.
   and slices through `FromSql` (interpolated, so every value is still a parameter EF types), because reading
   a whole series to hand back a hundred rows is the pathology it exists to prevent. SQLite keeps a
   `DateTimeOffset` as ISO-8601 text with a fixed date-and-time prefix, so plain text ordering IS slot
-  ordering — the same representational equality `UX_QueuedTasks_Occurrence` already rests on (follow-up F1).
+  ordering — the same representational equality `UX_QueuedTasks_Occurrence` rests on. **What makes that
+  equality safe is that every row is stored at offset zero**: `Persist` / `UpdateTask` normalize
+  (`QueuedTask.NormalizeTimestampsToUtc`, in the EF base — F1/#37), because the offset travels inside the
+  text and `10:00+02:00` is a different string from the `08:00+00:00` every compare-and-swap sends.
   Pinned on all four providers by
   `EfCoreTaskStorageTestsBase.GetOccurrencesPage_should_let_the_database_order_and_slice_the_series`, which
   reads the command off the EF diagnostic source: asserting the rows alone passes on an in-memory slice.

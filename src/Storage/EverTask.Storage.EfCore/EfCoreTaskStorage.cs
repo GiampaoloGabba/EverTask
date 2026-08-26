@@ -122,6 +122,10 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
     public async Task Persist(QueuedTask taskEntity, CancellationToken ct = default)
     {
+        // What a cursor compare-and-swap later matches is the STORED representation, and on SQLite that is
+        // text carrying the offset — so the row is stored at offset zero whatever the caller handed over (F1).
+        taskEntity.NormalizeTimestampsToUtc();
+
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         dbContext.QueuedTasks.Add(taskEntity);
@@ -799,6 +803,9 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
     public virtual async Task UpdateTask(QueuedTask task, CancellationToken ct = default)
     {
+        // Same reason as Persist: this is the other public write, and it rewrites the cursor itself (F1).
+        task.NormalizeTimestampsToUtc();
+
         logger.UpdatingTask(task.Id, task.TaskKey);
 
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);

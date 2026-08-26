@@ -8,6 +8,12 @@ Base EF Core storage for every relational provider; never used standalone.
   leased per operation, never shared. A pooled context admits only the single `DbContextOptions<T>` ctor
   parameter, so the schema travels in the options via `UseEverTaskSchema` (`EverTaskSchemaExtension`) instead
   of being injected. No `IServiceScopeFactory.CreateScope()` exists in this layer.
+- **`Persist` and `UpdateTask` normalize the row's timestamps to offset zero** (`NormalizeTimestampsToUtc`,
+  F1/#37). They are the two public writes a caller drives directly, and SQLite compares a `DateTimeOffset` as
+  the TEXT it stored, offset included — so a row written at `+02:00` lost every cursor compare-and-swap
+  against the same instant in UTC, for ever. The CAS operations already normalize their own operands; the
+  stored value was the half still free to disagree. `MemoryTaskStorage` does the same so the two stores round
+  a row trip identically. Pinned by the two `…_non_utc_offset` facts of the shared contract suite.
 - `RetrievePending` is the startup recovery filter — whatever it excludes is silently lost on restart, so
   `WaitingQueue` (persisted, not yet handed to a channel) and recurring `Completed`/`Failed` rows with
   `NextRunUtc != null` must stay in it.
