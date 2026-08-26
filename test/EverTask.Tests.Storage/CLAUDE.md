@@ -59,12 +59,21 @@ real engines.
   "fix" it.
 - **`SqlServerEfCoreTaskStorageTests.Should_rerun_a_read_that_sql_server_picked_as_the_deadlock_victim`
   builds the collision, it does not simulate it**: three `RetrievePending` loops (nonclustered index, then
-  clustered key lookup) against four `SetStatus` loops (clustered row, then the two indexes carrying
-  `Status`), plus two plain `Get` polls standing in for the caller that gets picked as the victim without
-  being part of the cycle. The proof the run really collided is the storage's own EventId 2025, read through
+  clustered key lookup) against the write side (clustered row, then the two indexes carrying `Status`),
+  plus two plain `Get` polls standing in for the caller that gets picked as the victim without
+  being part of the cycle. **The write side runs INSIDE the engine** — three sessions, each one round trip
+  buying a two-second T-SQL loop over `usp_SetTaskStatus`, re-issued until the test stops — because
+  client-side loops issue a fraction of their round trips when fifteen test hosts share the pool, and a
+  cycle that never forms was exactly how this test failed; two client-side `SetStatus` loops stay for the
+  real call path. Each writer starts at a different row: writers share one lock order and only block each
+  other. The stop is still between bursts, never a token on a command.
+  The proof the run really collided is the storage's own EventId 2025, read through
   a `RecordingLogger<SqlServerTaskStorage>` registered over the DI logger — the test stops at the FIRST one,
   which is the whole claim and what it asserts, so it costs a few seconds, and a run where nothing collided
-  FAILS rather than passing vacuously. **Its 2-minute budget is not a performance expectation**: it exists
+  FAILS rather than passing vacuously — but it says so in the right words, and with the engine's own
+  deadlock count (`sys.dm_os_performance_counters`, read before and after) so that "no cycle formed" and
+  "cycles formed and no read was picked" are told apart from a storage that stopped re-running its reads,
+  which surfaces one line earlier as a failed read. **Its 2-minute budget is not a performance expectation**: it exists
   only so a run that never collides ends, and it is sized for a solution-wide `dotnet test`, where three
   target frameworks share the cores and a cycle takes several times longer to form than it does alone. The
   20 s it started with failed exactly that way — no collision yet, reported as a storage that does not

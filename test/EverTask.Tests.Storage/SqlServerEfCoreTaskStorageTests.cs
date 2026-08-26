@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Diagnostics;
 using EverTask.Abstractions;
 using EverTask.Logger;
 using EverTask.Storage;
@@ -238,12 +239,24 @@ public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsyn
     /// never asked about.
     /// The storage's own rerun log is what proves the scenario really happened: a run in which nothing
     /// collided FAILS rather than passing without having tested anything.
+    /// The write pressure runs INSIDE SQL Server (see <see cref="WritePressureBatchSql"/>): a
+    /// solution-wide `dotnet test` has fifteen test hosts competing for the thread pool, and client-side
+    /// loops then issue a fraction of the round trips they issue alone — which is how a run reached its
+    /// budget without a cycle ever forming and reported itself as a storage that does not re-run its
+    /// reads. A server-side loop keeps hammering at full speed whatever the client's threads are doing,
+    /// so the reads under test only have to arrive; each one meets a table being rewritten continuously.
     /// </remarks>
     [Fact]
     public async Task Should_rerun_a_read_that_sql_server_picked_as_the_deadlock_victim()
     {
         var storage = GetStorage();
         var ids     = await SeedRecoverableRowsAsync(200);
+
+        // Diagnosis, not an assertion: whether the ENGINE deadlocked at all during the run separates
+        // "no cycle ever formed" from "cycles formed and no read of the storage was ever the victim".
+        // Both mean the run proved nothing, and neither is a storage that stopped re-running its reads.
+        var deadlocksBefore = await ReadEngineDeadlockCountAsync();
+        var pressureClock   = Stopwatch.StartNew();
 
         // The whole point is to stop as soon as the engine HAS deadlocked, which alone on the machine takes
         // two or three seconds; the budget is the guarantee that a run on which nothing ever collides still
@@ -260,7 +273,8 @@ public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsyn
         // would eventually hand `readFailures` a failure the test itself caused - on the very run that had
         // just proved the reread works.
         using var pressure = new CancellationTokenSource(TimeSpan.FromMinutes(2));
-        var readFailures = new ConcurrentQueue<Exception>();
+        var readFailures  = new ConcurrentQueue<Exception>();
+        var writeFailures = new ConcurrentQueue<Exception>();
 
         // The nonclustered-then-clustered side: the startup-recovery page, unchanged.
         async Task RecoveryReads()
@@ -280,16 +294,52 @@ public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsyn
         // A write runs to completion for a second reason of its own: usp_SetTaskStatus owns a transaction,
         // and cancelling one mid-flight leaves it open on a pooled connection, holding the locks the cleanup
         // of this test then waits for.
-        async Task StatusWrites()
+        // Each loop starts at a different point of the table so two writers spend their time on different
+        // rows: writers share one lock order and only ever block each other, while a writer and a reader
+        // meeting on the same row are the cycle this test is about.
+        async Task StatusWrites(int offset)
         {
             while (!pressure.IsCancellationRequested)
             {
-                foreach (var id in ids)
+                for (var i = 0; i < ids.Length; i++)
                 {
                     if (pressure.IsCancellationRequested) break;
 
+                    var id = ids[(i + offset) % ids.Length];
+
                     await storage.SetStatus(id, QueuedTaskStatus.InProgress, null, AuditLevel.None);
                     await storage.SetStatus(id, QueuedTaskStatus.Queued, null, AuditLevel.None);
+                }
+            }
+        }
+
+        // The same write, driven from inside the engine: one round trip buys a burst of thousands of
+        // executions of usp_SetTaskStatus instead of one, so the write pressure no longer depends on how
+        // often this process gets a thread. The burst is short and re-issued in a loop rather than running
+        // for the whole budget, so the run still ends promptly once a collision has been proved - and it
+        // ends BETWEEN bursts, never by cancelling a write that owns a transaction.
+        async Task ServerSideWrites(int offset)
+        {
+            while (!pressure.IsCancellationRequested)
+            {
+                try
+                {
+                    await using var connection = new SqlConnection(_connectionString);
+                    await connection.OpenAsync(CancellationToken.None);
+
+                    await using var command = new SqlCommand(WritePressureBatchSql, connection)
+                                              { CommandTimeout = 120 };
+                    command.Parameters.AddWithValue("@BurstMs", WriteBurstMs);
+                    command.Parameters.AddWithValue("@Offset", offset);
+
+                    await command.ExecuteNonQueryAsync(CancellationToken.None);
+                }
+                catch (SqlException e)
+                {
+                    // The pressure is allowed to lose: a batch picked as the deadlock victim is rolled
+                    // back and reported here, and the next burst takes its place. Only the READS are the
+                    // claim. Counted so a run that proved nothing can say what its writers were doing.
+                    writeFailures.Enqueue(e);
                 }
             }
         }
@@ -322,24 +372,99 @@ public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsyn
                 // for a second one asked a second collision to fit inside the budget too, and the gap
                 // between the first and the second is where most of the wait went: measured at two to
                 // eight seconds on an idle machine, more under a solution-wide run.
-                if (_storageLog.Count(RereadAfterDeadlockEventId) > 0)
+                // A read that FAILED ends the run too: that is the regression this test exists for, and
+                // it is already proved - there is nothing left for the remaining budget to add.
+                if (_storageLog.Count(RereadAfterDeadlockEventId) > 0 || !readFailures.IsEmpty)
                     await pressure.CancelAsync();
             }
         }
 
         await Task.WhenAll(
             RecoveryReads(), RecoveryReads(), RecoveryReads(),
-            StatusWrites(), StatusWrites(), StatusWrites(), StatusWrites(),
+            StatusWrites(0), StatusWrites(ids.Length / 2),
+            ServerSideWrites(0), ServerSideWrites(ids.Length / 3), ServerSideWrites(2 * ids.Length / 3),
             BystanderReads(), BystanderReads(),
             StopOnceItHasDeadlocked());
 
+        pressureClock.Stop();
+
         readFailures.ShouldBeEmpty(
             "a read has nothing to undo and nothing to reconcile: being chosen as the deadlock victim is the " +
-            "engine asking it to run again, not a failure to hand the caller");
+            "engine asking it to run again, not a failure to hand the caller" +
+            (readFailures.TryPeek(out var firstFailure) ? $" - first failure: {firstFailure}" : ""));
+
+        var deadlocksDuringRun = await ReadEngineDeadlockCountAsync() - deadlocksBefore;
 
         _storageLog.Count(RereadAfterDeadlockEventId).ShouldBeGreaterThan(0,
-            "two minutes of pressure and nothing collided, so this run proves nothing about what happens " +
-            "when something does");
+            "no collision could be provoked against a read of the storage in " +
+            $"{pressureClock.Elapsed.TotalSeconds:F0}s of pressure (the engine resolved {deadlocksDuringRun} " +
+            $"deadlock(s) in that window, and {writeFailures.Count} write burst(s) were aborted), so this run " +
+            "proves nothing about what happens when one does - it is not evidence that the storage stopped " +
+            "re-running its reads, which would have surfaced above as a failed read");
+    }
+
+    /// <summary>How long one server-side write burst hammers before the client gets its turn to stop it.</summary>
+    private const int WriteBurstMs = 2000;
+
+    /// <summary>
+    /// Write pressure that runs inside the engine: rotate over the seeded rows from <c>@Offset</c> and
+    /// run the real <c>usp_SetTaskStatus</c> on each until <c>@BurstMs</c> have passed. The procedure is
+    /// the point — its UPDATE takes the clustered row and then the two indexes carrying <c>Status</c>,
+    /// which is the lock order the read collides with — and driving it from a table variable keeps the
+    /// loop itself off the indexes the cycle is about.
+    /// </summary>
+    private string WritePressureBatchSql =>
+        $"""
+         SET NOCOUNT ON;
+
+         DECLARE @ids TABLE (Seq INT IDENTITY(1,1) PRIMARY KEY, Id UNIQUEIDENTIFIER);
+         INSERT INTO @ids (Id) SELECT Id FROM [{_dbContext.Schema}].[QueuedTasks];
+
+         DECLARE @count INT = (SELECT COUNT(*) FROM @ids);
+         IF @count = 0 RETURN;
+
+         DECLARE @deadline DATETIME2(3) = DATEADD(MILLISECOND, @BurstMs, SYSUTCDATETIME());
+         DECLARE @seq INT = (@Offset % @count) + 1;
+         DECLARE @id UNIQUEIDENTIFIER;
+
+         WHILE SYSUTCDATETIME() < @deadline
+         BEGIN
+             SELECT @id = Id FROM @ids WHERE Seq = @seq;
+
+             EXEC [{_dbContext.Schema}].[usp_SetTaskStatus] @TaskId = @id, @Status = N'InProgress',
+                  @Exception = NULL, @AuditLevel = 3;
+             EXEC [{_dbContext.Schema}].[usp_SetTaskStatus] @TaskId = @id, @Status = N'Queued',
+                  @Exception = NULL, @AuditLevel = 3;
+
+             SET @seq = CASE WHEN @seq >= @count THEN 1 ELSE @seq + 1 END;
+         END
+         """;
+
+    /// <summary>
+    /// Deadlocks the engine has resolved since it started, instance-wide. Purely diagnostic: it is what
+    /// tells a run that provoked nothing apart from a run whose cycles never picked a read of the storage.
+    /// Never throws — a diagnosis that fails the test it is explaining is worse than no diagnosis.
+    /// </summary>
+    private async Task<long> ReadEngineDeadlockCountAsync()
+    {
+        try
+        {
+            await using var connection = new SqlConnection(_connectionString);
+            await connection.OpenAsync();
+
+            await using var command = new SqlCommand(
+                """
+                SELECT cntr_value FROM sys.dm_os_performance_counters
+                WHERE counter_name = 'Number of Deadlocks/sec' AND instance_name = '_Total'
+                """,
+                connection);
+
+            return await command.ExecuteScalarAsync() as long? ?? 0;
+        }
+        catch (SqlException)
+        {
+            return 0;
+        }
     }
 
     /// <summary>Rows a recovery page returns, enough that it resolves them through the index.</summary>
