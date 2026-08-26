@@ -179,6 +179,15 @@ looks exactly like a handler nobody registers any more, so the schedule asks the
 is: if something is registered, the occurrence keeps its place and the next run tries again. Ending it there
 would drop work no handler ever saw, without one of the retries its policy promises.
 
+That patience has a bound, and it is counted in restarts rather than in runs. A handler whose constructor
+throws on every attempt is a misconfiguration, and an occurrence nothing can build holds a place in
+`MaxPendingOccurrences` for as long as the process lives. The row therefore keeps a count of the consecutive
+**process starts** that failed to rebuild it, and the fifth ends it `Failed` with the reason on the row: the
+same count, and the same ceiling, that startup recovery applies to a task it cannot re-dispatch. A later run
+inside the same process spends nothing, so a quarter of an hour of outage costs one attempt and not fifteen.
+A rebuild that succeeds clears the count, so two outages a week apart never add up to a verdict, and
+`RequeueFailedOccurrence` clears it too.
+
 **A schedule this build cannot read is not ended, it is parked.** The same thing can happen to the schedule
 row — a payload that stopped deserializing, a time zone id this machine no longer resolves — and ending that
 row would end the whole series, so the run does not. It materializes nothing, reports why, and puts the row
@@ -217,7 +226,9 @@ builder.Services.AddAuditCleanup(
 It leaves the schedule row alone, and a pruned occurrence is never re-materialized: the cursor decides what
 exists, not the rows behind it. An occurrence that still owns execution logs inside their own retention window
 is kept until those expire too, so pruning occurrences never deletes logs the log retention deliberately
-preserved.
+preserved — and the same holds for its audit trail, which the delete would cascade as well. With a 7-day
+occurrence window and a 90-day error window, a failed occurrence keeps its place until its audit rows are
+gone.
 
 The same policy carries the audit and execution-log windows; they are listed in
 [Audit & Execution-Log Retention](../configuration-reference.md#audit--execution-log-retention-addauditcleanup).

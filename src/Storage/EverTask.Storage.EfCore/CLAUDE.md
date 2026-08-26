@@ -80,5 +80,13 @@ Base EF Core storage for every relational provider; never used standalone.
   `CleanupTerminalOccurrences`) preserve rows that still own execution logs. The occurrence window is
   typically much shorter than the log window, so without that guard it cascade-deletes logs the log retention
   deliberately kept.
+  - **The AUDIT trail needs the same guard, and for a stronger reason**: `FK_StatusAudit_QueuedTasks` and
+    `FK_RunsAudit_QueuedTasks` cascade on delete, so purging an occurrence destroys the transitions and runs
+    under it. `CleanupCompletedTasks` has always refused a row with any audit left; the occurrence pass now
+    carries the same refusal through `preserveTasksWithAudits`, set when a status- or runs-audit window is
+    active. Seven days of occurrence retention against ninety of error retention erased a failure on day
+    eight, and the cleanup line reported an occurrence count and nothing else. Both flags are parameters
+    because SQLite and MySQL override the method, and an override that drops one silently purges what the
+    other window kept.
 - A new `ITaskStorage` method goes in `test/EverTask.Tests.Storage/EfCore/EfCoreTaskStorageTestsBase.cs` and
   then runs on all four providers. New provider: use the `new-relational-storage-provider` skill.

@@ -71,8 +71,31 @@ public sealed class SqlServerDurableOccurrencesMultiHostTests : IAsyncLifetime
         await _respawner.ResetAsync(connection);
     }
 
+    /// <summary>
+    /// What one host did to the shared schedule: how many times ITS materializer worked the row, and how many
+    /// times it asked the database to create an occurrence.
+    /// </summary>
+    /// <remarks>
+    /// Without it "two hosts" is only a premise. One row per slot is what the unique index guarantees on its
+    /// own, so the assertion holds trivially when a single host writes every row, and the test read the same
+    /// whether the second one had recovered the schedule or never seen it. Every materializer run reads the
+    /// schedule's live occurrences before it plans, so counting that call is counting runs — and it is a
+    /// storage call, which is what makes it per-host: each host builds its own.
+    /// </remarks>
+    private sealed class HostWork
+    {
+        private int _runs;
+        private int _materializations;
+
+        public int Runs             => Volatile.Read(ref _runs);
+        public int Materializations => Volatile.Read(ref _materializations);
+
+        public void RecordRun()             => Interlocked.Increment(ref _runs);
+        public void RecordMaterialization() => Interlocked.Increment(ref _materializations);
+    }
+
     /// <summary>A host of its own — its own scheduler, worker queues and materializer — on the shared database.</summary>
-    private async Task<IHost> StartHostAsync(bool start = true)
+    private async Task<IHost> StartHostAsync(bool start = true, HostWork? work = null)
     {
         var host = new HostBuilder()
                    .ConfigureServices(services =>
@@ -83,6 +106,23 @@ public sealed class SqlServerDurableOccurrencesMultiHostTests : IAsyncLifetime
                                .AddSqlServerStorage(_connectionString, opt => opt.AutoApplyMigrations = true);
 
                        services.AddSingleton(_recorder);
+
+                       if (work == null)
+                           return;
+
+                       // The real SQL Server storage, wrapped so this host's own calls are counted. Registered
+                       // after AddSqlServerStorage, whose TryAddSingleton then loses the resolve to this one.
+                       services.AddSingleton<ITaskStorage>(sp =>
+                       {
+                           var storage =
+                               new FaultInjectingTaskStorage(
+                                   ActivatorUtilities.CreateInstance<SqlServerTaskStorage>(sp));
+
+                           storage.RunBefore(nameof(ITaskStorage.GetOccurrences), work.RecordRun);
+                           storage.RunBefore(nameof(ITaskStorage.MaterializeOccurrence), work.RecordMaterialization);
+
+                           return storage;
+                       });
                    })
                    .Build();
 
@@ -136,14 +176,20 @@ public sealed class SqlServerDurableOccurrencesMultiHostTests : IAsyncLifetime
     [Fact]
     public async Task Two_hosts_replaying_the_same_backlog_create_one_row_per_slot()
     {
-        var seedHost = await StartHostAsync(start: false);
+        var firstWork  = new HostWork();
+        var secondWork = new HostWork();
+
+        var seedHost = await StartHostAsync(start: false, firstWork);
         var storage  = seedHost.Services.GetRequiredService<ITaskStorage>();
 
-        var cursor     = DateTimeOffset.UtcNow.AddMinutes(-6);
+        // Forty minutes of backlog inside a one-hour window: enough that the replay is still going when the
+        // second host arrives, instead of a handful of slots one host can drain before the other has finished
+        // recovering.
+        var cursor     = DateTimeOffset.UtcNow.AddMinutes(-40);
         var scheduleId = await SeedScheduleAsync(storage, DurableEveryMinute(maxPending: 10), cursor);
 
         // Both hosts recover the same schedule at the same time and both start materializing it.
-        await Task.WhenAll(seedHost.StartAsync(), StartHostAsync());
+        await Task.WhenAll(seedHost.StartAsync(), StartHostAsync(start: true, secondWork));
 
         await TaskWaitHelper.WaitForConditionAsync(
             () => storage.Get(t => t.ParentTaskId == scheduleId).GetAwaiter().GetResult().Length >= 5, 40000);
@@ -155,6 +201,18 @@ public sealed class SqlServerDurableOccurrencesMultiHostTests : IAsyncLifetime
                     .ToList();
 
         slots.ShouldNotBeEmpty();
+
+        // The premise, and the half the assertion below cannot state: BOTH hosts really worked this schedule.
+        // One row per slot is trivially true when only one host ever writes a row, so without this the test
+        // read identically whether the second host had recovered the schedule or never seen it.
+        firstWork.Runs.ShouldBeGreaterThan(0, "the first host's materializer worked the schedule");
+        secondWork.Runs.ShouldBeGreaterThan(0,
+            "and so did the second one: a second host that recovers no durable schedule must fail this test, " +
+            "not pass it silently");
+
+        (firstWork.Materializations + secondWork.Materializations).ShouldBeGreaterThanOrEqualTo(slots.Count,
+            "every row cost at least one materialization, and a slot two hosts raced for cost two");
+
         slots.Distinct().Count().ShouldBe(slots.Count,
             "the unique index on (schedule, slot) is what makes materialization idempotent between hosts");
 

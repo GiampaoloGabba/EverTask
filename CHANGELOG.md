@@ -24,8 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and its own paging, so a schedule with hundreds of occurrences is readable past its most recent page.
   Slots a schedule DROPPED are deliberately absent: they never became rows, and they are reported when they
   happen, by the `OccurrenceSkipped` event.
-- **The API stays read-only.** Changing a schedule at runtime goes through `ITaskScheduleManager` in your own
-  code, behind your own authorization: the dashboard reports, it does not command.
+- **The API stays read-only by default.** Everything #30 added reports; changing a schedule at runtime goes
+  through `ITaskScheduleManager` in your own code, behind your own authorization. The three write endpoints
+  the same release later added are opt-in and carry a credential of their own — see
+  *Added (opt-in management endpoints, #42)* below.
 - **Task DTOs carry `startedAtUtc`**, the instant a row's last (or current) run began. It is the term to
   measure lateness with: `lastExecutionUtc` is written on terminal transitions and so says when a run ENDED,
   which reported a punctual occurrence with a slow handler as late by its whole execution time. The instant
@@ -52,6 +54,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reported per occurrence, which cannot say how big a backlog was or that it has drained. `docs/monitoring-events.md`
   now also lists the three `Error` events the durable side publishes for a row this build cannot rebuild and
   for a provider re-park that found nowhere to park.
+
+### Added (opt-in management endpoints, #42)
+
+- **Three write endpoints, off by default and behind a credential of their own.**
+  `POST /api/management/tasks/{id}/requeue`, `/resume` and `/cancel` call `ITaskScheduleManager` for you:
+  requeue a failed occurrence, release a halted catch-up, cancel a schedule. They exist only when
+  `EnableManagementEndpoints` is `true` — while it is false the whole prefix answers `404` and the routes are
+  absent from the OpenAPI document, so an existing deployment is unchanged and reads exactly as it did.
+- **Reading and operating are two different credentials.** The dashboard username/password and the magic link
+  keep granting read; only the new `ManagementUsername` / `ManagementPassword` pair grants operate, and the
+  role travels on the same JWT (`LoginResponse.CanManage`, `TokenValidationResponse.CanManage` say which one
+  a token holds). `ManagementAuthorization` replaces the role check entirely when a host wants to decide for
+  itself. Turning monitoring authentication off does NOT open the write surface: without a host hook the
+  endpoints answer `403`. Credentials are compared in fixed time, and the surface is Bearer-only with no
+  cookies, so it carries no CSRF exposure.
+- **A standalone monitoring host has no scheduler to command**, so the endpoints answer `501` there rather
+  than pretending.
+
+### Changed (breaking — the two audit endpoints are paged, #44)
+
+- **`GET /tasks/{id}/status-audit` and `GET /tasks/{id}/runs-audit` return an object, not an array.** Both
+  now take `skip` / `take` like `/execution-logs` and answer `{ audits, totalCount, skip, take }`. A client
+  deserializing the body as a list — `JsonSerializer.Deserialize<List<StatusAuditDto>>(...)` — throws at
+  runtime after the upgrade and has to read `audits` instead. The reason is a long-lived recurring row: it
+  accumulates one transition per state per run, and the tab that shows the first twenty of them was
+  transferring the whole series to do it.
+- **`ITaskQueryService.GetStatusAuditAsync` / `GetRunsAuditAsync` change return type** from
+  `List<StatusAuditDto>` / `List<RunsAuditDto>` to `StatusAuditsResponse` / `RunsAuditsResponse`. A host that
+  implements or decorates that interface has to follow the signature.
+- **`TaskDetailDto.StatusAudits` / `RunsAudits` now carry the FIRST PAGE** (100 entries) rather than the whole
+  trail, with `StatusAuditsTotalCount` / `RunsAuditsTotalCount` beside them and the two endpoints for the
+  rest. The dashboard's detail grows Previous/Next on both tabs.
+- Two new `ITaskStorage` reads — `GetStatusAuditsPage` and `GetRunsAuditsPage` — as default members whose
+  default composes the unpaged read, so a custom storage keeps working; the EF base, the in-memory store and
+  the SQL Server deadlock re-read override them with an indexed count and slice.
 
 ### Added (occurrence providers, #29)
 
@@ -264,7 +301,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   schedule in any terminal state — Completed, Failed and Cancelled alike, which
   `DeleteCompletedTasksAfterRetention` does not do. It honours the same execution-log guard: with a
   log-retention window or cap active, an occurrence that still owns logs is kept, so a short
-  occurrence window never cascade-deletes logs a longer log window meant to keep.
+  occurrence window never cascade-deletes logs a longer log window meant to keep. It honours the
+  audit trail the same way: with a status- or runs-audit window active, an occurrence whose audit rows
+  are still inside their own window is kept, because deleting the row cascades them. A 7-day occurrence
+  window against a 90-day error window would otherwise erase a failure on day eight.
 - `EverTaskEventData` and `TaskHandlerExecutor` carry the schedule/occurrence context in new `init`
   properties. Their primary constructors and `Deconstruct` are unchanged, so existing code that
   builds or deconstructs them keeps compiling.
@@ -292,6 +332,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   conditional UPDATE that re-asserts the status, the run budget and the two temporal columns the decision
   was made from, so the recovery loses that race instead of silently winning it. The other three providers
   were already compare-and-swapping.
+
+### Fixed (schedule descriptions, and restarting a cancelled schedule)
+
+- **A cancelled schedule really restarts when it is dispatched again under its task key**, which is what the
+  documentation has always said is the way back from `Cancel` / `CancelSchedule`. A recurring
+  re-registration REUSES the row, so both halves of the cancellation followed it: the blacklist entry lives
+  about an hour and made the worker queue drop every delivery the new registration produced, and the row
+  stayed `Cancelled`, a status no recovery predicate selects, so a restart before the first slot lost the
+  series for good. The dispatch now drops that entry and puts the row back where a brand new dispatch would
+  have left it, after the new definition is written and with the transition audited. A one-shot was never
+  affected: a terminal row is removed and recreated under a new id.
+- **A schedule's description no longer renders its bounds on the host's clock.**
+  `RecurringTask.ToString()` — persisted as `QueuedTask.RecurringInfo` and shown by the dashboard — formatted
+  `RunUntil` and a `SpecificRunTime` with `ToLocalTime()`, so the same definition wrote a different sentence
+  from a UTC container and from a developer machine, and the time zone printed at the end of the sentence
+  labelled a wall time that was not its own. Both are now read on the schedule's own zone, or in UTC, named,
+  when it has none.
 
 ### Changed (breaking — retry policies moved to the `EverTask.Abstractions` namespace)
 

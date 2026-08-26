@@ -511,12 +511,13 @@ public class SchedulerResilienceTests
             scheduler.Schedule(CreateExecutor(DateTimeOffset.UtcNow)); // due now → loop enters dispatch
             await dispatchEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-            // Loop is parked inside dispatch. Dispose the wake-up semaphore now: when dispatch completes
-            // and the loop calls WaitAsync again, it hits a disposed semaphore.
-            var signal = (SemaphoreSlim)typeof(PeriodicTimerScheduler)
-                .GetField("_wakeUpSignal", BindingFlags.NonPublic | BindingFlags.Instance)!
+            // Loop is parked inside dispatch. Dispose the wake-up now — the same disposal Dispose() performs,
+            // and it disposes the semaphore underneath: when dispatch completes and the loop calls WaitAsync
+            // again, it hits a disposed one.
+            var wakeUp = (SchedulerWakeUp)typeof(PeriodicTimerScheduler)
+                .GetField("_wakeUp", BindingFlags.NonPublic | BindingFlags.Instance)!
                 .GetValue(scheduler)!;
-            signal.Dispose();
+            wakeUp.Dispose();
 
             dispatchGate.SetResult(); // release dispatch → loop loops back into WaitAsync(disposed)
             await Task.Delay(250);

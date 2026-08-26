@@ -158,6 +158,13 @@ The monitoring API exposes sensitive information:
 - Queue names and infrastructure details
 - Execution statistics and patterns
 
+**And it can be given a write surface.** `EnableManagementEndpoints` turns on three routes that requeue an
+occurrence, resume a halted catch-up or cancel a schedule — operations that put handlers with side effects
+back into execution. It is `false` by default and the prefix does not exist until it is set, but if you do
+set it: treat `ManagementUsername` / `ManagementPassword` as an operator credential, keep it apart from the
+dashboard one, and remember that a config binder reading environment variables can turn the flag on without
+anyone editing code. `ManagementAuthorization` is there when the decision belongs to your own principal.
+
 **Recommended production configurations:**
 
 #### 1. Disable UI in Production (API-only)
@@ -253,10 +260,11 @@ app.Run("http://internal-monitor.local:5000");
 
 ## API Endpoints
 
-All endpoints are prefixed with `/evertask-monitoring/api` (fixed). **Every one of them is read-only**:
-nothing here changes a task or a schedule. Changing a schedule at runtime is `ITaskScheduleManager`, called
-from your own code behind your own authorization — the dashboard credentials are a read credential shared by
-everyone who looks at it.
+All endpoints are prefixed with `/evertask-monitoring/api` (fixed). **Every one of them is read-only except
+the three under `/management`**, which do not exist unless a host turns them on (`EnableManagementEndpoints`,
+off by default) and which need a second credential — the dashboard credentials are a read credential shared
+by everyone who looks at it. Changing a schedule from application code is still `ITaskScheduleManager`,
+called behind your own authorization.
 
 ### Tasks
 
@@ -266,8 +274,9 @@ everyone who looks at it.
   - Durable schedules: `parentTaskId` (the occurrences of one schedule), `onlyOccurrences`, `onlyCatchUp`
     (only the rows that stand for missed work)
 - `GET /tasks/{id}` - Get task details
-- `GET /tasks/{id}/status-audit` - Get status audit history
-- `GET /tasks/{id}/runs-audit` - Get runs audit history
+- `GET /tasks/{id}/status-audit?skip=&take=` - Status transition history, newest first, as
+  `{ audits, totalCount, skip, take }`
+- `GET /tasks/{id}/runs-audit?skip=&take=` - Recorded runs of an inline recurring task, same shape
 - `GET /tasks/{id}/execution-logs?skip=&take=&level=` - Get the captured handler logs of a task
 - `GET /tasks/{id}/occurrences?nonTerminalOnly=&skip=&take=` - The materialized occurrences of a durable
   schedule, newest slot first, paged by the storage itself
@@ -302,10 +311,27 @@ a task that belongs to no schedule.
 - `GET /rate-limits` - Per-key parked count, next slot, tracked keys and fail-open count. In-memory, so it
   reports this process only.
 
+### Management (opt-in, the only endpoints that write)
+
+Absent unless `EnableManagementEndpoints` is `true`: while it is false the whole prefix answers `404` and the
+routes are not in the OpenAPI document. Once enabled, a call must carry the **operate** role — the token
+returned by logging in with `ManagementUsername` / `ManagementPassword` — or satisfy the
+`ManagementAuthorization` hook, which replaces the role check. The dashboard credential and every magic link
+are read-only and get `403`, and turning authentication off does not open the surface.
+
+- `POST /management/tasks/{id}/requeue` - Put a `Failed`/`Cancelled` occurrence back in the queue, keeping
+  its id, history and audit trail
+- `POST /management/tasks/{id}/resume` - Release a schedule that halted its own catch-up
+- `POST /management/tasks/{id}/cancel` - Cancel a schedule and the occurrences of it still pending
+
+All three take the id in the path, no body, and answer
+`{ status, message, taskId, nextRunUtc?, releasedHalt }`. `501` means no EverTask host is registered on this
+process (a standalone monitoring host has no scheduler to command).
+
 ### Config
 
 - `GET /config` - Get runtime configuration (no auth required)
-  - Returns: `{ apiBasePath, uiBasePath, signalRHubPath, requireAuthentication, uiEnabled }`
+  - Returns: `{ apiBasePath, uiBasePath, signalRHubPath, requireAuthentication, uiEnabled, managementEnabled }`
 
 ### SignalR Hub
 
@@ -327,6 +353,9 @@ public class EverTaskApiOptions
     // API base path (fixed: "/evertask-monitoring/api", readonly, derived)
     public string ApiBasePath => $"{BasePath}/api";
 
+    // Management (write) base path (fixed: "/evertask-monitoring/api/management", readonly, derived)
+    public string ManagementBasePath => $"{ApiBasePath}/management";
+
     // UI base path (fixed: "/evertask-monitoring", readonly, only used when EnableUI is true)
     public string UIBasePath => BasePath;
 
@@ -339,6 +368,19 @@ public class EverTaskApiOptions
 
     // Enable JWT Authentication (default: true)
     public bool EnableAuthentication { get; set; } = true;
+
+    // Expose the three write endpoints under ManagementBasePath (default: false)
+    // While false the whole prefix answers 404 and the routes are absent from the OpenAPI document
+    public bool EnableManagementEndpoints { get; set; }
+
+    // The OPERATE credential, separate from the read credential above (default: null = nobody operates)
+    // Only a token issued for this pair carries the operate role
+    public string? ManagementUsername { get; set; }
+    public string? ManagementPassword { get; set; }
+
+    // Decide for yourself instead of using the operate role (default: null = use the role)
+    // Runs inside routing, after the host's UseAuthentication, so context.User is your own principal
+    public Func<HttpContext, Task<bool>>? ManagementAuthorization { get; set; }
 
     // Enable CORS (default: true)
     public bool EnableCors { get; set; } = true;

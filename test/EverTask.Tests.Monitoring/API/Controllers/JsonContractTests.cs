@@ -111,10 +111,33 @@ public class JsonContractTests : MonitoringTestBase
     }
 
     /// <summary>
+    /// The DTOs the dashboard does not read, and therefore does not mirror.
+    /// </summary>
+    /// <remarks>
+    /// Named one by one so that "no interface" is a DECISION and not a silence: a DTO absent from this list
+    /// and absent from the TypeScript is drift, and an entry here that gains an interface is stale. The
+    /// guardian used to filter the DTO set by "has an interface", so the largest possible drift — a mirror
+    /// that does not exist at all — reported zero.
+    /// </remarks>
+    private static readonly Dictionary<string, string> NotMirroredByTheDashboard = new(StringComparer.Ordinal)
+    {
+        // The dashboard never calls the three POST /management routes: its only management key is
+        // RuntimeConfig.managementEnabled, and the operations belong to the application, behind its own
+        // authorization (decisions §3.8).
+        ["ManagementActionDto"] = "the dashboard never calls the management routes",
+
+        // Request bodies the dashboard builds inline ({ token }), which is the one direction the browser owns:
+        // "the API can omit this key" says nothing about a body the API only ever reads.
+        ["MagicLinkLoginRequest"]  = "a request body the dashboard builds inline",
+        ["TokenValidationRequest"] = "a request body the dashboard builds inline"
+    };
+
+    /// <summary>
     /// The dashboard's TypeScript mirrors the DTOs, and a field the API can omit has to be an OPTIONAL key
     /// there: declared required, it promises a value the wire never sends and nothing on the way in restores
     /// it. This is the assertion that fails when a nullable field is added to a DTO and mirrored as a
-    /// required key — the drift that no runtime test can see, because absent and null read the same in JS.
+    /// required key — the drift that no runtime test can see, because absent and null read the same in JS —
+    /// and when a DTO has no mirror at all.
     /// </summary>
     [Fact]
     public void Should_mirror_every_omittable_field_as_an_optional_key_in_the_dashboard_types()
@@ -122,17 +145,33 @@ public class JsonContractTests : MonitoringTestBase
         var types = TypeScriptTypes.Load();
         var nullability = new NullabilityInfoContext();
         var drift = new List<string>();
+        var mirrored = 0;
 
         var dtos = typeof(TaskListDto).Assembly
                                       .GetExportedTypes()
                                       .Where(t => t is { IsClass: true, IsAbstract: false }
                                                   && t.Namespace?.StartsWith("EverTask.Monitor.Api.DTOs",
                                                       StringComparison.Ordinal) == true)
-                                      .Where(t => types.Declares(t.Name))
-                                      .OrderBy(t => t.Name, StringComparer.Ordinal);
+                                      .OrderBy(t => t.Name, StringComparer.Ordinal)
+                                      .ToArray();
+
+        dtos.ShouldNotBeEmpty("the reflection has to find the DTOs before it can compare them to anything");
 
         foreach (var dto in dtos)
         {
+            if (!types.Declares(dto.Name))
+            {
+                if (!NotMirroredByTheDashboard.ContainsKey(dto.Name))
+                {
+                    drift.Add($"{dto.Name} has no interface in the dashboard types: mirror it, or say here " +
+                              "why the dashboard does not read it");
+                }
+
+                continue;
+            }
+
+            mirrored++;
+
             foreach (var property in dto.GetProperties(BindingFlags.Public | BindingFlags.Instance))
             {
                 if (nullability.Create(property).ReadState != NullabilityState.Nullable)
@@ -152,6 +191,19 @@ public class JsonContractTests : MonitoringTestBase
             }
         }
 
+        // The exemption list is checked from the other side too, or it becomes the place a mirrored DTO hides.
+        foreach (var exempt in NotMirroredByTheDashboard)
+        {
+            if (types.Declares(exempt.Key))
+                drift.Add($"{exempt.Key} IS mirrored now, so '{exempt.Value}' is stale: drop it from the list");
+
+            if (dtos.All(t => t.Name != exempt.Key))
+                drift.Add($"{exempt.Key} is no longer a DTO of this API: drop it from the list");
+        }
+
         drift.ShouldBeEmpty(string.Join(Environment.NewLine, drift));
+
+        mirrored.ShouldBeGreaterThan(dtos.Length / 2,
+            "and the comparison really ran: a parser that matched nothing would report no drift either");
     }
 }

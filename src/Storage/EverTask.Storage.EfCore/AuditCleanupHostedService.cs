@@ -156,13 +156,22 @@ public sealed class AuditCleanupHostedService : BackgroundService
         // 0/negative knob is disabled and must not silently freeze every purge).
         var logRetentionActive = policy.ExecutionLogRetentionDays is > 0 || policy.MaxExecutionLogsPerTask is > 0;
 
+        // The same rule for the audit trail: the audit passes above have already run, so an audit row still
+        // present is one a configured window chose to keep — and deleting the occurrence it belongs to would
+        // cascade-delete it. The occurrence window is typically far shorter than the error window (7 days
+        // against 90), so without this guard the failure history of every occurrence of every durable
+        // schedule went 82 days before the window that was meant to hold it, and the cleanup line reported
+        // an occurrence count and nothing else.
+        var auditRetentionActive = policy.StatusAuditRetentionDays is > 0 || policy.RunsAuditRetentionDays is > 0;
+
         // Occurrences of a durable schedule, in ANY terminal state. Runs BEFORE the completed-task purge
         // so the two never contend for the same rows, and independently of it: a failed or cancelled
         // occurrence is never eligible for that purge, yet must not accumulate forever.
         var occurrencesDeleted = 0;
         if (policy.OccurrenceRetentionDays is > 0)
             occurrencesDeleted = await storage.CleanupTerminalOccurrences(
-                now.AddDays(-policy.OccurrenceRetentionDays.Value), logRetentionActive, ct).ConfigureAwait(false);
+                now.AddDays(-policy.OccurrenceRetentionDays.Value), logRetentionActive, auditRetentionActive, ct)
+                .ConfigureAwait(false);
 
         var tasksDeleted = 0;
         if (policy.DeleteCompletedTasksAfterRetention)

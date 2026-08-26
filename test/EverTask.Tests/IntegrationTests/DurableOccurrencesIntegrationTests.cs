@@ -698,16 +698,20 @@ public class DurableOccurrencesIntegrationTests : IsolatedIntegrationTestBase
         // occurrence non-terminal for the whole life of the process — under the default budget of one, a
         // series that never materializes anything again while every run leaves the same warning no write ever
         // closes. The bound is the row's own recovery-failure counter, the one that already bounds a
-        // re-dispatch the recovery cannot make.
+        // re-dispatch the recovery cannot make — and it is spent at the SAME CADENCE, one attempt per process
+        // start. Counting per run instead burned all five inside five minutes of a schedule re-planning at
+        // BacklogRetryInterval, so a database failover and a misconfiguration ended the same way.
         var gate = new ActivationFaultGate();
 
-        await CreateIsolatedHostWithBuilderAsync(b =>
+        Task<IHost> RestartAsync() => CreateIsolatedHostWithBuilderAsync(b =>
             {
                 b.Services.AddSingleton<ITaskStorage>(_shared);
                 b.Services.AddSingleton(_recorder);
                 b.Services.AddSingleton(gate);
             },
             startHost: false);
+
+        await RestartAsync();
 
         var cursor     = DateTimeOffset.UtcNow.AddMinutes(-3);
         var scheduleId = await SeedScheduleAsync(MinuteCatchUp(TimeSpan.FromHours(1), 20), cursor);
@@ -727,23 +731,39 @@ public class DurableOccurrencesIntegrationTests : IsolatedIntegrationTestBase
         };
         await _shared.Persist(stranded);
 
-        var materializer = Host!.Services.GetRequiredService<OccurrenceMaterializer>();
-        materializer.MaxOccurrenceRebuildAttempts = 3;
-
         gate.FailUntilReleased();
 
-        for (var run = 1; run < materializer.MaxOccurrenceRebuildAttempts; run++)
+        const int ceiling = 3;
+
+        for (var start = 1; start < ceiling; start++)
         {
+            var materializer = Host!.Services.GetRequiredService<OccurrenceMaterializer>();
+            materializer.MaxOccurrenceRebuildAttempts = ceiling;
+
+            // Three runs, because a run is what USED to spend an attempt: an outage lasting three operational
+            // retries has to cost the row exactly one.
+            await materializer.RunAsync(scheduleId, null);
+            await materializer.RunAsync(scheduleId, null);
             await materializer.RunAsync(scheduleId, null);
 
-            (await _shared.Get(t => t.Id == stranded.Id))[0].Status.ShouldBe(QueuedTaskStatus.Queued,
-                $"run {run} is still inside the ceiling: a failure that may not last is not a verdict on the row");
+            var stillOwed = (await _shared.Get(t => t.Id == stranded.Id))[0];
+
+            stillOwed.Status.ShouldBe(QueuedTaskStatus.Queued,
+                $"process start {start} is still inside the ceiling: a failure that may not last is not a verdict on the row");
+            stillOwed.RecoveryDispatchFailureCount.ShouldBe(start,
+                "and three runs of one process are one outage, not three: the ceiling is spent per restart, " +
+                "like the recovery counter it borrows");
 
             (await OccurrencesOfAsync(scheduleId)).ShouldHaveSingleItem().Id.ShouldBe(stranded.Id,
                 "and while it is not a verdict the occurrence keeps the only slot of a budget of one");
+
+            await RestartAsync();
         }
 
-        await materializer.RunAsync(scheduleId, null);
+        var lastStart = Host!.Services.GetRequiredService<OccurrenceMaterializer>();
+        lastStart.MaxOccurrenceRebuildAttempts = ceiling;
+
+        await lastStart.RunAsync(scheduleId, null);
 
         var ended = (await _shared.Get(t => t.Id == stranded.Id))[0];
 
@@ -765,13 +785,15 @@ public class DurableOccurrencesIntegrationTests : IsolatedIntegrationTestBase
         // a time and end work no handler ever refused.
         var gate = new ActivationFaultGate();
 
-        await CreateIsolatedHostWithBuilderAsync(b =>
+        Task<IHost> RestartAsync() => CreateIsolatedHostWithBuilderAsync(b =>
             {
                 b.Services.AddSingleton<ITaskStorage>(_shared);
                 b.Services.AddSingleton(_recorder);
                 b.Services.AddSingleton(gate);
             },
             startHost: false);
+
+        await RestartAsync();
 
         var cursor     = DateTimeOffset.UtcNow.AddMinutes(-3);
         var scheduleId = await SeedScheduleAsync(MinuteCatchUp(TimeSpan.FromHours(1), 20), cursor);
@@ -791,19 +813,20 @@ public class DurableOccurrencesIntegrationTests : IsolatedIntegrationTestBase
         };
         await _shared.Persist(stranded);
 
-        var materializer = Host!.Services.GetRequiredService<OccurrenceMaterializer>();
-
         gate.FailUntilReleased();
 
-        await materializer.RunAsync(scheduleId, null);
-        await materializer.RunAsync(scheduleId, null);
+        // Two process starts, so two attempts: the count lives on the row precisely because the process that
+        // burned it may not be the one that finds the row healed.
+        await Host!.Services.GetRequiredService<OccurrenceMaterializer>().RunAsync(scheduleId, null);
+        await RestartAsync();
+        await Host!.Services.GetRequiredService<OccurrenceMaterializer>().RunAsync(scheduleId, null);
 
         (await _shared.Get(t => t.Id == stranded.Id))[0].RecoveryDispatchFailureCount.ShouldBe(2,
             "the attempts are counted on the row, so they survive the restart the process may not");
 
         gate.Release();
 
-        await materializer.RunAsync(scheduleId, null);
+        await Host!.Services.GetRequiredService<OccurrenceMaterializer>().RunAsync(scheduleId, null);
 
         var healed = (await _shared.Get(t => t.Id == stranded.Id))[0];
 

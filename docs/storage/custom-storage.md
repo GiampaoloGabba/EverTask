@@ -54,6 +54,21 @@ writes: `TrySetQueuedIfRecoverable`, `CompleteRecurringRun`, `SetRecurringSeries
 if your backend can make the check-and-set atomic. See `src/EverTask/Storage/ITaskStorage.cs` for the
 full contract and the per-member rationale.
 
+### Two obligations that are not visible from the signatures
+
+**`Persist` and `UpdateTask` must store the row's timestamps at offset zero.** Both take a `QueuedTask` from
+a caller, and a caller may hand over a `DateTimeOffset.Now`: `+02:00` on a machine in Rome. Every
+compare-and-swap on the cursor (`MaterializeOccurrence`, `TrySetRecurringSeriesCompleted`, `TryHaltSchedule`,
+`UpdateSchedule`) normalizes its own operand to UTC, so on any backend that compares the stored representation
+rather than the instant, a row written at a different offset loses that comparison forever and the schedule
+never materializes another occurrence. `QueuedTask.NormalizeTimestampsToUtc()` does it; call it first thing in
+both methods, as the built-in stores do.
+
+**`RequeueTerminal` must clear `RecoveryDispatchFailureCount` along with `Exception`.** That counter bounds how
+many consecutive process starts may fail to turn a row into a delivery before it is poisoned. A row put back
+still carrying the attempts that ended it is poisoned again by its first failure, so the requeue grants none
+of the retries it exists to restore.
+
 ## The Scheduling Clock
 
 Every scheduling decision in EverTask resolves "now" from one `TimeProvider`, so a test can drive the whole
@@ -137,7 +152,7 @@ ending a schedule on purpose. Its schedules just cannot be changed while they ru
 | `TryAdvanceScheduleCursor` | Move the cursor with NO occurrence, guarded by version + cursor |
 | `TrySetRecurringSeriesCompleted` | Finalize only while the expected cursor, status and version still hold |
 | `CancelSchedule` | Cancel the schedule and its still-waiting occurrences together |
-| `RequeueTerminal` | Put a `Failed`/`Cancelled` row back to `Queued`, keeping its identity and audits |
+| `RequeueTerminal` | Put a `Failed`/`Cancelled` row back to `Queued`, keeping its identity and audits, and clearing BOTH `Exception` and `RecoveryDispatchFailureCount` |
 | `TryRequeueStaleOccurrence` | Compare-and-swap requeue of an occurrence stranded in a known status |
 | `UpdateSchedule` | Replace the definition and bump the version, guarded by version + cursor and refused on a `Cancelled` row. A finished series expects a `null` cursor, so the guard has to read that as IS NULL; a cancel touches neither the version nor the cursor, so only the status can refuse it |
 | `TryHaltSchedule` | Write the halted marker, guarded by version + cursor + status |

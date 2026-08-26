@@ -417,6 +417,44 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
     }
 
     [Fact]
+    public async Task A_cancelled_schedule_really_restarts_when_it_is_dispatched_again_under_its_key()
+    {
+        // The documented way back from a cancel — "a cancelled schedule cannot be rescheduled, it has to be
+        // dispatched again" — and it did not work inside the process that had cancelled it. A recurring
+        // re-registration REUSES the row, so both halves of the cancellation followed the id: the blacklist
+        // entry lives about an hour and made WorkerQueue drop every delivery the new registration produced,
+        // while the row stayed Cancelled, which no recovery predicate selects.
+        await StartHostAsync();
+
+        var id = await Dispatcher.Dispatch(new RescheduleProbeTask("restart"),
+            r => r.Schedule().Every(1).Seconds(), taskKey: "reschedule-restart");
+
+        await Manager.CancelSchedule("reschedule-restart");
+
+        (await RowAsync(id)).Status.ShouldBe(QueuedTaskStatus.Cancelled, "the premise: the series really ended");
+
+        var before = _recorder.Count;
+
+        var restarted = await Dispatcher.Dispatch(new RescheduleProbeTask("restart"),
+            r => r.Schedule().Every(1).Seconds(), taskKey: "reschedule-restart");
+
+        restarted.ShouldBe(id, "a recurring re-registration keeps the row, which is why the cancel follows it");
+
+        var row = await RowAsync(id);
+        row.Status.ShouldNotBe(QueuedTaskStatus.Cancelled,
+            "a status no recovery predicate selects would lose the series at the first restart before its " +
+            "first slot");
+        row.Status.ShouldBe(QueuedTaskStatus.WaitingQueue, "which is where a brand new dispatch leaves a row");
+
+        WorkerBlacklist.IsBlacklisted(id).ShouldBeFalse(
+            "and the cancellation entry is dropped: the dispatch IS the decision to run it again");
+
+        await TaskWaitHelper.WaitForConditionAsync(() => _recorder.Count > before, 20000);
+
+        _recorder.Count.ShouldBeGreaterThan(before, "the series really runs again");
+    }
+
+    [Fact]
     public async Task A_series_that_has_already_ended_is_an_ordinary_reschedule_target()
     {
         await StartHostAsync();

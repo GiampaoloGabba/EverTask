@@ -832,6 +832,17 @@ public class RecurringTask
         if (period <= TimeSpan.Zero)
             period = TimeSpan.FromSeconds(1);
 
+        // A MONTH period is the one a span cannot express, and the flat 30 days the estimate uses is a
+        // DIFFERENT DAY OF THE MONTH on every month that is not 30 days long. That matters here and nowhere
+        // else, because a month grid keeps the day its anchor had — `AddMonths` first, then the day selectors
+        // walk FORWARD from what it landed on — so a probe one or two days off carries a different PHASE and
+        // the forward-only walk can never come back for the day the caller asked about:
+        // `EveryMonth().OnDays(1, 15).BackfillFrom(the 15th)` answered the 1st of the NEXT month (February is
+        // 28 days, so -30d lands on January 2 instead of January 1), and a rebase inside a month answered a
+        // day the cursor had never been on. Every other period is a constant step, where subtracting the span
+        // and stepping the calendar are the same instant.
+        int? months = ProbeStepsByMonths ? 1 : null;
+
         DateTimeOffset? first = null;
 
         for (var i = 0; i < MaxBackfillProbeBackoffs; i++)
@@ -841,7 +852,7 @@ public class RecurringTask
             if (instant - DateTimeOffset.MinValue <= period)
                 return first ?? GetNextOccurrence(DateTimeOffset.MinValue);
 
-            first = GetNextOccurrence(instant - period);
+            first = GetNextOccurrence(ProbeFrom(instant, months, period));
 
             // The probe reached a slot at or before `instant`: the walk in the caller now only has to come
             // forward, and it cannot skip anything on the way.
@@ -849,10 +860,41 @@ public class RecurringTask
                 return first;
 
             period += period;
+            months *= 2;
         }
 
         return first;
     }
+
+    /// <summary>
+    /// Where the probe starts: <paramref name="months"/> calendar months before <paramref name="instant"/> for
+    /// a month cadence, <paramref name="period"/> before it for every other shape.
+    /// </summary>
+    /// <remarks>
+    /// The calendar step falls back to the span at the very bottom of the representable range, where
+    /// <c>AddMonths</c> would throw: 31 days is the longest a calendar month can be, so the comparison is the
+    /// exact condition under which it cannot.
+    /// </remarks>
+    private static DateTimeOffset ProbeFrom(DateTimeOffset instant, int? months, TimeSpan period) =>
+        months is { } back && instant - DateTimeOffset.MinValue > TimeSpan.FromDays(31.0 * back)
+            ? instant.AddMonths(-back)
+            : instant - period;
+
+    /// <summary>
+    /// True when this schedule's own period is a calendar MONTH — the one period a flat span cannot express.
+    /// </summary>
+    /// <remarks>
+    /// Mirrors the branch <see cref="GetMinimumInterval(DateTimeOffset?)"/> answers its 30-day approximation
+    /// from: cron and every finer interval come first there, and all of them are constant steps.
+    /// </remarks>
+    private bool ProbeStepsByMonths =>
+        string.IsNullOrEmpty(CronInterval?.CronExpression)
+        && SecondInterval?.Interval is not > 0
+        && MinuteInterval?.Interval is not > 0
+        && HourInterval?.Interval is not > 0
+        && DayInterval?.Interval is not > 0
+        && WeekInterval?.Interval is not > 0
+        && MonthInterval?.Interval is > 0;
 
     /// <summary>
     /// True iff <paramref name="occurrence"/> is still the current one to run — i.e. the NEXT occurrence
@@ -1116,7 +1158,7 @@ public class RecurringTask
             parts.Add($"Start after a delay of {InitialDelay.Value}");
 
         if (SpecificRunTime.HasValue)
-            parts.Add($"Run at {SpecificRunTime.Value.ToLocalTime():yyyy-MM-dd HH:mm:ss}");
+            parts.Add($"Run at {OnScheduleClock(SpecificRunTime.Value)}");
 
         if (parts.Count > 0)
             parts.Add("then");
@@ -1203,11 +1245,28 @@ public class RecurringTask
     private void AppendBounds(List<string> parts)
     {
         if (RunUntil != null)
-            parts.Add($"until {RunUntil.Value.ToLocalTime():yyyy-MM-dd HH:mm:ss}");
+            parts.Add($"until {OnScheduleClock(RunUntil.Value)}");
 
         if (MaxRuns != null)
             parts.Add($"up to {MaxRuns} times");
     }
+
+    /// <summary>
+    /// An absolute instant read on the clock this description is written on: the schedule's own zone — the id
+    /// <see cref="AppendModifiers"/> prints right after it — and UTC, named, for a schedule that has none.
+    /// </summary>
+    /// <remarks>
+    /// Never the HOST's zone, which is what <c>ToLocalTime</c> gave it. This string is persisted as
+    /// <c>QueuedTask.RecurringInfo</c> and is what the monitoring dashboard shows, so the same definition
+    /// dispatched from a UTC container and from a developer machine wrote two different sentences for one
+    /// bound — and the zone id appended at the end labelled a wall time that belonged to neither. Falls back
+    /// to UTC rather than throwing when the stored id no longer resolves, for the same reason
+    /// <see cref="ToScheduleLocalTime"/> does: a task must not fail over what it reports about itself.
+    /// </remarks>
+    private string OnScheduleClock(DateTimeOffset instant) =>
+        ToScheduleLocalTime(instant) is { } local
+            ? $"{local:yyyy-MM-dd HH:mm:ss}"
+            : $"{instant.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC";
 
     /// <summary>
     /// T13: the zone is part of what the schedule MEANS, and so is how it treats a missed slot, so the

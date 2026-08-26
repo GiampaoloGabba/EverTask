@@ -452,6 +452,10 @@ public class Dispatcher(
         // into the expectation, so the CAS would confirm the concurrent state instead of losing to it.
         QueuedTaskStatus? existingStatus = null;
 
+        // The schedule this dispatch is reviving, when it is re-registering one a cancel had ended. Acted on
+        // after the row carries the new definition, never before: see RestoreCancelledSchedule below.
+        Guid? revivedSchedule = null;
+
         // Handle taskKey resolution if provided
         if (!string.IsNullOrWhiteSpace(taskKey) && taskStorage != null && existingTaskId == null)
         {
@@ -494,6 +498,15 @@ public class Dispatcher(
                     // For all other statuses (including Completed/Failed): update, don't remove
                     logger.UpdatingRecurringTask(existingTask.Id);
                     existingTaskId = existingTask.Id;
+
+                    // Including Cancelled, which is the documented way to restart a cancelled series ("it has
+                    // to be dispatched again") — and the one status that does not survive the reuse of the
+                    // row. A one-shot is removed and recreated under a new id, so nothing follows it; a
+                    // recurring row keeps its id, and with it the cancellation's blacklist entry (about an
+                    // hour, dropping every delivery the new registration produces) and the Cancelled status
+                    // itself, which UpdateTask never rewrites and no recovery predicate selects.
+                    if (existingTask.Status is QueuedTaskStatus.Cancelled)
+                        revivedSchedule = existingTask.Id;
 
                     // The run counter is preserved whether or not the row still has a cursor: storage keeps
                     // counting from it, so a TERMINAL series re-registered under the same taskKey resumes at
@@ -702,6 +715,12 @@ public class Dispatcher(
             }
         }
 
+        // The row now carries the new definition, so the series can be brought back to life. In this order:
+        // a revival that preceded the write would leave a live row on the definition the cancel ended if the
+        // write then failed.
+        if (revivedSchedule is { } revived)
+            await RestoreCancelledSchedule(revived, taskKey!, effectiveAuditLevel, ct).ConfigureAwait(false);
+
         // The executor is already lazy when useLazyExecutor is true (built by the wrapper
         // without a handler instance), eager otherwise
         var executorToSchedule = executor;
@@ -765,6 +784,37 @@ public class Dispatcher(
 
         scheduler.TryUnschedule(persistenceId);
         GateInvalidation?.Invalidate(persistenceId);
+    }
+
+    /// <summary>
+    /// Brings a schedule a cancel had ended back to life, because it has just been dispatched again under its
+    /// own task key — the documented way to restart one ("a cancelled schedule cannot be rescheduled, it has
+    /// to be dispatched again").
+    /// </summary>
+    /// <remarks>
+    /// A recurring re-registration REUSES the row, so both halves of the cancellation follow it and neither is
+    /// undone by anything else on this path. The blacklist entry outlives the cancel by about an hour and
+    /// <see cref="Worker.WorkerQueue"/> drops every delivery it covers, so the new registration was consumed
+    /// and nothing ran; and <c>UpdateTask</c> never writes the status column, so the row stayed
+    /// <c>Cancelled</c> — a status no recovery predicate selects, which loses the series for good at the first
+    /// restart before its first slot. The dispatch IS the decision to run it again, the same argument
+    /// <see cref="TaskScheduleManager.RequeueFailedOccurrence"/> makes for a single occurrence, so it drops the
+    /// entry and puts the row back in <see cref="QueuedTaskStatus.WaitingQueue"/> — where a brand new dispatch
+    /// would have left it. The transition is audited like any other, which is what tells an operator the
+    /// series was restarted rather than never cancelled.
+    /// </remarks>
+    private async Task RestoreCancelledSchedule(Guid scheduleId, string taskKey, AuditLevel auditLevel,
+                                                CancellationToken ct)
+    {
+        workerBlacklist.Remove(scheduleId);
+
+        if (taskStorage != null)
+        {
+            await taskStorage.SetStatus(scheduleId, QueuedTaskStatus.WaitingQueue, null, auditLevel, null, ct)
+                             .ConfigureAwait(false);
+        }
+
+        logger.CancelledScheduleRedispatched(scheduleId, taskKey);
     }
 
     private ValueTask<IDisposable> AcquireTaskKeyLockAsync(string? taskKey, Guid? existingTaskId, CancellationToken ct)

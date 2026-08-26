@@ -11,6 +11,15 @@ in-memory storage.
   after `EntryTtl` ≈ 1 h, so cancelled parked tasks don't leak them). `WorkerExecutor.DoWork` checks it BEFORE
   the rate-limit gate — cancelled tasks must not burn tokens. `Cancel` also calls `IScheduler.TryUnschedule`,
   bumps the gate invalidation epoch and releases the parking-lot entry.
+  - **A re-dispatch under the same taskKey UNDOES a cancellation** (`Dispatcher.RestoreCancelledSchedule`),
+    because that is the documented way to restart a cancelled schedule and a RECURRING re-registration reuses
+    the row. Both halves of the cancel would otherwise follow the id: the blacklist entry, which makes
+    `WorkerQueue` drop every delivery the new registration produces while the registration is consumed all
+    the same, and the `Cancelled` status, which `UpdateTask` never rewrites and no recovery predicate
+    selects — so a restart before the first slot lost the series for good. The row goes back to
+    `WaitingQueue` (where a brand new dispatch leaves it) AFTER the new definition is written, and the
+    transition is audited. A one-shot needs none of this: a terminal row is removed and recreated under a new
+    id.
 - **Immediate dispatches are LAZY**: the wrapper resolves a short-lived metadata handler in a disposable scope
   and the worker resolves the executing instance in its per-task scope. Never resolve an eager transient
   handler from the dispatcher's root provider — it pins `IAsyncDisposable` instances until shutdown.
@@ -335,14 +344,22 @@ the definition opted in.
     is anything registered for this task at all? — and only a "no" is final. Ending an occurrence on a
     transient activation failure drops work no handler ever saw, without one of the retries its policy
     promises; it keeps its slot of the budget instead, and the next run looks again — but only
-    `MaxOccurrenceRebuildAttempts` times. A constructor that throws EVERY time is a misconfiguration, not an
-    outage, and an unbounded "look again" held the series for the life of the process. The ceiling is the
-    row's own `RecoveryDispatchFailureCount`, incremented and cleared exactly as the recovery's L18 does it
-    (a rebuild that succeeds clears what it burned, so the count is CONSECUTIVE failures), and reaching it
-    ends the row through the same confirmed poison — with its own EventId (1825) and its own event sentence,
-    because "cannot be rebuilt from its row" sends an operator after a type or a payload that are both fine.
-    `RequeueTerminal` clears the counter with the exception for the same reason: a row that came back
-    carrying the attempts that ended it would be poisoned again by its first failure.
+    `MaxOccurrenceRebuildAttempts` **process starts** in a row. A constructor that throws EVERY time is a
+    misconfiguration, not an outage, and an unbounded "look again" held the series for the life of the
+    process. The ceiling is the row's own `RecoveryDispatchFailureCount`, incremented and cleared exactly as
+    the recovery's L18 does it (a rebuild that succeeds clears what it burned, so the count is CONSECUTIVE
+    failures), and reaching it ends the row through the same confirmed poison — with its own EventId (1825)
+    and its own event sentence, because "cannot be rebuilt from its row" sends an operator after a type or a
+    payload that are both fine. `RequeueTerminal` clears the counter with the exception for the same reason:
+    a row that came back carrying the attempts that ended it would be poisoned again by its first failure.
+    - **One attempt per PROCESS START, not per run**, which is the cadence of the counter it borrows: the
+      recovery spends its five over five restarts, while a schedule held behind a stale occurrence re-plans
+      every `BacklogRetryInterval` — a minute by default — so counting per run spent the whole ceiling in
+      five minutes and made a fifteen-minute database failover indistinguishable from the misconfiguration
+      the bound exists to catch. `_rebuildFailuresCounted` is the in-process memory of "this outage is
+      already counted"; it is dropped the moment the row heals or ends, and it is deliberately not durable —
+      what has to survive a restart is the column, what must not is the memory of an outage this process is
+      still inside.
   - **Only a CONFIRMED terminal state frees capacity.** `SetStatus` is best-effort on every relational
     provider — it logs its own failed write and returns — so the row is re-read before the slot is counted
     free. Taking the call's return as the answer let a swallowed write leave the old occurrence alive while a

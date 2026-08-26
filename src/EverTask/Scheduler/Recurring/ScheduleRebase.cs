@@ -15,9 +15,9 @@ namespace EverTask.Scheduler.Recurring;
 /// on the new clock. Naming only the period and taking its first slot is the same thing while a period holds
 /// one slot, and a rewind onto work already done as soon as it holds two.
 /// <para>
-/// A cadence that names no day inside its period — <c>EveryWeek()</c>, <c>EveryMonth()</c> — is the one shape
-/// whose period is smaller than its name suggests: the day itself rides on the cursor, so it is the day, not
-/// the week or the month around it, that has to survive.
+/// A week cadence that names no day, and EVERY month cadence, are the shapes whose period is smaller than its
+/// name suggests: they fire once per period on the day their anchor was on, so the day itself rides on the
+/// cursor and it is the day — not the week or the month around it — that has to survive.
 /// </para>
 /// <para>
 /// Deliberately narrow. The two definitions must have the same shape, because a rebase across a different
@@ -70,9 +70,10 @@ internal static class ScheduleRebase
 
         // WHERE INSIDE the period the cursor stood, counted in slots of the old definition. The first slot of
         // the period is the answer only when the cursor IS the first slot, which is every period that holds
-        // exactly one; a period that holds more — AtTimes(9,15), OnDays(Mon,Thu), OnDays(1,15) — would
-        // otherwise be rebased BACKWARD onto an occurrence that has already run, replaying it and spending one
-        // more of MaxRuns, while RecalculateFromNow on the very same definition answers the later slot.
+        // exactly one; a period that holds more — OnDays(Mon, Wed).AtTimes(9, 15), EveryWeek().OnDays(Mon,Thu)
+        // — would otherwise be rebased BACKWARD onto an occurrence that has already run, replaying it and
+        // spending one more of MaxRuns, while RecalculateFromNow on the very same definition answers the later
+        // slot. (A MONTH period never holds more than one, whatever it names: see CursorCarriesTheDay.)
         var index = cursorCarriesTheDay
                         ? PositionAmong(OnTimesOf(current), TimeOnly.FromDateTime(wall))
                         : PositionInPeriod(current, ToInstant(periodStart, current.GoverningZone ?? TimeZoneInfo.Utc),
@@ -219,13 +220,15 @@ internal static class ScheduleRebase
     /// makes that day — and not the week or the month around it — the period a rebase has to preserve.
     /// </summary>
     /// <remarks>
-    /// A week cadence with no <c>OnDays</c> steps <c>current.AddDays(7 * Interval)</c> and a month cadence with
-    /// no <c>OnDay</c>/<c>OnDays</c>/<c>OnFirst</c> steps <c>current.AddMonths(Interval)</c>: both keep the day
-    /// of whatever they were handed, so the grid's phase lives on the cursor. Naming the whole week or month as
-    /// the period and asking the grid for its first slot then answers from the phase the backward probe
-    /// happened to land on — a Wednesday series comes back on a Sunday, a monthly one on the 18th or the 28th
-    /// depending on how long the previous month was — and every occurrence after it is computed from there.
-    /// Both definitions agree on this, because <see cref="SameGrid"/> compares exactly those selectors.
+    /// A week cadence with no <c>OnDays</c> steps <c>current.AddDays(7 * Interval)</c>, and EVERY month cadence
+    /// steps <c>current.AddMonths(Interval)</c> and only then applies its day selector — which walks FORWARD
+    /// from the day it was handed and stays there for good. Both keep the day of whatever they were handed, so
+    /// the grid's phase lives on the cursor. Naming the whole week or month as the period and asking the grid
+    /// for its first slot then answers from the phase the backward probe happened to land on — a Wednesday
+    /// series comes back on a Sunday, and <c>OnDays(1, 15)</c> standing on the 15th comes back on the 1st,
+    /// because the probe enters the month at its start and the FIRST listed day is what it finds. Every
+    /// occurrence after it is computed from there. Both definitions agree on this, because
+    /// <see cref="SameGrid"/> compares exactly those selectors.
     /// </remarks>
     private static bool CursorCarriesTheDay(RecurringTask definition) => definition.PeriodKind switch
     {
@@ -233,7 +236,11 @@ internal static class ScheduleRebase
         // and placing the slot by hand would be guessing. Those shapes keep the grid probe.
         SchedulePeriodKind.Week => definition.WeekInterval is { OnDays.Length: 0 } && definition.DayInterval is null,
 
-        SchedulePeriodKind.Month => definition.MonthInterval is { OnDay: null, OnFirst: null, OnDays.Length: 0 }
+        // A month period holds exactly ONE slot however it names its day: OnDay pins it, OnFirst computes it,
+        // OnDays walks forward to the first listed day at or after the anchor's — and none of the three fires
+        // twice in a month, because the cascade advances the period before it selects inside it. So the day a
+        // month grid lands on is the day the cursor already stands on, whichever selector produced it.
+        SchedulePeriodKind.Month => definition.MonthInterval is not null
                                     && definition.WeekInterval is null && definition.DayInterval is null,
 
         _ => false

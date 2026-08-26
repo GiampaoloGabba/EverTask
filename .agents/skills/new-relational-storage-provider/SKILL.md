@@ -117,6 +117,15 @@ procedure OR PL/SQL). **Invariants that MUST hold (verify with tests):**
 - **Atomicity** — one statement / one transaction: audit insert + row update commit together; a forced
   mid-statement failure persists nothing.
 - **NextRunUtc assigned unconditionally** in the recurring completion (a null makes the series terminal).
+- **`Persist` and `UpdateTask` normalize the row's timestamps to offset zero**
+  (`QueuedTask.NormalizeTimestampsToUtc()`, first statement of both). They are the two writes a caller drives
+  with an entity of its own, and a `DateTimeOffset.Now` stored as `+02:00` loses every cursor compare-and-swap
+  against the same instant in UTC on any backend that compares the stored representation — the schedule then
+  never materializes another occurrence. The CAS operations already normalize their operands; the stored value
+  is the half that is otherwise free to disagree.
+- **`RequeueTerminal` clears `RecoveryDispatchFailureCount` as well as `Exception`.** That counter bounds how
+  many consecutive process starts may fail to turn a row into a delivery before it is poisoned, so a row put
+  back still carrying the attempts that ended it is poisoned again by its first failure.
 
 ### Durable occurrences: not optional if you advertise them
 
@@ -239,11 +248,13 @@ which, being insertion order, is total, so no page boundary repeats or drops an 
 count alone and must never reach a zero-row `FETCH`: that is a syntax error on some engines, not an empty
 result.
 
-Also override `CleanupTerminalOccurrences(cutoff, preserveTasksWithLogs, ct)` if the DB cannot translate the
-`DateTimeOffset` age cutoff (the SQLite pattern) — or if it cannot be trusted with a correlated `EXISTS`
-inside a `DELETE … LIMIT`, which is the MySQL trap: the guard is silently dropped and every occurrence is
-purged, cascade-deleting the `TaskExecutionLog` rows the log window kept. It shares that `preserveTasksWithLogs`
-guard with `CleanupCompletedTasks`, so whichever shape you pick, pick it for both.
+Also override `CleanupTerminalOccurrences(cutoff, preserveTasksWithLogs, preserveTasksWithAudits, ct)` if the
+DB cannot translate the `DateTimeOffset` age cutoff (the SQLite pattern) — or if it cannot be trusted with a
+correlated `EXISTS` inside a `DELETE … LIMIT`, which is the MySQL trap: the guards are silently dropped and
+every occurrence is purged, cascade-deleting the `TaskExecutionLog` rows the log window kept AND the
+`StatusAudit` / `RunsAudit` rows the audit windows kept. **Both guards** are shared with
+`CleanupCompletedTasks` for the same reason — the occurrence window is typically 7 days against an error
+window of 90 — so whichever shape you pick, pick it for both methods and carry both flags.
 
 ## STEP 3 — Packaging & docs checklist (do NOT skip — "in every form")
 

@@ -64,17 +64,29 @@ internal sealed class OccurrenceMaterializer
     private const int MaxServedSlotsPerRun = 500;
 
     /// <summary>
-    /// How many consecutive runs may fail to rebuild an occurrence before the failure stops being read as
+    /// How many PROCESS STARTS may fail to rebuild an occurrence before the failure stops being read as
     /// transient and the row is ended (F6).
     /// </summary>
     /// <remarks>
-    /// The twin of <c>WorkerService.MaxRecoveryDispatchAttempts</c>, and deliberately the same default and the
-    /// same durable counter: both bound the number of times one row is allowed to fail to become a delivery
-    /// before the verdict on it is final. Settable for the tests that have to reach the ceiling, exactly like
-    /// its recovery counterpart; it is not a public option, because the number is the same answer to the same
-    /// question and a host that wants to move it has nothing to weigh it against.
+    /// The twin of <c>WorkerService.MaxRecoveryDispatchAttempts</c>, and deliberately the same default, the
+    /// same durable counter and the same CADENCE: both bound the number of times one row is allowed to fail to
+    /// become a delivery before the verdict on it is final, and both spend one attempt per start of the
+    /// process. Settable for the tests that have to reach the ceiling, exactly like its recovery counterpart;
+    /// it is not a public option, because the number is the same answer to the same question and a host that
+    /// wants to move it has nothing to weigh it against.
     /// </remarks>
     internal int MaxOccurrenceRebuildAttempts { get; set; } = 5;
+
+    /// <summary>
+    /// The occurrences whose rebuild failure this process has already counted, so the run at
+    /// <c>BacklogRetryInterval</c> does not spend a second attempt on the same outage.
+    /// </summary>
+    /// <remarks>
+    /// Bounded by the occurrences that failed to rebuild while this process lived, and every entry leaves it
+    /// the moment the row heals or ends. Deliberately NOT durable: what has to survive a restart is the
+    /// counter on the row, and what must not is the memory of an outage this process is still inside.
+    /// </remarks>
+    private readonly ConcurrentDictionary<Guid, byte> _rebuildFailuresCounted = new();
 
     public OccurrenceMaterializer(IServiceScopeFactory scopeFactory, IServiceProvider serviceProvider,
                                   IScheduler scheduler, EverTaskServiceConfiguration options,
@@ -889,7 +901,19 @@ internal sealed class OccurrenceMaterializer
                     // question (how many times may this row fail to become a delivery?) answered the same
                     // way, on a column that already exists per row. A storage that does not persist it
                     // answers 0 for ever and keeps exactly the unbounded behaviour it had before.
-                    var attempts = await storage.IncrementRecoveryFailure(child.Id, ct).ConfigureAwait(false);
+                    //
+                    // ONE attempt per PROCESS START, which is the cadence the counter is borrowed from: the
+                    // recovery spends its five over five restarts, while a schedule holding a stale
+                    // occurrence re-plans every BacklogRetryInterval — a minute by default — so counting per
+                    // run burned the whole ceiling in five minutes and made a database failover of a quarter
+                    // of an hour indistinguishable from the misconfiguration this bound exists to catch. It
+                    // is also what the contract says out loud ("if something is registered, the occurrence
+                    // keeps its place and the next run tries again"): a run inside the same outage looks
+                    // again for free, and only the next restart adds a failure to the row.
+                    var counted  = _rebuildFailuresCounted.TryAdd(child.Id, 0);
+                    var attempts = counted
+                                       ? await storage.IncrementRecoveryFailure(child.Id, ct).ConfigureAwait(false)
+                                       : child.RecoveryDispatchFailureCount ?? 0;
 
                     if (attempts < MaxOccurrenceRebuildAttempts)
                     {
@@ -912,14 +936,22 @@ internal sealed class OccurrenceMaterializer
                     active--;
                 }
 
+                // The row is terminal, and RequeueTerminal is the way back: it clears the durable counter, so
+                // the in-process mark has to go with it or a requeued occurrence would meet the ceiling again
+                // on its first failure without ever having spent an attempt of its own.
+                _rebuildFailuresCounted.TryRemove(child.Id, out _);
+
                 continue;
             }
 
             var executor = rebuild.Executor;
 
             // The same L18 hygiene a successful re-dispatch does: a rebuild that healed leaves no failures
-            // behind for a later transient one to inherit and tip over the ceiling with. Conditional, so the
-            // ordinary reconciliation of a healthy row still costs no write.
+            // behind for a later transient one to inherit and tip over the ceiling with. Conditional on the
+            // WRITE, so the ordinary reconciliation of a healthy row still costs no round trip; the
+            // in-process mark is dropped either way, because it is what makes the next outage a new one.
+            _rebuildFailuresCounted.TryRemove(child.Id, out _);
+
             if ((child.RecoveryDispatchFailureCount ?? 0) > 0)
                 await storage.ClearRecoveryFailure(child.Id, ct).ConfigureAwait(false);
 
@@ -942,15 +974,17 @@ internal sealed class OccurrenceMaterializer
     /// something nothing can deliver.
     /// </summary>
     /// <param name="exhaustedAfter">
-    /// The number of consecutive runs that failed to rebuild the row, when THAT is what ended it (F6), and
-    /// null when the verdict was final on the first look. The two are the same write and two different
-    /// sentences: one names a build nothing can fix, the other a handler that is there and never builds.
+    /// The number of consecutive PROCESS STARTS that failed to rebuild the row, when THAT is what ended it
+    /// (F6), and null when the verdict was final on the first look. The two are the same write and two
+    /// different sentences: one names a build nothing can fix, the other a handler that is there and never
+    /// builds.
     /// </param>
     /// <remarks>
     /// The verdict cannot change while the process lives: the type is gone, its persisted payload does not
     /// deserialize against this build, or nothing here registers a handler for it, and re-reading the same
     /// row answers the same thing every minute. A rebuild that keeps failing with a handler registered gets
-    /// here too, but only after <see cref="MaxOccurrenceRebuildAttempts"/> runs have said the same thing. Left
+    /// here too, but only after <see cref="MaxOccurrenceRebuildAttempts"/> process starts have said the same
+    /// thing — an outage that ends inside one of them never reaches this at all. Left
     /// non-terminal it would go on consuming a slot of the schedule's concurrency budget, which at the default
     /// budget of one is a series that never materializes another occurrence. <c>Failed</c> is the state M13
     /// gives an occurrence that cannot run — the series moves on, the row keeps the reason it carries, and
@@ -994,7 +1028,8 @@ internal sealed class OccurrenceMaterializer
         // Why the row ended, in the event too: "cannot be rebuilt from its row" sends an operator to look for
         // a type or a payload, which is not what a handler that never builds needs.
         var cause = exhaustedAfter is { } burned
-            ? string.Create(CultureInfo.InvariantCulture, $"could not be rebuilt in {burned} consecutive run(s)")
+            ? string.Create(CultureInfo.InvariantCulture,
+                $"could not be rebuilt in {burned} consecutive process start(s)")
             : "cannot be rebuilt from its row";
 
         worker.PublishExternalEvent(executorForEvents, SeverityLevel.Error,

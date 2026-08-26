@@ -24,20 +24,15 @@ namespace EverTask.Scheduler;
 public class PeriodicTimerScheduler : IScheduler, IDisposable
 {
     private readonly ConcurrentPriorityQueue<TaskHandlerExecutor, DateTimeOffset> _queue;
-    private readonly ConcurrentDictionary<Guid, TaskHandlerExecutor> _scheduledItems;
+    private readonly ScheduledRegistrations _registrations;
     private readonly IWorkerQueueManager _queueManager;
     private readonly IEverTaskLogger<PeriodicTimerScheduler> _logger;
     private readonly TimeSpan _checkInterval;
     private readonly CancellationTokenSource _cts;
     private readonly CancellationToken _shutdownToken;
-    private readonly SemaphoreSlim _wakeUpSignal;
+    private readonly SchedulerWakeUp _wakeUp;
     private readonly TimeProvider _timeProvider;
-    private int _wakeUpPending;
     private volatile bool _disposed;
-
-    // The wake-up wait carried across loop iterations. See WaitForWakeUpAsync: when the delay wins the
-    // race the same waiter is reused, so a Release issued meanwhile is never swallowed by an abandoned one.
-    private Task? _pendingSignalWait;
 
     /// <summary>
     /// Delay before retrying the dispatch of a due task whose target queue is full.
@@ -74,11 +69,11 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
         _ = taskStorage;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _queue = new ConcurrentPriorityQueue<TaskHandlerExecutor, DateTimeOffset>();
-        _scheduledItems = new ConcurrentDictionary<Guid, TaskHandlerExecutor>();
+        _registrations = new ScheduledRegistrations(_queue, _logger.SupersededRegistrationKept);
         _cts = new CancellationTokenSource();
         // Captured before any dispatch: accessing _cts.Token after Dispose would throw
         _shutdownToken = _cts.Token;
-        _wakeUpSignal = new SemaphoreSlim(0, 1);
+        _wakeUp = new SchedulerWakeUp(_timeProvider);
 
         // Default: check ogni 1 secondo (bilanciamento ottimale)
         _checkInterval = checkInterval ?? TimeSpan.FromSeconds(1);
@@ -124,71 +119,17 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
 
         // Latest-wins registration per PersistenceId: a previously parked entry for the same task
         // (e.g. recovery racing with a taskKey re-registration at startup) becomes stale and is
-        // discarded at dequeue time, so the task executes only once per occurrence.
-        // CU19: also evict the stale node from the heap now, so repeated far-future re-registrations
-        // of the same id do not accumulate orphans retained until their due time.
-        // The swap itself is atomic so that refuseSuperseded can DECIDE on what it replaces: comparing
-        // outside it would leave a window in which the newer registration arrives between the comparison
-        // and the write, which is the whole race the conditional registration exists to close.
-        if (!SwapRegistration(item, refuseSuperseded))
+        // discarded at dequeue time, so the task executes only once per occurrence. That rule and the S4
+        // refusal both live in ScheduledRegistrations, which the sharded scheduler shares.
+        if (!_registrations.Swap(item, refuseSuperseded))
             return false;
 
         _queue.Enqueue(item, scheduledTime);
 
         // Sveglia il timer se è dormiente (coda era vuota)
-        // Thread-safe: usa Interlocked.CompareExchange per garantire che solo un thread
-        // possa segnalare il semaforo, eliminando la race condition check-then-act.
-        // Il flag _wakeUpPending viene resettato dopo che WaitAsync consuma il segnale.
-        if (Interlocked.CompareExchange(ref _wakeUpPending, 1, 0) == 0)
-        {
-            try
-            {
-                _wakeUpSignal.Release();
-            }
-            catch (ObjectDisposedException)
-            {
-                // Disposed concurrently with this Schedule: the registration stays parked and
-                // the task is recovered at the next startup (same as the guard above)
-            }
-        }
+        _wakeUp.Signal();
 
         return true;
-    }
-
-    /// <summary>
-    /// Puts <paramref name="item"/> in the registry, evicting whatever it replaces from the heap.
-    /// </summary>
-    /// <returns>False only when a newer registration was found and <paramref name="refuseSuperseded"/> asked
-    /// for it to be preserved.</returns>
-    private bool SwapRegistration(TaskHandlerExecutor item, bool refuseSuperseded)
-    {
-        while (true)
-        {
-            if (!_scheduledItems.TryGetValue(item.PersistenceId, out var previous))
-            {
-                if (_scheduledItems.TryAdd(item.PersistenceId, item))
-                    return true;
-
-                continue;
-            }
-
-            if (ReferenceEquals(previous, item))
-                return true;
-
-            if (refuseSuperseded && previous.ScheduleVersion > item.ScheduleVersion)
-            {
-                _logger.SupersededRegistrationKept(item.PersistenceId, item.ScheduleVersion,
-                    previous.ScheduleVersion);
-
-                return false;
-            }
-
-            if (!_scheduledItems.TryUpdate(item.PersistenceId, item, previous))
-                continue;
-
-            _queue.Remove(previous);
-            return true;
-        }
     }
 
     /// <inheritdoc />
@@ -196,7 +137,7 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
     {
         // The orphan entry left in the priority queue is discarded by the staleness
         // check in ProcessReadyTasksAsync.
-        return _scheduledItems.TryRemove(persistenceId, out _);
+        return _registrations.Remove(persistenceId);
     }
 
     /// <inheritdoc />
@@ -204,11 +145,11 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
     {
         // Conditional remove (same pattern as the consume in ProcessReadyTasksAsync):
         // a concurrent newer registration for the same task is preserved.
-        return _scheduledItems.TryRemove(new KeyValuePair<Guid, TaskHandlerExecutor>(persistenceId, expected));
+        return _registrations.Remove(persistenceId, expected);
     }
 
     /// <inheritdoc />
-    public bool IsScheduled(Guid persistenceId) => _scheduledItems.ContainsKey(persistenceId);
+    public bool IsScheduled(Guid persistenceId) => _registrations.Contains(persistenceId);
 
     /// <inheritdoc />
     public bool SupportsScheduleInspection => true;
@@ -226,22 +167,22 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
                 {
                     // Coda vuota: dormi fino a quando Schedule() chiama Release()
                     _logger.QueueEmpty();
-                    await WaitForWakeUpAsync(null, cancellationToken).ConfigureAwait(false);
+                    await _wakeUp.WaitAsync(null, cancellationToken).ConfigureAwait(false);
 
                     // Resetta il flag di wake-up dopo aver consumato il segnale
-                    Interlocked.Exchange(ref _wakeUpPending, 0);
+                    _wakeUp.Consumed();
                 }
                 else
                 {
                     // Attendi il minore tra: delay calcolato o checkInterval
                     var waitTime = delay < _checkInterval ? delay : _checkInterval;
 
-                    var signaled = await WaitForWakeUpAsync(waitTime, cancellationToken).ConfigureAwait(false);
+                    var signaled = await _wakeUp.WaitAsync(waitTime, cancellationToken).ConfigureAwait(false);
 
                     // Resetta il flag solo se il semaforo è stato effettivamente segnalato
                     if (signaled)
                     {
-                        Interlocked.Exchange(ref _wakeUpPending, 0);
+                        _wakeUp.Consumed();
                     }
                 }
 
@@ -263,57 +204,6 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
                 _logger.ErrorProcessingScheduledTasks(ex);
             }
         }
-    }
-
-    /// <summary>
-    /// Sleeps until either the wake-up signal arrives or <paramref name="waitTime"/> elapses on the
-    /// scheduling clock (null waits for the signal only). Returns true when the signal won.
-    /// </summary>
-    /// <remarks>
-    /// A race, not <c>SemaphoreSlim.WaitAsync(timeout)</c>: that timeout is hard-wired to the real clock, so
-    /// the loop would keep sleeping in wall time no matter which <see cref="TimeProvider"/> the rest of the
-    /// pipeline follows. The signal waiter is created once and KEPT across iterations when the delay wins —
-    /// abandoning it would let it silently consume the next <c>Release</c> that nobody is watching for, and
-    /// the scheduler would miss a wake-up.
-    /// </remarks>
-    private async Task<bool> WaitForWakeUpAsync(TimeSpan? waitTime, CancellationToken cancellationToken)
-    {
-        _pendingSignalWait ??= _wakeUpSignal.WaitAsync(cancellationToken);
-
-        if (waitTime == null)
-        {
-            await _pendingSignalWait.ConfigureAwait(false);
-            _pendingSignalWait = null;
-            return true;
-        }
-
-        using var delayCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var       delayTask = Task.Delay(waitTime.Value, _timeProvider, delayCts.Token);
-
-        var winner = await Task.WhenAny(_pendingSignalWait, delayTask).ConfigureAwait(false);
-
-        if (ReferenceEquals(winner, delayTask))
-        {
-            await delayTask.ConfigureAwait(false); // surfaces shutdown cancellation to the loop
-            return false;
-        }
-
-        var signalWait = _pendingSignalWait;
-        _pendingSignalWait = null;
-
-        // Stop the losing timer and observe its cancellation, so neither a timer nor a faulted task lingers.
-        await delayCts.CancelAsync().ConfigureAwait(false);
-        try
-        {
-            await delayTask.ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            // Expected: we cancelled it ourselves after the signal won.
-        }
-
-        await signalWait.ConfigureAwait(false); // surfaces shutdown cancellation to the loop
-        return true;
     }
 
     private TimeSpan CalculateNextDelay()
@@ -366,7 +256,7 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
 
             // Stale entry: the task was re-scheduled with a newer registration (latest wins)
             // or already dispatched. Drop this occurrence silently.
-            if (!_scheduledItems.TryGetValue(item.PersistenceId, out var current) || !ReferenceEquals(current, item))
+            if (!_registrations.IsCurrent(item))
                 continue;
 
             var result = await DispatchToWorkerQueue(item).ConfigureAwait(false);
@@ -384,7 +274,7 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
             {
                 // Enqueued, discarded or failed: this registration is consumed.
                 // Conditional remove: keep a concurrent newer registration alive.
-                _scheduledItems.TryRemove(new KeyValuePair<Guid, TaskHandlerExecutor>(item.PersistenceId, item));
+                _registrations.Remove(item.PersistenceId, item);
             }
         }
     }
@@ -426,6 +316,6 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
 
         _cts.Cancel();
         _cts.Dispose();
-        _wakeUpSignal.Dispose();
+        _wakeUp.Dispose();
     }
 }

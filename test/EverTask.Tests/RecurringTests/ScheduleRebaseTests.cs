@@ -70,6 +70,17 @@ public class ScheduleRebaseTests
         TimeZoneId    = zone
     };
 
+    /// <summary>
+    /// What <c>Schedule().EveryMonth().OnDays(…)</c> builds — and, despite naming several days, a period that
+    /// still holds exactly ONE slot: the cascade advances the month first and only then walks forward to the
+    /// listed day at or after the one the anchor was on, so the series settles on one of them for good.
+    /// </summary>
+    private static RecurringTask MonthlyOnDays(int[] days, TimeOnly at, string? zone = null) => new()
+    {
+        MonthInterval = new MonthInterval { Interval = 1, OnDays = days, OnTimes = [at] },
+        TimeZoneId    = zone
+    };
+
     // ---- What the period preserves ----------------------------------------------------------------
 
     [Fact]
@@ -155,6 +166,66 @@ public class ScheduleRebaseTests
 
         rebased.ShouldBe(new DateTimeOffset(2026, 3, 20, 10, 0, 0, TimeSpan.Zero),
             "the day of the month rides on the cursor, so it is the only thing a rebase may not move");
+    }
+
+    // A month cadence that NAMES its days is the same shape, which is what made it the one that got this
+    // wrong: OnDays(1, 15) does not fire twice a month — MonthInterval advances the period and only then
+    // walks forward to a listed day — so the day it settles on is the phase, and it lives on the cursor.
+    // Reading the whole month as the period and asking the grid for its first slot answered the FIRST listed
+    // day whatever the cursor was on, permanently re-phasing the series.
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(15)]
+    public void A_monthly_cadence_that_names_several_days_stays_on_the_one_the_cursor_settled_on(int settledOn)
+    {
+        // The series settled on ONE of the two listed days — whichever its anchor put it on — and moving the
+        // hour must leave it there. Asking the grid for the month's first slot answered the 1st both times,
+        // so a series running on the 1st was pushed onto the 15th and lost that month's run.
+        var cursor = new DateTimeOffset(2026, 2, settledOn, 2, 0, 0, TimeSpan.Zero); // 03:00 in Rome
+
+        var rebased = ScheduleRebase.Rebase(MonthlyOnDays([1, 15], new TimeOnly(3, 0), Rome),
+            MonthlyOnDays([1, 15], new TimeOnly(5, 0), Rome), cursor);
+
+        var local = TimeZoneInfo.ConvertTime(rebased, TimeZoneInfo.FindSystemTimeZoneById(Rome));
+
+        local.Date.ShouldBe(new DateTime(2026, 2, settledOn),
+            "moving the hour must not move the series onto the other day the definition lists");
+        local.TimeOfDay.ShouldBe(TimeSpan.FromHours(5));
+    }
+
+    [Fact]
+    public void A_monthly_cadence_that_names_several_days_keeps_the_slot_an_identical_definition_owes()
+    {
+        // The control, and the sharpest form of the defect: with the two definitions byte-identical a rebase
+        // has nothing to compute, yet the cursor moved from the 1st to the 15th — the 30-day backward probe
+        // enters a 28-day February one day late, so the grid answered from a phase the cursor never had.
+        foreach (var month in new[] { 2, 3, 4, 6, 7 })
+        {
+            var cursor = new DateTimeOffset(2026, month, 1, 3, 0, 0, TimeSpan.Zero);
+
+            ScheduleRebase.Rebase(MonthlyOnDays([1, 15], new TimeOnly(3, 0)),
+                    MonthlyOnDays([1, 15], new TimeOnly(3, 0)), cursor)
+                .ShouldBe(cursor, $"an identity rebase in month {month} must answer the cursor it was given");
+        }
+    }
+
+    [Fact]
+    public void A_monthly_cadence_that_names_several_times_keeps_the_one_the_cursor_stood_on()
+    {
+        // The same phase argument one level down: a month period holds one slot, and WHICH time of day it
+        // falls on is decided by the anchor too, so a cursor on the later time must not be rewound onto the
+        // earlier one — that replays an occurrence and spends one more of MaxRuns.
+        var current     = MonthlyOnDays([1, 15], new TimeOnly(3, 0));
+        var replacement = MonthlyOnDays([1, 15], new TimeOnly(3, 0));
+
+        current.MonthInterval!.OnTimes     = [new TimeOnly(3, 0), new TimeOnly(15, 0)];
+        replacement.MonthInterval!.OnTimes = [new TimeOnly(4, 0), new TimeOnly(16, 0)];
+
+        var cursor = new DateTimeOffset(2026, 2, 15, 15, 0, 0, TimeSpan.Zero);
+
+        ScheduleRebase.Rebase(current, replacement, cursor)
+                      .ShouldBe(new DateTimeOffset(2026, 2, 15, 16, 0, 0, TimeSpan.Zero));
     }
 
     [Fact]

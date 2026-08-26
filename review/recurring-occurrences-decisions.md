@@ -814,6 +814,76 @@ esattamente il punto della voce riscritta: la collisione avviene o non avviene, 
 La suite UI (`pnpm test`, 27 test), `pnpm run lint` e `pnpm run build` sono verdi con lei, e il bundle in
 `wwwroot` non cambia (i tre commenti corretti sono commenti).
 
+## 3.9 Chiusura della review finale dell'intera feature (2026-08-27) — DA RATIFICARE
+
+Sedici finding confermati sull'intera feature. Sei toccano comportamento o superficie e stanno in tabella,
+perché il gate 0.3 non lascia passare una modifica non scritta; gli altri dieci sono correzioni di
+documentazione, di CI e di test che asserivano meno di quanto dicessero, e stanno sotto.
+
+| Punto | Deviazione |
+|-------|------------|
+| **F6** — il tetto `MaxOccurrenceRebuildAttempts` è speso **una volta per avvio di processo**, non una per run del materializer | **DEVIAZIONE RATIFICATA, ed è la lettera del commento che il codice non seguiva.** Il tetto è dichiarato «il gemello di `WorkerService.MaxRecoveryDispatchAttempts`, stesso default e stesso contatore durevole»: quello della recovery si spende **una volta per avvio**, questo si spendeva una volta per run — e per lo schedule che tiene un'occorrenza stale il piano è sempre `WindowFull`, quindi il run si ripete a `BacklogRetryInterval`, un minuto di default. Cinque minuti di failover del database e una misconfigurazione finivano allo stesso modo, mentre `durable-occurrences.md` prometteva l'opposto («se qualcosa è registrato, l'occorrenza tiene il suo posto e il run successivo riprova») senza nominare alcun tetto. Ora il fallimento è contato una sola volta per processo (`_rebuildFailuresCounted`, in memoria, svuotato appena la riga guarisce o termina: ciò che deve sopravvivere a un riavvio è la colonna, non il ricordo di un outage che questo processo sta ancora attraversando), e il tetto vale cinque **riavvii**. Log 1817/1825 ed evento riformulati di conseguenza. Il contratto è ora scritto anche in `durable-occurrences.md`, che il tetto non lo menzionava affatto. Pinnata da `DurableOccurrencesIntegrationTests.An_occurrence_that_never_rebuilds_is_failed_once_it_has_burned_its_rebuild_attempts` (tre run per processo, un attempt per processo, verdetto all'ultimo avvio) e da `A_rebuild_that_finally_succeeds_clears_the_attempts_it_had_burned` (due avvii, contatore a 2, azzerato dalla guarigione). Due asserzioni cambiano, ed erano quelle che pinnavano il difetto. |
+| **M18 / §3.6** — `CursorCarriesTheDay` vale per **ogni** cadenza mensile, non solo per quella che non nomina giorni | **DEVIAZIONE RATIFICATA; §3.6 è precisata su questo punto.** Il testo di produzione citava `OnDays(1, 15)` come esempio di «periodo che ne contiene più di uno», ed è falso: `MonthInterval.GetNextOccurrence` fa `AddMonths(Interval)` e **poi** `NextValidDay(OnDays)`, che cammina in avanti dal giorno dell'anchor e ci si ferma — un mese contiene sempre **uno** slot, qualunque selettore usi, e il giorno su cui la serie si è posata è la FASE, che vive sul cursore esattamente come per `EveryMonth()`. Leggendo il mese come periodo e chiedendo alla griglia il suo primo slot, una serie che girava il 15 veniva spostata sul 1° e ri-fasata per sempre (`RebaseFromCursor`, anche con le due definizioni identiche). Il ramo a piazzamento manuale copre ora `OnDay`, `OnDays` e `OnFirst`, il che sistema anche il rewind di orario su un mensile con più `OnTimes` — la stessa perdita un livello più giù. Pinnata da `ScheduleRebaseTests`: le due fasi (`InlineData(1)`/`InlineData(15)`), il rebase identità su cinque mesi e il caso a due orari. |
+| **Gotcha 17** — la sonda di `FirstOccurrenceOnOrAfter` per una cadenza **mensile** passa dal calendario (`AddMonths`), non dalla stima piatta di 30 giorni | **CORREZIONE RATIFICATA, nessuna decisione superata.** La stima di `GetMinimumInterval` per un mese è 30 giorni: su ogni mese che non ne ha 30 la sonda atterra su un altro giorno del mese, e su una griglia la cui fase è il giorno quella è una griglia diversa. `BackfillFrom(il 15)` su `EveryMonth().OnDays(1, 15)` rispondeva il 1° del mese **successivo** (febbraio ha 28 giorni, quindi −30d cade il 2 gennaio invece che il 1°): il chiamante nominava un giorno che la definizione elenca e la serie partiva sei settimane dopo, uno slot di replay perso senza evento (P5). Tutte le altre forme sono passi costanti, dove sottrarre lo span e camminare il calendario danno lo stesso istante, quindi il path legacy resta identico. Pinnata da `BackfillCursorTests.A_monthly_schedule_that_names_several_days_backfills_the_listed_day_it_was_pointed_at`, che verifica **ogni** giorno di febbraio e non solo l'istante del finding. |
+| **T13** — `RunUntil` e `SpecificRunTime` in `ToString()`/`RecurringInfo` sono resi sull'orologio dello **schedule**, non su quello dell'host | **DEVIAZIONE RATIFICATA sul path legacy; è la quarta eccezione ammessa al Gate 0.3** (accanto a X3, `EagerHandlerOwnership` e il conteggio uniforme di §3.5). Il rendering con `ToLocalTime()` è precedente a #23, ma è #23 ad avergli messo accanto l'id di zona (`AppendModifiers`): le due metà si leggono come una frase sola e sono su due orologi diversi, quindi il numero mostrato non appartiene alla zona che lo etichetta. La stringa è per giunta **persistita** (`QueuedTask.RecurringInfo`) e servita dall'API di monitoring su lista e dettaglio, quindi la stessa definizione scriveva frasi diverse da un container UTC e da una macchina di sviluppo. Ora una zona governante rende il suo wall time e uno schedule senza zona rende UTC **dicendolo** (`… UTC`), che è l'unico modo di non essere ambigui dove non c'è un'etichetta. Cambia la stringa di ogni schedule che porta uno dei due valori; nessun test asseriva su quel testo. Pinnata da `RecurringTaskToStringTests` (bound zonato, bound senza zona, primo run). |
+| **M16** — `CleanupTerminalOccurrences` guadagna `preserveTasksWithAudits`, gemello di `preserveTasksWithLogs` | **DEVIAZIONE RATIFICATA; M16 è precisata.** La potatura delle occorrenze portava la sola guardia dei log (R15), mentre `FK_StatusAudit_QueuedTasks` e `FK_RunsAudit_QueuedTasks` sono `ON DELETE CASCADE` su tutti e quattro i provider: con `OccurrenceRetentionDays = 7` e `ErrorAuditRetentionDays = 90`, la passata dell'ottavo giorno distruggeva righe di audit che le passate di audit — girate pochi minuti prima nello stesso ciclo — avevano deliberatamente tenuto, e la riga di log riportava solo un conteggio di occorrenze. `CleanupCompletedTasks` rifiuta da sempre una riga con audit residuo: la stessa regola vale ora qui, attivata quando una finestra di audit è configurata (stesso condizionamento di `preserveTasksWithLogs`, così una policy senza audit conserva il comportamento storico). La firma è di un metodo introdotto da #23 e **mai rilasciato**; le tre implementazioni (base EF, SQLite, MySQL) cambiano insieme, nessuna migrazione, nessuna capability, nessun round-trip in più. Pinnata sui quattro provider da `EfCoreTaskStorageTestsBase.CleanupTerminalOccurrences_should_keep_an_occurrence_whose_audit_trail_a_window_still_holds`. Docs (cheatsheet, reference, `durable-occurrences.md`), skill storage (`.claude/` + mirror `.agents/`), skill `integrate-evertask` e `CLAUDE.md` del modulo aggiornati nello stesso cambio. |
+| **Dispatcher** — un re-dispatch sotto lo stesso taskKey **annulla** la cancellazione della riga schedule che riusa | **DEVIAZIONE RATIFICATA sul path legacy; è la quinta eccezione ammessa al Gate 0.3.** `ITaskScheduleManager.CancelSchedule` e `docs/recurring-tasks/managing-tasks.md` dicono entrambi che una serie cancellata «va dispacciata di nuovo», e dentro lo stesso processo non funzionava: una ri-registrazione ricorrente **riusa la riga**, quindi entrambe le metà del cancel la seguivano — la voce di blacklist dura circa un'ora e faceva scartare da `WorkerQueue` ogni consegna prodotta dalla nuova registrazione (consumata comunque), e lo stato restava `Cancelled`, che nessun predicato di recovery seleziona, quindi un riavvio prima del primo slot perdeva la serie per sempre. Il dispatch **è** la decisione di rieseguire — lo stesso argomento che M13 fa per la singola occorrenza — quindi toglie la voce e riporta la riga a `WaitingQueue`, dove un dispatch nuovo l'avrebbe lasciata, **dopo** che la nuova definizione è stata scritta e con la transizione auditata. Un one-shot non è toccato: una riga terminale viene rimossa e ricreata con un id nuovo. EventId 1022. Pinnata da `RescheduleIntegrationTests.A_cancelled_schedule_really_restarts_when_it_is_dispatched_again_under_its_key`. |
+
+Gli altri dieci, senza deviazione:
+
+- **`SwapRegistration` e `WaitForWakeUpAsync` erano due copie byte per byte** in `PeriodicTimerScheduler` e in
+  ogni shard di `ShardedScheduler`, ed entrambe portano una regola che una copia sola può perdere: la
+  registrazione latest-wins con il rifiuto S4 dentro lo swap, e la race segnale-vs-`Task.Delay(timeProvider)`
+  con l'invariante del waiter creato una volta e mai abbandonato. Estratte in `Scheduler/ScheduledRegistrations`
+  e `Scheduler/SchedulerWakeUp` (internal), che è anche l'unico simbolo che ora lega i due scheduler: prima
+  c'era solo un rimando in prosa. Refactor **behavior-neutral**; `SchedulerVersionedRegistrationTests`,
+  `TimerSchedulerTests` e `ShardedSchedulerTests` restano verdi senza che una asserzione sia stata toccata.
+- **La CI non apriva tre progetti di test su cinque.** `EverTask.Tests.Monitoring`, `EverTask.Analyzers.Tests`
+  e `EverTask.Tests.Logging` — cioè tutto il deliverable della fase 7, i test della regola ET0010 e
+  l'integrazione Serilog — erano scritti, committati e non eseguiti da nessun gate. Aggiunti tre step su
+  net9.0, come gli altri due.
+- **La CI escludeva SQL Server e PostgreSQL** dalla suite contratto a quattro provider, cioè esattamente le
+  due implementazioni fatte a mano (procedure e CTE scrivibili) che il modello EF condiviso non può
+  controllare. Il filtro è rimosso: il runner ha Docker, ed è lo stesso su cui la cella MariaDB gira da
+  sempre. Anche `AuditLevelIntegrationTests` rientra.
+- **Le cinque operazioni atomiche nuove erano chiamate solo con `AuditLevel.Full`**, quindi il ramo non
+  auditato di ognuna (`IF @AuditLevel = 0` nelle due procedure, `@finalizeAudit`/`@createAudit` nella CTE
+  Postgres, `AuditPolicy.ShouldCreateStatusAudit` nella base EF) non girava su nessun provider — e `Minimal`
+  è il livello che la documentazione dell'enum raccomanda per una ricorrente ad alta frequenza, cioè la forma
+  di un catch-up durevole. Quattro `[Theory]` × tre livelli in `EfCoreTaskStorageTestsBase`.
+- **`Two_hosts_replaying_the_same_backlog_create_one_row_per_slot` asseriva solo ciò che l'indice unique
+  garantisce già**, e passava identico se il secondo host non avesse mai recuperato lo schedule. Ogni host
+  conta ora il lavoro che il SUO materializer ha fatto sulla riga (una `FaultInjectingTaskStorage` per host,
+  `RunBefore` su `GetOccurrences` e su `MaterializeOccurrence`), e il test pretende che **entrambi** l'abbiano
+  lavorata; il backlog passa da sei a quaranta slot, così il replay è ancora in corso quando il secondo host
+  arriva.
+- **`A_restart_in_the_middle_of_a_replay_creates_no_duplicate_slot` non era a metà di un replay.** Con un
+  handler istantaneo il catch-up seriale di dieci slot finiva prima ancora che l'attesa tornasse, e
+  l'asserzione `>=` era soddisfatta dall'uguaglianza: un riavvio che non recupera nulla passava. L'handler
+  tiene ora il suo slot un secondo (la premessa è asserita), e il test **aspetta** che il secondo host crei
+  almeno una riga in più, dicendo nel messaggio di timeout in quale dei due stati si è fermato.
+- **Il guardiano dello specchio TypeScript saltava in silenzio ogni DTO senza interfaccia**, cioè riportava
+  zero deriva per la deriva più grande possibile. Ogni DTO deve ora avere uno specchio o comparire in
+  `NotMirroredByTheDashboard` con il motivo, la lista è controllata anche dall'altro lato (una voce che
+  guadagna un'interfaccia, o che non è più un DTO, è deriva) e il test pretende che il confronto sia davvero
+  avvenuto. Le tre voci di oggi sono `ManagementActionDto` (la dashboard non chiama le rotte di management) e
+  i due request body che il browser costruisce inline.
+- **Il CHANGELOG 4.0.0 diceva «The API stays read-only»** mentre la stessa release spedisce tre endpoint di
+  scrittura, e non aveva alcuna voce per #42 né per #44 — quest'ultima **breaking** e mai dichiarata (i due
+  endpoint di audit non rispondono più un array, `ITaskQueryService` cambia tipo di ritorno, i due blocchi del
+  dettaglio diventano la prima pagina). Aggiunte entrambe le sezioni, con l'intestazione
+  `### Changed (breaking — …)` che il file usa già altrove, e la frase read-only corretta.
+- **Il README del pacchetto `EverTask.Monitor.Api`** — cioè il testo su nuget.org — affermava ancora che ogni
+  endpoint è read-only, non elencava le tre rotte di management, e mostrava un `EverTaskApiOptions` senza i
+  cinque membri che le governano. Corretto in tutte e tre le sezioni (endpoint, opzioni, security), come lo
+  erano già `docs/monitoring-api-reference.md` e la skill.
+- **`docs/storage/custom-storage.md` non nominava le due obbligazioni** che una storage custom 4.0 ha e che
+  nessuna firma mostra: la normalizzazione UTC in `Persist`/`UpdateTask` (#37) e l'azzeramento di
+  `RecoveryDispatchFailureCount` in `RequeueTerminal` (#41). Scritte lì e nella skill
+  `new-relational-storage-provider` (`.claude/` + mirror `.agents/`). Nello stesso passaggio la voce del
+  marketplace del plugin, ferma a 1.1.1 attraverso tutta la riscrittura 4.0.0 (494 righe), passa a **2.0.0** —
+  altrimenti un `update` non scarica niente — e la sua descrizione smette di fermarsi a ET0008.
+
 ## 4. Stato finale
 
 1. M17 deciso (D5): single-active-host in 4.0; epic separata per la distribuzione di tutto EverTask.

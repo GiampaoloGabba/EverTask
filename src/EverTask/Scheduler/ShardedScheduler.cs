@@ -37,8 +37,8 @@ public class ShardedScheduler : IScheduler, IDisposable
     private sealed class Shard : IDisposable
     {
         private readonly ConcurrentPriorityQueue<TaskHandlerExecutor, DateTimeOffset> _queue;
-        private readonly ConcurrentDictionary<Guid, TaskHandlerExecutor> _scheduledItems;
-        private readonly SemaphoreSlim _wakeUpSignal;
+        private readonly ScheduledRegistrations _registrations;
+        private readonly SchedulerWakeUp _wakeUp;
         private readonly CancellationTokenSource _cts;
         private readonly CancellationToken _shutdownToken;
         private readonly IWorkerQueueManager _queueManager;
@@ -46,11 +46,7 @@ public class ShardedScheduler : IScheduler, IDisposable
         private readonly ShardedScheduler _owner;
         private readonly TimeProvider _timeProvider;
         private readonly int _shardId;
-        private int _wakeUpPending;
         private volatile bool _disposed;
-
-        // Kept across loop iterations when the delay wins the race: see WaitForWakeUpAsync.
-        private Task? _pendingSignalWait;
 
         public Shard(
             int shardId,
@@ -59,15 +55,15 @@ public class ShardedScheduler : IScheduler, IDisposable
             IEverTaskLogger<ShardedScheduler> logger,
             TimeProvider timeProvider)
         {
-            _shardId        = shardId;
-            _owner          = owner;
-            _timeProvider   = timeProvider;
-            _queue          = new();
-            _scheduledItems = new();
-            _wakeUpSignal   = new(0, 1);
-            _cts            = new();
-            _queueManager   = queueManager;
-            _logger         = logger;
+            _shardId       = shardId;
+            _owner         = owner;
+            _timeProvider  = timeProvider;
+            _queue         = new();
+            _cts           = new();
+            _queueManager  = queueManager;
+            _logger        = logger;
+            _registrations = new ScheduledRegistrations(_queue, logger.SupersededRegistrationKept);
+            _wakeUp        = new SchedulerWakeUp(timeProvider);
 
             // Captured before any dispatch: accessing _cts.Token after Dispose would throw
             _shutdownToken = _cts.Token;
@@ -97,68 +93,17 @@ public class ShardedScheduler : IScheduler, IDisposable
 
             // Latest-wins registration per PersistenceId: a previously parked entry for the same
             // task becomes stale and is discarded at dequeue time (single execution per occurrence).
-            // CU19: also evict the stale node from the heap now, so repeated far-future
-            // re-registrations of the same id do not accumulate orphans (symmetric with
-            // PeriodicTimerScheduler). The swap is atomic so that refuseSuperseded can decide on what it
-            // replaces: comparing outside it leaves the very window the conditional registration closes.
-            if (!SwapRegistration(item, refuseSuperseded))
+            // That rule and the S4 refusal live in ScheduledRegistrations, shared with
+            // PeriodicTimerScheduler.
+            if (!_registrations.Swap(item, refuseSuperseded))
                 return false;
 
             _queue.Enqueue(item, scheduledTime);
 
             // Sveglia il timer se è dormiente.
-            // Interlocked.CompareExchange evita la race check-then-act sul semaforo (max count 1):
-            // due Schedule() concorrenti con CurrentCount==0 lancerebbero SemaphoreFullException.
-            if (Interlocked.CompareExchange(ref _wakeUpPending, 1, 0) == 0)
-            {
-                try
-                {
-                    _wakeUpSignal.Release();
-                }
-                catch (ObjectDisposedException)
-                {
-                    // Disposed concurrently with this Schedule: the registration stays parked
-                    // and the task is recovered at the next startup (same as the guard above)
-                }
-            }
+            _wakeUp.Signal();
 
             return true;
-        }
-
-        /// <summary>
-        /// Puts <paramref name="item"/> in this shard's registry, evicting whatever it replaces from the heap.
-        /// </summary>
-        /// <returns>False only when a newer registration was found and <paramref name="refuseSuperseded"/>
-        /// asked for it to be preserved.</returns>
-        private bool SwapRegistration(TaskHandlerExecutor item, bool refuseSuperseded)
-        {
-            while (true)
-            {
-                if (!_scheduledItems.TryGetValue(item.PersistenceId, out var previous))
-                {
-                    if (_scheduledItems.TryAdd(item.PersistenceId, item))
-                        return true;
-
-                    continue;
-                }
-
-                if (ReferenceEquals(previous, item))
-                    return true;
-
-                if (refuseSuperseded && previous.ScheduleVersion > item.ScheduleVersion)
-                {
-                    _logger.SupersededRegistrationKept(item.PersistenceId, item.ScheduleVersion,
-                        previous.ScheduleVersion);
-
-                    return false;
-                }
-
-                if (!_scheduledItems.TryUpdate(item.PersistenceId, item, previous))
-                    continue;
-
-                _queue.Remove(previous);
-                return true;
-            }
         }
 
         /// <summary>
@@ -167,7 +112,7 @@ public class ShardedScheduler : IScheduler, IDisposable
         public bool TryUnschedule(Guid persistenceId)
         {
             // The orphan entry left in the priority queue is discarded by the staleness check
-            return _scheduledItems.TryRemove(persistenceId, out _);
+            return _registrations.Remove(persistenceId);
         }
 
         /// <summary>
@@ -176,13 +121,13 @@ public class ShardedScheduler : IScheduler, IDisposable
         /// </summary>
         public bool TryUnschedule(Guid persistenceId, TaskHandlerExecutor expected)
         {
-            return _scheduledItems.TryRemove(new KeyValuePair<Guid, TaskHandlerExecutor>(persistenceId, expected));
+            return _registrations.Remove(persistenceId, expected);
         }
 
         /// <summary>
         /// True when any registration is parked in this shard for the given task.
         /// </summary>
-        public bool IsScheduled(Guid persistenceId) => _scheduledItems.ContainsKey(persistenceId);
+        public bool IsScheduled(Guid persistenceId) => _registrations.Contains(persistenceId);
 
         /// <summary>Test seam (CU19): number of entries currently in this shard's priority queue.</summary>
         internal int QueueCount => _queue.Count;
@@ -201,15 +146,15 @@ public class ShardedScheduler : IScheduler, IDisposable
                     if (delay == Timeout.InfiniteTimeSpan)
                     {
                         _logger.ShardQueueEmpty(_shardId);
-                        await WaitForWakeUpAsync(null, ct).ConfigureAwait(false);
-                        Interlocked.Exchange(ref _wakeUpPending, 0);
+                        await _wakeUp.WaitAsync(null, ct).ConfigureAwait(false);
+                        _wakeUp.Consumed();
                     }
                     else
                     {
-                        var signaled = await WaitForWakeUpAsync(delay, ct).ConfigureAwait(false);
+                        var signaled = await _wakeUp.WaitAsync(delay, ct).ConfigureAwait(false);
                         if (signaled)
                         {
-                            Interlocked.Exchange(ref _wakeUpPending, 0);
+                            _wakeUp.Consumed();
                         }
                     }
 
@@ -230,51 +175,6 @@ public class ShardedScheduler : IScheduler, IDisposable
                     _logger.ShardErrorProcessingScheduledTasks(ex, _shardId);
                 }
             }
-        }
-
-        /// <summary>
-        /// Sleeps until either the wake-up signal arrives or <paramref name="waitTime"/> elapses on the
-        /// scheduling clock (null waits for the signal only). Returns true when the signal won. Mirrors
-        /// <c>PeriodicTimerScheduler.WaitForWakeUpAsync</c> — see it for why this is a race instead of
-        /// <c>SemaphoreSlim.WaitAsync(timeout)</c> and why the signal waiter survives a lost race.
-        /// </summary>
-        private async Task<bool> WaitForWakeUpAsync(TimeSpan? waitTime, CancellationToken ct)
-        {
-            _pendingSignalWait ??= _wakeUpSignal.WaitAsync(ct);
-
-            if (waitTime == null)
-            {
-                await _pendingSignalWait.ConfigureAwait(false);
-                _pendingSignalWait = null;
-                return true;
-            }
-
-            using var delayCts  = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            var       delayTask = Task.Delay(waitTime.Value, _timeProvider, delayCts.Token);
-
-            var winner = await Task.WhenAny(_pendingSignalWait, delayTask).ConfigureAwait(false);
-
-            if (ReferenceEquals(winner, delayTask))
-            {
-                await delayTask.ConfigureAwait(false); // surfaces shutdown cancellation to the loop
-                return false;
-            }
-
-            var signalWait = _pendingSignalWait;
-            _pendingSignalWait = null;
-
-            await delayCts.CancelAsync().ConfigureAwait(false);
-            try
-            {
-                await delayTask.ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                // Expected: we cancelled it ourselves after the signal won.
-            }
-
-            await signalWait.ConfigureAwait(false); // surfaces shutdown cancellation to the loop
-            return true;
         }
 
         /// <summary>
@@ -312,7 +212,7 @@ public class ShardedScheduler : IScheduler, IDisposable
                     continue;
 
                 // Stale entry (replaced by a newer registration or already dispatched): drop it
-                if (!_scheduledItems.TryGetValue(item.PersistenceId, out var current) || !ReferenceEquals(current, item))
+                if (!_registrations.IsCurrent(item))
                     continue;
 
                 var result = await DispatchToWorkerQueue(item).ConfigureAwait(false);
@@ -328,7 +228,7 @@ public class ShardedScheduler : IScheduler, IDisposable
                 else
                 {
                     // Conditional remove: keep a concurrent newer registration alive
-                    _scheduledItems.TryRemove(new KeyValuePair<Guid, TaskHandlerExecutor>(item.PersistenceId, item));
+                    _registrations.Remove(item.PersistenceId, item);
                 }
             }
         }
@@ -381,7 +281,7 @@ public class ShardedScheduler : IScheduler, IDisposable
             }
 
             _cts.Dispose();
-            _wakeUpSignal.Dispose();
+            _wakeUp.Dispose();
         }
     }
 

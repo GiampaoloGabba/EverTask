@@ -146,6 +146,14 @@ Fluent builder (`Builder/RecurringTaskBuilder.cs`) + occurrence math (`Recurring
       still answers past the instant, because that estimate is approximate for months and for `OnDays`.
       Pinned by `RecurringTests/BackfillCursorTests`, whose theory asserts the invariant every shape owes: the
       answer is never more than one period past the instant asked for.
+    - **A MONTH cadence steps back by calendar months, not by the span** (`ProbeStepsByMonths`). The estimate
+      for a month is a flat 30 days, so on every month that is not 30 days long the probe lands on a
+      different day of the month — and a month grid keeps the day of whatever it was handed (`AddMonths`,
+      then the day selectors walk FORWARD from there), so that is a different PHASE and the forward-only walk
+      never comes back for the day the caller asked about. `EveryMonth().OnDays(1, 15).BackfillFrom(the 15th)`
+      answered the 1st of the NEXT month, because February is 28 days and −30d lands on January 2 instead of
+      January 1. Every other period is a constant step, where subtracting the span and stepping the calendar
+      are the same instant.
 
 18. **A cursor belongs to the grid that produced it, so a reschedule never reuses it literally**
     (`ScheduleRebase`, M18). What carries over is the nominal PERIOD — `RecurringTask.PeriodKind`
@@ -170,10 +178,13 @@ Fluent builder (`Builder/RecurringTaskBuilder.cs`) + occurrence math (`Recurring
     the new definition has no slot in — crossing into the next period would skip a period of work or replay
     one. `RecalculateFromNow` is always the fallback, and it is what the manager offers in every refusal
     message.
-    - **A cadence that names no day inside its period has a period of ONE DAY**, whatever `PeriodKind` says.
-      `EveryWeek()` steps `current.AddDays(7 * Interval)` and `EveryMonth()` steps `current.AddMonths(Interval)`:
-      both keep the day they were handed, so the weekday or the day of the month is the grid's PHASE and it
-      lives on the cursor, not in the definition. Reading the whole week or month as the period and asking
+    - **A week cadence that names no day, and EVERY month cadence, have a period of ONE DAY**, whatever
+      `PeriodKind` says. `EveryWeek()` steps `current.AddDays(7 * Interval)` and every `MonthInterval` steps
+      `current.AddMonths(Interval)` and only then applies its day selector, which walks FORWARD from the day
+      it was handed and settles there: the weekday or the day of the month is the grid's PHASE and it
+      lives on the cursor, not in the definition. `OnDays(1, 15)` is the case that made this explicit — it
+      fires ONCE a month, not twice, so reading the month as the period and taking its first slot moved a
+      series running on the 15th onto the 1st. Reading the whole week or month as the period and asking
       `FirstOccurrenceOnOrAfter` for its first slot answers from the phase the backward probe landed on — a
       Wednesday series comes back on the Sunday, a monthly one on the 18th or the 28th depending on how long
       the previous month was — and every occurrence after it is computed from there. Those two shapes place

@@ -86,6 +86,32 @@ public class BackfillCursorTests
     }
 
     [Fact]
+    public void A_monthly_schedule_that_names_several_days_backfills_the_listed_day_it_was_pointed_at()
+    {
+        // The probe's own phase, seen from the backfill side. A month period is 28 to 31 days and the estimate
+        // is a flat 30, so pointing at February the 15th probed January the 16th, `AddMonths` came back to
+        // February the 16th, and the forward walk over the listed days landed on March the 1st — the caller
+        // named a day the definition lists and the series started six weeks later, one slot of replay lost.
+        var schedule = Build(r => r.Schedule().EveryMonth().OnDays(1, 15).AtTime(new TimeOnly(3, 0)));
+
+        schedule.FirstOccurrenceOnOrAfter(Utc(2026, 2, 15))
+                .ShouldBe(Utc(2026, 2, 15, 3, 0));
+
+        // Every day of that February, so the answer cannot be right for one instant by accident: up to the
+        // 1st at 03:00 the first slot is the 1st, up to the 15th at 03:00 it is the 15th, and after that the
+        // month has nothing left.
+        for (var day = 1; day <= 28; day++)
+        {
+            var expected = day == 1 ? Utc(2026, 2, 1, 3, 0)
+                : day <= 15         ? Utc(2026, 2, 15, 3, 0)
+                                    : Utc(2026, 3, 1, 3, 0);
+
+            schedule.FirstOccurrenceOnOrAfter(Utc(2026, 2, day))
+                    .ShouldBe(expected, $"backfilling from February {day} must not skip a listed day");
+        }
+    }
+
+    [Fact]
     public void A_day_of_week_selector_backfills_the_slot_of_the_very_day_it_was_asked_for()
     {
         var schedule = Build(r => r.Schedule().OnDays(DayOfWeek.Monday, DayOfWeek.Thursday)

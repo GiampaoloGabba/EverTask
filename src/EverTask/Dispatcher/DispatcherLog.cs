@@ -109,4 +109,10 @@ internal static partial class DispatcherLog
                   "Nothing was parked by this recovery")]
     public static partial void ProviderRetryParkRefused(this ILogger logger, Guid scheduleId,
                                                         DateTimeOffset retryAtUtc);
+
+    [LoggerMessage(EventId = 1022, Level = LogLevel.Information,
+        Message = "Schedule {ScheduleId} was dispatched again under the task key '{TaskKey}' after being " +
+                  "cancelled: its cancellation entry is dropped and the row goes back to WaitingQueue, which " +
+                  "is where a brand new dispatch would have left it")]
+    public static partial void CancelledScheduleRedispatched(this ILogger logger, Guid scheduleId, string taskKey);
 }

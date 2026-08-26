@@ -1918,8 +1918,18 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     /// is one a configured log-retention window chose to keep. Without it a 7-day occurrence window would
     /// destroy logs a 90-day window was holding.
     /// </param>
+    /// <param name="preserveTasksWithAudits">
+    /// The same guard again, for the audit trail: <c>FK_StatusAudit_QueuedTasks</c> and
+    /// <c>FK_RunsAudit_QueuedTasks</c> cascade on delete, so purging an occurrence destroys every audit row
+    /// under it — including the ones the audit passes, which run earlier in the same cycle, deliberately kept.
+    /// A 7-day occurrence window would otherwise erase a failure recorded under a 90-day error window on day
+    /// eight, silently, and the failure history of every occurrence of every durable schedule with it. The
+    /// caller sets this only when an audit retention is actually active; with none, audits are unbounded
+    /// anyway and the historic cascade-on-purge behavior stands.
+    /// </param>
     /// <param name="ct">Cancellation token.</param>
     public virtual async Task<int> CleanupTerminalOccurrences(DateTimeOffset cutoff, bool preserveTasksWithLogs,
+                                                              bool preserveTasksWithAudits,
                                                               CancellationToken ct = default)
     {
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
@@ -1930,6 +1940,9 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                    || qt.Status == QueuedTaskStatus.Failed
                    || qt.Status == QueuedTaskStatus.Cancelled)
                && (!preserveTasksWithLogs || !dbContext.TaskExecutionLogs.Any(l => l.TaskId == qt.Id))
+               && (!preserveTasksWithAudits
+                   || (!dbContext.StatusAudit.Any(sa => sa.QueuedTaskId == qt.Id)
+                       && !dbContext.RunsAudit.Any(ra => ra.QueuedTaskId == qt.Id)))
                && (qt.LastExecutionUtc ?? qt.CreatedAtUtc) < cutoff,
             ct).ConfigureAwait(false);
     }

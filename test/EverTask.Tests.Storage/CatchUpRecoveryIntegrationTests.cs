@@ -248,7 +248,8 @@ public sealed class CatchUpRecoveryIntegrationTests : IsolatedIntegrationTestBas
         cursorAfterReplay.ShouldNotBeNull();
 
         var deleted = await ((EfCoreTaskStorage)Storage)
-            .CleanupTerminalOccurrences(DateTimeOffset.UtcNow.AddMinutes(1), preserveTasksWithLogs: false);
+            .CleanupTerminalOccurrences(DateTimeOffset.UtcNow.AddMinutes(1), preserveTasksWithLogs: false,
+                                        preserveTasksWithAudits: false);
 
         deleted.ShouldBe(replayed.Length, "the premise: every replayed occurrence really was pruned");
         (await OccurrencesOfAsync(scheduleId)).ShouldBeEmpty();
@@ -269,6 +270,12 @@ public sealed class CatchUpRecoveryIntegrationTests : IsolatedIntegrationTestBas
     [Fact]
     public async Task A_restart_in_the_middle_of_a_replay_creates_no_duplicate_slot()
     {
+        // Each occurrence is held inside its handler, or "in the middle of a replay" is not what the restart
+        // lands in: a serial catch-up of ten slots against a handler that returns immediately drains before
+        // the wait below even comes back, and the second host then has nothing due for another minute — which
+        // is the state this test used to assert its way past, since a >= comparison is happy with equality.
+        _recorder.Hold = TimeSpan.FromSeconds(1);
+
         await CreateSqliteHostAsync(startHost: false);
 
         var cursor     = DateTimeOffset.UtcNow.AddMinutes(-10);
@@ -279,14 +286,39 @@ public sealed class CatchUpRecoveryIntegrationTests : IsolatedIntegrationTestBas
 
         var beforeRestart = (await OccurrencesOfAsync(scheduleId)).Select(o => o.ScheduledExecutionUtc).ToList();
         beforeRestart.ShouldNotBeEmpty();
+        beforeRestart.Count.ShouldBeLessThan(11, "the premise: the replay is not over when the host stops");
 
-        // Same database, new process: the second host recovers the schedule and continues the replay.
+        // Same database, new process: the second host recovers the schedule and CONTINUES the replay. That
+        // continuation is what has to be waited for — a >= comparison is satisfied by equality, so a restart
+        // that recovered nothing at all passed, and the distinctness below is what the unique index
+        // guarantees on its own. The backlog is ten slots and the first host was stopped after two runs, so
+        // there is always work left for the second.
         await CreateSqliteHostAsync(startHost: true);
-        await Task.Delay(3000);
+
+        try
+        {
+            await TaskWaitHelper.WaitUntilAsync(() => OccurrencesOfAsync(scheduleId),
+                rows => rows.Length > beforeRestart.Count, 30000);
+        }
+        catch (TimeoutException)
+        {
+            // A replay that stops says nothing about WHY on its own, and the two reasons look identical from
+            // the row count: a schedule nothing recovered, and one whose backlog was already drained.
+            var rows     = await OccurrencesOfAsync(scheduleId);
+            var schedule = (await Storage.Get(t => t.Id == scheduleId))[0];
+
+            throw new TimeoutException(
+                $"the second host did not continue the replay. Schedule {schedule.Status}, cursor " +
+                $"{schedule.NextRunUtc:O}, {schedule.CurrentRunCount} run(s), runtime '{schedule.RuntimeInfo}'; " +
+                "occurrences: " +
+                string.Join(", ", rows.Select(r => $"{r.ScheduledExecutionUtc:O}={r.Status}")));
+        }
 
         var after = (await OccurrencesOfAsync(scheduleId)).Select(o => o.ScheduledExecutionUtc).ToList();
 
-        after.Count.ShouldBeGreaterThanOrEqualTo(beforeRestart.Count);
+        after.Count.ShouldBeGreaterThan(beforeRestart.Count,
+            "the second host really picked the replay up: a restart that recovers no durable schedule must " +
+            "fail here instead of passing on an equality");
         after.Distinct().Count().ShouldBe(after.Count,
             "a restart mid-replay must not materialize a slot the first host had already created");
     }

@@ -2822,6 +2822,103 @@ public abstract class EfCoreTaskStorageTestsBase
             .ShouldBeFalse("and recovery must then refuse to put it back in a queue");
     }
 
+    // ---- What the audit level does to the durable operations -------------------------------------
+    // Every implementation branches on it — `IF @AuditLevel = 0` in the two procedures, the @createAudit /
+    // @finalizeAudit flags in the Postgres CTE, AuditPolicy.ShouldCreateStatusAudit in the EF base — and the
+    // whole durable region called them with nothing but Full, so the non-audited half of each branch ran on
+    // no provider. Minimal is the level the enum's own documentation recommends for a high-frequency
+    // recurring task, which is the shape a durable catch-up has; at Minimal only a real error is recorded,
+    // and none of the transitions below is one.
+
+    [Theory]
+    [InlineData(AuditLevel.Full, 1)]
+    [InlineData(AuditLevel.Minimal, 0)]
+    [InlineData(AuditLevel.None, 0)]
+    public async Task MaterializeOccurrence_should_audit_the_end_of_a_series_only_at_the_level_that_asks_for_it(
+        AuditLevel auditLevel, int expectedAudits)
+    {
+        var cursor     = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule   = await PersistSchedule(cursor);
+        var occurrence = NewOccurrence(schedule.Id, cursor);
+
+        (await _storage.MaterializeOccurrence(schedule.Id, 0, cursor, occurrence, newCursorUtc: null, auditLevel))
+            .ShouldBe(OccurrenceMaterializationOutcome.Created);
+
+        var parent = (await _storage.Get(t => t.Id == schedule.Id))[0];
+        parent.Status.ShouldBe(QueuedTaskStatus.Completed, "what is WRITTEN never depends on the audit level");
+        parent.NextRunUtc.ShouldBeNull();
+        (await _storage.Get(t => t.Id == occurrence.Id)).ShouldHaveSingleItem();
+
+        _mockedDbContext.StatusAudit.Count(a => a.QueuedTaskId == schedule.Id).ShouldBe(expectedAudits);
+    }
+
+    [Theory]
+    [InlineData(AuditLevel.Full, 1)]
+    [InlineData(AuditLevel.Minimal, 0)]
+    [InlineData(AuditLevel.None, 0)]
+    public async Task CancelSchedule_should_audit_the_cancellation_only_at_the_level_that_asks_for_it(
+        AuditLevel auditLevel, int expectedAuditsPerRow)
+    {
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+
+        var pending = NewOccurrence(schedule.Id, cursor);
+        await _storage.Persist(pending);
+
+        await _storage.CancelSchedule(schedule.Id, auditLevel);
+
+        (await _storage.Get(t => t.Id == schedule.Id))[0].Status.ShouldBe(QueuedTaskStatus.Cancelled);
+        (await _storage.Get(t => t.Id == pending.Id))[0].Status
+            .ShouldBe(QueuedTaskStatus.Cancelled, "the cascade is the write, and the level only decides the trail");
+
+        _mockedDbContext.StatusAudit.Count(a => a.QueuedTaskId == schedule.Id).ShouldBe(expectedAuditsPerRow);
+        _mockedDbContext.StatusAudit.Count(a => a.QueuedTaskId == pending.Id).ShouldBe(expectedAuditsPerRow);
+    }
+
+    [Theory]
+    [InlineData(AuditLevel.Full, 1)]
+    [InlineData(AuditLevel.Minimal, 0)]
+    [InlineData(AuditLevel.None, 0)]
+    public async Task RequeueTerminal_should_audit_the_requeue_only_at_the_level_that_asks_for_it(
+        AuditLevel auditLevel, int expectedAudits)
+    {
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+
+        var child = NewOccurrence(schedule.Id, cursor);
+        child.Status    = QueuedTaskStatus.Failed;
+        child.Exception = "boom";
+        await _storage.Persist(child);
+
+        (await _storage.RequeueTerminal(child.Id, auditLevel)).ShouldBeTrue();
+
+        var row = (await _storage.Get(t => t.Id == child.Id))[0];
+        row.Status.ShouldBe(QueuedTaskStatus.Queued);
+        row.Exception.ShouldBeNull();
+
+        _mockedDbContext.StatusAudit.Count(a => a.QueuedTaskId == child.Id).ShouldBe(expectedAudits);
+    }
+
+    [Theory]
+    [InlineData(AuditLevel.Full, 1)]
+    [InlineData(AuditLevel.Minimal, 0)]
+    [InlineData(AuditLevel.None, 0)]
+    public async Task TryRequeueStaleOccurrence_should_audit_the_requeue_only_at_the_level_that_asks_for_it(
+        AuditLevel auditLevel, int expectedAudits)
+    {
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+        var child    = NewOccurrence(schedule.Id, cursor);
+        await _storage.Persist(child);
+
+        (await _storage.TryRequeueStaleOccurrence(child.Id, QueuedTaskStatus.WaitingQueue, auditLevel))
+            .ShouldBeTrue();
+
+        (await _storage.Get(t => t.Id == child.Id))[0].Status.ShouldBe(QueuedTaskStatus.Queued);
+
+        _mockedDbContext.StatusAudit.Count(a => a.QueuedTaskId == child.Id).ShouldBe(expectedAudits);
+    }
+
     [Fact]
     public async Task TryAdvanceScheduleCursor_should_move_the_cursor_without_counting_a_run()
     {
@@ -3649,7 +3746,8 @@ public abstract class EfCoreTaskStorageTestsBase
         // The age gate is anchored on LastExecutionUtc, which a terminal transition stamps at that moment, so
         // the cutoff has to sit just past "now" for occurrences that finished during the test to qualify.
         var deleted = await ((EfCoreTaskStorage)_storage)
-            .CleanupTerminalOccurrences(DateTimeOffset.UtcNow.AddMinutes(1), preserveTasksWithLogs: false);
+            .CleanupTerminalOccurrences(DateTimeOffset.UtcNow.AddMinutes(1), preserveTasksWithLogs: false,
+                                        preserveTasksWithAudits: false);
 
         deleted.ShouldBe(3, "the ordinary completed-task purge would have kept the failed and cancelled ones");
         (await _storage.Get(t => t.Id == pending.Id)).ShouldHaveSingleItem();
@@ -3689,7 +3787,7 @@ public abstract class EfCoreTaskStorageTestsBase
         var cutoff = DateTimeOffset.UtcNow.AddMinutes(1);
 
         var preserved = await ((EfCoreTaskStorage)_storage)
-            .CleanupTerminalOccurrences(cutoff, preserveTasksWithLogs: true);
+            .CleanupTerminalOccurrences(cutoff, preserveTasksWithLogs: true, preserveTasksWithAudits: false);
 
         preserved.ShouldBe(1, "only the occurrence with no surviving logs may be pruned");
         (await _storage.Get(t => t.Id == withLogs.Id)).ShouldHaveSingleItem();
@@ -3699,10 +3797,56 @@ public abstract class EfCoreTaskStorageTestsBase
 
         // With no log retention active the historic cascade-on-purge behaviour stands.
         var withGuardOff = await ((EfCoreTaskStorage)_storage)
-            .CleanupTerminalOccurrences(cutoff, preserveTasksWithLogs: false);
+            .CleanupTerminalOccurrences(cutoff, preserveTasksWithLogs: false, preserveTasksWithAudits: false);
 
         withGuardOff.ShouldBe(1);
         (await _storage.Get(t => t.Id == withLogs.Id)).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task CleanupTerminalOccurrences_should_keep_an_occurrence_whose_audit_trail_a_window_still_holds()
+    {
+        // The audit half of the guard above, and the half the occurrence pass shipped without: deleting a row
+        // cascades FK_StatusAudit_QueuedTasks and FK_RunsAudit_QueuedTasks, and the audit passes run earlier
+        // in the same cycle — so an audit row still present is one a configured window chose to keep. The
+        // occurrence window is typically 7 days against an error window of 90, so without this a failure
+        // recorded on day 0 was destroyed on day 8, with only an occurrence count in the cleanup line.
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddDays(-30));
+        var schedule = await PersistSchedule(cursor);
+
+        var audited   = NewOccurrence(schedule.Id, cursor);
+        var unaudited = NewOccurrence(schedule.Id, cursor.AddMinutes(1));
+
+        foreach (var row in new[] { audited, unaudited })
+        {
+            row.CreatedAtUtc = FloorToMicroseconds(DateTimeOffset.UtcNow.AddDays(-30));
+            await _storage.Persist(row);
+        }
+
+        await _storage.SetStatus(audited.Id, QueuedTaskStatus.Failed,
+            new InvalidOperationException("kept by the error window"), AuditLevel.Full);
+        await _storage.SetCompleted(unaudited.Id, 1, AuditLevel.None);
+
+        (await _storage.GetStatusAudits(audited.Id)).ShouldNotBeEmpty(
+            "the premise: the row really carries the audit trail the window is holding");
+
+        var cutoff = DateTimeOffset.UtcNow.AddMinutes(1);
+
+        var preserved = await ((EfCoreTaskStorage)_storage)
+            .CleanupTerminalOccurrences(cutoff, preserveTasksWithLogs: false, preserveTasksWithAudits: true);
+
+        preserved.ShouldBe(1, "only the occurrence with no surviving audit row may be pruned");
+        (await _storage.Get(t => t.Id == audited.Id)).ShouldHaveSingleItem();
+        (await _storage.GetStatusAudits(audited.Id)).ShouldNotBeEmpty(
+            "the cascade must not destroy an audit row 82 days before its own window expires");
+        (await _storage.Get(t => t.Id == unaudited.Id)).ShouldBeEmpty();
+
+        // With no audit retention active the historic cascade-on-purge behaviour stands.
+        var withGuardOff = await ((EfCoreTaskStorage)_storage)
+            .CleanupTerminalOccurrences(cutoff, preserveTasksWithLogs: false, preserveTasksWithAudits: false);
+
+        withGuardOff.ShouldBe(1);
+        (await _storage.Get(t => t.Id == audited.Id)).ShouldBeEmpty();
     }
 
     [Fact]
