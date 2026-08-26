@@ -90,6 +90,26 @@ being accepted and quietly ignored:
 r.Schedule().Every(30).Minutes().InTimeZone("Europe/Rome");
 ```
 
+You don't have to wait for the host to start to find out. The analyzer bundled in `EverTask.Abstractions`
+reports **ET0010** on that line at compile time, with the same explanation:
+
+```
+warning ET0010: 'InTimeZone' throws when this schedule is built: a plain cadence (every N
+seconds/minutes/hours) is a constant step in elapsed time and produces the same instants in every zone;
+anchor the schedule to a calendar (a time of day, a day of the week, a month selector or a cron
+expression) or drop the call
+```
+
+It is a warning, not the guard: the exception is what enforces the rule, and the analyzer only reports what it
+can prove from the chain in front of it. A chain broken over a variable or returned by a helper method gets
+nothing, so a clean build is not a promise that every schedule is fine. Tune or silence it like any other
+diagnostic:
+
+```ini
+# .editorconfig
+dotnet_diagnostic.ET0010.severity = error   # or none
+```
+
 One consequence worth remembering: `AtMinute` and `AtSecond` refine an elapsed cadence, so they align on UTC.
 In a zone with a fractional offset, `EveryHour().AtMinute(30)` fires at :00 local in India (+05:30) and at :15
 local in Nepal (+05:45). If you need a local minute, anchor the schedule to a calendar instead:

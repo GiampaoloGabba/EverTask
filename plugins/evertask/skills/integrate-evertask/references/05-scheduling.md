@@ -96,6 +96,8 @@ r => r.Schedule().UseCron("0 2 * * *").InTimeZone("Asia/Tokyo")
 - `InTimeZone` on an elapsed cadence throws `InvalidOperationException` when the schedule is **built** (not at
   the call): an elapsed step is the same set of instants in every zone. `AtMinute`/`AtSecond` therefore align
   on UTC — `EveryHour().AtMinute(30)` fires at :00 local in India (+05:30) and :15 in Nepal (+05:45).
+  Analyzer **ET0010** warns at compile time on a chain it can prove is elapsed; a chain split over a variable
+  or a helper method is left to the exception, so a clean build proves nothing on its own.
 - An id this machine cannot resolve, or a `TimeZoneInfo.CreateCustomTimeZone` zone, throws `ArgumentException`
   at build. A stored id that stops resolving later is poisoned at recovery like a corrupt cron.
 - `AtTime`/`AtTimes` store the `TimeOnly` verbatim: pass the local time you mean and name the zone. The public

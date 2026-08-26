@@ -54,8 +54,14 @@ through their serialized members (closure walk, visited-set + depth bound), mirr
 | ET0007 | Warning | ≥2 public constructors, none parameterless or `[JsonConstructor]` → STJ throws on recovery (records & single-ctor are OK) | — |
 | ET0008 | Warning | net8.0 compilation sets `EnableOpenApiDocument = true` or calls `AddMonitoringApiScalar()` — both no-ops there (the built-in OpenAPI generator is net9+); separate `MonitoringOpenApiAnalyzer`, category `EverTask.Monitoring` | — |
 | ET0009 | Warning | Compile-time-constant retry delay, timeout or audit cleanup interval above the maximum timer duration (`uint.MaxValue - 1` ms, ~49.7 days); separate `TimerDelayLimitAnalyzer`, category `EverTask.Resilience` | — |
+| ET0010 | Warning | `InTimeZone` on a fluent chain that is provably Elapsed-only, which `RecurringTask.Validate()` refuses; separate `ScheduleTimeZoneAnalyzer`, category `EverTask.Scheduling` | — |
 
 Each rule is suppressible/promotable per-member via `dotnet_diagnostic.ETxxxx.severity` in `.editorconfig`.
+
+**ET0010 mirrors `RecurringTask.IsCalendarAnchored()`, not the fluent method names**: a Day/Week/Month
+interval is calendar-anchored on its own, and `OnHours()` is NOT (it populates no hour selector — see
+`src/EverTask/Scheduler/Recurring/CLAUDE.md` gotchas 10 and 16). It only reports a chain it can follow back to
+the `Schedule()`/`Then()` that started it; anything unprovable is left to the runtime check.
 
 **Maintainers**: keep this table, `DiagnosticDescriptors.cs` and `AnalyzerReleases.Unshipped.md` in lockstep
 (RS2002). The two analyzer DLLs target `netstandard2.0` and reference `Microsoft.CodeAnalysis.*` with

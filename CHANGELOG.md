@@ -170,6 +170,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps meaning what it was dispatched with: changing the default later moves nothing already stored,
   and a row that named no zone stays on UTC even on a host that has a default. Plain cadences are left
   alone, and an explicit `InTimeZone` wins.
+- **The compiler says it first.** The bundled analyzer reports **ET0010** on an `InTimeZone` call sitting on a
+  chain it can prove is a plain cadence, so the mistake shows up in the IDE instead of at the first startup.
+  It reports only what the chain in front of it spells out — a chain split over a variable or a helper method,
+  or one whose shape it does not recognize, is left to the runtime exception, which stays the guard. Severity
+  is warning, tunable per project with `dotnet_diagnostic.ET0010.severity`.
 - **A handler is told which zone its delivery belongs to.** `Context.TimeZoneId` and
   `Context.ScheduledAtLocal` carry the schedule's zone and its slot read on that clock, offset included,
   which is what tells the two passes of a repeated hour apart. The zone also appears in the row's

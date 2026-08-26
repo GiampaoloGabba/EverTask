@@ -8,7 +8,7 @@ latest published version of each package (they release in lockstep). Current rep
 | Feature / choice | Package | Notes |
 |---|---|---|
 | Core (always) | `EverTask` | Dispatcher, worker, scheduler, in-memory storage. |
-| Interfaces only (referenced by the task/handler library) | `EverTask.Abstractions` | `IEverTask`, `ITaskDispatcher`, `EverTaskHandler<T>`, retry/rate-limit types. **Bundles the ET0001–ET0008 analyzers.** |
+| Interfaces only (referenced by the task/handler library) | `EverTask.Abstractions` | `IEverTask`, `ITaskDispatcher`, `EverTaskHandler<T>`, retry/rate-limit types. **Bundles the ET0001–ET0010 analyzers.** |
 | In-Memory storage | (none) | Built into `EverTask`; just call `.AddMemoryStorage()`. |
 | SQL Server storage | `EverTask.Storage.SqlServer` | Pulls `EverTask.Storage.EfCore` + EF SqlServer. |
 | PostgreSQL storage | `EverTask.Storage.Postgres` | Pulls `EverTask.Storage.EfCore` + Npgsql. |
