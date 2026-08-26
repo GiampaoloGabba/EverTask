@@ -150,4 +150,14 @@ internal static partial class WorkerServiceLog
         Message = "Occurrence {TaskId} belongs to cancelled schedule {ScheduleId} and was cancelled instead of " +
                   "being put back in a queue")]
     public static partial void OccurrenceOfCancelledScheduleDropped(this ILogger logger, Guid taskId, Guid scheduleId);
+
+    [LoggerMessage(EventId = 1131, Level = LogLevel.Warning,
+        Message = "Poisoning task {TaskId} reported no error but the row is still recoverable: it is NOT counted " +
+                  "as terminalized and will be retried at the next startup")]
+    public static partial void RecoveryPoisonNotApplied(this ILogger logger, Exception exception, Guid taskId);
+
+    [LoggerMessage(EventId = 1132, Level = LogLevel.Warning,
+        Message = "Poisoning task {TaskId} failed; the row stays recoverable and will be retried at the next " +
+                  "startup")]
+    public static partial void RecoveryPoisonFailed(this ILogger logger, Exception exception, Guid taskId);
 }

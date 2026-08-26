@@ -61,8 +61,9 @@ public sealed class FaultInjectingTaskStorage(ITaskStorage inner) : ITaskStorage
     /// failure and hands the caller a completed task, so "the call returned" says nothing about the row.
     /// </summary>
     /// <remarks>
-    /// Only <see cref="SetStatus"/> honours it, because it is the only best-effort write in the interface. A
-    /// thrown fault is a different test: the caller sees the failure there.
+    /// Honoured by the best-effort writes: <see cref="SetStatus"/> and <see cref="SetRecurringTaskPoisoned"/>,
+    /// which every relational provider implements the same way. A thrown fault is a different test: the caller
+    /// sees the failure there.
     /// </remarks>
     public void SwallowNext(string operation, int times)
     {
@@ -228,7 +229,10 @@ public sealed class FaultInjectingTaskStorage(ITaskStorage inner) : ITaskStorage
                                          CancellationToken ct = default)
     {
         Gate(nameof(SetRecurringTaskPoisoned));
-        return inner.SetRecurringTaskPoisoned(taskId, exception, auditLevel, ct);
+
+        return Swallows(nameof(SetRecurringTaskPoisoned))
+                   ? Task.CompletedTask
+                   : inner.SetRecurringTaskPoisoned(taskId, exception, auditLevel, ct);
     }
 
     public Task<int> IncrementRecoveryFailure(Guid taskId, CancellationToken ct = default)

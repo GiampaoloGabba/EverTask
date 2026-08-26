@@ -20,7 +20,8 @@ namespace EverTask.Tests.TestHelpers;
 internal static class RecoveryHarness
 {
     internal static WorkerService CreateRecoveryService(ITaskStorage storage, int maxAttempts = 5,
-                                                        ITaskDispatcherInternal? dispatcher = null)
+                                                        ITaskDispatcherInternal? dispatcher = null,
+                                                        IEverTaskLogger<WorkerService>? logger = null)
     {
         var provider = new Mock<IServiceProvider>();
         provider.Setup(p => p.GetService(typeof(ITaskStorage))).Returns(storage);
@@ -35,7 +36,7 @@ internal static class RecoveryHarness
             dispatcher ?? new Mock<ITaskDispatcherInternal>().Object,
             new EverTaskServiceConfiguration(),
             new Mock<IEverTaskWorkerExecutor>().Object,
-            new Mock<IEverTaskLogger<WorkerService>>().Object)
+            logger ?? new Mock<IEverTaskLogger<WorkerService>>().Object)
         {
             MaxRecoveryDispatchAttempts = maxAttempts
         };

@@ -446,17 +446,23 @@ public class WorkerService(
             var payloadError           = prepared.Recovered.PayloadError;
             var recurringMetadataError = prepared.Recovered.ScheduleError;
 
-            // A recovery POISON must be TERMINAL for a recurring row (P0-1): SetRecurringTaskPoisoned clears
-            // NextRunUtc atomically with Failed, so IsRecoverable stops returning it. A plain SetStatus(Failed)
-            // leaves NextRunUtc set, and a recurring Failed row with NextRunUtc != null is revived and
-            // re-poisoned at every restart (or re-executed once per restart if the cause healed). A one-shot
-            // row has no NextRunUtc to clear, so SetStatus(Failed) terminalizes it correctly. This local helper
-            // routes every poison site to the right primitive; it is used ONLY on poison paths (never on a
-            // recurring run's transient failure, which must keep NextRunUtc to retry the next occurrence).
-            Task Poison(ITaskStorage storage, Exception error) =>
-                taskInfo.IsRecurring
-                    ? storage.SetRecurringTaskPoisoned(taskInfo.Id, error, auditLevel, token)
-                    : storage.SetStatus(taskInfo.Id, QueuedTaskStatus.Failed, error, auditLevel, null, token);
+            // Poisons this row through TryPoisonAsync (which picks the right primitive and CONFIRMS the row
+            // really left the recovery set) and does the accounting the answer allows: a poison that landed is
+            // the permanent failure the summary calls terminalized, one that did not is the transient failure
+            // it really is — the row is still recoverable and comes back at the next restart. Counting it as
+            // permanent told an operator a restart had made progress it had not, on the one line they read.
+            async Task<bool> PoisonAsync(ITaskStorage storage, Exception error)
+            {
+                var poisoned = await TryPoisonAsync(storage, taskInfo, auditLevel, error, token)
+                                   .ConfigureAwait(false);
+
+                if (poisoned)
+                    Interlocked.Increment(ref permanentFailures);
+                else
+                    Interlocked.Increment(ref transientFailures);
+
+                return poisoned;
+            }
 
             // CU3/L44 + P0-2: a recurring row that cannot be reconstructed as a recurring schedule must NOT be
             // silently demoted to a one-shot. This covers BOTH corrupt metadata (RecurringTask present but it no
@@ -470,9 +476,9 @@ public class WorkerService(
                 var error = recurringMetadataError
                             ?? new InvalidOperationException(
                                 "Recurring task metadata is missing or could not be deserialized");
-                await Poison(taskStorage, error).ConfigureAwait(false);
-                Interlocked.Increment(ref permanentFailures);
-                logger.RecurringMetadataPoisoned(error, taskInfo.Id);
+                if (await PoisonAsync(taskStorage, error).ConfigureAwait(false))
+                    logger.RecurringMetadataPoisoned(error, taskInfo.Id);
+
                 return;
             }
 
@@ -536,9 +542,8 @@ public class WorkerService(
 
                     if (attempts >= MaxRecoveryDispatchAttempts)
                     {
-                        await Poison(taskStorage, ex).ConfigureAwait(false);
-                        Interlocked.Increment(ref permanentFailures);
-                        logger.RecoveryDispatchPoisoned(ex, taskInfo.Id, attempts);
+                        if (await PoisonAsync(taskStorage, ex).ConfigureAwait(false))
+                            logger.RecoveryDispatchPoisoned(ex, taskInfo.Id, attempts);
                     }
                     else
                     {
@@ -565,9 +570,8 @@ public class WorkerService(
 
                 if (attempts >= MaxRecoveryDispatchAttempts)
                 {
-                    await Poison(taskStorage, error).ConfigureAwait(false);
-                    Interlocked.Increment(ref permanentFailures);
-                    logger.UnusablePayloadPoisoned(error, taskInfo.Id, attempts);
+                    if (await PoisonAsync(taskStorage, error).ConfigureAwait(false))
+                        logger.UnusablePayloadPoisoned(error, taskInfo.Id, attempts);
                 }
                 else
                 {
@@ -582,14 +586,15 @@ public class WorkerService(
                 using var itemScope = serviceScopeFactory.CreateScope();
                 var itemStorage = itemScope.ServiceProvider.GetService<ITaskStorage>();
 
+                // The accounting is PoisonAsync's, on both branches: a row that could not be written to — no
+                // storage in this scope, or a write that did not land — is back in the next recovery page, so
+                // it is a transient failure however permanent its cause is.
                 if (itemStorage != null)
-                {
-                    await Poison(itemStorage,
-                        new Exception("Unable to create the IBackground task from the specified properties"))
+                    await PoisonAsync(itemStorage,
+                            new Exception("Unable to create the IBackground task from the specified properties"))
                         .ConfigureAwait(false);
-                }
-
-                Interlocked.Increment(ref permanentFailures);
+                else
+                    Interlocked.Increment(ref transientFailures);
             }
         }
 
@@ -635,9 +640,17 @@ public class WorkerService(
 
                 if (attempts >= MaxRecoveryDispatchAttempts)
                 {
-                    await taskStorage.SetRecurringTaskPoisoned(row.Id, ex, auditLevel, token).ConfigureAwait(false);
-                    Interlocked.Increment(ref permanentFailures);
-                    logger.RecoveryDispatchPoisoned(ex, row.Id, attempts);
+                    // Same confirmation as every other poison site: the write is best effort, so the row
+                    // itself says whether the series was terminalized or is simply back at the next restart.
+                    if (await TryPoisonAsync(taskStorage, row, auditLevel, ex, token).ConfigureAwait(false))
+                    {
+                        Interlocked.Increment(ref permanentFailures);
+                        logger.RecoveryDispatchPoisoned(ex, row.Id, attempts);
+                    }
+                    else
+                    {
+                        Interlocked.Increment(ref transientFailures);
+                    }
                 }
                 else
                 {
@@ -675,6 +688,70 @@ public class WorkerService(
             {
                 logger.RecoveryFailureCounterResetFailed(ex, row.Id);
             }
+        }
+    }
+
+    /// <summary>
+    /// Terminalizes a row the recovery cannot run, and answers whether it REALLY left the recovery set.
+    /// </summary>
+    /// <remarks>
+    /// A recovery POISON must be TERMINAL for a recurring row (P0-1):
+    /// <see cref="ITaskStorage.SetRecurringTaskPoisoned"/> clears <c>NextRunUtc</c> atomically with
+    /// <see cref="QueuedTaskStatus.Failed"/>, so <see cref="QueuedTask.IsRecoverable"/> stops returning it. A
+    /// plain <see cref="ITaskStorage.SetStatus"/>(Failed) leaves the cursor set, and a recurring Failed row
+    /// with a cursor is revived and re-poisoned at every restart (or re-executed once per restart if the
+    /// cause healed); a one-shot has no cursor to clear, so SetStatus terminalizes it correctly. This is used
+    /// ONLY on poison paths — never on a recurring run's transient failure, which must keep its cursor to
+    /// retry the next occurrence.
+    /// <para>
+    /// Neither write speaks for itself: both are best effort on every relational provider — they log their
+    /// own failed write and return — so "the call returned" says nothing about the row. The outcome is
+    /// therefore CONFIRMED by re-reading it and measuring it against the two canonical predicates a recovery
+    /// page is the union of, exactly as the occurrence reconciliation confirms a terminal status before it
+    /// frees a slot of its schedule's budget. Reporting an unconfirmed poison as a terminalization declared
+    /// progress a restart had not made, on the row that then repeated the same cycle at the next one.
+    /// </para>
+    /// <para>
+    /// A write that throws is contained here too (a custom storage inherits the interface's non-swallowing
+    /// two-write default): it is the same answer — the row is still recoverable — and letting it out would
+    /// abort the whole wave over one unusable row, leaving every sibling of its page unrecovered.
+    /// </para>
+    /// </remarks>
+    private async Task<bool> TryPoisonAsync(ITaskStorage storage, QueuedTask row, AuditLevel auditLevel,
+                                            Exception error, CancellationToken ct)
+    {
+        try
+        {
+            if (row.IsRecurring)
+                await storage.SetRecurringTaskPoisoned(row.Id, error, auditLevel, ct).ConfigureAwait(false);
+            else
+                await storage.SetStatus(row.Id, QueuedTaskStatus.Failed, error, auditLevel, null, ct)
+                             .ConfigureAwait(false);
+
+            var persisted = await storage.Get(t => t.Id == row.Id, ct).ConfigureAwait(false);
+
+            // A row that is GONE is out of the recovery set as surely as a poisoned one; anything still
+            // there has to fail BOTH predicates, since either one puts it back in a recovery page.
+            if (persisted.Length == 0)
+                return true;
+
+            var current = persisted[0];
+
+            if (!current.IsRecoverableForExecution(_timeProvider.GetUtcNow())
+                && !current.IsRecurringSeriesToFinalize())
+                return true;
+
+            logger.RecoveryPoisonNotApplied(error, row.Id);
+            return false;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.RecoveryPoisonFailed(ex, row.Id);
+            return false;
         }
     }
 

@@ -736,7 +736,8 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     /// by Sqlite and SQL Server (a once-per-row terminal write — no counter/next-run proc is involved, exactly
     /// like <see cref="SetRecurringSeriesCompleted"/>). Errors are SWALLOWED (logged, not rethrown), matching
     /// <see cref="SetStatus"/>: a failed poison must not break the recovery of sibling tasks; the row simply
-    /// stays recoverable and is retried at the next restart.
+    /// stays recoverable and is retried at the next restart. Which is why returning normally is not an
+    /// outcome: the recovery re-reads the row and reports what it finds, never what this call did not say.
     /// </summary>
     public virtual async Task SetRecurringTaskPoisoned(Guid taskId, Exception exception, AuditLevel auditLevel,
                                                        CancellationToken ct = default)

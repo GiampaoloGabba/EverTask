@@ -106,6 +106,16 @@ the execution predicate: a spent series must be finalized, never handed back to 
   `NotSupportedException` reach the recovery counts a normal end of series as an L18 failure and poisons the
   row. The L18 counter reset runs OUTSIDE the try that guards the terminal write: the write is already
   committed, and a failing reset must not be reclassified as a failing finalization.
+- **A poison is REPORTED only once the ROW confirms it** (`WorkerService.TryPoisonAsync`, every poison site
+  including the finalization's). Both writes are best effort — `SetStatus` and `SetRecurringTaskPoisoned` log
+  their own failed write and return on every relational provider — so returning normally says nothing, and the
+  row is re-read and measured against BOTH recovery predicates before the summary counts a permanent failure.
+  Counting a swallowed write as a terminalization declared progress a restart had not made, on the one line an
+  operator reads, for a row that was still recoverable and repeated the same cycle at the next restart: it is
+  the transient failure it really is. A write that THROWS is contained there too — a custom storage inherits
+  the interface's non-swallowing default — because it is the same answer for the row, and letting it out
+  aborted the whole wave over one unusable row. Pinned by `RecoveryPoisonOutcomeTests.cs`, which swallows and
+  throws the poison over a real `MemoryTaskStorage`.
 - **Startup order matters**: `WorkerService.ExecuteAsync` starts consumers **first**, then runs recovery
   **concurrently** (`RunRecoveryAsync`). Recover-before-consume reintroduces the capacity deadlock.
 - **Recovery runs in two waves** (`RecoverWaveAsync`), across the WHOLE recovered set and not page by page:

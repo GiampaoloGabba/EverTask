@@ -16,12 +16,23 @@ namespace EverTask.Tests.TestHelpers;
 public sealed class RecordingLogger<T> : IEverTaskLogger<T>
 {
     private readonly ConcurrentBag<int> _events = [];
+    private readonly ConcurrentBag<string> _messages = [];
 
     /// <summary>How many times <paramref name="eventId"/> was written.</summary>
     public int Count(int eventId) => _events.Count(id => id == eventId);
 
+    /// <summary>
+    /// Every line as it was rendered, for what an EventId alone cannot answer: a message whose ARGUMENTS are
+    /// the assertion (a summary that counts the same outcomes under one id, say).
+    /// </summary>
+    public IReadOnlyCollection<string> Messages => _messages;
+
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
-                            Func<TState, Exception?, string> formatter) => _events.Add(eventId.Id);
+                            Func<TState, Exception?, string> formatter)
+    {
+        _events.Add(eventId.Id);
+        _messages.Add(formatter(state, exception));
+    }
 
     public bool IsEnabled(LogLevel logLevel) => true;
 

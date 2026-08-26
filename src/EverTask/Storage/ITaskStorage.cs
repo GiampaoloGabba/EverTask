@@ -279,6 +279,12 @@ public interface ITaskStorage
     /// overridden it. Built-in providers (Memory/EfCore and the relational providers by inheritance) override
     /// it with a single transactional write — mirroring <see cref="SetRecurringSeriesCompleted"/>.
     /// </para>
+    /// <para>
+    /// The relational override is BEST EFFORT, like <see cref="SetStatus"/>: it logs its own failed write and
+    /// returns, so a failed poison never breaks the recovery of sibling rows. Returning normally therefore
+    /// says nothing about the row, and the recovery confirms the outcome by re-reading it before it reports a
+    /// terminalization.
+    /// </para>
     /// </remarks>
     /// <param name="taskId">The ID of the recurring task to poison.</param>
     /// <param name="exception">The exception recorded as the poison reason.</param>
