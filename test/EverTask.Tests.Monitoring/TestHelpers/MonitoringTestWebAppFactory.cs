@@ -12,7 +12,9 @@ public class MonitoringTestWebAppFactory(
     Action<IServiceCollection>? configureServices = null,
     Action<EverTaskApiOptions>? configureOptions = null,
     bool useRateLimiter = false,
-    Action<IEndpointRouteBuilder>? configureEndpoints = null)
+    Action<IEndpointRouteBuilder>? configureEndpoints = null,
+    string? pathBase = null,
+    Action<IApplicationBuilder>? configurePipeline = null)
     : WebApplicationFactory<TestProgram>
 {
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -90,7 +92,18 @@ public class MonitoringTestWebAppFactory(
                 seeder.SeedAsync().GetAwaiter().GetResult();
             }
 
+            // Before UseRouting, where a host puts it: it moves the prefix out of Request.Path, so from here
+            // on routing and the middleware registered by the startup filter see two different paths.
+            if (!string.IsNullOrEmpty(pathBase))
+            {
+                app.UsePathBase(pathBase);
+            }
+
             app.UseRouting();
+
+            // Where the host's UseAuthentication sits: what runs here decides what HttpContext.User holds
+            // by the time an MVC filter reads it.
+            configurePipeline?.Invoke(app);
 
             // Endpoint-aware rate limiting (must sit between UseRouting and UseEndpoints)
             if (useRateLimiter)

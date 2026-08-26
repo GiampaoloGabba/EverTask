@@ -165,8 +165,8 @@ Defaults differ between the auto-created `default`/`recurring` queues (inherit t
 | `Username` / `Password` | `"admin"` / `"admin"` | CHANGE IN PRODUCTION |
 | `EnableAuthentication` | `true` | JWT on API + hub |
 | `EnableManagementEndpoints` | `false` | Opens the write surface (`POST /api/management/tasks/{id}/{requeue\|resume\|cancel}`, since 4.0.0). Off = every path under `/api/management` answers 404 |
-| `ManagementUsername` / `ManagementPassword` | `null` / `null` | Second, **operate-level** credential (since 4.0.0): logging in with it returns a token that the management endpoints accept. `Username`/`Password` stay read-only |
-| `ManagementAuthorization` | `null` | `Func<HttpContext, Task<bool>>` the host fills in (since 4.0.0). When set it REPLACES the role check for `/api/management` |
+| `ManagementUsername` / `ManagementPassword` | `null` / `null` | Second, **operate-level** credential (since 4.0.0): logging in with it returns a token that the management endpoints accept. `Username`/`Password` stay read-only. Registration THROWS if only one half is set, or if `ManagementPassword` equals `Password` or `MagicLinkToken` |
+| `ManagementAuthorization` | `null` | `Func<HttpContext, Task<bool>>` the host fills in (since 4.0.0). When set it REPLACES the role check for `/api/management`. Runs inside routing, after the host's `UseAuthentication`, so `context.User` is the app's own principal |
 | `JwtSecret` | `null` (random 256-bit per instance) | Set explicitly (≥ 32 bytes) for multi-instance deployments |
 | `JwtIssuer` / `JwtAudience` | `"EverTask.Monitor.Api"` | n/a |
 | `JwtExpirationHours` | `8` | Token TTL |

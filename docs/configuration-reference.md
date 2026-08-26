@@ -1501,7 +1501,8 @@ options.EnableManagementEndpoints = true;
 options.ManagementUsername        = "evertask-operator";
 options.ManagementPassword        = builder.Configuration["EverTask:OperatePassword"];
 
-// Or decided by the application's own authorization, whatever it is
+// Or decided by the application's own authorization, whatever it is. The hook runs inside routing, after
+// the host's UseAuthentication, so context.User is the principal the application authenticated.
 options.EnableManagementEndpoints = true;
 options.ManagementAuthorization   = context =>
     Task.FromResult(context.User.IsInRole("BackgroundJobsOperator"));
@@ -1518,6 +1519,21 @@ options.ManagementAuthorization   = context =>
 With `EnableAuthentication = false` there is no session and therefore no role: the management endpoints are
 refused (403) unless `ManagementAuthorization` says otherwise. Opening the read API must not silently mean
 "anyone may cancel a schedule".
+
+**Where the decision runs.** Inside routing, as an MVC authorization filter on the management routes — not in
+the monitoring middleware. Two things follow, and both matter:
+
+- It sees the request as routing does, so a host that calls `app.UsePathBase("/tenant")` is covered.
+  `UsePathBase` moves the prefix out of `Request.Path` *after* the monitoring middleware has run, so a check
+  living only there would miss the very request that routing then resolves to the action.
+- It runs after the host's `UseAuthentication`, so `context.User` inside `ManagementAuthorization` is the
+  principal your application authenticated. `context.User.IsInRole(...)`, a claims check or anything else you
+  already use answers exactly what it answers in your own controllers.
+
+**The management credential must really be a second one.** Registration throws `InvalidOperationException`
+when `ManagementPassword` equals `Password` or `MagicLinkToken`, and when only one half of
+`ManagementUsername` / `ManagementPassword` is set. A username is not a secret: an operate password the host
+already hands out for reading is not a second credential, it is the shared one with a different name on it.
 
 **CSRF.** These endpoints need no anti-forgery token: the API authenticates a session with a Bearer token in
 the `Authorization` header, never with a cookie (the `?access_token=` fallback exists on the SignalR hub path

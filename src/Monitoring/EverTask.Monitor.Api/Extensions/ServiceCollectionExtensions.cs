@@ -33,6 +33,8 @@ public static class ServiceCollectionExtensions
         var options = new EverTaskApiOptions();
         configure?.Invoke(options);
 
+        ValidateManagementCredentials(options);
+
         // Register options both as singleton instance AND as IOptions<T> wrapper
         // This allows injection of both EverTaskApiOptions and IOptions<EverTaskApiOptions>
         services.AddSingleton(options);
@@ -55,6 +57,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IStatisticsService, StatisticsService>();
         services.AddScoped<IManagementService, ManagementService>();
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
+        services.AddSingleton<ManagementAuthorizationFilter>();
 
         // NOTE: JWT authentication is handled by JwtAuthenticationMiddleware (custom middleware)
         // We do NOT use ASP.NET Core's .AddAuthentication().AddJwtBearer() because:
@@ -132,6 +135,8 @@ public static class ServiceCollectionExtensions
         var options = new EverTaskApiOptions();
         configure?.Invoke(options);
 
+        ValidateManagementCredentials(options);
+
         // Register options both as singleton instance AND as IOptions<T> wrapper
         // This allows injection of both EverTaskApiOptions and IOptions<EverTaskApiOptions>
         services.AddSingleton(options);
@@ -143,6 +148,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IStatisticsService, StatisticsService>();
         services.AddScoped<IManagementService, ManagementService>();
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
+        services.AddSingleton<ManagementAuthorizationFilter>();
 
         // NOTE: JWT authentication is handled by JwtAuthenticationMiddleware (custom middleware)
         // We do NOT use ASP.NET Core's .AddAuthentication().AddJwtBearer() because:
@@ -202,6 +208,51 @@ public static class ServiceCollectionExtensions
             new EverTaskApiStartupFilter(sp.GetRequiredService<EverTaskApiOptions>()));
 
         return services;
+    }
+
+    /// <summary>
+    /// Refuses a management credential that is not really a second credential, at startup rather than at the
+    /// first login.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// Only one half of the pair is configured, or its password is one the host already hands out for
+    /// reading.
+    /// </exception>
+    private static void ValidateManagementCredentials(EverTaskApiOptions options)
+    {
+        var hasUsername = !string.IsNullOrEmpty(options.ManagementUsername);
+        var hasPassword = !string.IsNullOrEmpty(options.ManagementPassword);
+
+        if (hasUsername != hasPassword)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(EverTaskApiOptions.ManagementUsername)} and " +
+                $"{nameof(EverTaskApiOptions.ManagementPassword)} must be configured together: with only one " +
+                "of them the operate credential does not exist, and every management call would answer 403.");
+        }
+
+        if (!hasPassword)
+            return;
+
+        // A username is not a secret, so an equal password is the whole credential: anyone holding the shared
+        // read one could log in as the operate account by guessing a name.
+        if (string.Equals(options.ManagementPassword, options.Password, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"{nameof(EverTaskApiOptions.ManagementPassword)} must differ from " +
+                $"{nameof(EverTaskApiOptions.Password)}: the dashboard credential is shared by everyone who " +
+                "looks at the dashboard, and giving it the management password promotes it to the operate " +
+                "role — which is exactly what the second credential exists to prevent.");
+        }
+
+        if (!string.IsNullOrEmpty(options.MagicLinkToken)
+            && string.Equals(options.ManagementPassword, options.MagicLinkToken, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"{nameof(EverTaskApiOptions.ManagementPassword)} must differ from " +
+                $"{nameof(EverTaskApiOptions.MagicLinkToken)}: a magic link travels in a URL, so a token equal " +
+                "to the management password puts that password in browser history and proxy logs.");
+        }
     }
 
 #if NET9_0_OR_GREATER

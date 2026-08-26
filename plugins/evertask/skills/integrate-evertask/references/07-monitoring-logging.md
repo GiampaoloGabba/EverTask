@@ -92,9 +92,12 @@ keep their routes and MVC JsonOptions, and a host SPA fallback keeps working (is
     // operate role, which ONLY the second credential below grants (never Username/Password, never a
     // magic link). Or replace the role check with the host's own authorization.
     options.EnableManagementEndpoints = false;
+    // Registration THROWS if only one half is set, or if the password equals Password or MagicLinkToken.
     options.ManagementUsername        = Environment.GetEnvironmentVariable("MONITOR_OPERATE_USER");
     options.ManagementPassword        = Environment.GetEnvironmentVariable("MONITOR_OPERATE_PASS");
-    options.ManagementAuthorization   = null;  // Func<HttpContext, Task<bool>>; when set it REPLACES the role check
+    // Func<HttpContext, Task<bool>>; when set it REPLACES the role check. Runs inside routing, after the
+    // host's UseAuthentication, so ctx.User is the app's own principal.
+    options.ManagementAuthorization   = null;
 });
 ```
 
@@ -152,7 +155,8 @@ Management endpoints (4.0+, `POST`, no body, task id in the path):
 answer `{status, message, taskId, nextRunUtc?, releasedHalt}` with 200 / 404 / 409 / 501 / 503. 404 on
 every route while `EnableManagementEndpoints` is false; 403 for a read-only session. `resume` and
 `cancel` resolve the row's `taskKey`, so a schedule dispatched without one answers 409. No CSRF token
-is needed (Bearer header, never a cookie) — keep the dashboard token out of cookies.
+is needed (Bearer header, never a cookie) — keep the dashboard token out of cookies. The gate is an MVC
+authorization filter on those routes, so it holds under `app.UsePathBase(...)` as well.
 
 Durable schedules (`.WithDurableOccurrences()` / `.OnMisfire(...)`, see `05-scheduling.md`) show up
 in three places. Task DTOs carry `parentTaskId`, `occurrenceMode`, `misfirePolicy`, `timeZoneId`,

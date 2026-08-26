@@ -144,6 +144,11 @@ public class EverTaskApiOptions
     /// Compared in fixed time. WARNING: this credential can requeue, resume and cancel — treat it as an
     /// administrative one and keep it out of the magic link, which always yields a read-only session.
     /// </summary>
+    /// <remarks>
+    /// Registration REFUSES a value equal to <see cref="Password"/> or to <see cref="MagicLinkToken"/>, and
+    /// refuses half a pair: a username is not a secret, so an operate password the host already hands out
+    /// for reading is not a second credential at all.
+    /// </remarks>
     public string? ManagementPassword { get; set; }
 
     /// <summary>
@@ -154,8 +159,15 @@ public class EverTaskApiOptions
     /// <remarks>
     /// This is the hook for an application that already has its own authorization — an ASP.NET Core policy,
     /// a claims check on its own principal, an mTLS certificate — and does not want a second credential in
-    /// the monitoring options. It runs only for paths under <see cref="ManagementBasePath"/>, and only after
+    /// the monitoring options. It runs only for the management endpoints, and only after
     /// <see cref="EnableManagementEndpoints"/> and (when enabled) JWT authentication have already passed.
+    /// <para>
+    /// It runs INSIDE routing, as an MVC authorization filter, which means it runs after the host's own
+    /// <c>UseAuthentication</c>: <c>context.User</c> is the principal the application authenticated, so
+    /// <c>context.User.IsInRole(...)</c> and a claims check answer what the host expects. A host that wants
+    /// its own authentication to be the only one can set <see cref="EnableAuthentication"/> to false and let
+    /// this hook decide alone.
+    /// </para>
     /// </remarks>
     public Func<HttpContext, Task<bool>>? ManagementAuthorization { get; set; }
 

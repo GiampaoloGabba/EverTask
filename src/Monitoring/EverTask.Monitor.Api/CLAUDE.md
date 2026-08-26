@@ -54,15 +54,32 @@ REST API + embedded React dashboard, all under the fixed `/evertask-monitoring` 
     storage instead.
 - **The management endpoints are the ONE write surface, and they start from the authorization** (#42).
   `EnableManagementEndpoints` is off by default and, while it is, every path under `{ApiBasePath}/management`
-  answers **404** from `JwtAuthenticationMiddleware` — the prefix is gated there, not per action, so a route
-  added to `ManagementController` cannot forget to ask for it. Once enabled the session must carry the
+  answers **404**. Once enabled the session must carry the
   **operate** role (`MonitoringRoles`, a `role` claim on the JWT), granted ONLY by the second credential
   `ManagementUsername`/`ManagementPassword`: the dashboard credential is shared by everyone who looks at the
   dashboard, and a magic link is a URL, so both stay read. The host's `ManagementAuthorization` hook REPLACES
   the role check when set — including when `EnableAuthentication` is false, where there is no session and the
   answer without a hook is 403, never "open".
+  - **The authoritative gate is `Infrastructure/ManagementAuthorizationFilter`, an MVC authorization filter,
+    NOT the middleware.** `JwtAuthenticationMiddleware` reads `Request.Path` as it stands BEFORE a host's
+    `UsePathBase` has moved the prefix out of it, so under `app.UsePathBase("/tenant")` every path test there
+    missed while routing — which sees the rewritten path — resolved the action anyway: an anonymous
+    `POST /tenant/evertask-monitoring/api/management/tasks/{id}/cancel` ended a live schedule with the write
+    surface switched off. Nothing security-critical may rest on that middleware alone; what is left there is
+    the 404 shield for the ordinary pipeline. The same filter placement is what lets the host's
+    `ManagementAuthorization` hook read `HttpContext.User`: it runs after the host's `UseAuthentication`,
+    while the middleware runs before it and saw an anonymous principal, which made the documented
+    `context.User.IsInRole(...)` answer false for everyone.
+  - `RoutePrefixConvention` attaches that filter by ROUTE (anything under `{prefix}/api/management`), not by
+    controller type or attribute, so a controller added under the prefix inherits the gate. The hook is
+    evaluated in the filter ONLY — evaluating it in the middleware too ran the host's authorization twice per
+    request.
+  - **The operate credential is validated at registration** (`ValidateManagementCredentials`): half a pair,
+    or a `ManagementPassword` equal to `Password` or to `MagicLinkToken`, throws. A username is not a secret,
+    so an equal password promotes the shared read credential to operate at the first login.
   - CSRF needs no token here: the API authenticates with a Bearer header and never a cookie, and
-    `?access_token=` is accepted on the hub path alone.
+    `?access_token=` is accepted on the hub path alone — and the filter deliberately does NOT read it, so the
+    write surface never takes a credential from a query string.
   - `ITaskScheduleManager` is OPTIONAL in `ManagementService` (an optional constructor parameter, like
     `TaskQueryService`'s rate limiter): the standalone registration has no EverTask host, and 501 is the
     honest answer there. `resume`/`cancel` resolve the row's `TaskKey` — the only way a schedule can be named

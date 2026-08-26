@@ -754,7 +754,12 @@ upgrades does not gain them:
   `ManagementUsername` / `ManagementPassword`. The dashboard credential and every magic link are read-only
   and get `403`.
 - A host with its own authorization can decide instead, with the
-  `ManagementAuthorization` hook (`Func<HttpContext, Task<bool>>`), which **replaces** the role check.
+  `ManagementAuthorization` hook (`Func<HttpContext, Task<bool>>`), which **replaces** the role check. It runs
+  inside routing, after the host's `UseAuthentication`, so `context.User` is the principal the application
+  authenticated.
+
+The gate is an MVC authorization filter on these routes, so it holds behind an `app.UsePathBase(...)` too —
+the request routing resolves is the request it judges.
 
 Configuration and the full decision order are in
 [Monitoring Configuration](configuration-reference.md#enablemanagementendpoints-managementusername--managementpassword-managementauthorization).

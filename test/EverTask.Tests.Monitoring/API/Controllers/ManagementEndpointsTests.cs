@@ -1,5 +1,7 @@
+using System.Security.Claims;
 using EverTask.Monitor.Api.DTOs.Auth;
 using EverTask.Monitor.Api.DTOs.Management;
+using EverTask.Monitor.Api.Extensions;
 using EverTask.Tests.Monitoring.TestData;
 using EverTask.Tests.Monitoring.TestHelpers;
 
@@ -270,9 +272,138 @@ public class ManagementEndpointsTests
         (await ReadResultAsync(response)).Message.ShouldContain("task key");
     }
 
+    [Fact]
+    public async Task Should_hold_the_gate_when_a_path_base_hides_the_prefix_from_the_middleware()
+    {
+        // UsePathBase moves the prefix out of Request.Path AFTER the startup filter's middleware has run, so
+        // every path test there misses while routing — which sees the rewritten path — resolves the action.
+        // An anonymous POST reached Cancel and ended a live schedule.
+        await using var factory = CreateFactory(pathBase: "/tenant");
+        using var client = factory.CreateClient();
+
+        var dispatcher = factory.Services.GetRequiredService<ITaskDispatcher>();
+        var storage    = factory.Services.GetRequiredService<ITaskStorage>();
+
+        var scheduleId = await dispatcher.Dispatch(new SampleRecurringTask("must survive"),
+            r => r.Schedule().Every(1).Hours(), taskKey: "path-base-bypass");
+
+        var response = await client.PostAsync($"/tenant{BasePath}/management/tasks/{scheduleId}/cancel", null);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.Unauthorized, "no session was presented");
+
+        var row = (await storage.Get(t => t.Id == scheduleId))[0];
+        row.Status.ShouldNotBe(QueuedTaskStatus.Cancelled, "the action must never have run");
+    }
+
+    [Fact]
+    public async Task Should_keep_the_write_surface_closed_behind_a_path_base_while_it_is_disabled()
+    {
+        await using var factory = CreateFactory(options => options.EnableManagementEndpoints = false,
+            pathBase: "/tenant");
+        using var client = factory.CreateClient();
+
+        var dispatcher = factory.Services.GetRequiredService<ITaskDispatcher>();
+        var storage    = factory.Services.GetRequiredService<ITaskStorage>();
+
+        var scheduleId = await dispatcher.Dispatch(new SampleRecurringTask("must survive too"),
+            r => r.Schedule().Every(1).Hours(), taskKey: "path-base-disabled");
+
+        await AuthorizeAsync(client, OperateUser, OperatePassword);
+
+        var response = await client.PostAsync($"/tenant{BasePath}/management/tasks/{scheduleId}/cancel", null);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.NotFound);
+
+        var row = (await storage.Get(t => t.Id == scheduleId))[0];
+        row.Status.ShouldNotBe(QueuedTaskStatus.Cancelled);
+    }
+
+    [Fact]
+    public async Task Should_run_the_authorization_hook_on_the_principal_the_host_authenticated()
+    {
+        // The documented pattern is context.User.IsInRole(...). Run before the host's UseAuthentication the
+        // hook saw an anonymous principal and answered false for everyone, so the option was unusable as
+        // documented.
+        await using var factory = CreateFactory(
+            options => options.ManagementAuthorization = context =>
+                Task.FromResult(context.User.IsInRole(HostOperatorRole)),
+            configurePipeline: app => app.Use(async (context, next) =>
+            {
+                var roles = context.Request.Headers["X-Host-Roles"].ToString();
+
+                if (!string.IsNullOrEmpty(roles))
+                {
+                    var claims = roles.Split(',').Select(role => new Claim(ClaimTypes.Role, role.Trim()));
+                    context.User = new ClaimsPrincipal(
+                        new ClaimsIdentity(claims, "TestHostAuth", ClaimTypes.Name, ClaimTypes.Role));
+                }
+
+                await next();
+            }));
+
+        using var client = factory.CreateClient();
+
+        // A read-only monitoring session: what decides is the host's principal, not the role on the token.
+        await AuthorizeAsync(client, ReadUser, ReadPassword);
+
+        var refused = await client.PostAsync(RouteFor("cancel", Guid.NewGuid()), null);
+        refused.StatusCode.ShouldBe(HttpStatusCode.Forbidden, "the host authenticated nobody with that role");
+
+        client.DefaultRequestHeaders.Add("X-Host-Roles", HostOperatorRole);
+
+        var allowed = await client.PostAsync(RouteFor("cancel", Guid.NewGuid()), null);
+        allowed.StatusCode.ShouldBe(HttpStatusCode.NotFound,
+            "the hook read the host's principal and let the call through to the endpoint");
+    }
+
+    [Fact]
+    public void Should_refuse_a_management_password_the_host_already_hands_out_for_reading()
+    {
+        // A username is not a secret: an equal password IS the credential, so the shared read one would be
+        // promoted to operate at the first login.
+        var sharedPassword = Should.Throw<InvalidOperationException>(() =>
+            new ServiceCollection().AddEverTaskMonitoringApiStandalone(options =>
+            {
+                options.Password           = "same-secret";
+                options.ManagementUsername = "operator";
+                options.ManagementPassword = "same-secret";
+            }));
+
+        sharedPassword.Message.ShouldContain(nameof(EverTaskApiOptions.ManagementPassword));
+
+        var magicLink = Should.Throw<InvalidOperationException>(() =>
+            new ServiceCollection().AddEverTaskMonitoringApiStandalone(options =>
+            {
+                options.MagicLinkToken     = "a-very-long-magic-link-token";
+                options.ManagementUsername = "operator";
+                options.ManagementPassword = "a-very-long-magic-link-token";
+            }));
+
+        magicLink.Message.ShouldContain(nameof(EverTaskApiOptions.MagicLinkToken));
+
+        var halfPair = Should.Throw<InvalidOperationException>(() =>
+            new ServiceCollection().AddEverTaskMonitoringApiStandalone(options =>
+                options.ManagementUsername = "operator"));
+
+        halfPair.Message.ShouldContain(nameof(EverTaskApiOptions.ManagementPassword));
+
+        // The distinct pair the whole model rests on stays accepted.
+        Should.NotThrow(() => new ServiceCollection().AddEverTaskMonitoringApiStandalone(options =>
+        {
+            options.Password           = "read-secret";
+            options.ManagementUsername = "operator";
+            options.ManagementPassword = "operate-secret";
+        }));
+    }
+
+    private const string HostOperatorRole = "evertask-operator";
+
     private static MonitoringTestWebAppFactory CreateFactory(Action<EverTaskApiOptions>? configure = null,
-                                                             bool requireAuthentication = true) =>
-        new(requireAuthentication, configureOptions: options =>
+                                                             bool requireAuthentication = true,
+                                                             string? pathBase = null,
+                                                             Action<IApplicationBuilder>? configurePipeline = null) =>
+        new(requireAuthentication, pathBase: pathBase, configurePipeline: configurePipeline,
+            configureOptions: options =>
         {
             options.EnableManagementEndpoints = true;
             options.ManagementUsername        = OperateUser;

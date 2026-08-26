@@ -14,6 +14,11 @@ public class RoutePrefixConvention(string prefix, string apiExplorerGroupName) :
 {
     private static readonly MonitoringJsonResultFilter JsonFilter = new();
 
+    /// <summary>
+    /// Resolved per request from DI, because the gate needs the options and the token service.
+    /// </summary>
+    private static readonly ServiceFilterAttribute ManagementGate = new(typeof(ManagementAuthorizationFilter));
+
     private readonly string _prefix = prefix.Trim('/');
 
     /// <summary>
@@ -46,6 +51,20 @@ public class RoutePrefixConvention(string prefix, string apiExplorerGroupName) :
                         selector.AttributeRouteModel);
                 }
             }
+
+            // Keyed on the ROUTE and not on the controller type: the write surface is a prefix, so a
+            // controller added under it inherits the gate instead of having to remember an attribute.
+            if (IsRoutedUnderManagement(controller))
+                controller.Filters.Add(ManagementGate);
         }
+    }
+
+    private bool IsRoutedUnderManagement(ControllerModel controller)
+    {
+        var managementPrefix = $"{_prefix}/api/management";
+
+        return controller.Selectors.Any(selector =>
+            selector.AttributeRouteModel?.Template?.StartsWith(managementPrefix, StringComparison.OrdinalIgnoreCase)
+            == true);
     }
 }
