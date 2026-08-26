@@ -43,13 +43,20 @@ public class MonitoringTestWebAppFactory(
             // SignalR tests need the worker enabled to execute tasks and receive events
             if (!enableWorker)
             {
-                var workerServiceDescriptor = services.FirstOrDefault(d =>
+                // The registration is a factory lambda, so ImplementationType is null: the worker has to be
+                // recognized by the lambda's return type too. Removing nothing is an error, not a fallback -
+                // a worker left running recovers the seeded rows and flips their statuses mid-test.
+                var workerDescriptors = services.Where(d =>
                     d.ServiceType == typeof(IHostedService) &&
-                    d.ImplementationType?.Name == "WorkerService");
-                if (workerServiceDescriptor != null)
-                {
-                    services.Remove(workerServiceDescriptor);
-                }
+                    (d.ImplementationType?.Name == "WorkerService" ||
+                     d.ImplementationFactory?.Method.ReturnType.Name == "WorkerService")).ToList();
+
+                if (workerDescriptors.Count == 0)
+                    throw new InvalidOperationException(
+                        "WorkerService registration not found: the removal filter no longer matches how AddEverTask registers it");
+
+                foreach (var descriptor in workerDescriptors)
+                    services.Remove(descriptor);
             }
 
             // Add SignalR services (required for SignalR hub)

@@ -353,6 +353,20 @@ public sealed class FaultInjectingTaskStorage(ITaskStorage inner) : ITaskStorage
         return inner.GetStatusAudits(taskId, ct);
     }
 
+    public Task<AuditPage<StatusAudit>> GetStatusAuditsPage(Guid taskId, int skip, int take,
+                                                            CancellationToken ct = default)
+    {
+        Gate(nameof(GetStatusAuditsPage));
+        return inner.GetStatusAuditsPage(taskId, skip, take, ct);
+    }
+
+    public Task<AuditPage<RunsAudit>> GetRunsAuditsPage(Guid taskId, int skip, int take,
+                                                        CancellationToken ct = default)
+    {
+        Gate(nameof(GetRunsAuditsPage));
+        return inner.GetRunsAuditsPage(taskId, skip, take, ct);
+    }
+
     public Task<RunsAudit[]> GetRunsAudits(Guid taskId, CancellationToken ct = default)
     {
         Gate(nameof(GetRunsAudits));
