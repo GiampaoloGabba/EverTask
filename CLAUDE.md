@@ -32,6 +32,10 @@ The analyzer ruleset is an explicit rule list at the end of `.editorconfig` (NOT
   `completed`, `cancelled`, `Error occurred` stable).
 - **Never flatten an explicit `object[]` into `params` on `ExecuteSqlRawAsync(sql, args, ct)`**: overload
   resolution moves to `params object[]`, the `CancellationToken` silently becomes a SQL parameter, it compiles.
+- **Comments say WHY, never HOW — and only a non-obvious why**: a special case, a fixed race, an order
+  that must not change, in 1-3 tight lines. No essays (long rationale goes in the commit message), no
+  plan/review codes (`M7`, `CU13`, `F6`, ...) — a GitHub issue reference is fine. XML docs only on public
+  surface: contract and exceptions, not history. Never comment to persuade a reviewer.
 - **EF migrations are frozen**: exclude them from every formatting/cleanup pass (`dotnet format` ignores the
   ReSharper pass's exclusion — pass `--exclude "**/Migrations/**"`).
 
