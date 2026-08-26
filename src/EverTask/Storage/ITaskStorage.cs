@@ -1,4 +1,5 @@
-﻿using System.Linq.Expressions;
+﻿using System.Collections.ObjectModel;
+using System.Linq.Expressions;
 
 namespace EverTask.Storage;
 
@@ -565,11 +566,129 @@ public interface ITaskStorage
     }
 
     /// <summary>
+    /// One page of the occurrences of a schedule, newest slot first, with the total that matches the request.
+    /// </summary>
+    /// <remarks>
+    /// The paging belongs to the storage because the reader that needs it — a dashboard listing a schedule
+    /// with a year of retention behind it — must never pull the whole series into memory to show a hundred
+    /// rows. The default composes the unpaged read so a custom storage keeps working; the built-in providers
+    /// override it and let the database order, count and slice over the
+    /// <c>(ParentTaskId, ScheduledExecutionUtc)</c> index the occurrence contract already needs.
+    /// </remarks>
+    /// <param name="parentId">The schedule row.</param>
+    /// <param name="nonTerminalOnly">Keep only the occurrences that can still lead to an execution.</param>
+    /// <param name="skip">How many occurrences to skip, from the newest slot. Never negative.</param>
+    /// <param name="take">How many occurrences to return. Never negative; 0 asks for the count alone.</param>
+    /// <param name="ct">Cancellation token.</param>
+    async Task<OccurrencePage> GetOccurrencesPage(Guid parentId, bool nonTerminalOnly, int skip, int take,
+                                                  CancellationToken ct = default)
+    {
+        var rows = await GetOccurrences(parentId, nonTerminalOnly, ct).ConfigureAwait(false);
+
+        return new OccurrencePage(
+            rows.OrderByDescending(r => r.ScheduledExecutionUtc).Skip(skip).Take(take).ToArray(),
+            rows.Length);
+    }
+
+    /// <summary>
     /// Number of occurrences of a schedule that are not terminal yet — the storage half of the
     /// concurrency budget (the in-process delivery and scheduler registries complete it).
     /// </summary>
     async Task<int> CountActiveOccurrences(Guid parentId, CancellationToken ct = default) =>
         (await GetOccurrences(parentId, nonTerminalOnly: true, ct).ConfigureAwait(false)).Length;
+
+    /// <summary>
+    /// When the last run of each of the given rows STARTED, as the status audit trail recorded it. Rows with
+    /// no recorded start are simply absent from the result.
+    /// </summary>
+    /// <remarks>
+    /// No column holds this: <see cref="QueuedTask.LastExecutionUtc"/> is written on TERMINAL transitions, so
+    /// it says when a run ENDED, and the only trace of the moment a run began is the
+    /// <see cref="QueuedTaskStatus.InProgress"/> transition in <see cref="QueuedTask.StatusAudits"/> — which
+    /// therefore has to be READ, and is the one source that can speak for a run still in flight. It is asked
+    /// for a whole page of rows at once because its reader is a dashboard listing them.
+    /// <para>
+    /// A row whose <see cref="AuditLevel"/> does not record that transition (anything below
+    /// <see cref="EverTask.Abstractions.AuditLevel.Full"/>) has no recorded start at all, and answering
+    /// nothing for it is the correct answer.
+    /// </para>
+    /// <para>
+    /// Read-only, so the default is a correct query over <see cref="Get"/> rather than a refusal: a custom
+    /// storage that materializes the audit navigation keeps working, and the built-in providers override it
+    /// with one indexed query over the audit table.
+    /// </para>
+    /// </remarks>
+    /// <param name="taskIds">The rows to answer for.</param>
+    /// <param name="ct">Cancellation token.</param>
+    async Task<IReadOnlyDictionary<Guid, DateTimeOffset>> GetLastRunStarts(IReadOnlyCollection<Guid> taskIds,
+                                                                          CancellationToken ct = default)
+    {
+        if (taskIds.Count == 0)
+            return ReadOnlyDictionary<Guid, DateTimeOffset>.Empty;
+
+        var rows   = await Get(t => taskIds.Contains(t.Id), ct).ConfigureAwait(false);
+        var starts = new Dictionary<Guid, DateTimeOffset>(rows.Length);
+
+        foreach (var row in rows)
+        {
+            foreach (var audit in row.StatusAudits)
+            {
+                if (audit.NewStatus != QueuedTaskStatus.InProgress)
+                    continue;
+
+                if (!starts.TryGetValue(row.Id, out var known) || audit.UpdatedAtUtc >= known)
+                    starts[row.Id] = audit.UpdatedAtUtc;
+            }
+        }
+
+        return starts;
+    }
+
+    /// <summary>
+    /// The status transitions recorded for one row, newest first.
+    /// </summary>
+    /// <remarks>
+    /// Same reason as <see cref="GetLastRunStarts"/>: the audit trail has to be READ. No read populates
+    /// <see cref="QueuedTask.StatusAudits"/>, so a reader walking that navigation answers only over a store
+    /// that keeps the audits on the row object itself and hands back an empty history on every relational
+    /// one — for a row whose audit table holds the whole transition history.
+    /// <para>
+    /// Read-only, so the default is a correct query over <see cref="Get"/> rather than a refusal: a custom
+    /// storage that materializes the navigation keeps working, and the built-in providers override it with
+    /// one indexed query over the audit table.
+    /// </para>
+    /// </remarks>
+    /// <param name="taskId">The row to answer for.</param>
+    /// <param name="ct">Cancellation token.</param>
+    async Task<StatusAudit[]> GetStatusAudits(Guid taskId, CancellationToken ct = default)
+    {
+        var rows = await Get(t => t.Id == taskId, ct).ConfigureAwait(false);
+
+        // Reversed first, so that audits sharing an instant — a coarse clock makes that ordinary — come back
+        // in the order they were recorded rather than upside down: a stable sort keeps whatever order it was
+        // handed for equal keys.
+        return rows.Length == 0
+                   ? []
+                   : rows[0].StatusAudits.Reverse().OrderByDescending(a => a.UpdatedAtUtc).ToArray();
+    }
+
+    /// <summary>
+    /// The runs recorded for one row, newest first.
+    /// </summary>
+    /// <remarks>
+    /// The <see cref="RunsAudit"/> half of <see cref="GetStatusAudits"/>, and dead in exactly the same way
+    /// when read off <see cref="QueuedTask.RunsAudits"/>.
+    /// </remarks>
+    /// <param name="taskId">The row to answer for.</param>
+    /// <param name="ct">Cancellation token.</param>
+    async Task<RunsAudit[]> GetRunsAudits(Guid taskId, CancellationToken ct = default)
+    {
+        var rows = await Get(t => t.Id == taskId, ct).ConfigureAwait(false);
+
+        return rows.Length == 0
+                   ? []
+                   : rows[0].RunsAudits.Reverse().OrderByDescending(a => a.ExecutedAt).ToArray();
+    }
 
     /// <summary>
     /// Saves execution logs for a task. Called by WorkerExecutor after task execution.

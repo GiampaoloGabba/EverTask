@@ -32,6 +32,17 @@ public sealed class RecurringTasksRegistrar(ITaskDispatcher dispatcher) : IHoste
             new DailyDigestTask(),
             r => r.Schedule().EveryDay().AtTime(new TimeOnly(9, 0)).InTimeZone("Europe/Rome"),
             taskKey: "daily-digest");
+
+        // A nightly batch where a missed night still has to run: every due slot gets its own row,
+        // and a downtime is replayed inside caps that are mandatory on purpose.
+        await dispatcher.Dispatch(
+            new NightlyReconciliationTask(),
+            r => r.Schedule()
+                  .EveryDay().AtTime(new TimeOnly(2, 0))
+                  .InTimeZone("Europe/Rome")
+                  .OnMisfire(m => m.CatchUp(
+                      new CatchUpOptions(TimeSpan.FromDays(92), maxOccurrences: 200))),
+            taskKey: "nightly-reconciliation");
     }
 
     public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
@@ -72,4 +83,8 @@ Notes:
   by an hour at the next DST change. `RunAt` still takes an absolute instant: build it with
   `zone.GetUtcOffset(localDateTime)`, never `zone.BaseUtcOffset`.
 - `UseCron(...)` overrides every other interval call; never combine them.
-- Skipped occurrences after downtime are logged only: they don't count against `MaxRuns`.
+- With the default `Skip` policy, occurrences a downtime missed are logged only: they don't run and don't
+  count against `MaxRuns`. Under `CatchUp` or `FireOnce` they become real rows, so they DO count — a
+  replayed slot is a run of the series. Pick per task: a heartbeat wants `Skip`, a nightly batch usually
+  does not. The handler reads the slot it stands for from `Context.ScheduledAtLocal`, never from the clock:
+  a replay delivers several nights within seconds of each other.

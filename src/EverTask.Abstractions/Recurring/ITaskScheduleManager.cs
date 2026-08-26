@@ -79,7 +79,9 @@ public interface ITaskScheduleManager
     /// <para>
     /// It recomputes FROM NOW, which is <see cref="RescheduleMode.RecalculateFromNow"/> applied to the stored
     /// definition: on a durable schedule that is behind, the slots it still owes are passed over and reported
-    /// as discarded (<see cref="ScheduleUpdateResult.DiscardedBacklog"/>, and a <c>BacklogDiscarded</c> event).
+    /// as discarded: <see cref="ScheduleUpdateResult.DiscardedBacklog"/> counts them, and the one
+    /// <c>ScheduleRescheduled</c> monitoring event every accepted change publishes carries the count and turns
+    /// <c>Warning</c> because of it.
     /// To release a halted or late catch-up while KEEPING that backlog, call <see cref="ResumeSchedule"/>.
     /// </para>
     /// </remarks>

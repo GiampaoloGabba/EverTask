@@ -57,31 +57,10 @@ public class DashboardService : IDashboardService
         var totalFinished = completedCount + failedCount;
         var successRate = totalFinished > 0 ? (decimal)completedCount / totalFinished * 100 : 0m;
 
-        // Average execution time (actual execution duration, not including queue time)
-        // Calculate from StatusAudits: time from InProgress to Completed/Failed
-        var executionTimes = filteredTasks
-            .Where(t => (t.Status == QueuedTaskStatus.Completed || t.Status == QueuedTaskStatus.Failed)
-                        && t.StatusAudits is { Count: > 0 })
-            .Select(t =>
-            {
-                var audits = t.StatusAudits.OrderBy(a => a.UpdatedAtUtc).ToList();
-                var inProgressAudit = audits.FirstOrDefault(a => a.NewStatus == QueuedTaskStatus.InProgress);
-                var finalAudit = audits.FirstOrDefault(a =>
-                    a.NewStatus == QueuedTaskStatus.Completed || a.NewStatus == QueuedTaskStatus.Failed);
-
-                if (inProgressAudit != null && finalAudit != null && finalAudit.UpdatedAtUtc > inProgressAudit.UpdatedAtUtc)
-                {
-                    return (finalAudit.UpdatedAtUtc - inProgressAudit.UpdatedAtUtc).TotalMilliseconds;
-                }
-                return (double?)null;
-            })
-            .Where(duration => duration.HasValue)
-            .Select(duration => duration!.Value)
-            .ToList();
-
-        var avgExecutionTimeMs = executionTimes.Count > 0
-            ? executionTimes.Average()
-            : 0.0;
+        // Average execution time (actual execution duration, not including queue time), from the duration the
+        // worker measured around each run. Deriving it from StatusAudits instead read a navigation no storage
+        // read populates, so the tile answered 0.0 on every relational store.
+        var avgExecutionTimeMs = TaskRunTiming.AverageMeasuredDurationMs(filteredTasks);
 
         // Status distribution
         var statusDistribution = filteredTasks
@@ -106,7 +85,12 @@ public class DashboardService : IDashboardService
             tasksOverTime,
             queueSummaries,
             _rateLimiter?.ParkedTaskCount ?? 0
-        );
+        )
+        {
+            // Over the WHOLE store, never the selected range: a backlog is what is owed right now, and a
+            // downtime that materialized its occurrences yesterday is exactly the case the tile exists for.
+            CatchUpBacklog = SummarizeCatchUpBacklog(allTasks, now)
+        };
     }
 
     /// <inheritdoc />
@@ -125,6 +109,72 @@ public class DashboardService : IDashboardService
                 GenerateActivityMessage(t)
             ))
             .ToList();
+    }
+
+    /// <summary>
+    /// The occurrences of every durable schedule, by row state, plus how far behind the oldest one that has
+    /// not started already is.
+    /// </summary>
+    /// <remarks>
+    /// Counted from the rows themselves: an occurrence IS a task row, so the backlog is a fact the store
+    /// holds rather than a figure to estimate. Slots a schedule dropped never became rows and are therefore
+    /// absent here by construction — they are reported when they happen, by the OccurrenceSkipped event.
+    /// </remarks>
+    private static CatchUpBacklogDto SummarizeCatchUpBacklog(IEnumerable<QueuedTask> allTasks, DateTimeOffset now)
+    {
+        var pending    = 0;
+        var active     = 0;
+        var failed     = 0;
+        var skipped    = 0;
+        var completed  = 0;
+        var halted     = 0;
+        DateTimeOffset? oldestPendingSlot = null;
+
+        foreach (var task in allTasks)
+        {
+            if (task.ParentTaskId == null)
+            {
+                // A halt lives on the SCHEDULE row, in the same column an occurrence uses for its own
+                // metadata, and it only counts while the series is still one that could run: a cancelled or
+                // finished schedule keeps the marker it was written with, and nothing ever clears it.
+                if (TaskScheduleFacts.HasStandingHalt(task))
+                    halted++;
+
+                continue;
+            }
+
+            switch (task.Status)
+            {
+                case QueuedTaskStatus.InProgress:
+                    active++;
+                    break;
+                case QueuedTaskStatus.Failed:
+                    failed++;
+                    break;
+                case QueuedTaskStatus.Cancelled:
+                    skipped++;
+                    break;
+                case QueuedTaskStatus.Completed:
+                    completed++;
+                    break;
+                default:
+                    pending++;
+                    if (task.ScheduledExecutionUtc is { } slot &&
+                        (oldestPendingSlot == null || slot < oldestPendingSlot))
+                    {
+                        oldestPendingSlot = slot;
+                    }
+
+                    break;
+            }
+        }
+
+        // A slot still in the future is not lateness: a durable schedule materializes ahead of its own time
+        // whenever its budget allows, and reporting that as a negative lag would read as time travel.
+        var lag = oldestPendingSlot is { } oldest && oldest < now ? (now - oldest).TotalSeconds : 0d;
+
+        return new CatchUpBacklogDto(pending, active, failed, skipped, completed, oldestPendingSlot,
+            Math.Round(lag, 2), halted);
     }
 
     private static List<TasksOverTimeDto> GenerateTasksOverTime(List<QueuedTask> tasks, DateTimeOffset start, DateTimeOffset end)

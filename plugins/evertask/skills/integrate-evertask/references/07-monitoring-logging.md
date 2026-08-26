@@ -66,7 +66,7 @@ Multi-server: add a backplane (`AddSignalR().AddAzureSignalR(...)` or `.AddStack
 
 Full embedded React dashboard + REST API; auto-registers SignalR. **ASP.NET Core only.**
 
-Additive by design (3.12+): route prefix, JSON contract (camelCase/string enums), CORS, SPA
+Additive by design (4.0+): route prefix, JSON contract (camelCase/string enums), CORS, SPA
 fallback and OpenAPI document all apply to the monitoring endpoints only. The host's controllers
 keep their routes and MVC JsonOptions, and a host SPA fallback keeps working (issue #21).
 
@@ -95,14 +95,14 @@ Optional Scalar API reference (`EverTask.Monitor.Api.Scalar` package, net9+): ch
 `.AddMonitoringApiScalar()` after `AddMonitoringApi()` to serve an interactive API reference at
 `/evertask-monitoring/scalar` (auto-enables the OpenAPI document). Everything stays under the
 monitoring base path: the host's own OpenAPI/Swagger/Scalar setup is never touched.
-(`EnableSwagger` is an obsolete no-op since 3.12.0.)
+(`EnableSwagger` is an obsolete no-op since 4.0.0.)
 
 **Required after `Build()`:** `app.MapEverTaskApi();` (maps hub + controllers + SPA). It also accepts
 an optional `Action<HttpConnectionDispatcherOptions>` to tune the SignalR hub connection.
 
-> CORS (3.12+): `EnableCors = true` applies the `EverTaskMonitoringApi` policy to requests under
+> CORS (4.0+): `EnableCors = true` applies the `EverTaskMonitoringApi` policy to requests under
 > `/evertask-monitoring` automatically; the host pipeline is untouched and nothing needs wiring.
-> Login rate limit (3.12+): the `evertask-monitoring-login` policy (5 attempts/15 min per IP, 429)
+> Login rate limit (4.0+): the `evertask-monitoring-login` policy (5 attempts/15 min per IP, 429)
 > covers `/api/auth/login` and both `/api/auth/magic` forms; it is registered by the package but
 > enforced only if the host runs `app.UseRateLimiter()` after `UseRouting()`. (`BasePath`,
 > `ApiBasePath`, `UIBasePath`, `SignalRHubPath` are read-only computed properties; don't try to
@@ -113,7 +113,7 @@ Fixed paths: dashboard `/evertask-monitoring`, API `/evertask-monitoring/api`, h
 `Authorization: Bearer` or `?access_token=`). Login: `POST /evertask-monitoring/api/auth/login`
 `{username,password}`. Default creds `admin`/`admin`: **always change in production.**
 
-Magic link when `MagicLinkToken` is set (3.12+): hand users
+Magic link when `MagicLinkToken` is set (4.0+): hand users
 `https://host/evertask-monitoring/magic#token=<MagicLinkToken>`. The fragment never reaches the
 server; the dashboard exchanges it with `POST /api/auth/magic` `{token}`. Never generate a
 `?token=` URL or call `GET /api/auth/magic?token=` (deprecated, kept for compat): the query string
@@ -124,10 +124,50 @@ frontend. If a legacy `?token=` link must stay, branch request logging around th
 `app.UseWhen(ctx => !ctx.Request.Path.StartsWithSegments("/evertask-monitoring"), b => b.UseSerilogRequestLogging());`.
 
 REST endpoints (under `/evertask-monitoring/api`): `GET /tasks` (filter status/queue/type/date,
-paged ≤100), `/tasks/{id}` (+ `/status-audit`, `/runs-audit`, `/execution-logs`),
-`/dashboard/overview`, `/dashboard/recent-activity`, `/queues`, `/queues/{name}/tasks`,
-`/statistics/{success-rate-trend|task-types|execution-times}`, `/rate-limits` (per-key parked count,
-next slot, tracked keys, fail-open count; in-memory, single-node), `/config` (no auth).
+paged), `/tasks/{id}` (+ `/status-audit`, `/runs-audit`, `/execution-logs`, `/occurrences`),
+`/tasks/counts`, `/dashboard/overview`, `/dashboard/recent-activity`, `/queues`,
+`/queues/{name}/tasks`, `/statistics/{success-rate-trend|task-types|execution-times}`,
+`/rate-limits` (per-key parked count, next slot, tracked keys, fail-open count; in-memory,
+single-node), `/config` (no auth). Every endpoint is **read-only**: changing a schedule at runtime is
+`ITaskScheduleManager` in your own code, behind your own authorization (`05-scheduling.md`).
+
+Durable schedules (`.WithDurableOccurrences()` / `.OnMisfire(...)`, see `05-scheduling.md`) show up
+in three places. Task DTOs carry `parentTaskId`, `occurrenceMode`, `misfirePolicy`, `timeZoneId`,
+`scheduleVersion`, `nominalSlotUtc` and `misfireKind` (nulls omitted, and they are null TOGETHER on a
+task that belongs to no schedule — `scheduleVersion` included, so a plain one-shot carries none of
+them rather than a version of 0); `/tasks/{id}` adds an `occurrence` block on a child and a `halt`
+block on a schedule whose catch-up stopped itself over its cap; `/tasks/{id}/occurrences` lists what
+a schedule materialized, newest slot first, paged by the storage itself. Filter the list with `parentTaskId`, `onlyOccurrences` and
+`onlyCatchUp`. `/dashboard/overview` adds `catchUpBacklog`: the occurrences of every durable
+schedule by state (pending / active / failed / skipped / completed), the oldest slot that has not
+started, how far behind it is, and how many schedules are halted — a halt never releases itself, so
+that counter is the one to alert on, and it counts only the schedules that are still live: a halted
+series someone cancelled keeps its marker, since nothing clears it, but stops being reported. Slots a
+schedule DROPPED never became rows and are not in those counts; they arrive as `OccurrenceSkipped`
+events, which always name the rule that dropped them.
+
+To show how late a delivery is, use `startedAtUtc` (when its run began) and never `lastExecutionUtc`,
+which is written on terminal transitions and so says when the run ENDED — a punctual occurrence with
+a three-minute handler would read as three minutes late. It is read from the row's `InProgress`
+transition in the audit trail, so a run still in flight answers for itself at `AuditLevel.Full`;
+below that level a run that FINISHED is derived from its end less its measured duration, and
+everything else — a row that never ran, a failure or a finalization that measured no duration, a row
+waiting for its next delivery — reports nothing rather than an instant nobody measured.
+
+The two audit trails (`/status-audit`, `/runs-audit`, and the `statusAudits`/`runsAudits` blocks of
+`/tasks/{id}`) are read from the audit tables, so they answer the same history whatever storage is
+behind the API, and `avgExecutionTimeMs` on the overview is the mean of the durations completions
+measured — the same column `executionTimeMs` reports per task, with the runs nobody measured left out
+rather than counted as zero.
+
+Events from the durable side reach the same `TaskEventOccurredAsync` channel, carrying
+`ScheduledAtUtc` (the nominal slot) and `ScheduleVersion`, plus `ParentTaskId` on the events of an
+OCCURRENCE — a schedule-level event is about the schedule row itself, so there its own `TaskId` is
+the schedule id: occurrence materialized, occurrence skipped, stale occurrence requeued, catch-up
+started and completed (the two ends of one replay), catch-up halted (rate-limited to one per schedule
+every five minutes), schedule rescheduled, re-park failed, occurrence-provider evaluation failed, and
+the two `Error` events for a row this build cannot rebuild (a schedule that materializes nothing, an
+occurrence marked `Failed`).
 
 Standalone (no `EverTaskServiceBuilder`): `services.AddEverTaskMonitoringApiStandalone(...)`;
 then you must register `ITaskStorage` yourself. It does **not** auto-register SignalR monitoring,
@@ -172,6 +212,9 @@ is required). Pair with `AddAuditCleanup(...)` retention
 ## Wizard decision points
 
 1. Dashboard? → `EverTask.Monitor.Api` + `MapEverTaskApi()` (web only). Set auth creds.
+   If the app runs durable schedules, point the operator at the overview's `catchUpBacklog` and at
+   the schedule detail's Occurrences tab: that is where a halted catch-up and a growing backlog are
+   visible.
 2. Only real-time events, no dashboard? → SignalR + `MapEverTaskMonitorHub()`.
 3. Only react in code (log/alert/forward to APM)? → subscribe `TaskEventOccurredAsync`.
 4. Need execution logs streamed? → `IncludeExecutionLogs = true`.

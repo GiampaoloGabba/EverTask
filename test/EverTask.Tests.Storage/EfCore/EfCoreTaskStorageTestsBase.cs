@@ -6,7 +6,10 @@ using EverTask.Storage;
 using EverTask.Storage.EfCore;
 using EverTask.Tests.TestHelpers;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Newtonsoft.Json;
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using Shouldly;
 using Xunit;
 
@@ -3205,6 +3208,300 @@ public abstract class EfCoreTaskStorageTestsBase
         (await _storage.GetOccurrences(schedule.Id, nonTerminalOnly: true)).ShouldHaveSingleItem()
                                                                           .Id.ShouldBe(active.Id);
         (await _storage.CountActiveOccurrences(schedule.Id)).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task GetOccurrencesPage_should_return_one_page_newest_first_with_the_whole_total()
+    {
+        // The page is what keeps a schedule with a long retention behind it readable: the caller asks for a
+        // hundred rows and the database orders, counts and slices, instead of handing back every occurrence
+        // for someone else to sort in memory.
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-10));
+        var schedule = await PersistSchedule(cursor);
+        var other    = await PersistSchedule(cursor);
+
+        var slots = Enumerable.Range(0, 5).Select(i => cursor.AddMinutes(i)).ToArray();
+
+        foreach (var slot in slots)
+            await _storage.Persist(NewOccurrence(schedule.Id, slot));
+
+        await _storage.Persist(NewOccurrence(other.Id, cursor));
+
+        var first = await _storage.GetOccurrencesPage(schedule.Id, nonTerminalOnly: false, skip: 0, take: 2);
+
+        first.TotalCount.ShouldBe(5, "the total is the whole series, never the size of the page");
+        first.Occurrences.Select(o => o.ScheduledExecutionUtc)
+             .ShouldBe([slots[4], slots[3]], "newest slot first, like the endpoint that reads it");
+
+        var second = await _storage.GetOccurrencesPage(schedule.Id, nonTerminalOnly: false, skip: 2, take: 2);
+
+        second.TotalCount.ShouldBe(5);
+        second.Occurrences.Select(o => o.ScheduledExecutionUtc).ShouldBe([slots[2], slots[1]]);
+
+        var past = await _storage.GetOccurrencesPage(schedule.Id, nonTerminalOnly: false, skip: 5, take: 2);
+
+        past.Occurrences.ShouldBeEmpty("a page past the end is empty, not the last one again");
+        past.TotalCount.ShouldBe(5);
+    }
+
+    [Fact]
+    public async Task GetOccurrencesPage_should_count_and_page_only_what_the_filter_keeps()
+    {
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-10));
+        var schedule = await PersistSchedule(cursor);
+
+        var pending  = NewOccurrence(schedule.Id, cursor);
+        var finished = NewOccurrence(schedule.Id, cursor.AddMinutes(1));
+
+        await _storage.Persist(pending);
+        await _storage.Persist(finished);
+        await _storage.SetCompleted(finished.Id, 1, AuditLevel.Full);
+
+        var page = await _storage.GetOccurrencesPage(schedule.Id, nonTerminalOnly: true, skip: 0, take: 10);
+
+        page.TotalCount.ShouldBe(1, "the total counts the filtered set, not the whole schedule");
+        page.Occurrences.ShouldHaveSingleItem().Id.ShouldBe(pending.Id);
+    }
+
+    /// <summary>
+    /// The page is a page all the way down to the database. Asserting the ROWS alone passes just as well on
+    /// an implementation that reads the whole series and slices it in memory — which is the one thing this
+    /// member exists to stop, and which is invisible until a schedule with a year of retention behind it is
+    /// opened. So the command the provider sent is read back and made to carry the slice.
+    /// </summary>
+    [Fact]
+    public async Task GetOccurrencesPage_should_let_the_database_order_and_slice_the_series()
+    {
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-10));
+        var schedule = await PersistSchedule(cursor);
+
+        foreach (var slot in Enumerable.Range(0, 5).Select(i => cursor.AddMinutes(i)))
+            await _storage.Persist(NewOccurrence(schedule.Id, slot));
+
+        using var recorder = new SqlRecorder();
+
+        // EF stops building command event data for a cache window whenever it last found nobody listening, so
+        // the first call after this recorder subscribes can publish nothing at all. The call is therefore
+        // repeated until the provider speaks — it answers the same thing every time, and what it SENDS is the
+        // subject here. Waiting for any command instead would end on one another test published.
+        string[] commands = [];
+        string?  pageQuery = null;
+
+        for (var attempt = 0; attempt < 40 && pageQuery is null; attempt++)
+        {
+            if (attempt > 0)
+                await Task.Delay(250);
+
+            var page = await _storage.GetOccurrencesPage(schedule.Id, nonTerminalOnly: false, skip: 1, take: 2);
+            page.Occurrences.Length.ShouldBe(2);
+            page.TotalCount.ShouldBe(5);
+
+            commands = recorder.Commands();
+
+            // The slot ordering is what tells this query apart from every other read of the same table:
+            // nothing else in the storage orders QueuedTasks by ScheduledExecutionUtc descending.
+            pageQuery = commands.FirstOrDefault(
+                c => c.Contains("ScheduledExecutionUtc", StringComparison.OrdinalIgnoreCase)
+                     && c.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase)
+                     && c.Contains("DESC", StringComparison.OrdinalIgnoreCase));
+        }
+
+        pageQuery.ShouldNotBeNull(
+            "the ordering belongs to the database, never to the caller's memory. Commands seen: "
+            + string.Join(" | ", commands));
+
+        // LIMIT/OFFSET on SQLite, PostgreSQL and MySQL; OFFSET … FETCH on SQL Server.
+        (pageQuery.Contains("LIMIT", StringComparison.OrdinalIgnoreCase)
+         || pageQuery.Contains("FETCH", StringComparison.OrdinalIgnoreCase))
+            .ShouldBeTrue("the slice belongs to the database too, so one page costs one page");
+
+        commands.Any(c => c.Contains("COUNT(", StringComparison.OrdinalIgnoreCase)
+                          && c.Contains("QueuedTasks", StringComparison.Ordinal))
+                .ShouldBeTrue("the total is counted in the store: counting it here would materialize the series");
+    }
+
+    /// <summary>
+    /// The SQL the EF providers really sent, taken off the EF diagnostic source. It subscribes for the
+    /// duration of one call, so what it holds is what that call cost.
+    /// </summary>
+    private sealed class SqlRecorder : IObserver<DiagnosticListener>, IObserver<KeyValuePair<string, object?>>,
+                                       IDisposable
+    {
+        private readonly List<IDisposable>       _subscriptions = [];
+        private readonly ConcurrentQueue<string> _commands      = new();
+        private readonly IDisposable             _listeners;
+
+        public SqlRecorder() => _listeners = DiagnosticListener.AllListeners.Subscribe(this);
+
+        public string[] Commands() => _commands.Distinct(StringComparer.Ordinal).ToArray();
+
+        void IObserver<DiagnosticListener>.OnNext(DiagnosticListener listener)
+        {
+            if (listener.Name != DbLoggerCategory.Name) return;
+
+            lock (_subscriptions)
+                _subscriptions.Add(listener.Subscribe(this));
+        }
+
+        void IObserver<KeyValuePair<string, object?>>.OnNext(KeyValuePair<string, object?> value)
+        {
+            if (value.Value is CommandEventData data)
+                _commands.Enqueue(data.Command.CommandText);
+        }
+
+        void IObserver<DiagnosticListener>.OnCompleted() { }
+        void IObserver<DiagnosticListener>.OnError(Exception error) { }
+        void IObserver<KeyValuePair<string, object?>>.OnCompleted() { }
+        void IObserver<KeyValuePair<string, object?>>.OnError(Exception error) { }
+
+        public void Dispose()
+        {
+            _listeners.Dispose();
+
+            lock (_subscriptions)
+            {
+                foreach (var subscription in _subscriptions)
+                    subscription.Dispose();
+
+                _subscriptions.Clear();
+            }
+        }
+    }
+
+    [Fact]
+    public async Task GetLastRunStarts_should_answer_when_a_run_began_even_while_it_is_still_in_flight()
+    {
+        // No column says when a run STARTED: LastExecutionUtc is written on the terminal transition, so it
+        // says when one ENDED, and a row that is still running has not written it at all. The InProgress
+        // transition in the audit trail is the only trace of the moment, and it has to be READ — no storage
+        // read populates the StatusAudits navigation, so a reader that walks it gets nothing here.
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-10));
+        var schedule = await PersistSchedule(cursor);
+
+        var running   = NewOccurrence(schedule.Id, cursor);
+        var finished  = NewOccurrence(schedule.Id, cursor.AddMinutes(1));
+        var neverRan  = NewOccurrence(schedule.Id, cursor.AddMinutes(2));
+        var unaudited = NewOccurrence(schedule.Id, cursor.AddMinutes(3));
+
+        foreach (var row in new[] { running, finished, neverRan, unaudited })
+            await _storage.Persist(row);
+
+        await _storage.SetInProgress(running.Id, AuditLevel.Full);
+
+        await _storage.SetInProgress(finished.Id, AuditLevel.Full);
+        await _storage.SetCompleted(finished.Id, 25, AuditLevel.Full);
+
+        // Below Full nothing records that transition, so this row has no recorded start at all.
+        await _storage.SetInProgress(unaudited.Id, AuditLevel.Minimal);
+
+        var starts = await _storage.GetLastRunStarts(
+            [running.Id, finished.Id, neverRan.Id, unaudited.Id]);
+
+        starts.ContainsKey(running.Id).ShouldBeTrue("a run in flight has a recorded start, and nothing else does");
+        starts.ContainsKey(finished.Id).ShouldBeTrue();
+        starts.ContainsKey(neverRan.Id).ShouldBeFalse("a row that never started has no start to report");
+        starts.ContainsKey(unaudited.Id).ShouldBeFalse("nothing recorded the transition, so nothing is answered");
+
+        var ended = (await _storage.Get(t => t.Id == finished.Id))[0].LastExecutionUtc;
+        ended.ShouldNotBeNull();
+        starts[finished.Id].ShouldBeLessThanOrEqualTo(ended!.Value, "a run begins before it ends");
+
+        (await _storage.GetLastRunStarts([])).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task GetLastRunStarts_should_answer_with_the_newest_run_of_a_row_that_ran_more_than_once()
+    {
+        // A requeued occurrence, and every recurring row: the start that answers for the row is the one of the
+        // run it is in now, never the one of an attempt that already ended.
+        var cursor     = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-10));
+        var schedule   = await PersistSchedule(cursor);
+        var occurrence = NewOccurrence(schedule.Id, cursor);
+
+        await _storage.Persist(occurrence);
+
+        await _storage.SetInProgress(occurrence.Id, AuditLevel.Full);
+        await _storage.SetStatus(occurrence.Id, QueuedTaskStatus.Failed, new InvalidOperationException("boom"),
+            AuditLevel.Full);
+
+        var firstAttempt = (await _storage.GetLastRunStarts([occurrence.Id]))[occurrence.Id];
+
+        await Task.Delay(50);
+        await _storage.SetInProgress(occurrence.Id, AuditLevel.Full);
+
+        var secondAttempt = (await _storage.GetLastRunStarts([occurrence.Id]))[occurrence.Id];
+
+        secondAttempt.ShouldBeGreaterThan(firstAttempt, "the second attempt is the run this row stands for");
+    }
+
+    [Fact]
+    public async Task GetStatusAudits_should_answer_the_whole_transition_history_newest_first()
+    {
+        // The audit trail has to be READ. Nothing populates the StatusAudits navigation on a row a query
+        // hands back, so a reader walking it answers an empty history for a row whose audit table holds
+        // every transition it ever made — which is what the status-history endpoint used to do here.
+        var cursor     = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-10));
+        var schedule   = await PersistSchedule(cursor);
+        var occurrence = NewOccurrence(schedule.Id, cursor);
+
+        await _storage.Persist(occurrence);
+        await _storage.SetInProgress(occurrence.Id, AuditLevel.Full);
+        await _storage.SetCompleted(occurrence.Id, 25, AuditLevel.Full);
+
+        (await _storage.Get(t => t.Id == occurrence.Id))[0].StatusAudits
+            .ShouldBeEmpty("the premise: the row a read hands back carries no audits at all");
+
+        var audits = await _storage.GetStatusAudits(occurrence.Id);
+
+        audits.Select(a => a.NewStatus)
+              .ShouldBe([QueuedTaskStatus.Completed, QueuedTaskStatus.InProgress],
+                  "newest transition first, like the endpoint that reads it");
+        audits.ShouldAllBe(a => a.QueuedTaskId == occurrence.Id);
+
+        (await _storage.GetStatusAudits(Guid.NewGuid())).ShouldBeEmpty("a row nobody stored has no history");
+    }
+
+    [Fact]
+    public async Task GetStatusAudits_should_answer_only_for_the_row_it_was_asked_about()
+    {
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-10));
+        var schedule = await PersistSchedule(cursor);
+
+        var asked = NewOccurrence(schedule.Id, cursor);
+        var other = NewOccurrence(schedule.Id, cursor.AddMinutes(1));
+
+        await _storage.Persist(asked);
+        await _storage.Persist(other);
+
+        await _storage.SetStatus(other.Id, QueuedTaskStatus.Failed, new InvalidOperationException("boom"),
+            AuditLevel.Full);
+
+        var audits = await _storage.GetStatusAudits(asked.Id);
+
+        audits.ShouldAllBe(a => a.QueuedTaskId == asked.Id);
+        audits.ShouldNotContain(a => a.NewStatus == QueuedTaskStatus.Failed);
+    }
+
+    [Fact]
+    public async Task GetRunsAudits_should_answer_every_recorded_run_newest_first()
+    {
+        // A recurring row is the one that runs more than once, and its runs live in their own table for
+        // exactly that reason: the row itself keeps only the last duration.
+        var series = await PersistSchedule(FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-10)));
+
+        await _storage.UpdateCurrentRun(series.Id, 11, DateTimeOffset.UtcNow.AddMinutes(1), AuditLevel.Full);
+        await _storage.UpdateCurrentRun(series.Id, 22, DateTimeOffset.UtcNow.AddMinutes(2), AuditLevel.Full);
+
+        (await _storage.Get(t => t.Id == series.Id))[0].RunsAudits
+            .ShouldBeEmpty("the premise, again: the navigation is empty on the row a read hands back");
+
+        var runs = await _storage.GetRunsAudits(series.Id);
+
+        runs.Length.ShouldBe(2);
+        runs.Select(r => r.ExecutionTimeMs).ShouldBe([22, 11], "newest run first");
+        runs.ShouldAllBe(r => r.QueuedTaskId == series.Id);
+
+        (await _storage.GetRunsAudits(Guid.NewGuid())).ShouldBeEmpty();
     }
 
     [Fact]

@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Collections.ObjectModel;
 using System.Linq.Expressions;
 using System.Reflection;
 using EverTask.Abstractions;
@@ -1442,6 +1443,36 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     }
 
     /// <inheritdoc />
+    public virtual async Task<OccurrencePage> GetOccurrencesPage(Guid parentId, bool nonTerminalOnly, int skip,
+                                                                 int take, CancellationToken ct = default)
+    {
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+
+        var query = dbContext.QueuedTasks.AsNoTracking().Where(t => t.ParentTaskId == parentId);
+
+        if (nonTerminalOnly)
+            query = query.Where(NonTerminalOccurrence);
+
+        // The count is asked of the database too: a page exists so the series is never materialized, and
+        // counting it in memory would materialize it anyway.
+        var total = await query.CountAsync(ct).ConfigureAwait(false);
+
+        // A page of nothing is answered without a second round trip, and never as a FETCH clause: a
+        // zero-row FETCH is a syntax error on some engines, not an empty result.
+        if (take <= 0)
+            return new OccurrencePage([], total);
+
+        var rows = await query
+                         .OrderByDescending(t => t.ScheduledExecutionUtc)
+                         .Skip(skip)
+                         .Take(take)
+                         .ToArrayAsync(ct)
+                         .ConfigureAwait(false);
+
+        return new OccurrencePage(rows, total);
+    }
+
+    /// <inheritdoc />
     public virtual async Task<int> CountActiveOccurrences(Guid parentId, CancellationToken ct = default)
     {
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
@@ -1451,6 +1482,68 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                               .Where(t => t.ParentTaskId == parentId)
                               .Where(NonTerminalOccurrence)
                               .CountAsync(ct)
+                              .ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public virtual async Task<IReadOnlyDictionary<Guid, DateTimeOffset>> GetLastRunStarts(
+        IReadOnlyCollection<Guid> taskIds, CancellationToken ct = default)
+    {
+        if (taskIds.Count == 0)
+            return ReadOnlyDictionary<Guid, DateTimeOffset>.Empty;
+
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+
+        var ids = taskIds as Guid[] ?? taskIds.ToArray();
+
+        // One correlated subquery per row over the (QueuedTaskId) index of the audit table, ordered by the
+        // audit IDENTITY and never by its timestamp: SQLite refuses a DateTimeOffset in an ORDER BY, and the
+        // audits of one row are inserted in transition order, so the newest id IS the newest transition.
+        var starts = await dbContext.QueuedTasks
+                                    .AsNoTracking()
+                                    .Where(t => ids.Contains(t.Id))
+                                    .Select(t => new
+                                    {
+                                        t.Id,
+                                        StartedAtUtc = t.StatusAudits
+                                                        .Where(a => a.NewStatus == QueuedTaskStatus.InProgress)
+                                                        .OrderByDescending(a => a.Id)
+                                                        .Select(a => (DateTimeOffset?)a.UpdatedAtUtc)
+                                                        .FirstOrDefault()
+                                    })
+                                    .ToArrayAsync(ct)
+                                    .ConfigureAwait(false);
+
+        return starts.Where(s => s.StartedAtUtc.HasValue)
+                     .ToDictionary(s => s.Id, s => s.StartedAtUtc!.Value);
+    }
+
+    /// <inheritdoc />
+    public virtual async Task<StatusAudit[]> GetStatusAudits(Guid taskId, CancellationToken ct = default)
+    {
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+
+        // Ordered on the audit IDENTITY, never on its timestamp, for the same two reasons as
+        // GetLastRunStarts: SQLite refuses a DateTimeOffset in an ORDER BY, and the audits of one row are
+        // inserted in transition order, so the newest id IS the newest transition.
+        return await dbContext.StatusAudit
+                              .AsNoTracking()
+                              .Where(a => a.QueuedTaskId == taskId)
+                              .OrderByDescending(a => a.Id)
+                              .ToArrayAsync(ct)
+                              .ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public virtual async Task<RunsAudit[]> GetRunsAudits(Guid taskId, CancellationToken ct = default)
+    {
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+
+        return await dbContext.RunsAudit
+                              .AsNoTracking()
+                              .Where(a => a.QueuedTaskId == taskId)
+                              .OrderByDescending(a => a.Id)
+                              .ToArrayAsync(ct)
                               .ConfigureAwait(false);
     }
 

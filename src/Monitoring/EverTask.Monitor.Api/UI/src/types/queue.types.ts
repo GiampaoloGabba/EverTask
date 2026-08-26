@@ -1,5 +1,5 @@
 export interface QueueMetricsDto {
-  queueName: string | null;
+  queueName?: string | null;
   totalTasks: number;
   pendingTasks: number;
   inProgressTasks: number;
@@ -14,7 +14,7 @@ export interface QueueConfigurationDto {
   maxDegreeOfParallelism: number;
   channelCapacity: number;
   queueFullBehavior: string;
-  defaultTimeout: string | null;
+  defaultTimeout?: string | null;
   totalTasks: number;
   pendingTasks: number;
   inProgressTasks: number;

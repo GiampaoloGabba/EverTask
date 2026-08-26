@@ -24,6 +24,11 @@ Docker or Testcontainers here. Subsets filter on namespace: `--filter "FullyQual
   side: hand the scheduler a slot already past — every reconciled occurrence — and it consumes the
   registration within its check interval, so the rescue is `IsScheduled(id) || deliveries.IsDelivering(id)`
   (the delivery registration is taken at enqueue and, with no consumer started, never released).
+- **A handler's counter is not the run counter**: the test tasks bump their counter from inside `Handle`,
+  while `CurrentRunCount` is written afterwards, in the delivery's `finally`. A 50 ms poll grid over a 100 ms
+  handler can observe the increment a millisecond after it happens, so a row read taken on that signal alone
+  reads a run count nobody has written yet. Wait with `WaitForRecurringRunsAsync` — it waits for the audit
+  AND the counter — before asserting on `CurrentRunCount`.
 - **Driving the clock**: pass `clock: new FakeTimeProvider(instant)` to either `CreateIsolatedHost…` overload.
   The base registers it AFTER `AddEverTask` — which uses `TryAddSingleton(TimeProvider.System)`, so an earlier
   registration would lose — and exposes it as `Clock`. Seed rows from `Clock.GetUtcNow()` rather than
@@ -35,6 +40,12 @@ Docker or Testcontainers here. Subsets filter on namespace: `--filter "FullyQual
   to arm its delay (`WaitForPendingTimersAsync`) before jumping, or the jump lands before there is anything to
   elapse. Retry delays are out of scope (they run on `IRetryPolicy`'s own clock) — never expect `Advance()` to
   complete one.
+- **Cronos is the oracle, not a second implementation.** `RecurringTests/CronOracleTests` walks 400
+  occurrences of a fluent schedule and of the cron expression that means the same thing, in nine zones, and
+  demands they agree — from the SECOND occurrence on, because `DayInterval`/`MonthInterval` advance their
+  period before they land and so may differ on the first, which is tested separately. A zone the tz database
+  lacks cannot reach a `RecurringTask` at all (`ScheduleTimeZone.Normalize` refuses an id it cannot resolve),
+  so that case is compared one level down, against the two production pieces the zoned walk is made of.
 - **Which clock the CONTAINER hands out is a separate question.** `RateLimiting/RateLimiterDeterministicClockTests`
   resolves the limiter, the gate and the parking lot from a real `AddEverTask` container, because two of the
   three are built by hand-written factories that pass the clock explicitly: every other rate-limiting test
@@ -71,7 +82,11 @@ Docker or Testcontainers here. Subsets filter on namespace: `--filter "FullyQual
   test arms it (`FailNext` / `FailAlways` / `Heal`), so the failure and the recovery from it both execute for
   real. Used by `RecoveryFinalizationFailureTests` and by the durable-occurrence kick test; a mock in its
   place would make both fictional. It forwards EVERY default interface member explicitly — a new one left out
-  silently runs the interface's own default (a `NotSupportedException`) instead of the inner store.
+  silently runs the interface's own default (a `NotSupportedException`) instead of the inner store, and no
+  test can arm a fault on it because nothing gates it. `FaultInjectingTaskStorageContractTests` is what makes
+  that a fact instead of a promise: it walks `ITaskStorage` by reflection and names every member the wrapper
+  does not declare. It has a control on `TestTaskStorage`, which declares only the mandatory members, so an
+  empty answer means "all forwarded" and not "the reflection matched nothing".
   `RunBefore(operation, hook)` is the other half: the hook runs on the calling thread just before the
   operation reaches the inner store, so a test can land something else inside the window that operation is
   about to open (a cancel arriving mid-`MaterializeOccurrence`) or measure how many callers are inside one at

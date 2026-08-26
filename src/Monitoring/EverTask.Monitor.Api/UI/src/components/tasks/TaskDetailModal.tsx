@@ -6,9 +6,13 @@ import { JsonViewer } from '@/components/common/JsonViewer';
 import { Timeline } from '@/components/common/Timeline';
 import { ExceptionViewer } from '@/components/common/ExceptionViewer';
 import { ExecutionLogsTab } from '@/components/tasks/ExecutionLogsTab';
+import { OccurrencesTab } from '@/components/tasks/OccurrencesTab';
+import { LateBadge, MisfireBadge } from '@/components/tasks/OccurrenceBadges';
 import { TaskDetailDto, AuditLevel } from '@/types/task.types';
 import { format } from 'date-fns';
-import { Copy, RefreshCw, Calendar, Clock, Timer, CalendarClock, Hourglass } from 'lucide-react';
+import { Copy, RefreshCw, Calendar, Clock, Timer, CalendarClock, Hourglass, Layers, Globe, OctagonX } from 'lucide-react';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Breadcrumb } from '@/components/common/Breadcrumb';
 import { useState } from 'react';
@@ -20,7 +24,7 @@ interface TaskDetailModalProps {
 export function TaskDetailModal({ task }: TaskDetailModalProps) {
   const [copiedId, setCopiedId] = useState(false);
 
-  const formatDate = (dateStr: string | null) => {
+  const formatDate = (dateStr: string | null | undefined) => {
     if (!dateStr) return '-';
     try {
       return format(new Date(dateStr), 'MMM d, yyyy HH:mm:ss');
@@ -102,6 +106,10 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
     { label: handlerInfo.shortName },
   ];
 
+  // A durable SCHEDULE row is the one that owns occurrences; an occurrence carries a parent instead.
+  const isOccurrence = task.parentTaskId !== null && task.parentTaskId !== undefined;
+  const isDurableSchedule = task.occurrenceMode === 'Durable' && !isOccurrence;
+
   return (
     <div className="space-y-6">
       {/* Breadcrumb */}
@@ -132,6 +140,38 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
                 <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-200">
                   <RefreshCw className="h-3 w-3 mr-1" />
                   Recurring
+                </Badge>
+              )}
+              {isDurableSchedule && (
+                <Badge variant="outline" className="bg-indigo-50 text-indigo-700 border-indigo-200">
+                  <Layers className="h-3 w-3 mr-1" />
+                  Durable occurrences
+                </Badge>
+              )}
+              {isOccurrence && (
+                <Badge variant="outline" className="bg-indigo-50 text-indigo-700 border-indigo-200">
+                  <Layers className="h-3 w-3 mr-1" />
+                  Occurrence
+                </Badge>
+              )}
+              {task.occurrence && (
+                <MisfireBadge
+                  kind={task.occurrence.misfireKind}
+                  missedCount={task.occurrence.missedCount}
+                  missedCountIsExact={task.occurrence.missedCountIsExact}
+                />
+              )}
+              {isOccurrence && (
+                <LateBadge
+                  slotUtc={task.nominalSlotUtc}
+                  startedAtUtc={task.startedAtUtc}
+                  status={task.status}
+                />
+              )}
+              {task.timeZoneId && (
+                <Badge variant="outline" className="bg-sky-50 text-sky-700 border-sky-200">
+                  <Globe className="h-3 w-3 mr-1" />
+                  {task.timeZoneId}
                 </Badge>
               )}
               <Badge variant="outline" className="bg-gray-50 text-gray-700 border-gray-300">
@@ -193,6 +233,22 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
           </div>
         </CardContent>
       </Card>
+
+      {/* Catch-up halt (a durable schedule that stopped itself) */}
+      {task.halt && (
+        <Alert variant="destructive">
+          <OctagonX className="h-4 w-4" />
+          <AlertTitle>Catch-up halted</AlertTitle>
+          <AlertDescription>
+            {task.halt.reason ?? 'The backlog exceeded the configured cap.'}{' '}
+            {task.halt.isExact ? '' : 'At least '}
+            {task.halt.detectedAtLeast} slot{task.halt.detectedAtLeast === 1 ? ' was' : 's were'} due at cursor{' '}
+            {formatDate(task.halt.cursorUtc)}, decided {formatDate(task.halt.atUtc)} against schedule version{' '}
+            {task.halt.scheduleVersion}. A halt does not release itself: call{' '}
+            <code>ResumeSchedule</code> or <code>Reschedule</code> to let the series continue.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Task Information */}
       <Card>
@@ -272,6 +328,80 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
                 </div>
               )}
 
+              {isOccurrence && (
+                <div>
+                  <span className="text-xs uppercase tracking-wide text-gray-600 font-medium">Schedule</span>
+                  <p className="text-sm font-medium mt-1">
+                    <Link className="text-blue-600 hover:underline break-all" to={`/tasks/${task.parentTaskId}`}>
+                      {task.parentTaskId}
+                    </Link>
+                  </p>
+                  {task.occurrence?.runNumber && (
+                    <p className="text-xs text-muted-foreground mt-1">Run {task.occurrence.runNumber} of the series</p>
+                  )}
+                </div>
+              )}
+
+              {task.nominalSlotUtc && (
+                <div>
+                  <span className="text-xs uppercase tracking-wide text-gray-600 font-medium">Nominal Slot</span>
+                  <div className="flex items-center gap-1 text-sm font-medium mt-1">
+                    <CalendarClock className="h-3 w-3" />
+                    {formatDate(task.nominalSlotUtc)}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    The slot this occurrence stands for, not the moment it was fired
+                  </p>
+                </div>
+              )}
+
+              {task.occurrence?.misfireKind && task.occurrence.missedFromUtc && (
+                <div>
+                  <span className="text-xs uppercase tracking-wide text-gray-600 font-medium">Missed Work</span>
+                  <p className="text-sm font-medium mt-1">
+                    {formatDate(task.occurrence.missedFromUtc)} &rarr; {formatDate(task.occurrence.missedThroughUtc)}
+                  </p>
+                  {task.occurrence.missedCount !== null && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {task.occurrence.missedCountIsExact === false ? 'At least ' : ''}
+                      {task.occurrence.missedCount} slot{task.occurrence.missedCount === 1 ? '' : 's'} in that range
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {task.isRecurring && task.occurrenceMode && (
+                <div>
+                  <span className="text-xs uppercase tracking-wide text-gray-600 font-medium">Occurrence Mode</span>
+                  <p className="text-sm font-medium mt-1">
+                    {task.occurrenceMode === 'Durable'
+                      ? 'Durable — every due slot becomes its own row'
+                      : 'Inline — the schedule row runs the handler itself'}
+                  </p>
+                </div>
+              )}
+
+              {task.isRecurring && task.misfirePolicy && (
+                <div>
+                  <span className="text-xs uppercase tracking-wide text-gray-600 font-medium">On Misfire</span>
+                  <p className="text-sm font-medium mt-1">{task.misfirePolicy}</p>
+                </div>
+              )}
+
+              {task.timeZoneId && (
+                <div>
+                  <span className="text-xs uppercase tracking-wide text-gray-600 font-medium">Time Zone</span>
+                  <p className="text-sm font-medium mt-1">{task.timeZoneId}</p>
+                </div>
+              )}
+
+              {(task.scheduleVersion ?? 0) > 0 && (
+                <div>
+                  <span className="text-xs uppercase tracking-wide text-gray-600 font-medium">Schedule Version</span>
+                  <p className="text-sm font-medium mt-1">{task.scheduleVersion}</p>
+                </div>
+              )}
+
               {task.isRecurring && task.recurringInfo && (
                 <div>
                   <span className="text-xs uppercase tracking-wide text-gray-600 font-medium">Recurring Schedule</span>
@@ -324,7 +454,7 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
         </CardHeader>
         <CardContent>
           <Tabs defaultValue="status" className="w-full">
-            <TabsList className="grid w-full grid-cols-3">
+            <TabsList className={isDurableSchedule ? 'grid w-full grid-cols-4' : 'grid w-full grid-cols-3'}>
               <TabsTrigger value="status">
                 Status History ({statusAudits.length})
               </TabsTrigger>
@@ -334,6 +464,11 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
               <TabsTrigger value="logs">
                 Execution Logs
               </TabsTrigger>
+              {isDurableSchedule && (
+                <TabsTrigger value="occurrences">
+                  Occurrences
+                </TabsTrigger>
+              )}
             </TabsList>
             <TabsContent value="status" className="mt-4">
               {statusAudits.length > 0 ? (
@@ -356,6 +491,11 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
             <TabsContent value="logs" className="mt-4">
               <ExecutionLogsTab taskId={task.id} />
             </TabsContent>
+            {isDurableSchedule && (
+              <TabsContent value="occurrences" className="mt-4">
+                <OccurrencesTab scheduleId={task.id} />
+              </TabsContent>
+            )}
           </Tabs>
         </CardContent>
       </Card>

@@ -36,11 +36,11 @@ public class EverTaskApiOptions
     public bool EnableUI { get; set; } = true;
 
     /// <summary>
-    /// No longer used. The Swashbuckle integration was removed in 3.12; setting this has no effect.
+    /// No longer used. The Swashbuckle integration was removed in 4.0; setting this has no effect.
     /// Use <see cref="EnableOpenApiDocument"/> (net9.0+) and optionally the EverTask.Monitor.Api.Scalar
     /// package for an interactive API reference.
     /// </summary>
-    [Obsolete("The Swashbuckle integration was removed in 3.12 and this setting is a no-op. Use EnableOpenApiDocument (net9.0+) and optionally the EverTask.Monitor.Api.Scalar package.")]
+    [Obsolete("The Swashbuckle integration was removed in 4.0 and this setting is a no-op. Use EnableOpenApiDocument (net9.0+) and optionally the EverTask.Monitor.Api.Scalar package.")]
     public bool EnableSwagger { get; set; } = false;
 
     /// <summary>

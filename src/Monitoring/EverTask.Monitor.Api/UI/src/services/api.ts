@@ -10,7 +10,8 @@ import type {
   StatusAuditDto,
   RunsAuditDto,
   ExecutionLogsResponse,
-  TaskCountsDto
+  TaskCountsDto,
+  OccurrencesResponse
 } from '@/types/task.types';
 import {
   DateRange,
@@ -172,6 +173,13 @@ class ApiService {
     await this.initialize();
     return this.client.get<ExecutionLogsResponse>(`/tasks/${id}/execution-logs`, {
       params: { skip, take, level }
+    });
+  }
+
+  async getOccurrences(id: string, skip: number = 0, take: number = 100, nonTerminalOnly?: boolean) {
+    await this.initialize();
+    return this.client.get<OccurrencesResponse>(`/tasks/${id}/occurrences`, {
+      params: { skip, take, nonTerminalOnly }
     });
   }
 

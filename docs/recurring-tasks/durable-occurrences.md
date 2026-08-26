@@ -255,7 +255,10 @@ moves for every schedule at once.
 | `Schedule … skipped N due slot(s) from …: older than the most recent slots the catch-up cap keeps` | `SkipOldest` dropped the part of the backlog beyond `MaxOccurrences` |
 | `Schedule … skipped N due slot(s) from …: the skip policy does not replay a slot that is no longer current` | a durable schedule under `Skip` moved past a backlog |
 | `Stale occurrence … was stranded in … and has been requeued` | an occurrence with no live delivery behind it was rescued |
+| `Catch-up of schedule … started from slot …` | a replay began, with how many slots it owes |
+| `Catch-up of schedule … completed: N occurrence(s) materialized …` | the backlog drained and the schedule is keeping up again |
 | `Occurrence … cannot be rebuilt from its row and was marked Failed` | its type, payload or handler no longer loads, so nothing can deliver it |
+| `Occurrence … cannot be rebuilt from its row and could not be marked Failed (it is still …)` | the same, except the write that should have ended it did not land, so the occurrence still holds its slot of the budget |
 | `Schedule … cannot be rebuilt from its row and materializes nothing` | the same on the schedule row, which is parked for the retry instead of being ended |
 | `Catch-up of schedule … halted at cursor …` | the backlog exceeded `MaxOccurrences` under `Halt` |
 | `Slot … of schedule … already has an occurrence` | the cursor pointed at a slot that was already served, and was carried past it |
@@ -263,6 +266,11 @@ moves for every schedule at once.
 Every dropped run says which limit dropped it, and one catch-up run can report two of them with a count each.
 An age window too narrow for the outage and a cap that kept only the newest slots are different settings with
 different fixes; one number under one cause sent you to the wrong one.
+
+The two catch-up messages are the ends of one replay, and everything in between is per occurrence: without
+them there is no way to tell where a backlog started, how big it was, or that it is over. They are per
+process — a host restarted mid-replay announces a new one — and a replay that halts ends with the halt event
+instead of a completion.
 
 The counting messages say `at least N` instead of `N` when the number is a lower bound, for the same reason
 `MissedCountIsExact` exists: a walked grid is counted under a bound, and a bounded count is never reported as

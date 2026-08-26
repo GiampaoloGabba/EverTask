@@ -5,7 +5,8 @@ import {
   PaginationParams,
   TasksPagedResponse,
   TaskDetailDto,
-  TaskCountsDto
+  TaskCountsDto,
+  OccurrencesResponse
 } from '@/types/task.types';
 
 export const useTasks = (
@@ -47,6 +48,29 @@ export const useTaskCounts = (
       const response = await apiService.getTaskCounts();
       return response.data;
     },
+    ...options,
+  });
+};
+
+/**
+ * One page of the occurrences of a schedule. The paging is the SERVER's — a schedule with a long retention
+ * behind it holds hundreds of thousands of rows — so `skip` belongs to the query key: two pages are two
+ * different answers, not the same one filtered.
+ */
+export const useOccurrences = (
+  scheduleId: string,
+  enabled: boolean,
+  skip: number = 0,
+  take: number = 100,
+  options?: Omit<UseQueryOptions<OccurrencesResponse>, 'queryKey' | 'queryFn'>
+) => {
+  return useQuery({
+    queryKey: ['occurrences', scheduleId, skip, take],
+    queryFn: async () => {
+      const response = await apiService.getOccurrences(scheduleId, skip, take);
+      return response.data;
+    },
+    enabled: enabled && !!scheduleId,
     ...options,
   });
 };

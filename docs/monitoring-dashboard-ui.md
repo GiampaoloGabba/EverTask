@@ -9,7 +9,7 @@ nav_order: 4
 
 The EverTask dashboard is a React interface for monitoring task execution, debugging failures, and spotting performance patterns.
 
-> **Note**: The dashboard is currently **read-only** (v3.3). You can view, analyze, filter, and export all task data, but task management operations (stop, restart, cancel) will be added in future releases.
+> **Note**: The dashboard is **read-only**. You can view, analyze, filter and export all task data; anything that changes a schedule (reschedule, resume a halted catch-up, requeue a failed occurrence, cancel a series) is [`ITaskScheduleManager`](recurring-tasks/managing-tasks.md), called from your own code behind your own authorization.
 
 **Quick Access:**
 ```
@@ -26,6 +26,7 @@ The dashboard helps you answer critical questions about your background tasks:
 - **"Is my system healthy?"** - Monitor success rates, execution times, and queue metrics at a glance
 - **"Which tasks are slow?"** - Analyze performance trends and identify bottlenecks
 - **"How reliable are my recurring tasks?"** - Track execution history across all attempts
+- **"What did that outage cost me?"** - See the occurrences a [durable schedule](recurring-tasks/durable-occurrences.md) still owes, how far behind it is, and whether a catch-up stopped itself
 
 ## Main Views
 
@@ -35,19 +36,27 @@ Your starting point shows the big picture: total tasks, success rates, active qu
 
 The Recent Activity feed shows the last 50 events as they happen, so you can watch tasks flow through the system in real-time.
 
+When any schedule runs with [durable occurrences](recurring-tasks/durable-occurrences.md), a **Durable Occurrences** card appears with the whole backlog by state — pending, active, failed, skipped, completed — the oldest slot that has not started yet, and how far behind it is. A schedule whose catch-up halted itself over its overflow cap is called out there too, because a halt never releases itself: someone has to resume or reschedule the series.
+
 ### Task List & Filtering
 
 Filter tasks by status (Queued, In Progress, Completed, Failed, Cancelled), queue name, task type, or date range. Combine filters to narrow down exactly what you need: "Show me all failed payment tasks from yesterday in the critical queue."
 
 Search is instant and works across task IDs, types, and parameters. Pagination keeps things fast even with millions of tasks in storage.
 
+Occurrences of a durable schedule are tasks like any other, so they show up in the list with an **Occurrence** badge, a **Catch-up** or **Fire once** badge when they stand for missed work, and how late they started against their nominal slot. The API filters behind them (`onlyOccurrences`, `onlyCatchUp`, `parentTaskId`) are documented in the [API Reference](monitoring-api-reference.md#get-tasks).
+
 ### Task Details
 
-Click any task to see everything about its lifecycle. The modal view has three tabs:
+Click any task to see everything about its lifecycle. The modal view has three tabs — four on a durable schedule:
 
 **Status History** shows every state transition (Queued → InProgress → Completed/Failed) with timestamps. Perfect for understanding "when did this task actually start?" or "how long was it queued?"
 
 **Execution History** is especially valuable for recurring tasks. See all execution attempts, their durations, and outcomes. Quickly spot if a recurring task that usually takes 2 seconds suddenly took 30 seconds on the last run.
+
+**Occurrences** appears on a durable schedule row only. It lists the rows that schedule materialized, newest slot first, with the run number each of them is, the misfire it stands for, and how late it started. A hundred at a time, with Previous and Next. The storage hands over one page: a schedule with a year of retention behind it holds far more rows than a tab can show. Each line opens that occurrence's own detail page — it is a task row, so it has its own audits and logs.
+
+A schedule row also carries what its definition says: the occurrence mode, the misfire policy, the time zone its calendar is read on, and the schedule version, which changes every time the schedule is [rescheduled at runtime](recurring-tasks/managing-tasks.md). An occurrence carries the other half — the schedule it belongs to, its nominal slot, and the range of missed slots it was created out of.
 
 **Execution Logs** is your debugging powerhouse. If you enabled persistent logging, you'll see a terminal-style viewer with color-coded log levels (Info in blue, Warnings in yellow, Errors in red). Stack traces get syntax highlighting, and you can export logs to JSON/CSV for deeper analysis.
 
@@ -147,7 +156,10 @@ See the dashboard in action with these 10 screenshots showing all major features
 
 ## Coming in Future Releases
 
-Task management operations (stop, restart, cancel tasks), runtime parameter editing, and queue management (pause/resume) are planned for future versions.
+Write operations from the dashboard itself — requeue, resume, cancel, queue pause/resume — wait on an
+authorization model of their own: the dashboard's single username and password is a read credential, and
+operations need a role that is not it. Until then those calls live in your application code, where the
+authorization already is.
 
 ## Next Steps
 

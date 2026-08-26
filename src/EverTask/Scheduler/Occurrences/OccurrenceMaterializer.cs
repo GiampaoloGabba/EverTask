@@ -36,6 +36,7 @@ internal sealed class OccurrenceMaterializer
 
     private readonly ConcurrentDictionary<Guid, ScheduleGate> _gates = new();
     private readonly ConcurrentDictionary<Guid, DateTimeOffset> _haltReported = new();
+    private readonly ConcurrentDictionary<Guid, CatchUpEpisode> _catchUps = new();
 
     private IEverTaskWorkerExecutor? _workerExecutor;
     private OccurrenceProviderRetryRegistry? _providerRetries;
@@ -296,11 +297,21 @@ internal sealed class OccurrenceMaterializer
             return;
         }
 
+        // The episode boundary, decided from the plan and reported before the rows exist: a consumer that only
+        // sees the per-occurrence events cannot tell where one replay begins and ends.
+        TrackCatchUpEpisode(executor, parentId, plan, now);
+
         var pass = await MaterializeAsync(scope.ServiceProvider, storage, snapshot, definition, recovered, executor,
             plan, auditLevel, now, identity, ct).ConfigureAwait(false);
 
+        CountCatchUpOccurrences(parentId, pass.Created);
+
         if (pass.Finalized)
         {
+            // The series ended in the middle of its own replay: the episode is over whatever the backlog
+            // still held, and saying so here is the only chance to close it — the row is done being read.
+            ReportCatchUpCompleted(executor, parentId, now);
+
             _logger.DurableSeriesCompleted(parentId);
 
             // A durable series ends HERE and nowhere else — the cursor is nulled in the same commit that
@@ -920,20 +931,26 @@ internal sealed class OccurrenceMaterializer
         await storage.SetStatus(child.Id, QueuedTaskStatus.Failed, reason, auditLevel, null, ct)
                      .ConfigureAwait(false);
 
-        _logger.OccurrenceRowUnusable(reason, child.Id, parentId);
-
+        // Read back BEFORE saying anything: both the log line and the event state what happened to the row,
+        // and "was marked Failed" is exactly what a swallowed write did NOT do. Reported that way, an
+        // operator reads a slot as freed while the schedule is still held behind the occurrence.
         var written = (await storage.Get(t => t.Id == child.Id, ct).ConfigureAwait(false)).FirstOrDefault();
         var ended   = written is null || !QueuedTask.IsNonTerminalStatus(written.Status);
 
-        if (!ended)
-            _logger.OccurrenceTerminalizationLost(child.Id, parentId, written!.Status);
+        if (ended)
+            _logger.OccurrenceRowUnusable(reason, child.Id, parentId);
+        else
+            _logger.OccurrenceTerminalizationLost(reason, child.Id, parentId, written!.Status);
 
         if (WorkerExecutor is not { HasEventSubscribers: true } worker)
             return ended;
 
         worker.PublishExternalEvent(executorForEvents, SeverityLevel.Error,
-            string.Create(CultureInfo.InvariantCulture,
-                $"Occurrence {child.Id} of schedule {parentId} cannot be rebuilt from its row and was marked Failed: {reason.Message}"));
+            ended
+                ? string.Create(CultureInfo.InvariantCulture,
+                    $"Occurrence {child.Id} of schedule {parentId} cannot be rebuilt from its row and was marked Failed: {reason.Message}")
+                : string.Create(CultureInfo.InvariantCulture,
+                    $"Occurrence {child.Id} of schedule {parentId} cannot be rebuilt from its row and could not be marked Failed (it is still {written!.Status}): {reason.Message}"));
 
         return ended;
     }
@@ -1093,6 +1110,7 @@ internal sealed class OccurrenceMaterializer
     private void DropGate(Guid parentId)
     {
         _haltReported.TryRemove(parentId, out _);
+        _catchUps.TryRemove(parentId, out _);
         _enumerator.Forget(parentId);
 
         if (_gates.TryGetValue(parentId, out var gate))
@@ -1209,6 +1227,77 @@ internal sealed class OccurrenceMaterializer
     }
 
     /// <summary>
+    /// Opens or closes the catch-up EPISODE a schedule is in, which is what the two boundary events report.
+    /// </summary>
+    /// <remarks>
+    /// A catch-up spans as many runs as the concurrency budget takes to drain the backlog, and each of those
+    /// runs reports only the rows it wrote: without a boundary a consumer cannot tell one replay from the
+    /// ordinary occurrences around it, and cannot tell when it is over. The episode is decided from the PLAN —
+    /// a plan that stamps its rows as catch-up work is a replay in progress, one that does not is a schedule
+    /// keeping up — so it opens before the rows exist and closes on the first run that owes nothing more. It
+    /// is per-process state: a restart in the middle of a replay opens a new episode, which is what the
+    /// materializer itself does with the backlog.
+    /// </remarks>
+    private void TrackCatchUpEpisode(TaskHandlerExecutor executor, Guid parentId, DueSlotPlan plan,
+                                     DateTimeOffset now)
+    {
+        if (plan.Misfire is { Kind: MisfireKind.CatchUp } misfire)
+        {
+            if (!_catchUps.TryAdd(parentId, new CatchUpEpisode(now)))
+                return;
+
+            _logger.CatchUpStarted(parentId, misfire.MissedFromUtc, misfire.MissedCount,
+                misfire.MissedCountIsExact);
+
+            if (WorkerExecutor is not { HasEventSubscribers: true } worker)
+                return;
+
+            var due = misfire.MissedCountIsExact
+                          ? misfire.MissedCount.ToString(CultureInfo.InvariantCulture)
+                          : string.Create(CultureInfo.InvariantCulture, $"at least {misfire.MissedCount}");
+
+            worker.PublishExternalEvent(executor, SeverityLevel.Information,
+                string.Create(CultureInfo.InvariantCulture,
+                    $"Catch-up of schedule {parentId} started from slot {misfire.MissedFromUtc:O}: {due} slot(s) are due"));
+
+            return;
+        }
+
+        // Nothing left to replay: this run planned ordinary work, so whatever the episode was owed has been
+        // materialized (or dropped, which is reported on its own). Only a plan that ran out of WORK says
+        // that — one that ran out of concurrency budget plans nothing at all while the replay is at its
+        // busiest, and reading that as the end would close and reopen the episode between every two
+        // occurrences of a serial catch-up.
+        if (plan.StopReason == DueSlotStopReason.Exhausted)
+            ReportCatchUpCompleted(executor, parentId, now);
+    }
+
+    /// <summary>Adds what a pass really wrote to the episode's tally, when one is open.</summary>
+    private void CountCatchUpOccurrences(Guid parentId, int created)
+    {
+        if (created > 0 && _catchUps.TryGetValue(parentId, out var episode))
+            Interlocked.Add(ref episode.Materialized, created);
+    }
+
+    /// <summary>Closes the episode a schedule was in, if it was in one.</summary>
+    private void ReportCatchUpCompleted(TaskHandlerExecutor executor, Guid parentId, DateTimeOffset now)
+    {
+        if (!_catchUps.TryRemove(parentId, out var episode))
+            return;
+
+        var materialized = Volatile.Read(ref episode.Materialized);
+
+        _logger.CatchUpCompleted(parentId, materialized, now - episode.StartedAtUtc);
+
+        if (WorkerExecutor is not { HasEventSubscribers: true } worker)
+            return;
+
+        worker.PublishExternalEvent(executor, SeverityLevel.Information,
+            string.Create(CultureInfo.InvariantCulture,
+                $"Catch-up of schedule {parentId} completed: {materialized} occurrence(s) materialized since {episode.StartedAtUtc:O}"));
+    }
+
+    /// <summary>
     /// Reports a halt, rate-limited per schedule: the operational retry comes back every minute, and a
     /// schedule nobody has resumed yet must stay visible without filling the dashboard.
     /// </summary>
@@ -1284,6 +1373,16 @@ internal sealed class OccurrenceMaterializer
         int ServedSlots,
         bool Finalized,
         bool WonEveryWrite);
+
+    /// <summary>One catch-up episode of a schedule: when this process saw it start, and what it has written.</summary>
+    private sealed class CatchUpEpisode(DateTimeOffset startedAtUtc)
+    {
+        public readonly DateTimeOffset StartedAtUtc = startedAtUtc;
+
+        /// <summary>Occurrences materialized since the episode opened. Written by one run at a time, but the
+        /// gate is per schedule and a re-entrant run may add to it, so the add is interlocked.</summary>
+        public int Materialized;
+    }
 
     /// <summary>Per-schedule serialization plus the pending-work flag that keeps a coalesced run from vanishing.</summary>
     private sealed class ScheduleGate

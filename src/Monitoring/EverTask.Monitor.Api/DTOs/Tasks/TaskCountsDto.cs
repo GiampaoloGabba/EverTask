@@ -12,4 +12,14 @@ public record TaskCountsDto(
     int Standard,
     int Recurring,
     int Failed
-);
+)
+{
+    // An init property rather than a fifth positional parameter: the constructor and Deconstruct signatures of
+    // a public record stay what they were (X4).
+
+    /// <summary>
+    /// Count of materialized occurrences — the rows a durable schedule created, which are also counted in
+    /// <see cref="Standard"/> because each of them is a one-shot task in its own right.
+    /// </summary>
+    public int Occurrences { get; init; }
+}

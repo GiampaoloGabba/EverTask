@@ -1,4 +1,4 @@
-using EverTask.Tests.Monitoring.TestData;
+﻿using EverTask.Tests.Monitoring.TestData;
 
 namespace EverTask.Tests.Monitoring.API.Services;
 
@@ -75,6 +75,48 @@ public class DashboardServiceTests
         {
             result[0].Timestamp.ShouldBeGreaterThanOrEqualTo(result[1].Timestamp);
         }
+    }
+
+    [Fact]
+    public async Task Should_average_the_durations_the_runs_measured_on_rows_that_carry_no_audit()
+    {
+        // Every relational read hands back rows whose StatusAudits navigation is empty — nothing populates
+        // it — so an average derived from that trail answered 0.0 on all four providers. The measured
+        // duration is a column, and it is on every row a completion wrote.
+        var fast = CreateTask(QueuedTaskStatus.Completed);
+        var slow = CreateTask(QueuedTaskStatus.Completed);
+
+        fast.ExecutionTimeMs = 100;
+        slow.ExecutionTimeMs = 300;
+
+        _storageMock.Setup(s => s.GetAll(It.IsAny<CancellationToken>())).ReturnsAsync([fast, slow]);
+
+        (await _service.GetOverviewAsync(DateRange.Today)).AvgExecutionTimeMs.ShouldBe(200);
+    }
+
+    [Fact]
+    public async Task Should_leave_out_of_the_average_the_runs_nobody_measured()
+    {
+        // A failure stamps the end and leaves the duration at 0, and so does a series finalized WITHOUT a
+        // run — the recovery of a recurring series past its bound. Counting those zeros as durations halves
+        // the mean of a store that has them.
+        var measured  = CreateTask(QueuedTaskStatus.Completed);
+        var failed    = CreateTask(QueuedTaskStatus.Failed);
+        var finalized = CreateTask(QueuedTaskStatus.Completed);
+
+        measured.ExecutionTimeMs  = 100;
+        failed.ExecutionTimeMs    = 0;
+        finalized.ExecutionTimeMs = 0;
+
+        _storageMock.Setup(s => s.GetAll(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([measured, failed, finalized]);
+
+        (await _service.GetOverviewAsync(DateRange.Today)).AvgExecutionTimeMs.ShouldBe(100);
+
+        _storageMock.Setup(s => s.GetAll(It.IsAny<CancellationToken>())).ReturnsAsync([failed, finalized]);
+
+        (await _service.GetOverviewAsync(DateRange.Today)).AvgExecutionTimeMs
+            .ShouldBe(0, "nothing was measured, and no number is invented for it");
     }
 
     private List<QueuedTask> CreateTasksWithVariousStatuses()

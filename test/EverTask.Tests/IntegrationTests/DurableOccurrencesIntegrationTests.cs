@@ -728,17 +728,64 @@ public class DurableOccurrencesIntegrationTests : IsolatedIntegrationTestBase
 
         var materializer = Host!.Services.GetRequiredService<OccurrenceMaterializer>();
 
-        await materializer.RunAsync(scheduleId, null);
+        // The event is the only thing an operator sees, and it is the half that used to lie: the run reads the
+        // row back to decide whether the slot is free, then announced "was marked Failed" whatever it read.
+        var events = new ConcurrentQueue<EverTaskEventData>();
+        Task Collect(EverTaskEventData data)
+        {
+            events.Enqueue(data);
+            return Task.CompletedTask;
+        }
 
-        (await _shared.Get(t => t.Id == unusable.Id))[0].Status.ShouldBe(QueuedTaskStatus.Queued,
-            "the premise: the write was swallowed exactly the way a relational provider swallows its own");
+        WorkerExecutor.TaskEventOccurredAsync += Collect;
 
-        (await OccurrencesOfAsync(scheduleId)).ShouldHaveSingleItem().Id.ShouldBe(unusable.Id,
-            "so the slot it holds is still taken: only a terminal state that really landed frees capacity");
+        try
+        {
+            await materializer.RunAsync(scheduleId, null);
 
-        await materializer.RunAsync(scheduleId, null);
+            (await _shared.Get(t => t.Id == unusable.Id))[0].Status.ShouldBe(QueuedTaskStatus.Queued,
+                "the premise: the write was swallowed exactly the way a relational provider swallows its own");
 
-        (await _shared.Get(t => t.Id == unusable.Id))[0].Status.ShouldBe(QueuedTaskStatus.Failed);
+            (await OccurrencesOfAsync(scheduleId)).ShouldHaveSingleItem().Id.ShouldBe(unusable.Id,
+                "so the slot it holds is still taken: only a terminal state that really landed frees capacity");
+
+            // Publishing is fire-and-forget, so the event is waited for rather than read when the call returns.
+            await TaskWaitHelper.WaitForConditionAsync(
+                () => events.Any(e => e.Message?.Contains("cannot be rebuilt from its row",
+                                                          StringComparison.Ordinal) == true),
+                20000);
+
+            var lost = events.Single(e => e.Message?.Contains("cannot be rebuilt from its row",
+                                                              StringComparison.Ordinal) == true);
+
+            lost.Severity.ShouldBe(nameof(SeverityLevel.Error));
+            lost.Message.ShouldContain("could not be marked Failed",
+                customMessage: "the row is still Queued, and the event is what an operator reads that from");
+            lost.Message.ShouldContain(nameof(QueuedTaskStatus.Queued),
+                customMessage: "and it names the state the occurrence is actually in");
+            lost.Message.Contains("and was marked Failed", StringComparison.Ordinal).ShouldBeFalse(
+                "announcing a terminal state that never landed says the slot is free while the series is still " +
+                "held behind the occurrence");
+
+            events.Clear();
+
+            await materializer.RunAsync(scheduleId, null);
+
+            (await _shared.Get(t => t.Id == unusable.Id))[0].Status.ShouldBe(QueuedTaskStatus.Failed);
+
+            await TaskWaitHelper.WaitForConditionAsync(
+                () => events.Any(e => e.Message?.Contains("and was marked Failed", StringComparison.Ordinal) == true),
+                20000);
+
+            events.Single(e => e.Message?.Contains("cannot be rebuilt from its row", StringComparison.Ordinal) == true)
+                  .Message.ShouldContain("and was marked Failed",
+                      customMessage: "and the run whose write DID land says so, so the two are told apart");
+        }
+        finally
+        {
+            WorkerExecutor.TaskEventOccurredAsync -= Collect;
+        }
+
         (await OccurrencesOfAsync(scheduleId)).Length.ShouldBe(2,
             "and the series moves on once the row is really terminal");
     }
@@ -2021,6 +2068,104 @@ public class DurableOccurrencesIntegrationTests : IsolatedIntegrationTestBase
 
         slots.ShouldBe([from, from.AddMinutes(1), from.AddMinutes(2), from.AddMinutes(3), from.AddMinutes(4)],
             "a backfill replays the past it was given, one row per slot, oldest first");
+    }
+
+    [Fact]
+    public async Task A_backfill_asked_for_a_task_key_that_already_has_a_schedule_keeps_the_cursor_the_row_carries()
+    {
+        // BackfillFrom decides where a series STARTS, so it is a first-registration decision: an idempotent
+        // re-registration of the same key keeps the cursor the row already carries, which for a durable
+        // schedule is the materializer's alone. Anything that means to replay a past has to register its own
+        // series — the sample's replay endpoint does exactly that.
+        await StartHostAsync(startHost: false);
+
+        var scheduleId = await Dispatcher.Dispatch(new DurableProbeTask("keyed"),
+            r => r.Schedule()
+                  .Every(1).Hours()
+                  .OnMisfire(m => m.CatchUp(new CatchUpOptions(TimeSpan.FromHours(6), 20))),
+            taskKey: "durable-backfill-key");
+
+        var cursor = (await _shared.Get(t => t.Id == scheduleId))[0].NextRunUtc;
+        cursor.ShouldNotBeNull();
+
+        var reDispatched = await Dispatcher.Dispatch(new DurableProbeTask("keyed"),
+            r => r.Schedule()
+                  .Every(1).Hours()
+                  .OnMisfire(m => m.CatchUp(new CatchUpOptions(TimeSpan.FromHours(6), 20)))
+                  .BackfillFrom(DateTimeOffset.UtcNow.AddHours(-5)),
+            taskKey: "durable-backfill-key");
+
+        reDispatched.ShouldBe(scheduleId, "the task key addresses the same row");
+
+        (await _shared.Get(t => t.Id == scheduleId))[0].NextRunUtc.ShouldBe(cursor,
+            "the backfill is ignored on a row that already has a cursor: nothing is replayed");
+
+        (await OccurrencesOfAsync(scheduleId)).ShouldBeEmpty();
+    }
+
+    // ---- The boundaries of one catch-up episode -----------------------------------------------------
+
+    [Fact]
+    public async Task A_catch_up_reports_the_episode_it_starts_and_the_moment_it_is_over()
+    {
+        // Between the two boundaries every event is per occurrence, and per occurrence there is no way to
+        // tell where a replay begins, how big it was, or that it has drained. The backlog is replayed one at
+        // a time (the default budget), so this also pins that the episode is opened ONCE across the runs it
+        // takes — a busy run plans nothing at all, which must not read as the end of the replay.
+        await StartHostAsync(startHost: false);
+
+        var events = new ConcurrentQueue<EverTaskEventData>();
+
+        Task Collect(EverTaskEventData data)
+        {
+            events.Enqueue(data);
+            return Task.CompletedTask;
+        }
+
+        var cursor     = DateTimeOffset.UtcNow.AddMinutes(-3);
+        var scheduleId = await SeedScheduleAsync(MinuteCatchUp(TimeSpan.FromHours(1), 20), cursor);
+
+        var startedText   = $"Catch-up of schedule {scheduleId} started";
+        var completedText = $"Catch-up of schedule {scheduleId} completed";
+
+        WorkerExecutor.TaskEventOccurredAsync += Collect;
+
+        try
+        {
+            await Host!.StartAsync();
+
+            await WaitForOccurrencesAsync(scheduleId, 3);
+            await TaskWaitHelper.WaitForConditionAsync(() => Count(events, completedText) == 1, 30000);
+        }
+        finally
+        {
+            WorkerExecutor.TaskEventOccurredAsync -= Collect;
+        }
+
+        var started = events.Where(e => Says(e, startedText)).ToList();
+
+        started.Count.ShouldBe(1, "one episode, however many runs draining it takes");
+        started[0].TaskId.ShouldBe(scheduleId, "the episode belongs to the schedule row, not to an occurrence");
+        started[0].Severity.ShouldBe(nameof(SeverityLevel.Information));
+        // The replay is announced from the oldest slot it owes, which is where the cursor stood.
+        started[0].Message.ShouldContain(cursor.ToString("O", CultureInfo.InvariantCulture));
+        started[0].Message.ShouldContain("slot(s) are due");
+
+        var completed = events.Single(e => Says(e, completedText));
+        completed.TaskId.ShouldBe(scheduleId);
+        completed.Severity.ShouldBe(nameof(SeverityLevel.Information));
+        completed.Message.ShouldContain("occurrence(s) materialized since");
+
+        var replayed = int.Parse(completed.Message.Split("completed: ")[1].Split(' ')[0], CultureInfo.InvariantCulture);
+        replayed.ShouldBeGreaterThanOrEqualTo(3, "the tally is what the episode really wrote");
+
+        return;
+
+        static bool Says(EverTaskEventData data, string fragment) =>
+            data.Message?.Contains(fragment, StringComparison.Ordinal) == true;
+
+        static int Count(ConcurrentQueue<EverTaskEventData> events, string fragment) =>
+            events.Count(e => Says(e, fragment));
     }
 
     // ---- At-least-once, said out loud ----------------------------------------------------------------

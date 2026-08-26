@@ -283,6 +283,14 @@ the definition opted in.
     sending an operator to widen a window that had dropped a fraction of it. The `Skip` policy's own drop is
     the third reason, and it was wearing the age window's sentence too. One EventId and one event message per
     reason (1802, 1819, 1820).
+- **A replay has two boundary events, and they are decided from the PLAN** (`TrackCatchUpEpisode`): a plan
+  that stamps its rows as catch-up work opens an episode, the first plan that owes nothing more closes it.
+  Everything in between is reported per occurrence, which cannot say where a backlog began, how big it was,
+  or that it has drained. Only an `Exhausted` plan may close one: a run with no concurrency budget left
+  (`WindowFull`) plans nothing at all precisely while the replay is busiest, and reading that as the end
+  opened and closed an episode between every two occurrences of a serial catch-up. The episode is
+  per-process — a restart mid-replay opens a new one, which is what the materializer does with the backlog
+  anyway — and a halt or a cancel ends it without a completion, because those have their own event.
 - **A stale occurrence keeps consuming the budget until it terminates.** Reconciliation notices an occurrence
   that is non-terminal but neither delivering nor parked, requeues it under a compare-and-swap on the status it
   was found in, and hands it back to the scheduler — but it still counts as active. Only a terminal state frees
@@ -305,7 +313,10 @@ the definition opted in.
   - **Only a CONFIRMED terminal state frees capacity.** `SetStatus` is best-effort on every relational
     provider — it logs its own failed write and returns — so the row is re-read before the slot is counted
     free. Taking the call's return as the answer let a swallowed write leave the old occurrence alive while a
-    successor was created behind it, two of them under a budget that says one.
+    successor was created behind it, two of them under a budget that says one. The read-back also decides what
+    is REPORTED: the log line and the monitoring event are written after it, and the run that could not end the
+    row says so instead of announcing a `Failed` nothing put there. "Was marked Failed" over a row still
+    `Queued` gives an operator no reason to look for the occurrence that is holding the schedule.
 - **The schedule row is not a delivery**: it never enters `DoWorkCore`, never sets `InProgress`, never touches
   the rate-limit gate and never runs `QueueNextOccourrence`. Rate limiting applies to the occurrences, per key
   — `TaskHandlerWrapper.ExtractRateLimit` returns nothing for a durable definition.

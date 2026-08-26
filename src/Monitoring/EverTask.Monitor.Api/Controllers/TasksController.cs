@@ -124,6 +124,35 @@ public class TasksController : ControllerBase
     }
 
     /// <summary>
+    /// Get the materialized occurrences of a durable schedule, newest slot first.
+    /// </summary>
+    /// <param name="id">The schedule row identifier.</param>
+    /// <param name="nonTerminalOnly">Keep only the occurrences that can still lead to an execution (default: false).</param>
+    /// <param name="skip">Number of occurrences to skip (default: 0).</param>
+    /// <param name="take">Number of occurrences to return (default: 100).</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>
+    /// The occurrences of the schedule with the slot, run number and misfire metadata each of them carries.
+    /// Empty for an inline schedule and for a task that is not a schedule at all.
+    /// </returns>
+    /// <response code="200">Returns the occurrences.</response>
+    /// <response code="401">Unauthorized - JWT token required.</response>
+    [HttpGet("{id:guid}/occurrences")]
+    [ProducesResponseType(typeof(OccurrencesResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<ActionResult<OccurrencesResponse>> GetOccurrences(
+        Guid id,
+        [FromQuery] bool nonTerminalOnly = false,
+        [FromQuery] int skip = 0,
+        [FromQuery] int take = 100,
+        CancellationToken ct = default)
+    {
+        var result = await _taskQueryService.GetOccurrencesAsync(id, nonTerminalOnly, skip, take, ct)
+                                            .ConfigureAwait(false);
+        return Ok(result);
+    }
+
+    /// <summary>
     /// Get task counts by category for dashboard badges.
     /// </summary>
     /// <param name="ct">Cancellation token.</param>

@@ -12,6 +12,9 @@ public class EverTaskTestController : ControllerBase
     /// <summary>The key the nightly cleanup is registered under, and the name every schedule call uses.</summary>
     private const string CleanupKey = "nightly-cleanup";
 
+    /// <summary>The key of the durable nightly reconciliation, the schedule that replays what it missed.</summary>
+    private const string ReconciliationKey = "nightly-reconciliation";
+
     private readonly ITaskDispatcher _dispatcher;
     private readonly ITaskScheduleManager _schedules;
     private readonly IEverTaskWorkerExecutor _executor;
@@ -167,6 +170,102 @@ public class EverTaskTestController : ControllerBase
     {
         await _schedules.CancelSchedule(CleanupKey);
         return Ok(new { message = "Nightly cleanup cancelled" });
+    }
+
+    [SwaggerOperation(
+        Summary = "Schedule the nightly reconciliation with durable occurrences and a 92-day catch-up",
+        Description = "02:00 Europe/Rome every night. Every due slot becomes its OWN row, so a downtime is " +
+                      "replayed one night at a time instead of being lost: up to 92 days back and 200 " +
+                      "occurrences per episode, two at a time. Watch the logs — the handler reads the day to " +
+                      "reconcile from Context.ScheduledAtLocal, never from the clock.")
+    ]
+    [HttpGet("schedule-reconciliation")]
+    public async Task<IActionResult> ScheduleReconciliation()
+    {
+        var taskId = await _dispatcher.Dispatch(
+            new NightlyReconciliationTask(),
+            recurring => recurring.Schedule()
+                                  .EveryDay().AtTime(new TimeOnly(2, 0))
+                                  .InTimeZone("Europe/Rome")
+                                  .OnMisfire(m => m.CatchUp(
+                                      new CatchUpOptions(TimeSpan.FromDays(92), maxOccurrences: 200)
+                                      {
+                                          // Two nights may be replayed at once; the rest wait their turn.
+                                          MaxPendingOccurrences = 2
+                                      })),
+            taskKey: ReconciliationKey);
+
+        return Ok(new
+        {
+            message = "Nightly reconciliation scheduled for 02:00 Europe/Rome, catching up to 92 days",
+            taskId
+        });
+    }
+
+    [SwaggerOperation(
+        Summary = "Replay the nightly reconciliation from a past date",
+        Description = "Registers a SEPARATE reconciliation series whose cursor starts in the past, so the " +
+                      "catch-up has a real backlog: one occurrence row per missed night, visible in the " +
+                      "dashboard under the schedule's Occurrences tab, and the series ends once they have " +
+                      "all run. BackfillFrom decides where a series STARTS, so it only applies to a first " +
+                      "registration: re-registering the nightly key would keep the cursor that row already " +
+                      "carries — that is what makes registration idempotent — and nothing would be replayed.")
+    ]
+    [HttpPost("backfill-reconciliation")]
+    public async Task<IActionResult> BackfillReconciliation([FromQuery] int daysBack = 5)
+    {
+        // A replay of no nights is not a schedule: the run budget below would be refused at build time.
+        daysBack = Math.Clamp(daysBack, 1, 90);
+
+        var from = DateTimeOffset.UtcNow.AddDays(-daysBack);
+
+        // One key per replay start, so asking for a different backlog really registers a different series and
+        // asking twice for the same one is the no-op an idempotent registration should be.
+        var taskKey = $"{ReconciliationKey}:replay:{from:yyyyMMdd}";
+
+        var taskId = await _dispatcher.Dispatch(
+            new NightlyReconciliationTask(),
+            recurring => recurring.Schedule()
+                                  .EveryDay().AtTime(new TimeOnly(2, 0))
+                                  .InTimeZone("Europe/Rome")
+                                  .OnMisfire(m => m.CatchUp(
+                                      new CatchUpOptions(TimeSpan.FromDays(92), maxOccurrences: 200)
+                                      {
+                                          MaxPendingOccurrences = 2
+                                      }))
+                                  .BackfillFrom(from)
+                                  // The replay is all this series exists for: it ends with the nights it owed
+                                  // instead of becoming a second nightly schedule beside the real one.
+                                  .MaxRuns(daysBack),
+            taskKey: taskKey);
+
+        return Ok(new
+        {
+            message = $"Reconciliation replay registered with its cursor at {from:u}: the missed nights become occurrences",
+            taskId,
+            taskKey
+        });
+    }
+
+    [SwaggerOperation(
+        Summary = "Resume the nightly reconciliation after its catch-up halted",
+        Description = "A catch-up whose backlog exceeds the configured cap stops itself and stays stopped — " +
+                      "not even a restart releases it. This is the explicit operator action that does.")
+    ]
+    [HttpPost("resume-reconciliation")]
+    public async Task<IActionResult> ResumeReconciliation()
+    {
+        var result = await _schedules.ResumeSchedule(ReconciliationKey);
+
+        return Ok(new
+        {
+            message = result.ReleasedHalt
+                          ? "The catch-up halt was released and the backlog was re-planned"
+                          : "The schedule was not halted; it was simply re-evaluated",
+            result.TaskId,
+            result.ScheduleVersion,
+            nextRun = result.NextRunUtc
+        });
     }
 
     [SwaggerOperation(

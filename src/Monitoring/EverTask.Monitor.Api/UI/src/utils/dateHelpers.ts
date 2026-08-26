@@ -1,6 +1,6 @@
 import { format, formatDistanceToNow, parseISO } from 'date-fns';
 
-export const formatDate = (dateString: string | null): string => {
+export const formatDate = (dateString: string | null | undefined): string => {
   if (!dateString) return 'N/A';
   try {
     return format(parseISO(dateString), 'PPpp');
@@ -9,7 +9,7 @@ export const formatDate = (dateString: string | null): string => {
   }
 };
 
-export const formatDateShort = (dateString: string | null): string => {
+export const formatDateShort = (dateString: string | null | undefined): string => {
   if (!dateString) return 'N/A';
   try {
     return format(parseISO(dateString), 'PP');
@@ -18,7 +18,7 @@ export const formatDateShort = (dateString: string | null): string => {
   }
 };
 
-export const formatTimeAgo = (dateString: string | null): string => {
+export const formatTimeAgo = (dateString: string | null | undefined): string => {
   if (!dateString) return 'N/A';
   try {
     return formatDistanceToNow(parseISO(dateString), { addSuffix: true });

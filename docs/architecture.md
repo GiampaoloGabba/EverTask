@@ -16,7 +16,9 @@ This document explains how EverTask works internally, its architecture, performa
 - [Scheduler Architecture](#scheduler-architecture)
 - [Performance Optimizations](#performance-optimizations)
 - [Threading Model](#threading-model)
+- [Recovery & at-least-once delivery](#recovery--at-least-once-delivery)
 - [Design Principles](#design-principles)
+- [Performance Characteristics](#performance-characteristics)
 
 ## Overview
 
@@ -44,6 +46,11 @@ EverTask is a high-performance background task execution library built for persi
 ┌─────────────┐     ┌──────────────┐
 │   Scheduler │────>│ PriorityQueue│
 └──────┬──────┘     └──────────────┘
+       │
+       ▼
+┌─────────────┐     ┌──────────────┐
+│ Materializer│────>│ TaskStorage  │  (durable schedules only: one child row per due
+└──────┬──────┘     └──────────────┘   slot, then handed back to the Scheduler)
        │
        ▼
 ┌─────────────┐     ┌──────────────┐
@@ -175,6 +182,44 @@ WorkerExecutor checks if recurring
          └──> (Cycle continues)
 ```
 
+### 5. Durable Occurrence Cycle (opt-in)
+
+A schedule that opts into durable occurrences stops running the handler itself. The schedule row becomes a
+definition plus a cursor, and the `OccurrenceMaterializer` turns each due slot into its own one-shot row:
+
+```
+Schedule row fires (no handler, no rate-limit budget)
+    │
+    ▼
+OccurrenceMaterializer reads the row
+    │
+    ├──> Reconcile: any occurrence stranded outside queue and scheduler is put back
+    ├──> Plan: which slots are due, under MaxAge / MaxOccurrences / MaxPendingOccurrences
+    │
+    ▼
+For each planned slot, ONE transaction:
+    insert the child row  +  advance the cursor and the run count
+    (and close the series in the same commit when that slot spends the last run)
+    │
+    ▼
+Children handed to the Scheduler — never enqueued directly
+    │
+    ├──> Each child runs as an ordinary one-shot: own status, retries, audit, logs
+    │
+    └──> When a child ends, it kicks the materializer again
+         │
+         └──> (Cycle continues, or the schedule parks on its next future slot)
+```
+
+The insert and the cursor advance are one atomic compare-and-swap on `(schedule version, cursor)`, so two
+hosts racing the same slot produce one row and one advance, never two of either. The unique index on
+`(ParentTaskId, ScheduledExecutionUtc)` is what makes a slot exist exactly once. When the backlog is larger
+than the configured cap, the schedule writes a durable *halt* marker and stops instead of replaying it: the
+marker outlives restarts, and only `ResumeSchedule` or `Reschedule` clears it.
+
+See [Durable Occurrences](recurring-tasks/durable-occurrences.md) for the caps, the misfire policies and the
+events.
+
 ## Efficient Task Processing
 
 EverTask avoids polling entirely, using an event-driven approach for maximum efficiency.
@@ -278,6 +323,12 @@ A persisted task has to run even if the process dies between persistence and exe
 **Double-execution defense.** The delivery contract is at-least-once, and the guard against accidental in-process double delivery is the `TaskDeliveryRegistry` (one per host). It registers each persistence id from the moment it's written to a channel until that delivery terminally ends; a second write of the same id is rejected at the boundary (`EnqueueResult.DuplicateInProcess`), which recovery and live dispatch both treat as an idempotent skip. The discipline is exactly one `End` per delivery, in the outer `finally` of `WorkerExecutor.DoWork`. Because it's at-least-once and not exactly-once, handlers with side effects should still be idempotent, and a stable task key is the usual lever.
 
 A row whose type loads but whose payload won't deserialize stays recoverable for a few attempts, then gets poisoned (marked `Failed`) rather than retried forever. The full invariants live in `src/EverTask/CLAUDE.md` and the [Resilience](resilience.md) guide.
+
+**Two categories, not one.** The recovery scan separates rows that still have work to *execute* from a recurring series that has nothing left to run but still carries a cursor. The second kind is finalized — `Completed`, cursor cleared — through a conditional write, without passing through the handler; before that distinction existed such a row satisfied no predicate at all and stayed `Queued` forever.
+
+**Children before parents.** A host running durable schedules recovers in two waves over the same cutoff: everything else first, the durable schedule rows second. Without that barrier a schedule row could materialize a new occurrence while the recovery was still putting its existing one back, and a concurrency budget of one would be overshot. The second wave is a second keyset scan of the same query, not a buffered list of ids: a backlog spanning many pages costs no memory that grows with it.
+
+**Single active host.** Materialization is idempotent across hosts — the unique index sees to that — but execution deduplication is not: `TaskDeliveryRegistry` is per process. Running two hosts against one shared store is outside the contract; see [Scalability](scalability.md#horizontal-scaling-multiple-instances).
 
 ## Design Principles
 

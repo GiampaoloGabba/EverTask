@@ -18,6 +18,21 @@ export interface OverviewDto {
   queueSummaries: QueueSummaryDto[];
   // Rate-limited tasks currently parked waiting for budget (in-memory, single-node view).
   throttledTasks: number;
+  // Materialized occurrences by state, and how far behind the oldest pending one is.
+  catchUpBacklog: CatchUpBacklogDto;
+}
+
+export interface CatchUpBacklogDto {
+  pending: number;
+  active: number;
+  failed: number;
+  // Occurrences that will never run: cancelled on their own or with their schedule.
+  skipped: number;
+  completed: number;
+  oldestPendingSlotUtc?: string | null;
+  lagSeconds: number;
+  // Durable schedules whose catch-up halted itself over the overflow cap. A halt never releases itself.
+  haltedSchedules: number;
 }
 
 export interface TasksOverTimeDto {
@@ -28,7 +43,7 @@ export interface TasksOverTimeDto {
 }
 
 export interface QueueSummaryDto {
-  queueName: string | null;
+  queueName?: string | null;
   pendingCount: number;
   inProgressCount: number;
   completedCount: number;

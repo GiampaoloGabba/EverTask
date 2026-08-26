@@ -245,9 +245,21 @@ public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsyn
         var storage = GetStorage();
         var ids     = await SeedRecoverableRowsAsync(200);
 
-        // The whole point is to stop as soon as the engine HAS deadlocked; the timeout is only the
-        // guarantee that a machine on which nothing collides still ends the test.
-        using var pressure = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        // The whole point is to stop as soon as the engine HAS deadlocked, which alone on the machine takes
+        // two or three seconds; the budget is the guarantee that a run on which nothing ever collides still
+        // ends, so it is sized for the slowest run rather than the expected one and costs nothing on a
+        // healthy one. Twenty seconds was not sized for it: a solution-wide `dotnet test` runs three target
+        // frameworks at once, so three SQL Server containers and every other suite share these cores, the
+        // pressure loops get a fraction of the round trips they get alone, and how long a cycle takes to
+        // form scales with them - a run that simply had not collided YET then reported itself as a run in
+        // which the storage does not re-run its reads.
+        // It is a STOP SIGNAL for the loops, never a token handed to a command: an attention sent to a
+        // query already on the wire surfaces out of SqlClient as a bare SqlException ("A severe error
+        // occurred on the current command ... Operation cancelled by user") as readily as an
+        // OperationCanceledException, and since cancelling is how this test ends, a read carrying the token
+        // would eventually hand `readFailures` a failure the test itself caused - on the very run that had
+        // just proved the reread works.
+        using var pressure = new CancellationTokenSource(TimeSpan.FromMinutes(2));
         var readFailures = new ConcurrentQueue<Exception>();
 
         // The nonclustered-then-clustered side: the startup-recovery page, unchanged.
@@ -257,18 +269,17 @@ public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsyn
             {
                 try
                 {
-                    await storage.RetrievePending(DateTimeOffset.UtcNow, null, null, 200, pressure.Token);
+                    await storage.RetrievePending(DateTimeOffset.UtcNow, null, null, 200, CancellationToken.None);
                 }
-                catch (OperationCanceledException) { }
                 catch (Exception e) { readFailures.Enqueue(e); }
             }
         }
 
         // The clustered-then-nonclustered side: the status write of a task being executed. Audits are off
         // so the pressure - and the cleanup after it - stays on the one table the cycle is about.
-        // Each write runs to completion (CancellationToken.None): usp_SetTaskStatus owns a transaction, and
-        // cancelling one mid-flight leaves it open on a pooled connection, holding the locks the cleanup of
-        // this test then waits for.
+        // A write runs to completion for a second reason of its own: usp_SetTaskStatus owns a transaction,
+        // and cancelling one mid-flight leaves it open on a pooled connection, holding the locks the cleanup
+        // of this test then waits for.
         async Task StatusWrites()
         {
             while (!pressure.IsCancellationRequested)
@@ -291,9 +302,8 @@ public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsyn
             {
                 try
                 {
-                    await storage.Get(t => t.Status == QueuedTaskStatus.InProgress, pressure.Token);
+                    await storage.Get(t => t.Status == QueuedTaskStatus.InProgress, CancellationToken.None);
                 }
-                catch (OperationCanceledException) { }
                 catch (Exception e) { readFailures.Enqueue(e); }
             }
         }
@@ -308,7 +318,11 @@ public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsyn
                 }
                 catch (OperationCanceledException) { return; }
 
-                if (_storageLog.Count(RereadAfterDeadlockEventId) >= 2)
+                // One rerun is the whole claim, and it is exactly what the assertion below reads. Waiting
+                // for a second one asked a second collision to fit inside the budget too, and the gap
+                // between the first and the second is where most of the wait went: measured at two to
+                // eight seconds on an idle machine, more under a solution-wide run.
+                if (_storageLog.Count(RereadAfterDeadlockEventId) > 0)
                     await pressure.CancelAsync();
             }
         }
@@ -324,7 +338,8 @@ public class SqlServerEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsyn
             "engine asking it to run again, not a failure to hand the caller");
 
         _storageLog.Count(RereadAfterDeadlockEventId).ShouldBeGreaterThan(0,
-            "nothing collided, so this run proves nothing about what happens when something does");
+            "two minutes of pressure and nothing collided, so this run proves nothing about what happens " +
+            "when something does");
     }
 
     /// <summary>Rows a recovery page returns, enough that it resolves them through the index.</summary>

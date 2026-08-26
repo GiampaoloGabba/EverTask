@@ -707,6 +707,69 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
     }
 
     /// <inheritdoc />
+    public Task<OccurrencePage> GetOccurrencesPage(Guid parentId, bool nonTerminalOnly, int skip, int take,
+                                                   CancellationToken ct = default)
+    {
+        lock (_pendingTasksLock)
+        {
+            // Filtered once: the total and the page are two questions about the same set, and asking the list
+            // twice would walk it twice for no gain.
+            var matching = _pendingTasks
+                           .Where(t => t.ParentTaskId == parentId
+                                       && (!nonTerminalOnly || QueuedTask.IsNonTerminalStatus(t.Status)))
+                           .ToArray();
+
+            return Task.FromResult(new OccurrencePage(
+                matching.OrderByDescending(t => t.ScheduledExecutionUtc).Skip(skip).Take(take).ToArray(),
+                matching.Length));
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyDictionary<Guid, DateTimeOffset>> GetLastRunStarts(IReadOnlyCollection<Guid> taskIds,
+                                                                           CancellationToken ct = default)
+    {
+        var starts = new Dictionary<Guid, DateTimeOffset>(taskIds.Count);
+
+        lock (_pendingTasksLock)
+        {
+            foreach (var task in _pendingTasks.Where(t => taskIds.Contains(t.Id)))
+            {
+                // The LAST InProgress audit of the list, not the newest timestamp: the audits of a row are
+                // appended in transition order and the clock here is coarse enough for two of them to share
+                // an instant.
+                var started = task.StatusAudits.LastOrDefault(a => a.NewStatus == QueuedTaskStatus.InProgress);
+                if (started != null)
+                    starts[task.Id] = started.UpdatedAtUtc;
+            }
+        }
+
+        return Task.FromResult<IReadOnlyDictionary<Guid, DateTimeOffset>>(starts);
+    }
+
+    /// <inheritdoc />
+    public Task<StatusAudit[]> GetStatusAudits(Guid taskId, CancellationToken ct = default)
+    {
+        lock (_pendingTasksLock)
+        {
+            // Reversed insertion order, not ordered by timestamp: the audits of a row are appended in
+            // transition order and the clock here is coarse enough for two of them to share an instant.
+            var task = _pendingTasks.FirstOrDefault(t => t.Id == taskId);
+            return Task.FromResult(task == null ? [] : task.StatusAudits.Reverse().ToArray());
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<RunsAudit[]> GetRunsAudits(Guid taskId, CancellationToken ct = default)
+    {
+        lock (_pendingTasksLock)
+        {
+            var task = _pendingTasks.FirstOrDefault(t => t.Id == taskId);
+            return Task.FromResult(task == null ? [] : task.RunsAudits.Reverse().ToArray());
+        }
+    }
+
+    /// <inheritdoc />
     public Task<int> CountActiveOccurrences(Guid parentId, CancellationToken ct = default)
     {
         lock (_pendingTasksLock)

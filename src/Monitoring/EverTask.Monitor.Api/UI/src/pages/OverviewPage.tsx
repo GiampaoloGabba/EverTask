@@ -6,8 +6,9 @@ import { ActivityFeed } from '@/components/dashboard/ActivityFeed';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { DateRange } from '@/types/dashboard.types';
-import { CheckCircle2, XCircle, TrendingUp, Clock, AlertCircle, Gauge } from 'lucide-react';
+import { CheckCircle2, XCircle, TrendingUp, Clock, AlertCircle, Gauge, History } from 'lucide-react';
 import { formatNumber, formatPercentage, formatTime } from '@/utils/formatters';
+import { CatchUpBacklogCard } from '@/components/dashboard/CatchUpBacklogCard';
 
 export function OverviewPage() {
   const { data: overview, isLoading, isError } = useDashboardOverview(DateRange.Today);
@@ -26,6 +27,9 @@ export function OverviewPage() {
       </Alert>
     );
   }
+
+  const backlog = overview.catchUpBacklog;
+  const owed = backlog ? backlog.pending + backlog.active : 0;
 
   return (
     <div className="space-y-6">
@@ -70,7 +74,18 @@ export function OverviewPage() {
             subtitle="Parked waiting for rate-limit budget"
           />
         )}
+        {owed > 0 && (
+          <KPICard
+            icon={History}
+            title="Catch-up Backlog"
+            value={formatNumber(owed)}
+            subtitle="Occurrences owed, pending or running"
+          />
+        )}
       </div>
+
+      {/* Durable occurrences */}
+      {backlog && <CatchUpBacklogCard backlog={backlog} />}
 
       {/* Charts */}
       <div className="grid gap-4 md:grid-cols-2">

@@ -182,8 +182,31 @@ transition your transaction never made. The three optimized in-box providers tak
 EF Core base re-reads inside the transaction, which is exact only while writers are serialized, as they are
 on SQLite.
 
-The two read helpers (`GetOccurrences`, `CountActiveOccurrences`) carry no atomicity contract, so their
-defaults are a correct query over `Get`. Override them for an indexed one.
+The six read helpers (`GetOccurrences`, `GetOccurrencesPage`, `CountActiveOccurrences`, `GetLastRunStarts`,
+`GetStatusAudits`, `GetRunsAudits`) carry no atomicity contract, so their defaults are a correct query over `Get`. Override them for an indexed
+one. `GetOccurrencesPage` is the one worth the effort: it answers the dashboard's occurrence list, and the
+default reads the whole series to return one page of it — which on a schedule with a long retention behind it
+is hundreds of thousands of rows for a hundred. Order by slot descending, count and slice in the store, and
+return both the page and the total that matches the request. All five in-box stores do. Find out how your
+engine will order by the slot before you promise that: EF Core will not translate an `ORDER BY` over a
+`DateTimeOffset` on SQLite, so the in-box SQLite provider writes that one query as SQL instead of sorting the
+series in memory.
+
+`GetLastRunStarts` answers when the last run of each of a page of rows began. No column holds that.
+`LastExecutionUtc` is written on terminal transitions, so it is when a run ENDED, and a row still running has
+not written it at all; the only trace of the moment is the `InProgress` transition in the status audit trail,
+so it has to be read. The default walks `QueuedTask.StatusAudits`, which answers only in a store that
+materializes that navigation; the in-box providers override it with one indexed query over the audit table.
+Answer nothing for a row you have no recorded start for. The dashboard would rather show no lateness than an
+invented one.
+
+`GetStatusAudits(taskId)` and `GetRunsAudits(taskId)` answer the two audit trails of one row, newest first,
+and they exist for the same reason. Nothing populates `QueuedTask.StatusAudits` or `QueuedTask.RunsAudits` on
+a row a query hands back, so the dashboard's status-history and runs-history tabs read them through the
+storage. The defaults walk the two navigations, which is right only in a store that materializes them; the
+in-box providers override both with one indexed query over the audit table. Order on the audit identity, not
+on its timestamp: the rows of one task are inserted in transition order, and SQLite will not order by a
+`DateTimeOffset` at all. A task id you hold nothing for gets an empty list, not an error.
 
 Three columns back all of this: `ParentTaskId` (with a restrict self-foreign-key, a unique index on
 `(ParentTaskId, ScheduledExecutionUtc)` named `UX_QueuedTasks_Occurrence`, and a check constraint that an

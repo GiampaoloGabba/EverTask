@@ -457,6 +457,363 @@ I sei gap di sola copertura, chiusi con test e senza modifiche di comportamento:
   compilabile che parte dal giorno corrente) → allineato al contratto V1: si parte da oggi e a saltare uno
   slot già passato è `slot > AfterUtc`, che è l'unica cosa che deve farlo.
 
+## 3.8 Deviazioni della fase 7 (2026-08-26) — DA RATIFICARE
+
+La fase 7 (monitoring API/UI, sweep docs, samples, release) consegna **sei** voci: una scelta lasciata aperta
+dal piano §7, tre aggiunte di superficie e due correzioni di documentazione preesistente. Come per le fasi
+1-6, senza una riga scritta qui il gate 3 le blocca.
+
+| Punto | Deviazione |
+|-------|------------|
+| **Piano §7** — `POST /tasks/{id}/requeue` «dietro l'auth esistente (**aperto**: l'API oggi è read-only)»: **non implementato** | **PUNTO APERTO CHIUSO SU "NO", ed è la sola risposta coerente con il resto della fase.** L'API di monitoring è read-only per costruzione: nessun endpoint scrive, e l'unica autenticazione che ha è la coppia utente/password del dashboard, cioè una credenziale di sola lettura condivisa da chiunque guardi la dashboard. Un requeue è invece un'operazione di dominio — rimette in coda un'esecuzione con effetti collaterali — e la fase 5 ha già la superficie giusta per farla: `ITaskScheduleManager.RequeueFailedOccurrence(id)`, chiamata dall'applicazione dietro la SUA autorizzazione, che è l'unica che sa chi può rieseguire cosa. Metterlo nell'API significherebbe farlo passare per l'auth del dashboard, cioè decidere quella policy al posto del consumatore. La riga «every endpoint is read-only» è ora scritta in `docs/monitoring-api-reference.md`, nella skill `integrate-evertask` e nel CLAUDE.md del modulo, con il rimando al manager: il sub-issue #30 non la elenca fra i deliverable, e il piano la marcava aperta proprio perché la decisione andava presa qui. Il sample mostra la strada raccomandata (`resume-reconciliation`, `reschedule-cleanup`, endpoint dell'applicazione). |
+| **`InternalsVisibleTo("EverTask.Monitor.Api")`** su `EverTask` (nuovo) | **AGGIUNTA RATIFICATA.** Tre dei sei campi che il piano §7 chiede sulle DTO (`OccurrenceMode`, `MisfirePolicy`, `TimeZoneId`) vivono dentro la `RecurringTask` serializzata, e le due metà di `RuntimeInfo` (metadati dell'occorrenza, halt del catch-up) sono `internal` per costruzione: sono forme persistite, non contratti pubblici. Le alternative erano peggiori — un secondo lettore nell'API con le proprie `JsonSerializerOptions` (che dovrebbe replicare il converter tollerante di `EverTaskJson` e divergerebbe alla prima modifica), oppure nuova superficie **pubblica** su `EverTask` per esporre forme che il piano non chiede di esporre (P6). La fiducia è di sola lettura: `Services/TaskScheduleFacts` è l'unico consumatore, non scrive nulla, e non lancia mai su ciò che una colonna contiene — una riga illeggibile perde un badge, non fa fallire l'endpoint. Pinnata dalla suite `API/Controllers/OccurrenceEndpointTests`, che legge quei campi da righe scritte dal materializer vero. |
+| **`MisfireKind` sulle DTO di lista e dettaglio**, oltre ai sei campi elencati dal piano §7 | **AGGIUNTA RATIFICATA.** Il piano elenca i campi e, separatamente, chiede alla UI i «badge catch-up/late»: il badge catch-up non è derivabile da nessuno dei sei — `OccurrenceMode` dice che lo schedule è durevole, non che QUELLA riga sta per lavoro mancato. È lo stesso valore che l'handler legge da `Context.Misfire.Kind`, letto dalla stessa fonte (`RuntimeInfo`), quindi non è un'informazione nuova ma la stessa esposta a chi guarda invece che a chi esegue. `TaskDetailDto` porta anche il blocco `Occurrence` completo (range e conteggio del backlog, con la sua esattezza) e `Halt`, che sono ciò che il piano chiama «nominal slot» e «backlog by state» letti su una singola riga. |
+| **`CatchUpBacklogDto`: quali stati, e due contatori in più** | **FORMA RATIFICATA.** Il sub-issue #30 chiede «backlog **by state** (pending/active/failed/skipped) and lag» senza definire i quattro nomi; ogni contatore è ora uno stato di riga reale, non una stima: `pending` = non-terminale non ancora partita (`WaitingQueue`/`Queued`/`Pending`/`ServiceStopped`), `active` = `InProgress`, `failed` = `Failed`, `skipped` = `Cancelled` — cioè le occorrenze che non gireranno mai, da sole o con il loro schedule. `completed` e `haltedSchedules` sono i due in più: il primo perché senza di lui i quattro non sommano a nulla di verificabile, il secondo perché un halt **non si rilascia da solo** (M10) ed è l'unica condizione della fase 4 su cui un operatore deve agire — lasciarla fuori dalla overview significava non mostrarla da nessuna parte. Gli slot che uno schedule **scarta** restano assenti per costruzione (non sono mai diventati righe) e la cosa è scritta sia nella DTO sia nelle docs, con il rimando all'evento `OccurrenceSkipped`, che è dove quella perdita è riportata (P5). Il `lag` è la distanza fra `now` e lo slot pending più vecchio, azzerata quando quello slot è ancora futuro: una materializzazione in anticipo non è un ritardo negativo. |
+| **Il badge «late» è calcolato nel browser**, non servito dall'API | **SCELTA RATIFICATA.** `RuntimeInfo` porta solo il misfire **persistito** (`CatchUp`/`FireOnce`), che è un fatto della decisione che ha creato la riga; `MisfireKind.Late` invece esiste solo al momento della consegna, perché è la distanza fra lo slot e l'istante in cui l'handler è partito confrontata con `SetMisfireThreshold` — un valore di host che la riga non porta. Servirlo avrebbe richiesto di persistere la lateness (C1 dice esplicitamente che non lo è) o di far leggere all'API una configurazione dell'host che in modalità standalone non esiste. La UI ha entrambi i termini (`nominalSlotUtc`, `lastExecutionUtc`) e mostra la lateness come durata invece che come booleano, senza inventare una soglia: sotto il secondo non mostra nulla. Documentato in `UI/CLAUDE.md`. |
+| **Sweep di versione: ogni «since 3.12.0» / «3.12+» diventa 4.0.0**, incluso il messaggio di `[Obsolete]` di `EnableSwagger` e l'XML-doc che lo accompagna | **CORREZIONE RATIFICATA.** 3.12.0 non è mai stata rilasciata: il retarget della v1.1 (3.12.0 → 4.0.0) ha reso false tutte le frasi «since 3.12.0» sparse in docs, skill e XML-doc, che promettono a un lettore una versione che su NuGet non esiste. Le occorrenze erano diciotto, in nove file, e il messaggio di `[Obsolete]` è l'unica che il compilatore di un consumer stampa. Nessun test asseriva su quelle stringhe. Nello stesso sweep i sample JSON di `docs/monitoring-api-reference.md` sono stati allineati alle DTO reali: `tasks` → `items`, `taskType`/`handlerType` → `type`/`handler`, la overview riscritta sui nomi che il servizio serializza davvero. Era drift **preesistente**, non introdotto dalla fase, ma aggiungere campi nuovi accanto a un JSON sbagliato avrebbe dato per buono il resto. |
+
+### Chiusura dei findings della review di fase 7 (2026-08-26)
+
+Undici finding confermati, chiusi alla radice. Quattro toccano superficie o comportamento e stanno qui, perché
+il gate 3 non lascia passare una modifica non scritta; gli altri sette sono correzioni di documentazione o di
+un difetto di lettura, ognuno con i suoi test.
+
+| Punto | Deviazione |
+|-------|------------|
+| **§3.8 «il badge late è calcolato nel browser»** — l'API serve ora `startedAtUtc` su `TaskListDto`, `TaskDetailDto` e `OccurrenceDto`, e la UI misura la lateness da lì | **PRECISAZIONE RATIFICATA; la riga di §3.8 resta valida sulla decisione (la lateness non è persistita né servita come booleano) ed è superata su QUALE sia il secondo termine.** «La UI ha entrambi i termini (`nominalSlotUtc`, `lastExecutionUtc`)» era falsa: `LastExecutionUtc` è scritta **solo sulle transizioni terminali** (`EfCoreTaskStorage.SetStatus`, `MemoryTaskStorage.SetStatus`), quindi dice quando un run è **finito** — un'occorrenza puntuale con un handler da tre minuti veniva mostrata come «3m late», cioè la durata dell'esecuzione spacciata per ritardo, contro la definizione di §3.8 stessa («la distanza fra lo slot e l'istante in cui l'handler è partito») e contro la regola che lo stesso diff scrive in `UI/CLAUDE.md`. Il termine giusto non è derivabile nel browser: è una regola su **come lo storage scrive quelle colonne**, quindi appartiene al server. `Services/TaskRunTiming.StartOfLastRun` lo risponde con due sorgenti in ordine — l'audit `InProgress` della riga quando la riga porta audit (l'unica che sappia parlare anche di un run **in corso**), altrimenti la fine del run meno la durata misurata attorno a esso. Una riga che non è mai partita non ne ha nessuno: un'**occorrenza cancellata** non riceve mai `LastExecutionUtc`, e il badge la misurava contro l'orologio, cioè mostrava un numero che cresceva per sempre — ora misura contro `now` **solo** finché la riga può ancora partire (stato non terminale). Pinnata da `OccurrenceEndpointTests.Should_report_when_an_occurrence_started_apart_from_when_it_ended` (host reale, handler da 1,5 s su uno slot puntuale: `startedAtUtc − slot < 1 s` mentre `lastExecutionUtc − slot > 1 s`, con lo stesso valore su lista, dettaglio e occorrenze) e, per il ramo derivato senza audit, da `TaskQueryServiceTests.Should_derive_when_a_run_started_from_its_end_and_its_duration_when_the_row_has_no_audit`. |
+| **`ScheduleVersion` sulle DTO diventa `int?`** | **DEVIAZIONE RATIFICATA dalla forma consegnata dalla fase 7.** `TaskListDto.ScheduleVersion` e `TaskDetailDto.ScheduleVersion` erano `int` non nullable: con `JsonIgnoreCondition.WhenWritingNull` come unica regola di omissione, **ogni** riga serializzava `"scheduleVersion": 0`, one-shot compresi — mentre `docs/monitoring-api-reference.md` e la skill `07-monitoring-logging.md` promettevano entrambe che «i null sono omessi, quindi un one-shot non porta nessuno dei campi di schedule». Un consumatore che usa la presenza di quei campi come discriminante classificava così **ogni** task come appartenente a uno schedule alla versione 0. La colonna esiste su tutte le righe e vale 0 di default, ma appartenere a uno schedule è un fatto della **forma della riga** (`IsRecurring || ParentTaskId != null`), ed è quello che decide: gli altri cinque campi sono già nullable e ora i sei sono assenti insieme. Un test della fase stessa cambia (`Should_report_an_ordinary_task_as_belonging_to_no_schedule`: `ShouldBe(0)` ⇒ `ShouldBeNull`) ed è l'unica asserzione adattata, accanto al nuovo controllo `Should_report_the_schedule_version_on_the_rows_that_belong_to_a_schedule`, che pretende lo 0 esplicito su schedule e occorrenza. Tipi TS, reference e skill aggiornati nello stesso cambio. |
+| **X2** — nuovo membro di lettura `ITaskStorage.GetOccurrencesPage(parentId, nonTerminalOnly, skip, take)` (DIM) e record `OccurrencePage` | **AGGIUNTA RATIFICATA.** `GET /tasks/{id}/occurrences` paginava **dopo** aver letto, ordinato e materializzato in memoria l'intera serie: uno schedule al minuto con un anno di retention sono ~525.000 righe trasferite per mostrarne cento, a ogni apertura del tab. La pagina non è esprimibile con i membri esistenti (`GetOccurrences` risponde tutto, `Get` non pagina), quindi il taglio deve vivere nello storage. È **read-only**, quindi segue la regola già scritta per gli altri due lettori: default corretto sopra `GetOccurrences` (nessun custom storage si rompe), override indicizzato nella base EF (ordinamento, `Count` e `Skip`/`Take` server-side sull'indice `(ParentTaskId, ScheduledExecutionUtc)` che il contratto occorrenze richiede già), in memoria, e wrapper `RereadOnDeadlock` su SQL Server. Nessuna capability nuova, nessuna migrazione, nessun round-trip aggiunto ai hot path (D7): il solo chiamante è l'API di monitoring. Pinnata sui quattro provider da `EfCoreTaskStorageTestsBase.GetOccurrencesPage_should_return_one_page_newest_first_with_the_whole_total` e `…_should_count_and_page_only_what_the_filter_keeps`, in memoria da `MemoryStorageOccurrenceContractTests.Should_page_the_occurrences_newest_first_and_report_the_whole_total`, e al seam dell'API da `TaskQueryServiceTests.Should_ask_the_storage_for_one_page_of_occurrences_and_never_for_the_series`. Docs (`custom-storage.md`) e skill storage (`.claude/` + mirror `.agents/`) aggiornate nello stesso cambio. |
+| **Piano §7** — `CatchUpStarted` / `CatchUpCompleted`: implementati, con semantica di **episodio per processo** | **FORMA RATIFICATA di un deliverable del piano §7 che mancava.** Il piano elenca i due messaggi fra quelli della fase; non esistevano né nel codice né in `docs/monitoring-events.md`, e nessuna riga ne rinviava la consegna. Un catch-up dura quanti run servono a drenare il backlog e ogni run riporta solo le righe che ha scritto: senza i due estremi un consumatore non sa dove comincia un replay, quanto era grande, né che è finito. L'episodio è deciso dal **piano** (`OccurrenceMaterializer.TrackCatchUpEpisode`): si apre al primo run che stampa righe di catch-up e si chiude al primo run che non ne deve più — e **solo** se quel run è `Exhausted`, perché un run senza capacità (`WindowFull`) non pianifica nulla proprio mentre il replay è più attivo, e leggerlo come «finito» aprirebbe e chiuderebbe un episodio fra due occorrenze di un catch-up seriale. È in-process per costruzione: un riavvio a metà replay apre un episodio nuovo, che è esattamente ciò che il materializer fa con il backlog. Un halt non produce un completamento (l'evento di halt è quello), e nemmeno una serie cancellata sotto il replay. EventId 1823/1824, severità `Information`. Pinnata su host reale da `DurableOccurrencesIntegrationTests.A_catch_up_reports_the_episode_it_starts_and_the_moment_it_is_over` (un solo `started` attraverso i run del replay, il conteggio nel `completed`). |
+
+Gli altri sette, senza deviazione:
+
+- **L'halt è riportato solo finché la serie è viva.** Il marcatore in `RuntimeInfo` è stato runtime di uno
+  schedule vivo e **nessuno lo cancella** quando la serie finisce: `CancelSchedule` e
+  `TrySetRecurringSeriesCompleted` scrivono lo stato e lasciano la colonna dov'è (non hanno più niente da
+  fermare). `catchUpBacklog.haltedSchedules` — che le docs chiamano «il contatore su cui allertare» — restava
+  quindi a 1 per sempre, e `GET /tasks/{id}` continuava a rendere il blocco `halt` che la UI mostra come
+  alert distruttivo, dicendo a un operatore di rianimare una serie che aveva chiuso apposta. La correzione sta
+  dove sta il difetto, cioè nella **lettura**: `TaskScheduleFacts.HasStandingHalt` è l'unica regola («porta il
+  marcatore **e** è ancora una serie che potrebbe girare») e la usano sia il dettaglio sia la overview.
+  Pinnata da `OccurrenceEndpointTests.Should_stop_reporting_a_halt_of_a_schedule_that_was_cancelled`, che
+  pretende anche la premessa: dopo il cancel il marcatore è **ancora** sulla riga.
+- **`useSignalRRefresh` invalida `['occurrences']`.** La chiave che `useOccurrences` registra non era nella
+  lista, la query non dichiara `refetchInterval` e il `QueryClient` globale ha `staleTime: 30000` con
+  `refetchOnWindowFocus: false`: il tab Occurrences restava congelato sullo snapshot del mount mentre ogni
+  altro pannello della stessa pagina si aggiornava. Invalidata incondizionatamente accanto a `['taskCounts']`,
+  per la stessa ragione: un'occorrenza è una riga di task, e qualunque evento può crearla o cambiarne lo
+  stato. Regola scritta in `UI/CLAUDE.md`.
+- **`README.md` di `EverTask.Monitor.Api`** (il `PackageReadmeFile`, cioè il testo su nuget.org): la sezione
+  `## API Endpoints` si fermava a `/tasks/{id}/runs-audit`. Aggiunti `/tasks/{id}/occurrences`,
+  `/tasks/counts`, `/tasks/{id}/execution-logs`, `/rate-limits`, i filtri `parentTaskId`/`onlyOccurrences`/
+  `onlyCatchUp`, `catchUpBacklog` sulla overview, i campi di schedule delle DTO e la riga «ogni endpoint è
+  read-only» con il rimando a `ITaskScheduleManager` — la stessa che la fase ha scritto altrove. Corretti
+  anche i nomi dei parametri di `GET /tasks`, che erano quelli di nessuna versione (`status`, `type`,
+  `search` invece di `statuses`, `taskType`, `searchTerm`).
+- **Tre eventi `Error` mancavano dalla tabella di `docs/monitoring-events.md`** — schedule non ricostruibile
+  dalla riga, occorrenza non ricostruibile marcata `Failed`, ri-park del provider fallito — cioè esattamente
+  le condizioni su cui una regola di alert costruita su quella tabella deve scattare. Aggiunti con i loro
+  messaggi verbatim e un paragrafo che dice cosa significano.
+- **La correlazione via `ParentTaskId` era promessa per tutti gli eventi durevoli** e vale solo per quelli di
+  un'**occorrenza**: un evento di schedule (halt, reschedule, provider) è pubblicato **sulla riga schedule**,
+  quindi il suo `TaskId` è l'id dello schedule e `ParentTaskId` è null, come per ogni riga che non è
+  occorrenza di nessuno. La frase dice ora quale metà usare per quale evento; `EverTaskEventData` non cambia.
+- **L'endpoint di backfill del sample non faceva backfill**: `BackfillFrom` decide dove una serie
+  **comincia**, quindi vale solo alla prima registrazione — una re-registrazione idempotente della stessa
+  chiave conserva il cursore che la riga già porta, e per uno schedule durevole il `Dispatcher` lo preserva
+  incondizionatamente. L'endpoint registra ora una **serie di replay propria**, con una chiave per istante di
+  partenza e `MaxRuns` pari alle notti dovute, così il replay avviene davvero e finisce invece di diventare un
+  secondo schedule notturno. Il fatto di libreria su cui il sample si appoggia è pinnato da
+  `DurableOccurrencesIntegrationTests.A_backfill_asked_for_a_task_key_that_already_has_a_schedule_keeps_the_cursor_the_row_carries`.
+
+Fuori tabella, perché non sono deviazioni ma il completamento di ciò che il piano §7 chiede: il CHANGELOG
+acquisisce le voci delle fasi 4, 5 e 6 (mai scritte: la sezione `[Unreleased]` si fermava a #26) e diventa
+`## [4.0.0]`; il mirror `.agents/skills/new-relational-storage-provider/` era **derivato** dalla versione
+`.claude/` e si era fermato indietro di tre modifiche, ed è stato risincronizzato mantenendo la sola
+sostituzione `CLAUDE.md` → `AGENTS.md` che lo distingue.
+
+### Chiusura dei findings della review di fase 7 — round 2 (2026-08-26)
+
+Quattro finding confermati, chiusi alla radice, e tutti e quattro sullo stesso pezzo: cosa l'API può dire di
+un run e come si raggiungono le righe che lo portano. I tre che toccano la superficie o la semantica stanno in
+tabella (un membro di lettura nuovo su `ITaskStorage`, e le due regole di `StartOfLastRun`); il quarto — il tab
+Occorrenze senza controlli di pagina — è sotto.
+
+| Punto | Deviazione |
+|-------|------------|
+| **X2** — nuovo membro di lettura `ITaskStorage.GetLastRunStarts(taskIds, ct)` (DIM) | **AGGIUNTA RATIFICATA, ed è la sola forma che rende vera la riga di §3.8 su `startedAtUtc`.** Il round 1 ha scritto che la sorgente primaria è «l'audit `InProgress` della riga quando la riga porta audit — l'unica che sappia parlare anche di un run **in corso**»: quella condizione non si verifica **mai** su una storage relazionale. Nessuna lettura (`Get`, `GetAll`, `GetOccurrencesPage`) fa `.Include(StatusAudits)` — non esiste un solo `.Include(` sotto `src/` — quindi `row.StatusAudits` è vuota sui quattro provider EF e il ramo era codice morto: la stessa riga riceveva una risposta diversa a seconda del backend, e `startedAtUtc` era `null` per **ogni** run in volo, cioè esattamente quando un operatore guarda un replay. L'audit va quindi **letto**, e la lettura appartiene allo storage. È **read-only**, quindi segue la regola già scritta per gli altri tre lettori: default corretto sopra `Get` (una storage custom che materializza la navigazione continua a funzionare), override indicizzato nella base EF (una sottoquery correlata sulla tabella audit, ordinata sull'**identità** dell'audit e non sul timestamp — SQLite rifiuta un `DateTimeOffset` in `ORDER BY`, e l'ordine di inserimento è lo stesso), in memoria, e wrapper `RereadOnDeadlock` su SQL Server. Nessuna capability nuova, nessuna migrazione, nessun round-trip sui hot path (D7): il solo chiamante è l'API di monitoring, una query per pagina. Il costo residuo è dichiarato: sotto `AuditLevel.Full` la transizione non viene registrata da nessuno, quindi la riga non ha uno start registrato e l'API non ne inventa uno. Pinnata sui quattro provider da `EfCoreTaskStorageTestsBase.GetLastRunStarts_should_answer_when_a_run_began_even_while_it_is_still_in_flight` e `…_should_answer_with_the_newest_run_of_a_row_that_ran_more_than_once`, in memoria da `MemoryStorageOccurrenceContractTests.Should_report_when_a_run_began_from_the_audit_trail_and_nothing_when_none_recorded_it`, al seam dell'API da `TaskQueryServiceTests` e, su host reale, da `OccurrenceEndpointTests.Should_report_when_a_run_still_in_flight_started`. Docs (`custom-storage.md`, `monitoring-api-reference.md`) e skill storage (`.claude/` + mirror `.agents/`) aggiornate nello stesso cambio. |
+| **§3.8** — `StartOfLastRun` deriva uno start **solo** da un run che ne ha misurato uno (riga `Completed`), e nessuno per una riga in attesa | **PRECISAZIONE RATIFICATA della riga di round 1.** «La fine del run meno la durata misurata attorno a esso» è vera solo dove le due colonne sono state scritte **dalla stessa transizione**, cioè da una completion (`SetCompleted`/`CompleteRecurringRun`). Il path di fallimento scrive `LastExecutionUtc` e lascia `ExecutionTimeMs` a 0 (`WorkerExecutor:1563` → `SetStatus(..., executionTimeMs: null)`), quindi la sottrazione restituiva **la fine come inizio** e il badge mostrava l'intera esecuzione come ritardo — il difetto che il round 1 doveva togliere, ancora intero su ogni occorrenza fallita; e una riga portata a `Failed` senza essere mai passata da `InProgress` (`FailUnusableOccurrenceAsync`) riceveva uno start per un handler che non è mai partito. Due regole, entrambe dal lato della non-invenzione: si deriva **solo** su `Completed`, e una riga il cui stato corrente riguarda un run **non ancora iniziato** (`WaitingQueue`/`Queued`/`Pending`/`ServiceStopped`) non riporta nulla, perché lo start di un tentativo precedente non è quello del run che la riga rappresenta ora — che è ciò che un'occorrenza rimessa in coda e ogni ricorrente fra due run riportavano. Pinnata da `OccurrenceEndpointTests.Should_report_when_a_run_that_FAILED_started_instead_of_when_it_ended` (host reale, handler da 2,5 s che poi lancia: `ExecutionTimeMs = 0` come premessa, e lo start a meno di 1,5 s dallo slot mentre la fine è oltre 2 s), `…Should_report_no_start_for_an_occurrence_that_was_failed_without_ever_running` e dai quattro test di seam in `TaskQueryServiceTests`. |
+
+Gli altri due, senza deviazione:
+
+- **Il tab Occorrenze non aveva alcun controllo di pagina**: `useOccurrences` chiedeva sempre la prima
+  pagina del backend e la tabella diceva «300 occorrenze (showing 100)» senza offrire un modo di raggiungere
+  le altre — un'occorrenza fallita alla riga 150 era irraggiungibile dalla dashboard. `OccurrencesTab` tiene
+  ora il proprio `skip` e mostra Previous/Next con il conteggio della finestra, come già fa
+  `ExecutionLogsTab`; la pagina entra nella query key (`['occurrences', id, skip, take]`), che
+  l'invalidazione per prefisso di `useSignalRRefresh` continua a raggiungere. Lo stato vuoto resta della
+  **prima** pagina soltanto: una pagina vuota più avanti è una serie che si è ridotta sotto il lettore
+  (retention, un cancel) e ha comunque bisogno della strada di ritorno. **Verifica**: la UI non ha una suite
+  di test in questo repo (nessun vitest, nessun testing-library in `package.json`), quindi la modifica è
+  verificata da `pnpm run build` (tsc) e `pnpm run lint`; ciò che il server promette al tab — una pagina e il
+  totale della serie — resta pinnato da `TaskQueryServiceTests.Should_ask_the_storage_for_one_page_of_occurrences_and_never_for_the_series`,
+  da `OccurrenceEndpointTests.Should_page_the_occurrences_it_lists` e dai test di contratto di
+  `GetOccurrencesPage` sui cinque store.
+- **`GetLastRunStarts` non viene chiesta per le righe che non possono avere uno start**: `TaskRunTiming`
+  filtra la pagina prima di interrogare lo storage, quindi una lista di sole righe in attesa non paga alcuna
+  query. È la stessa regola che decide la risposta, in un punto solo.
+
+### Chiusura dei findings della review di fase 7 — round 3 (2026-08-26)
+
+Due finding confermati, chiusi alla radice, ed è lo stesso pezzo del round 2 portato fino in fondo: che cosa
+l'API può dire di un run, e da dove legge le righe che lo raccontano. Le due voci che toccano superficie o
+semantica stanno in tabella (due membri di lettura nuovi su `ITaskStorage`, e la media dei tempi di esecuzione
+della overview); la terza — la regola con cui uno start si deriva — è sotto, e non è una deviazione.
+
+| Punto | Deviazione |
+|-------|------------|
+| **X2** — due nuovi membri di lettura `ITaskStorage.GetStatusAudits(taskId, ct)` e `GetRunsAudits(taskId, ct)` (DIM) | **AGGIUNTA RATIFICATA, ed è ciò che il round 2 aveva corretto per UN lettore solo.** Il round 2 ha stabilito che `QueuedTask.StatusAudits` non è materializzata da nessuna lettura di storage (nessun `.Include(` sotto `src/`, nessun `AutoInclude`, nessun lazy loading) e ha spostato **un** lettore — quello dello start di un run — su un membro di storage. Gli altri quattro leggevano la stessa navigazione morta: `GET /tasks/{id}/status-audit`, `GET /tasks/{id}/runs-audit`, i blocchi `statusAudits`/`runsAudits` di `GET /tasks/{id}` e l'`avgExecutionTimeMs` della overview. Su SQL Server, Postgres, MySQL e SQLite un operatore vedeva quindi `Status History (0)` e `Runs History (0)` su una riga la cui tabella di audit contiene tutte le transizioni, e il tile del tempo medio fermo a `0.0`. Le due letture nuove seguono la regola già scritta per gli altri tre lettori: **read-only**, quindi default corretto sopra `Get` (una storage custom che materializza le navigazioni continua a funzionare), override indicizzato nella base EF sulle tabelle di audit — ordinate sull'**identità** dell'audit e non sul timestamp, per la stessa ragione del round 2 (SQLite rifiuta un `DateTimeOffset` in `ORDER BY`, e l'ordine di inserimento è l'ordine delle transizioni) —, in memoria, e wrapper `RereadOnDeadlock` su SQL Server. Nessuna capability nuova, nessuna migrazione, nessun round-trip sui hot path (D7): l'unico chiamante è l'API di monitoring. `TaskQueryService` ha **un** lettore per trail (`ReadStatusAuditsAsync`/`ReadRunsAuditsAsync`), condiviso da endpoint e dettaglio, così i due non possono divergere. Pinnata sui quattro provider da `EfCoreTaskStorageTestsBase.GetStatusAudits_should_answer_the_whole_transition_history_newest_first`, `…_should_answer_only_for_the_row_it_was_asked_about` e `GetRunsAudits_should_answer_every_recorded_run_newest_first` (ognuno con la **premessa** asserita: la riga che una `Get` restituisce porta le collezioni vuote), in memoria da `MemoryStorageOccurrenceContractTests.Should_report_the_transition_history_and_the_runs_newest_first`, al seam dell'API da `TaskQueryServiceTests.Should_read_the_audit_trail_from_the_storage_and_never_off_the_row` e — questa è la novità che il round 2 non aveva — su una **storage relazionale vera** da `API/Services/RelationalAuditReadTests` (EF Core + SQLite con migrazioni applicate), perché `MonitoringTestWebAppFactory` registra `AddMemoryStorage()`, l'unico store che tiene gli audit sull'oggetto riga: è la ragione per cui la divergenza per backend passava l'intera suite. Docs (`custom-storage.md`, `monitoring-api-reference.md`), skill storage (`.claude/` + mirror `.agents/`) e `CLAUDE.md` del modulo aggiornati nello stesso cambio. |
+| **`avgExecutionTimeMs` della overview passa dalla colonna misurata**, non più dalla differenza fra due audit | **DEVIAZIONE RATIFICATA.** La overview era l'unico punto dell'API a calcolare un tempo medio come `Completed/Failed − InProgress` letto da `StatusAudits`: falso su tutte le relazionali (navigazione vuota) e falso comunque sotto `AuditLevel.Full` (nessuna transizione registrata da sottrarre). `StatisticsService` risponde già dalla colonna `ExecutionTimeMs`, cioè dalla durata che il worker misura attorno all'handler, e la overview usa ora la **stessa** regola (`TaskRunTiming.AverageMeasuredDurationMs`), condivisa dai tre siti: gli stessi task non possono più produrre tre medie diverse. Cambia il numero servito da `GET /dashboard/overview` — prima era `0.0` ovunque tranne che in memoria — e cambia l'insieme: entrano i soli `Completed` con una durata misurata, escono i `Failed` (il path di fallimento non scrive nessuna durata: non c'è nulla da mediare, e contarli come zero abbasserebbe la media). Pinnata da `DashboardServiceTests.Should_average_the_durations_the_runs_measured_on_rows_that_carry_no_audit` e `…Should_leave_out_of_the_average_the_runs_nobody_measured`, e su storage reale da `RelationalAuditReadTests.Should_report_an_average_execution_time_on_a_relational_store`. Docs (`monitoring-api-reference.md`) e `CLAUDE.md` del modulo aggiornati. |
+
+La terza, senza deviazione:
+
+- **`startedAtUtc` non si deriva più da una durata che nessuno ha misurato.** Il round 2 aveva ristretto il
+  ramo derivato allo stato `Completed`, ma la finestra restava aperta: le tre scritture di finalizzazione
+  portano `Status = Completed` e `LastExecutionUtc = now` **forzando** `ExecutionTimeMs` a 0, quindi
+  `finished.AddMilliseconds(-0)` restituiva l'istante della finalizzazione come momento in cui un run è
+  cominciato, su righe dove nessun handler ha girato — la riga schedule di uno schedule durevole (è
+  `IsScheduleOnly`: salta `SetInProgress`, l'handler e ogni `SetCompleted`, M8) chiusa dall'ultima
+  materializzazione, e una serie inline finalizzata dalla recovery (`WorkerService` passa
+  `executionTimeMs: 0`, e `SetRecurringSeriesCompleted` assegna `ExecutionTimeMs = 0` incondizionatamente,
+  sovrascrivendo anche la durata che l'ultimo run vero aveva misurato). La regola è ora una sola e sta in un
+  punto solo — `TaskRunTiming.MeasuredDurationMs`: si deriva **soltanto** da `Completed` **con
+  `ExecutionTimeMs > 0`**, perché 0 vuol dire "nessuno l'ha misurata", non "istantanea". La stessa regola
+  decide chi entra nella media di cui sopra, che è ciò che tiene le due risposte coerenti. Il costo dichiarato
+  è un run realmente sotto il millisecondo che, senza audit, non riporta uno start: la non-invenzione vale più
+  di un'approssimazione, ed è la stessa scelta di `docs/monitoring-api-reference.md:174-177`. Pinnata da
+  `TaskQueryServiceTests.Should_report_no_start_for_a_completion_that_measured_no_duration` e
+  `…Should_report_no_start_for_a_schedule_row_finalized_without_a_run` (la riga schedule con `MaxRuns`
+  esaurito, che è la forma (a) del finding).
+
+### Chiusura dei gap di completezza della fase 7 (2026-08-26)
+
+I certificatori di completezza hanno riaperto sette punti sulla fase 7. Due toccano il comportamento o la
+superficie e stanno in tabella, perché il gate 3 non lascia passare una modifica non scritta; gli altri cinque
+sono deliverable della fase mai consegnati — copertura, tipi e GitHub — e stanno sotto.
+
+| Punto | Decisione |
+|-------|-----------|
+| **D7** — `GetOccurrencesPage` su SQLite leggeva l'**intera serie**, la ordinava e la paginava in memoria, mentre gli altri quattro store contano, ordinano e affettano nel database | **CHIUSO CON FIX, e il fix è una prima per il provider: una query scritta in SQL.** La riga di `docs/monitoring-api-reference.md` («the page is a page all the way down to the database») e quella del CHANGELOG («rather than read whole and paged in memory») erano false su uno store su cinque, e `docs/storage/custom-storage.md` documentava l'eccezione — cioè tre documenti che si contraddicevano. Il regolamento del modulo («SQLite non traduce un `ORDER BY` su `DateTimeOffset`: sovrascrivi qui e valuta client-side») è giusto dove l'insieme portato in memoria è quello che il chiamante avrebbe comunque (una pagina di recovery, gli id di un batch di cleanup), ed è esattamente sbagliato qui: l'unico scopo del membro è che la serie **non** venga letta, quindi «valutare client-side» non è la versione SQLite dell'operazione, è la sua rinuncia. `SqliteTaskStorage.GetOccurrencesPage` ordina, limita e sposta ora con `FromSql` **interpolato** — ogni valore resta un parametro che EF tipizza da sé, `parentId` compreso — e conta con la stessa `CountAsync` della base. L'unica assunzione è che l'ordinamento testuale della rappresentazione ISO-8601 di SQLite sia l'ordinamento degli istanti: lo è, perché il prefisso data-e-ora è a larghezza fissa, la parte frazionaria è troncata **da destra** e i due segni dell'offset stanno sotto ogni cifra — ed è la **stessa** assunzione di rappresentazione su cui `UX_QueuedTasks_Occurrence` già poggia su questo provider (follow-up F1, ora #37). Lo `Status` è confrontato come TEXT perché è così che il modello lo scrive (`HasConversion<string>()`), non come numero dell'enum. **Nessuna migrazione, nessuna capability, nessun round-trip sui hot path.** Pinnato sui quattro provider da `EfCoreTaskStorageTestsBase.GetOccurrencesPage_should_let_the_database_order_and_slice_the_series`, che legge il comando davvero inviato dal diagnostic source di EF e pretende `ORDER BY … DESC` sullo slot, la clausola di slice (`LIMIT`/`FETCH`) e il conteggio server-side: **asserire le righe passa identico su una fetta in memoria**, ed è la ragione per cui i due test esistenti non hanno mai visto la differenza. Docs (`custom-storage.md`), skill storage (`.claude/` + mirror `.agents/`) e `Sqlite/CLAUDE.md` aggiornate nello stesso cambio. |
+| **Tipi TS non allineati al JSON** — ogni campo nullable era una **chiave obbligatoria** in `src/types/*.types.ts`, mentre il filtro JSON omette i null e l'interceptor axios non ripristina nulla | **CHIUSO CON FIX.** È la contraddizione esatta della decisione del round 1 su `ScheduleVersion` (`int?` «perché i sei campi di schedule sono assenti insieme, ed è la presenza che discrimina»): il tipo che il primo consumatore usa per leggerli prometteva invece che le chiavi ci fossero sempre. Un `parentTaskId: string \| null` su una risposta che quella chiave non porta è `undefined` a runtime, cioè un valore che il tipo dichiara impossibile. Ogni proprietà nullable diventa **opzionale** (`name?: T \| null`) in tutti e otto i file di tipi, e le firme che le ricevono si allargano di conseguenza (`dateHelpers`, i tre `formatDate` locali, le props dei due badge). Il difetto era più largo di quanto il finding dicesse: applicando la regola sono emerse due chiavi obbligatorie anche in `queue.types.ts` e una in `signalr.types.ts`, tutte precedenti a #23. Pinnato da `API/Controllers/JsonContractTests`, che ha **due metà**: il JSON **grezzo** letto come testo (i sei campi assenti su un one-shot, in dettaglio e in lista; presenti su uno schedule e su una sua occorrenza — deserializzare non distingue una chiave assente da una chiave `null`, che è tutta la differenza), e un guardiano che rilegge i `.types.ts` dal working tree e confronta ogni proprietà nullable di ogni DTO con la chiave corrispondente: è l'asserzione che fallisce quando un campo nullable nuovo viene rispecchiato come obbligatorio, cioè la deriva che nessun test a runtime può vedere perché in JavaScript assente e `null` si leggono uguali. |
+
+Gli altri cinque, senza deviazione:
+
+- **La UI non aveva un test runner** (`package.json` non aveva nemmeno uno script `test`): paginazione, badge
+  late/catch-up, invalidazione SignalR e rendering del backlog erano compilati e lintati, mai eseguiti — il
+  deliverable UI del piano §7 non era «presente e significativo». Aggiunti Vitest + Testing Library + jsdom
+  (`pnpm test`, `vitest.config.ts` che fa merge di `vite.config.ts`, così il componente sotto test risolve
+  come quello che spedisce) e **27 test** su quattro file, accanto a ciò che esercitano: i controlli di pagina
+  del tab Occorrenze contro un `@/services/api` finto — hook, query client e componente sono quelli veri —
+  compresi lo stato vuoto della sola prima pagina e la pagina che si svuota sotto il lettore; i due badge, con
+  la lateness misurata da `startedAtUtc` e **non** dalla fine del run, la riga cancellata che non ne porta
+  nessuna, e il conteggio marcato come lower bound; l'invalidazione di `['occurrences']` a ogni evento; la
+  card del backlog, halt compreso, e il suo essere invisibile quando non c'è nessuno schedule durevole. Il
+  `tsc` della build compila anche loro. La riga del round 2 («la UI non ha una suite di test in questo repo,
+  quindi la modifica è verificata da `pnpm run build` e `pnpm run lint`») è **superata**: quella modifica —
+  i controlli di pagina — è ora pinnata da sei test.
+- **Il registro dei follow-up era stale su F9**, che questa stessa fase aveva aggiunto: rinviava
+  `GetStatusAudits`/`GetRunsAudits`, i due blocchi del dettaglio e la media della overview, tutti **consegnati
+  dal round 3**, e non compariva nella tabella-indice. Aprirlo così avrebbe creato un'issue per lavoro già
+  fatto e perso l'unico residuo davvero aperto. F9 è riscritto sulla sola metà rimasta — la **paginazione**
+  dei due trail — con la premessa dichiarata chiusa, ed è in tabella con le altre.
+- **Le issue del registro non esistevano.** Il piano §7 le elenca fra i deliverable della fase e nessuna era
+  stata aperta: F1 **#37**, F2 **#38**, F3 **#39**, F5 **#40**, F6 **#41**, F7 **#42**, F8 **#43**, F9 **#44**;
+  F4 è l'epic **#31**, che esisteva già. La colonna «Stato» del registro porta ora il numero, e il testo di
+  ogni voce resta la traccia in albero da cui il corpo dell'issue è stato scritto.
+- **Il commento riepilogativo su #23 mancava.** Sulla pagina pubblica c'era solo il commento di design del
+  2026-08-22; il piano §7 chiede anche quello di consegna. Aggiunto: le sette fasi con la loro sub-issue e ciò
+  che ognuna ha portato, i tre punti dell'issue originale con la loro risposta, il limite single-active-host
+  dichiarato, e i follow-up aperti. #23 **resta aperta**: chiude al merge e alla pubblicazione di 4.0.0.
+- **La sub-issue di fase 7 #30 era aperta**, sola fra le sette, e il suo titolo prometteva ancora la
+  release 3.12.0. Rititolata a 4.0.0 (stesso sweep di versione di §3.8) e chiusa con il verbale di ciò che la
+  fase ha consegnato, come già #24–#29.
+
+**Il gate completo, verde e scritto.** `dotnet build EverTask.slnx -c Release` a **0 warning e 0 errori** su
+net8.0/net9.0/net10.0, e `dotnet test EverTask.slnx -c Release` **tutta verde** (exit 0): 15 assembly di test,
+**9.252 test superati, 0 falliti**, 12 ignorati (i quattro test net-condizionali dell'API di monitoring, uno
+per TFM), **Testcontainers inclusi** — SQL Server, PostgreSQL e MariaDB, mai filtrati. È la terza di tre
+esecuzioni complete fatte qui, ed è utile dire cosa hanno detto le altre due, perché la richiesta era proprio
+una run completa dimostrata: la prima ha fallito solo sul test di meccanismo nuovo di questa chiusura (il
+recorder usciva sull'attesa alla prima query pubblicata da **un altro** test in parallelo, e la misura
+partiva quindi ancora soppressa — corretto ripetendo la chiamata finché è la SUA query a comparire); la
+seconda ha fallito su due flake **preesistenti**, entrambe già a registro (F5/#40, e F10/#45 aperta qui: il
+test della vittima del deadlock su SQL Server fallisce, per progetto, quando il motore non collide — e sotto
+tre TFM in parallelo sullo stesso container può non collidere). Nessuna delle tre run ha mai fallito su codice
+di prodotto, e la suite UI (`pnpm test`, 27 test) e `pnpm run lint` sono verdi con lei.
+
+### Chiusura dei gap di completezza della fase 7 — round 2 (2026-08-26)
+
+Tre punti riaperti, tutti su `docs/monitoring-api-reference.md` e tutti della stessa specie: il file descrive
+due endpoint e una richiesta con una forma che l'API non ha mai prodotto. Nessuno tocca il codice di prodotto
+— la correzione è nelle docs — ma tutti e tre sono ora **pinnati da test**, perché è la mancanza di un
+confronto fra il sample e la DTO ad averli lasciati passare due volte, §3.8 compresa («i sample JSON sono
+stati allineati alle DTO reali»).
+
+- **Il sample di `GET /tasks/{id}/status-audit`** documentava `taskId`, `oldStatus`, `changedAtUtc` ed
+  `errorDetails`, mentre `StatusAuditDto` serializza `id`, `queuedTaskId`, `updatedAtUtc`, `newStatus` ed
+  `exception`; `oldStatus` non esiste, perché la tabella registra la transizione e non la coppia. Le due voci
+  erano per giunta ordinate dalla più vecchia alla più recente, contro la prosa due righe sopra e contro
+  l'ordine che `GetStatusAudits` consegna (identità dell'audit decrescente), e il secondo id era un GUID
+  malformato, con un gruppo di troppo. Sample riscritto sui nomi reali, tre voci newest-first, e due paragrafi
+  che dicono cosa c'è al posto di `oldStatus` e quando `exception` compare.
+- **Il sample di `GET /tasks/{id}/runs-audit`** documentava `taskId`, `executionStartedUtc`,
+  `executionCompletedUtc` ed `errorDetails`: nessuna delle due colonne temporali esiste. `RunsAuditDto` porta
+  `executedAt` — l'istante in cui l'esito del run è stato registrato, cioè la sua fine — ed `executionTimeMs`.
+  Riscritto, con la prosa che dice le due cose che un lettore avrebbe dedotto male: non c'è una colonna di
+  inizio (lo start del run è `startedAtUtc` sul task), e la lista è **vuota** su tutto ciò che non è una
+  ricorrente inline, perché un run è scritto solo dall'avanzamento di uno schedule che ha eseguito il proprio
+  handler — quindi niente per un one-shot, niente per la riga schedule di uno schedule durevole (che handler
+  non ne esegue) e niente per le sue occorrenze, che sono one-shot.
+- **L'example request di `GET /tasks`** passava ancora `status=Completed`, un parametro che l'endpoint non
+  lega: non viene rifiutato, viene ignorato, e chi copia l'esempio riceve una pagina non filtrata credendola
+  filtrata. Corretto in `statuses` qui e nei quattro esempi di codice in fondo al file (C#, JavaScript, Python,
+  cURL). Lo stesso difetto sopravviveva nel `README.md` del pacchetto — l'esempio React chiamava
+  `?status=Running`, con anche un valore di stato che l'enum non ha — ed è ora `?statuses=InProgress`; nello
+  stesso file il sample della sezione «JSON Serialization» mostrava `executedAtUtc`, che nessuna DTO porta, ed
+  è ora `lastExecutionUtc`.
+
+I test sono due, entrambi su host reale. `API/Controllers/ApiReferenceAuditSampleTests` fa girare davvero una
+ricorrente con un solo run e confronta i due sample con la risposta viva: ogni chiave documentata è una
+proprietà della DTO, ogni proprietà mai nulla compare nel sample, nessuna chiave che l'API manda resta fuori,
+i `queuedTaskId` documentati sono Guid veri e appartengono a un solo task, e le due liste — quella documentata
+e quella viva — sono newest-first. `API/Controllers/ApiReferenceRequestSampleTests` prende l'example request
+dal file e la manda: il totale deve essere il numero di righe `Completed` nello store, che è minore del totale
+delle righe, quindi un parametro ignorato fa fallire il test invece di passare inosservato; controlla inoltre
+che ogni parametro di query documentato per la lista task (URL e dict Python) sia legato da
+`TaskFilter`/`PaginationParams`, e che ogni sample JSON del file sia JSON valido con identificatori davvero
+Guid. I cinque test sono stati verificati contro il testo **precedente**: quattro falliscono su di esso.
+
+**Il gate.** `dotnet build EverTask.slnx -c Release` a 0 warning e 0 errori su net8.0/net9.0/net10.0, e
+`dotnet test EverTask.slnx -c Release` senza filtri, **Testcontainers inclusi**: 15 assembly, un solo test
+fallito su tutta la corsa, ed è la flake già a registro (F10/#45, `Should rerun a read that sql server picked
+as the deadlock victim` su net10.0 — fallisce per progetto quando il motore non collide, e sotto tre TFM in
+parallelo sullo stesso container può non collidere). Rieseguito da solo passa. La suite di monitoring, che è
+quella che questa chiusura tocca, è verde su tutti e tre i TFM (222/222 su net9 e net10, 218 su net8 con i
+quattro test net-condizionali ignorati).
+
+### Chiusura dei gap di completezza della fase 7 — round 3 (2026-08-26)
+
+Tre punti riaperti, tutti sullo **specchio**: cosa la fase ha consegnato e cosa i documenti (o i tipi del
+primo consumatore) dicono che abbia consegnato. Uno solo tocca una riga del piano §7 e sta in tabella; gli
+altri due sono uno sweep mancato e un tipo TS mai allineato, e stanno sotto.
+
+| Punto | Decisione |
+|-------|-----------|
+| **Piano §7** — `BacklogDiscarded` è elencato fra i «messaggi» che la fase deve documentare, ma esiste **solo** come riga di log (`TaskScheduleManagerLog`, EventId 2201), mentre l'XML-doc pubblico di `ITaskScheduleManager.ReevaluateSchedule` e `docs/recurring-tasks/managing-tasks.md` lo promettevano come **evento di monitoring** | **PUNTO CHIUSO SU «non è un evento», e sono le due promesse a essere corrette.** S5 e la chiusura del round 3 della review di fase 7 hanno già fissato la forma: «ogni cambiamento accettato pubblica **UN** evento di monitoring, e porta l'intero cambiamento — versione di partenza e di arrivo, cursori, modalità, halt rilasciato, backlog scartato». Il backlog scartato è quindi una **parte** di `ScheduleRescheduled` (è ciò che ne alza la severità a `Warning` e ciò che aggiunge `; {n} due slot(s) were discarded` al messaggio), non un secondo evento: aggiungerne uno spaccherebbe in due un fatto solo, e obbligherebbe un consumatore a correlare due messaggi per sapere cosa è successo a uno schedule. Le due frasi nominano ora `ScheduleRescheduled`, e `managing-tasks.md` dice a chiare lettere che `BacklogDiscarded` è una riga di **log** con lo stesso conteggio — la distinzione che mancava e che mandava a vuoto chiunque facesse text-match sul nome documentato. `docs/monitoring-events.md` non cambia: la riga «Schedule rescheduled» era già lì, con il suo messaggio verbatim e il paragrafo sulla severità. |
+
+Gli altri due, senza deviazione:
+
+- **`docs/configuration-reference.md` era l'unico dei tre bersagli dello sweep §7 rimasto indietro.** La
+  lista «API Endpoints → Main endpoints» era ancora quella pre-#23: nessun `GET /tasks/{id}/occurrences` —
+  che è un deliverable della **stessa** riga di piano — e nessun `GET /tasks/counts`, mentre il `README.md`
+  del pacchetto e la skill `references/07-monitoring-logging.md` erano stati portati avanti nella stessa
+  fase. Aggiunti entrambi, più i tre filtri durevoli su `GET /tasks`, il `catchUpBacklog` della overview e la
+  riga «ogni endpoint è read-only» con il rimando a `ITaskScheduleManager`, che è la stessa frase che §3.8 ha
+  scritto negli altri due documenti. La lista «Dashboard Features» sotto aveva lo stesso buco: mancavano il
+  tab **Occurrences** e la card del **catch-up backlog**, cioè i due pezzi di UI che la riga UI del piano §7
+  consegna, più i badge catch-up/late sulle righe della lista task.
+- **`signalr.types.ts` non rispecchiava nulla di ciò che la fase ha aggiunto a `EverTaskEventData`.**
+  `parentTaskId`, `scheduledAtUtc` e `scheduleVersion` — documentati da `docs/monitoring-events.md` e dalla
+  skill nella stessa fase — non c'erano, e nemmeno `executionLogs`, che è precedente a #23. Il file era stato
+  **toccato** dalla fase (la regola «nullable ⇒ chiave opzionale» applicata a `exception`), quindi lo specchio
+  era applicato a metà, non semplicemente dimenticato. La ragione per cui nessun test lo ha visto è che il
+  guardiano di `JsonContractTests` cammina il namespace `EverTask.Monitor.Api.DTOs`, e `EverTaskEventData` non
+  ci vive: è il record di **EverTask**, che `SignalRTaskMonitor` spedisce verbatim. Le quattro chiavi ci sono
+  ora, con il tipo dell'entry di log (`TaskExecutionLogData`), e la copertura è nuova:
+  `SignalR/EventWireContractTests` prende il payload dall'**hub vero** come `JsonElement` e pretende che ogni
+  chiave sulla linea sia una chiave che `signalr.types.ts` dichiara — l'asserzione che fallisce esattamente
+  sulla deriva di questo gap (tre dei suoi quattro test falliscono contro il file precedente). Il parser dei
+  `.types.ts` è stato promosso a `TestHelpers/TypeScriptTypes`, condiviso dai due guardiani, perché una
+  seconda copia sarebbe la copia che diverge sui file che esiste per sorvegliare.
+
+Una cosa che il gap non diceva e che il test ha stabilito: **l'hub NON omette i null.**
+`JsonHubProtocol` non ha `WhenWritingNull`, quindi su quella linea — al contrario che sull'API REST — le
+chiavi nullable sono **sempre presenti** con valore `null`, e un consumatore discrimina sul valore e non sulla
+presenza. Le chiavi restano dichiarate opzionali (è vero di entrambe le forme, ed è l'unica regola che questi
+file seguono), ma il commento in testa al file lo dice invece di ripetere per inerzia la frase dell'API.
+Pinnato da `Should_write_the_schedule_keys_as_null_for_a_task_that_belongs_to_no_schedule`, e scritto in
+`UI/CLAUDE.md`.
+
+### Chiusura dei gap di completezza della fase 7 — round 4 (2026-08-26)
+
+Sei punti riaperti. Uno solo tocca il comportamento e sta in tabella; tre sono uno **specchio sbagliato** — un
+registro, un file di tipi e un wrapper di test — e stanno sotto; gli ultimi **due erano già chiusi** quando
+sono stati riaperti, e la verifica va scritta anche quando dice questo.
+
+| Punto | Deviazione |
+|-------|------------|
+| **L'evento «occurrence unusable» annunciava un `Failed` che sulla riga non c'era** (`OccurrenceMaterializer.FailUnusableOccurrenceAsync`) | **CORREZIONE RATIFICATA, ed è la regola della fase 4 («solo uno stato terminale CONFERMATO libera capacità») estesa a ciò che si RACCONTA.** Metà del difetto era già chiusa: `SetStatus` è best-effort su ogni provider relazionale — logga la propria scrittura fallita e ritorna — quindi la riga viene riletta prima di contare libero lo slot. La **frase**, però, era scritta prima di quella rilettura e non la guardava: il log 1810 («has been marked Failed») e l'evento di monitoring («cannot be rebuilt from its row and was marked Failed») uscivano identici anche quando la riga era rimasta `Queued`. Il log aveva almeno una riga di smentita dietro (1818); l'evento no — è pubblicato una volta sola ed è tutto ciò che un consumatore vede. Un operatore leggeva quindi che l'occorrenza era stata terminalizzata mentre teneva ancora il suo slot e lo schedule non materializzava più nulla: esattamente la condizione per cui quell'evento `Error` esiste. Ora la rilettura viene **prima** di ogni frase, e ogni frase dice ciò che è successo davvero: 1810 è la riga del caso in cui la scrittura è atterrata, 1818 quella del caso opposto — e riceve l'eccezione, l'unica cosa che le mancava rispetto a 1810 — e l'evento ha due formulazioni, la seconda delle quali nomina lo stato in cui la riga è rimasta (`could not be marked Failed (it is still Queued)`). Il prefisso `cannot be rebuilt from its row` non cambia, quindi un consumatore che fa text-match su quello le intercetta entrambe. `docs/monitoring-events.md` (tabella più il paragrafo dei tre eventi «da alert»), `docs/recurring-tasks/durable-occurrences.md` e `src/EverTask/CLAUDE.md` aggiornati nello stesso cambio. Pinnata da `DurableOccurrencesIntegrationTests.A_status_write_that_never_landed_does_not_free_the_slot_it_was_meant_to_free`, che ora **sottoscrive** l'evento invece di limitarsi a rileggere la riga: sul primo run pretende «could not be marked Failed», lo stato `Queued` dentro il testo e **l'assenza** di «and was marked Failed» — che è la frase che il codice precedente pubblicava lì — e sul secondo, quello in cui la scrittura atterra, pretende la formulazione opposta. |
+
+Gli altri tre, senza deviazione:
+
+- **F10 e il corpo di #45 erano stale sulla loro stessa metà già chiusa.** È lo stesso difetto che il round 1
+  ha corretto per F9: la voce del registro e l'issue descrivevano il test come non ancora toccato («la
+  pressione gira finché `StopOnceItHasDeadlocked` conta due rieseguite», e come direzione «dare al loop un
+  budget che non scada mentre il container è conteso»), mentre lo stesso working tree si ferma alla **prima**
+  riesecuzione, ha una finestra di **due minuti** e `test/EverTask.Tests.Storage/CLAUDE.md` documenta la forma
+  nuova. Aprire un'issue così chiede lavoro già fatto e nasconde il residuo vero. Riscritti entrambi sulla
+  sola metà rimasta aperta — rendere la **collisione** affidabile, che non dipende dal budget ma da come il
+  ciclo viene provocato, più la **diagnosi**, perché un run senza collisione fallisce ancora sull'asserzione
+  finale e si legge come uno storage che non riesegue le proprie letture — con la premessa dichiarata chiusa e
+  il secondo fallimento (round 2, net10.0) registrato come prova che allargare la finestra non basta.
+- **`FaultInjectingTaskStorage` non inoltrava `GetOccurrencesPage`**: tre membri di lettura nuovi su quattro.
+  `test/EverTask.Tests/CLAUDE.md` dichiara che il wrapper inoltra OGNI default interface member, e la frase
+  era falsa — quel membro girava il default dell'interfaccia (che compone `GetOccurrences`) invece dello store
+  interno, e soprattutto non aveva un `Gate`, quindi era l'unico dei quattro su cui un test non poteva
+  iniettare un guasto. Inoltrato; e l'invariante non è più solo una frase:
+  `FaultInjectingTaskStorageContractTests` cammina `ITaskStorage` per riflessione e nomina ogni membro che il
+  wrapper non dichiara, con un controllo su `TestTaskStorage` — che implementa solo i membri obbligatori — così
+  una risposta vuota vuol dire «tutti inoltrati» e non «la riflessione non ha trovato niente».
+- **`signalr.types.ts` diceva due cose opposte a tre righe di distanza.** L'intestazione, scritta dal round 3,
+  spiega che l'hub NON omette i null (`JsonHubProtocol` non ha `WhenWritingNull`) e che una chiave nullable
+  arriva **presente** con valore `null`; i commenti per-chiave di `parentTaskId` e `scheduleVersion` dicevano
+  invece «this key is absent» e «absent on a task that belongs to no schedule» — la frase dell'API REST
+  ripetuta per inerzia, cioè proprio ciò che il round 3 diceva di aver tolto. È anche ciò che
+  `SignalR/EventWireContractTests.Should_write_the_schedule_keys_as_null_for_a_task_that_belongs_to_no_schedule`
+  pretende: chiavi PRESENTI con valore null. Corretti, e con loro `executionLogs`, che diceva «stripped from
+  the payload» dove è la lista a essere tolta e la chiave a restare, a `null`. Nessun tipo cambia: restano
+  opzionali, che è vero di entrambe le forme ed è la regola unica di questi file.
+
+E i due che erano già chiusi, verificati sulla pagina pubblica invece che sul testo di questo file:
+
+- **Il commento riepilogativo su #23 c'era** (2026-08-26T09:08:06Z, `#issuecomment-5423079176`): le sette fasi
+  con la loro sub-issue, i tre punti dell'issue originale con la loro risposta, il limite single-active-host e
+  i follow-up. Una cosa mancava davvero, ed è stata aggiunta: **#45**, aperta nella stessa chiusura e assente
+  dall'elenco dei follow-up.
+- **La sub-issue #30 era già rititolata a 4.0.0 e già chiusa** (2026-08-26T09:08:33Z) con il verbale di ciò che
+  la fase ha consegnato, come #24-#29. Nessuna modifica.
+
+**Il gate.** `dotnet build EverTask.slnx -c Release` a **0 warning e 0 errori** su net8.0/net9.0/net10.0, e
+`dotnet test EverTask.slnx -c Release` senza filtri, **Testcontainers inclusi** (SQL Server, PostgreSQL,
+MariaDB): 15 assembly, **9.283 test superati** su 9.297, 12 ignorati (i quattro net-condizionali dell'API di
+monitoring, uno per TFM) e **due falliti**, nessuno dei due su codice di prodotto, entrambi verdi rieseguiti
+da soli.
+
+- `MemoryLeakRegressionTests.Should_resolve_and_dispose_fresh_handler_per_execution_for_immediate_tasks`
+  (net10.0): la flake già a registro **F5/#40** — due test della classe condividono i contatori statici della
+  sonda. Rieseguita da sola, la classe è 6/6.
+- `PostgresEfCoreTaskStorageTests.Should_SetTaskInProgress` (net8.0): il costruttore non è riuscito ad
+  **aprire la connessione** al container («Failed to connect to 127.0.0.1:38235 — è consentito un solo
+  utilizzo di ogni indirizzo di socket»), cioè esaurimento delle porte effimere di Windows con quindici host
+  di test su tre TFM contro gli stessi container. Non è un difetto del provider né della suite: nessuna query
+  è stata eseguita. Rieseguita da sola, la classe è 211/211. È un'osservazione nuova, non a registro; se si
+  ripresenta merita una voce sua accanto a F5 e F8.
+
+Il test della vittima del deadlock (**F10/#45**) è **verde su tutti e tre i TFM** in questa corsa — che è
+esattamente il punto della voce riscritta: la collisione avviene o non avviene, e non è il test a deciderlo.
+La suite UI (`pnpm test`, 27 test), `pnpm run lint` e `pnpm run build` sono verdi con lei, e il bundle in
+`wwwroot` non cambia (i tre commenti corretti sono commenti).
+
 ## 4. Stato finale
 
 1. M17 deciso (D5): single-active-host in 4.0; epic separata per la distribuzione di tutto EverTask.

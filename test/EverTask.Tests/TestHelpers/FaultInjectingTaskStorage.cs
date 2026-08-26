@@ -323,10 +323,36 @@ public sealed class FaultInjectingTaskStorage(ITaskStorage inner) : ITaskStorage
         return inner.GetOccurrences(parentId, nonTerminalOnly, ct);
     }
 
+    public Task<OccurrencePage> GetOccurrencesPage(Guid parentId, bool nonTerminalOnly, int skip, int take,
+                                                   CancellationToken ct = default)
+    {
+        Gate(nameof(GetOccurrencesPage));
+        return inner.GetOccurrencesPage(parentId, nonTerminalOnly, skip, take, ct);
+    }
+
     public Task<int> CountActiveOccurrences(Guid parentId, CancellationToken ct = default)
     {
         Gate(nameof(CountActiveOccurrences));
         return inner.CountActiveOccurrences(parentId, ct);
+    }
+
+    public Task<IReadOnlyDictionary<Guid, DateTimeOffset>> GetLastRunStarts(IReadOnlyCollection<Guid> taskIds,
+                                                                           CancellationToken ct = default)
+    {
+        Gate(nameof(GetLastRunStarts));
+        return inner.GetLastRunStarts(taskIds, ct);
+    }
+
+    public Task<StatusAudit[]> GetStatusAudits(Guid taskId, CancellationToken ct = default)
+    {
+        Gate(nameof(GetStatusAudits));
+        return inner.GetStatusAudits(taskId, ct);
+    }
+
+    public Task<RunsAudit[]> GetRunsAudits(Guid taskId, CancellationToken ct = default)
+    {
+        Gate(nameof(GetRunsAudits));
+        return inner.GetRunsAudits(taskId, ct);
     }
 
     public Task SaveExecutionLogsAsync(Guid taskId, IReadOnlyList<TaskExecutionLog> logs,

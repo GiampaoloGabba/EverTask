@@ -17,7 +17,7 @@ nav_order: 1
 
 ---
 
-EverTask is a .NET background task execution library focused on persistence and resilience. Use it to process work in the background, run scheduled jobs, and build task pipelines that survive failures and restarts.
+EverTask is a .NET background task execution library focused on persistence and resilience. Use it to process work in the background, run scheduled jobs on local wall-clock time, replay the occurrences a downtime missed, and build task pipelines that survive failures and restarts.
 
 ## Quick Example
 
@@ -75,8 +75,9 @@ With those four steps in place, EverTask persists the task, executes it in the b
   - [Cron Expressions](recurring-tasks/cron-expressions.md) - 5- and 6-field cron schedules
   - [Time Zones](recurring-tasks/time-zones.md) - Local hours that survive daylight saving
   - [Durable Occurrences](recurring-tasks/durable-occurrences.md) - One row per occurrence, and what to do with the ones a downtime missed
+  - [Occurrence Providers](recurring-tasks/occurrence-providers.md) - Compute the next run yourself, from a calendar the library cannot know
   - [Idempotent Registration](recurring-tasks/idempotent-registration.md) - Register recurring tasks safely on every startup
-  - [Managing Tasks](recurring-tasks/managing-tasks.md) - Inspect, cancel, and reschedule recurring tasks
+  - [Managing Tasks](recurring-tasks/managing-tasks.md) - Inspect, cancel, reschedule and resume recurring tasks at runtime
   - [Best Practices](recurring-tasks/best-practices.md) - Patterns and pitfalls
 - **[Resilience](resilience.md)** - Handle failures with retry policies and timeouts
   - [Overview](resilience/overview.md) - Failure handling at a glance

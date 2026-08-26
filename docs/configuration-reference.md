@@ -19,6 +19,8 @@ This is a complete reference for all EverTask configuration options.
 - [Monitoring Configuration](#monitoring-configuration)
 - [Storage Provider Details](#storage-provider-details)
 - [Handler Configuration](#handler-configuration)
+- [Dispatch Parameters](#dispatch-parameters)
+- [Recurring Task Builder](#recurring-task-builder)
 - [Runtime Schedule Management](#runtime-schedule-management)
 - [Complete Examples](#complete-examples)
 - [Configuration Validation](#configuration-validation)
@@ -1343,7 +1345,7 @@ not auto-register SignalR monitoring and requires you to register `ITaskStorage`
 |----------|------|---------|-------------|
 | `EnableUI` | `bool` | `true` | Enable embedded React dashboard |
 | `EnableOpenApiDocument` | `bool` | `false` | Serve the monitoring OpenAPI document (net9.0+; auto-enabled by the Scalar package) |
-| `EnableSwagger` | `bool` | `false` | Obsolete no-op since 3.12.0 (use `EnableOpenApiDocument`) |
+| `EnableSwagger` | `bool` | `false` | Obsolete no-op since 4.0.0 (use `EnableOpenApiDocument`) |
 | `Username` | `string` | `"admin"` | JWT Authentication username |
 | `Password` | `string` | `"admin"` | JWT Authentication password (CHANGE IN PRODUCTION!) |
 | `EnableAuthentication` | `bool` | `true` | Enable JWT Authentication |
@@ -1354,7 +1356,7 @@ not auto-register SignalR monitoring and requires you to register `ITaskStorage`
 | `EnableCors` | `bool` | `true` | **Registers** a named CORS policy (`EverTaskMonitoringApi`); EverTask does NOT apply it: your app must (`app.UseCors(...)`). See note below |
 | `CorsAllowedOrigins` | `string[]` | `[]` | Origins for the registered policy (empty = allow-any). Only effective once the policy is actually applied |
 | `AllowedIpAddresses` | `string[]` | `[]` | IP address whitelist (empty = allow all IPs). Supports IPv4, IPv6, and CIDR notation |
-| `MagicLinkToken` | `string?` | `null` | Static token for magic link authentication. When set, enables instant access via `/evertask-monitoring/magic#token=...` (exchanged with `POST /api/auth/magic`; the `?token=` query form is deprecated since 3.12.0 because it lands in request logs) |
+| `MagicLinkToken` | `string?` | `null` | Static token for magic link authentication. When set, enables instant access via `/evertask-monitoring/magic#token=...` (exchanged with `POST /api/auth/magic`; the `?token=` query form is deprecated since 4.0.0 because it lands in request logs) |
 | `EventDebounceMs` | `int` | `1000` | Debounce time in milliseconds for SignalR event-driven cache invalidation in the dashboard. Higher values reduce API load during task bursts but introduce slight UI update delays. Recommended: 300ms (very responsive), 500ms (balanced), 1000ms (conservative for high-volume) |
 | `BasePath` | `string` | `/evertask-monitoring` | **Read-only** computed property (fixed; cannot be set) |
 | `ApiBasePath` | `string` | `/evertask-monitoring/api` | **Read-only** computed property (`{BasePath}/api`) |
@@ -1404,7 +1406,7 @@ Scalar setup and the optional recipe to surface the document inside the host's o
 
 #### EnableSwagger (obsolete)
 
-No-op since 3.12.0: the Swashbuckle integration was removed (it broke .NET 10 hosts using the
+No-op since 4.0.0: the Swashbuckle integration was removed (it broke .NET 10 hosts using the
 built-in OpenAPI stack, issue #20). Use `EnableOpenApiDocument` and optionally the
 `EverTask.Monitor.Api.Scalar` package instead.
 
@@ -1485,7 +1487,7 @@ The SignalR hub path is now fixed to `/evertask-monitoring/hub` and cannot be ch
 #### EnableCors
 
 When `true`, registers the `EverTaskMonitoringApi` CORS policy and applies it to requests under
-`/evertask-monitoring` (since 3.12.0). The host pipeline is untouched: no global `UseCors` and
+`/evertask-monitoring` (since 4.0.0). The host pipeline is untouched: no global `UseCors` and
 nothing to wire manually. With `CorsAllowedOrigins` empty the policy allows any origin; with
 origins set it restricts to them and adds `AllowCredentials`.
 
@@ -1607,7 +1609,7 @@ options.MagicLinkToken = "your-secret-token";
 options.AllowedIpAddresses = new[] { "10.0.0.0/8" };
 ```
 
-**Access URL** (since 3.12.0, token in the URL fragment):
+**Access URL** (since 4.0.0, token in the URL fragment):
 ```
 https://your-server/evertask-monitoring/magic#token=your-very-long-secret-token-here-min-32-chars
 ```
@@ -1639,15 +1641,19 @@ https://your-server/evertask-monitoring/magic#token=your-very-long-secret-token-
 Once configured, the monitoring API exposes REST endpoints for querying tasks and reading statistics. All endpoints are relative to `{BasePath}/api` (default: `/evertask-monitoring/api`).
 
 **Main endpoints:**
-- `GET /tasks` - Paginated task list with filtering
+- `GET /tasks` - Paginated task list with filtering, including the `parentTaskId`, `onlyOccurrences` and `onlyCatchUp` filters for [durable occurrences](recurring-tasks/durable-occurrences.md)
 - `GET /tasks/{id}` - Task details
+- `GET /tasks/counts` - Task counts by category (all, standard, recurring, failed, occurrences)
 - `GET /tasks/{id}/status-audit` - Status change history
 - `GET /tasks/{id}/runs-audit` - Execution history
 - `GET /tasks/{id}/execution-logs` - Persisted handler logs (when persistent logging is enabled)
-- `GET /dashboard/overview` - Dashboard statistics
+- `GET /tasks/{id}/occurrences` - The occurrences a durable schedule has materialized, newest slot first, paged by the storage itself
+- `GET /dashboard/overview` - Dashboard statistics, including the catch-up backlog of every durable schedule by state
 - `GET /queues` - Queue metrics
 - `GET /statistics/success-rate-trend` - Success rate trends
 - `GET /rate-limits` - Keyed rate-limit state (per-key parked count, next slot, tracked keys, fail-open count; in-memory, single-node)
+
+Every endpoint is read-only: nothing here changes a task or a schedule. Changing a schedule while the application runs is [`ITaskScheduleManager`](recurring-tasks/managing-tasks.md), called from your own code behind your own authorization — the dashboard credentials are one read credential shared by everyone who looks at it.
 
 See [Monitoring Dashboard](monitoring-dashboard.md) for complete API documentation.
 
@@ -1656,8 +1662,10 @@ See [Monitoring Dashboard](monitoring-dashboard.md) for complete API documentati
 When `EnableUI` is true, the embedded React dashboard provides:
 
 - **Overview Dashboard**: Total tasks, success rate, active queues, execution times
-- **Task List**: Filtering, sorting, pagination, status filters
+- **Catch-up Backlog**: The occurrences of every durable schedule by state (pending, active, failed, skipped, completed), how far behind the oldest pending slot is, and how many schedules stopped themselves over their catch-up cap. Shown only when a durable schedule exists
+- **Task List**: Filtering, sorting, pagination, status filters, plus a catch-up badge and a lateness badge on the rows that stand for missed work
 - **Task Details**: Complete information, execution history, error details
+- **Occurrences**: A tab on a durable schedule — the occurrences it materialized, newest slot first, with page controls
 - **Queue Metrics**: Per-queue statistics and health monitoring
 - **Analytics**: Success rate trends, task type distribution, execution times
 - **Real-Time Updates**: Live task updates via SignalR

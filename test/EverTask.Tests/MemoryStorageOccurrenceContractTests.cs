@@ -1,4 +1,4 @@
-using EverTask.Logger;
+﻿using EverTask.Logger;
 using EverTask.Storage;
 using EverTask.Tests.TestHelpers;
 
@@ -252,6 +252,107 @@ public class MemoryStorageOccurrenceContractTests
 
         (await _storage.GetOccurrences(id)).ShouldHaveSingleItem()
             .Id.ShouldNotBe(duplicate.Id, "the slot keeps the occurrence that won it");
+    }
+
+    [Fact]
+    public async Task Should_page_the_occurrences_newest_first_and_report_the_whole_total()
+    {
+        // The memory twin of the paged read the relational providers answer from their index: a caller that
+        // asks for a page must never get the series, and the total must be the series and not the page.
+        var id = await SeedScheduleAsync();
+
+        var slots = Enumerable.Range(0, 4).Select(i => Cursor.AddMinutes(i)).ToArray();
+
+        foreach (var slot in slots)
+        {
+            var occurrence = NewOccurrence(id);
+            occurrence.ScheduledExecutionUtc = slot;
+            await _storage.Persist(occurrence);
+        }
+
+        var page = await _storage.GetOccurrencesPage(id, nonTerminalOnly: false, skip: 1, take: 2);
+
+        page.TotalCount.ShouldBe(4);
+        page.Occurrences.Select(o => o.ScheduledExecutionUtc).ShouldBe([slots[2], slots[1]]);
+
+        var completed = (await _storage.GetOccurrences(id)).First(o => o.ScheduledExecutionUtc == slots[0]);
+        await _storage.SetCompleted(completed.Id, 1, AuditLevel.None);
+
+        var active = await _storage.GetOccurrencesPage(id, nonTerminalOnly: true, skip: 0, take: 10);
+
+        active.TotalCount.ShouldBe(3, "the total counts what the filter keeps");
+        active.Occurrences.ShouldAllBe(o => o.Status != QueuedTaskStatus.Completed);
+    }
+
+    [Fact]
+    public async Task Should_report_when_a_run_began_from_the_audit_trail_and_nothing_when_none_recorded_it()
+    {
+        // The memory twin of the audit read the relational providers answer with one indexed query. Same
+        // three answers: a run still in flight has a start, one that never began has none, and neither does a
+        // row whose audit level records no InProgress transition.
+        var id = await SeedScheduleAsync();
+
+        var running   = NewOccurrence(id);
+        var neverRan  = NewOccurrence(id);
+        var unaudited = NewOccurrence(id);
+
+        neverRan.ScheduledExecutionUtc  = Cursor.AddMinutes(1);
+        unaudited.ScheduledExecutionUtc = Cursor.AddMinutes(2);
+
+        foreach (var occurrence in new[] { running, neverRan, unaudited })
+            await _storage.Persist(occurrence);
+
+        await _storage.SetInProgress(running.Id, AuditLevel.Full);
+        await _storage.SetInProgress(unaudited.Id, AuditLevel.Minimal);
+
+        var starts = await _storage.GetLastRunStarts([running.Id, neverRan.Id, unaudited.Id]);
+
+        starts.ContainsKey(running.Id).ShouldBeTrue("a run in flight has a recorded start");
+        starts.ContainsKey(neverRan.Id).ShouldBeFalse("a row that never started has no start to report");
+        starts.ContainsKey(unaudited.Id).ShouldBeFalse("nothing recorded the transition, so nothing is answered");
+
+        // A second attempt is the run the row stands for now.
+        await _storage.SetStatus(running.Id, QueuedTaskStatus.Failed, new InvalidOperationException("boom"),
+            AuditLevel.Full);
+        await Task.Delay(50);
+        await _storage.SetInProgress(running.Id, AuditLevel.Full);
+
+        (await _storage.GetLastRunStarts([running.Id]))[running.Id]
+            .ShouldBeGreaterThan(starts[running.Id]);
+    }
+
+    [Fact]
+    public async Task Should_report_the_transition_history_and_the_runs_newest_first()
+    {
+        // The memory twin of the two audit reads the relational providers answer from their audit tables.
+        // Same contract: newest first, only the row that was asked about, and nothing for a row nobody stored.
+        var id         = await SeedScheduleAsync();
+        var occurrence = NewOccurrence(id);
+        var sibling    = NewOccurrence(id);
+
+        sibling.ScheduledExecutionUtc = Cursor.AddMinutes(1);
+
+        await _storage.Persist(occurrence);
+        await _storage.Persist(sibling);
+
+        await _storage.SetInProgress(occurrence.Id, AuditLevel.Full);
+        await _storage.SetCompleted(occurrence.Id, 25, AuditLevel.Full);
+        await _storage.SetStatus(sibling.Id, QueuedTaskStatus.Failed, new InvalidOperationException("boom"),
+            AuditLevel.Full);
+
+        var audits = await _storage.GetStatusAudits(occurrence.Id);
+
+        audits.Select(a => a.NewStatus)
+              .ShouldBe([QueuedTaskStatus.Completed, QueuedTaskStatus.InProgress]);
+        audits.ShouldNotContain(a => a.NewStatus == QueuedTaskStatus.Failed, "the sibling's history is its own");
+
+        (await _storage.GetStatusAudits(TestGuidGenerator.New())).ShouldBeEmpty();
+
+        await _storage.UpdateCurrentRun(id, 11, Cursor.AddMinutes(5), AuditLevel.Full);
+        await _storage.UpdateCurrentRun(id, 22, Cursor.AddMinutes(10), AuditLevel.Full);
+
+        (await _storage.GetRunsAudits(id)).Select(r => r.ExecutionTimeMs).ShouldBe([22d, 11d]);
+        (await _storage.GetRunsAudits(occurrence.Id)).ShouldBeEmpty("a one-shot records no runs");
     }
 
     [Fact]

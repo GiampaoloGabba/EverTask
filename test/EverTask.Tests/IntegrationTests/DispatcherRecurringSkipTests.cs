@@ -89,6 +89,11 @@ public class DispatcherRecurringSkipTests : IsolatedIntegrationTestBase
         var counter = StateManager.GetCounter(nameof(TestTaskRecurringSeconds));
         counter.ShouldBeGreaterThanOrEqualTo(1);
 
+        // The counter is bumped from INSIDE Handle; the run counter is persisted afterwards, in the
+        // delivery's finally. The poll grid above can land a couple of milliseconds after the increment,
+        // so the row has to be waited for on its own terms.
+        await WaitForRecurringRunsAsync(taskId, expectedRuns: 1, timeoutMs: 3000);
+
         var tasks = await Storage.GetAll();
         var task  = tasks.FirstOrDefault(t => t.Id == taskId);
 
@@ -120,6 +125,9 @@ public class DispatcherRecurringSkipTests : IsolatedIntegrationTestBase
         // Assert: First execution should have happened after initial delay
         var elapsedTime = executionTime - startTime;
         elapsedTime.TotalSeconds.ShouldBeGreaterThanOrEqualTo(initialDelay.TotalSeconds - 0.5); // 0.5s tolerance
+
+        // Same race as above: the counter says the handler ran, not that the run was written to the row.
+        await WaitForRecurringRunsAsync(taskId, expectedRuns: 1, timeoutMs: 3000);
 
         var tasks = await Storage.GetAll();
         var task  = tasks.FirstOrDefault(t => t.Id == taskId);

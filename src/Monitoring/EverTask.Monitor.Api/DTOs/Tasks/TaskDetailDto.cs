@@ -1,3 +1,4 @@
+using EverTask.Abstractions;
 using EverTask.Storage;
 
 namespace EverTask.Monitor.Api.DTOs.Tasks;
@@ -55,4 +56,44 @@ public record TaskDetailDto(
     List<StatusAuditDto> StatusAudits,
     List<RunsAuditDto> RunsAudits,
     DateTimeOffset? ThrottledUntil = null
-);
+)
+{
+    // Schedule and occurrence context lives in INIT properties, never as appended positional parameters:
+    // appending would change the primary constructor and Deconstruct signatures of a public record (X4).
+
+    /// <inheritdoc cref="TaskListDto.ParentTaskId"/>
+    public Guid? ParentTaskId { get; init; }
+
+    /// <inheritdoc cref="TaskListDto.OccurrenceMode"/>
+    public OccurrenceMode? OccurrenceMode { get; init; }
+
+    /// <inheritdoc cref="TaskListDto.MisfirePolicy"/>
+    public MisfirePolicy? MisfirePolicy { get; init; }
+
+    /// <inheritdoc cref="TaskListDto.TimeZoneId"/>
+    public string? TimeZoneId { get; init; }
+
+    /// <inheritdoc cref="TaskListDto.ScheduleVersion"/>
+    public int? ScheduleVersion { get; init; }
+
+    /// <inheritdoc cref="TaskListDto.NominalSlotUtc"/>
+    public DateTimeOffset? NominalSlotUtc { get; init; }
+
+    /// <inheritdoc cref="TaskListDto.StartedAtUtc"/>
+    public DateTimeOffset? StartedAtUtc { get; init; }
+
+    /// <inheritdoc cref="TaskListDto.MisfireKind"/>
+    public MisfireKind? MisfireKind { get; init; }
+
+    /// <summary>
+    /// The occurrence metadata this row carries — slot, run number, and the backlog it was created out of.
+    /// Null on a schedule row and on an ordinary one-shot.
+    /// </summary>
+    public OccurrenceInfoDto? Occurrence { get; init; }
+
+    /// <summary>
+    /// The standing catch-up halt of a durable schedule, or null while it is running. A halt never releases
+    /// itself: only <c>ResumeSchedule</c> or a <c>Reschedule</c> clears it.
+    /// </summary>
+    public ScheduleHaltDto? Halt { get; init; }
+}

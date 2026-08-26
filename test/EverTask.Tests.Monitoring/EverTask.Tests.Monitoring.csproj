@@ -29,6 +29,9 @@
     <ProjectReference Include="..\..\src\Monitoring\EverTask.Monitor.Api.Scalar\EverTask.Monitor.Api.Scalar.csproj" />
     <ProjectReference Include="..\..\src\Monitoring\EverTask.Monitor.AspnetCore.SignalR\EverTask.Monitor.AspnetCore.SignalR.csproj" />
     <ProjectReference Include="..\..\src\EverTask\EverTask.csproj" />
+    <!-- A real relational store for the API services: the audit reads answer differently per backend, and the
+         in-memory one is the only store that keeps the audits on the row object itself. -->
+    <ProjectReference Include="..\..\src\Storage\EverTask.Storage.Sqlite\EverTask.Storage.Sqlite.csproj" />
     <ProjectReference Include="..\EverTask.Tests\EverTask.Tests.csproj" />
   </ItemGroup>
 

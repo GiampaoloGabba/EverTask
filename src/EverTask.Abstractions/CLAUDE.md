@@ -6,7 +6,7 @@ Contracts-only package (`IEverTask`, `ITaskDispatcher`, `IEverTaskHandler<T>`, `
 `IRetryPolicy`, `IRateLimitedTask`): application code references it without pulling in the runtime, the same
 way MediatR.Contracts relates to MediatR.
 
-**Every public type lives in the flat `EverTask.Abstractions` namespace** (3.12+; `EverTask.Resilience` is
+**Every public type lives in the flat `EverTask.Abstractions` namespace** (4.0+; `EverTask.Resilience` is
 gone). The feature folders (`Handler/`, `Resilience/`, `RateLimiting/`, `Recurring/`, `Guids/`) are
 organizational only — the `.csproj.DotSettings` marks them as non-namespace-providers, so never "fix" a
 file's namespace to match its folder.

@@ -37,6 +37,10 @@ jobs:
         run: pnpm run lint
         working-directory: src/Monitoring/EverTask.Monitor.Api/UI
 
+      - name: Test UI
+        run: pnpm test
+        working-directory: src/Monitoring/EverTask.Monitor.Api/UI
+
       - name: Build UI
         run: pnpm run build
         working-directory: src/Monitoring/EverTask.Monitor.Api/UI

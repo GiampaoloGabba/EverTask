@@ -127,6 +127,64 @@ public class SqliteTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     }
 
     /// <summary>
+    /// The occurrence page ordered, counted and sliced by SQLite, like every other provider.
+    /// </summary>
+    /// <remarks>
+    /// EF Core refuses to translate an <c>ORDER BY</c> over a <see cref="DateTimeOffset"/> here, and that
+    /// ordering is the whole member: without it the only way to answer is to read the entire series and slice
+    /// it in memory, which is exactly what a page exists to avoid — a schedule with a year of retention behind
+    /// it is hundreds of thousands of rows for a hundred. The slice is therefore written as SQL instead of
+    /// being moved into the process. SQLite keeps a <c>DateTimeOffset</c> as ISO-8601 text with a fixed
+    /// date-and-time prefix, so its plain text ordering IS the slot ordering: the fractional part is trimmed
+    /// from the right and both offset signs sort below every digit. That is the same representational
+    /// equality the occurrence unique index already rests on here.
+    /// </remarks>
+    public override async Task<OccurrencePage> GetOccurrencesPage(Guid parentId, bool nonTerminalOnly, int skip,
+                                                                  int take, CancellationToken ct = default)
+    {
+        await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+
+        // Same non-terminal set as EfCoreTaskStorage.NonTerminalOccurrence, inlined because the page below
+        // has to name it in SQL too — keep the two halves and the base in sync.
+        var query = dbContext.QueuedTasks.AsNoTracking().Where(t => t.ParentTaskId == parentId);
+
+        if (nonTerminalOnly)
+            query = query.Where(t => t.Status == QueuedTaskStatus.WaitingQueue
+                                     || t.Status == QueuedTaskStatus.Queued
+                                     || t.Status == QueuedTaskStatus.Pending
+                                     || t.Status == QueuedTaskStatus.InProgress
+                                     || t.Status == QueuedTaskStatus.ServiceStopped);
+
+        var total = await query.CountAsync(ct).ConfigureAwait(false);
+
+        if (take <= 0)
+            return new OccurrencePage([], total);
+
+        // Interpolated, never concatenated: every value below travels as a parameter EF types itself, so the
+        // parent id is bound exactly as the rest of the provider binds it. The status is compared as TEXT
+        // because that is how the model stores it (`HasConversion<string>()`), not as the enum's number.
+        var rows = await dbContext.QueuedTasks
+                                  .FromSql(
+                                      $"""
+                                       SELECT * FROM "QueuedTasks"
+                                       WHERE "ParentTaskId" = {parentId}
+                                         AND ({!nonTerminalOnly}
+                                              OR "Status" IN ({nameof(QueuedTaskStatus.WaitingQueue)},
+                                                              {nameof(QueuedTaskStatus.Queued)},
+                                                              {nameof(QueuedTaskStatus.Pending)},
+                                                              {nameof(QueuedTaskStatus.InProgress)},
+                                                              {nameof(QueuedTaskStatus.ServiceStopped)}))
+                                       ORDER BY "ScheduledExecutionUtc" DESC
+                                       LIMIT {take} OFFSET {skip}
+                                       """)
+                                  .AsNoTracking()
+                                  .ToArrayAsync(ct)
+                                  .ConfigureAwait(false);
+
+        return new OccurrencePage(rows, total);
+    }
+
+    /// <summary>
     /// Occurrence cleanup with the age gate in memory: SQLite cannot translate the DateTimeOffset
     /// comparison, the same limitation behind every other override here. The execution-log guard translates
     /// and stays server-side, exactly as in <see cref="CleanupCompletedTasks"/>.

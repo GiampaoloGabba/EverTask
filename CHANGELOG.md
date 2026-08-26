@@ -5,7 +5,142 @@ All notable changes to EverTask will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [4.0.0] - 2026-08-26
+
+### Added (monitoring the durable side, #30)
+
+- **The dashboard and the REST API report occurrences.** A task's detail says which schedule it belongs to,
+  the nominal slot it stands for, the run of the series it is, and the run of missed slots it was created out
+  of; a schedule row says how it produces its occurrences, which misfire policy it carries, the zone its
+  calendar is read on, and the version its definition is at. `GET /tasks/{id}/occurrences` lists what a
+  durable schedule materialized, newest slot first; `GET /tasks` filters on `parentTaskId`,
+  `onlyOccurrences` and `onlyCatchUp`; `GET /tasks/counts` counts the occurrences apart from the rows that
+  are not one. Every field is added as an `init` property, never as an appended constructor parameter, so
+  the DTO signatures a consumer already builds are unchanged.
+- **The overview answers "what does this host still owe".** `catchUpBacklog` reports the occurrences of every
+  durable schedule by state — pending, active, failed, skipped, completed — plus the oldest slot that has not
+  started, how far behind it already is, and how many schedules have halted their own catch-up. The dashboard
+  shows the same as a card, and the schedule detail grows an Occurrences tab with catch-up and lateness badges
+  and its own paging, so a schedule with hundreds of occurrences is readable past its most recent page.
+  Slots a schedule DROPPED are deliberately absent: they never became rows, and they are reported when they
+  happen, by the `OccurrenceSkipped` event.
+- **The API stays read-only.** Changing a schedule at runtime goes through `ITaskScheduleManager` in your own
+  code, behind your own authorization: the dashboard reports, it does not command.
+- **Task DTOs carry `startedAtUtc`**, the instant a row's last (or current) run began. It is the term to
+  measure lateness with: `lastExecutionUtc` is written on terminal transitions and so says when a run ENDED,
+  which reported a punctual occurrence with a slow handler as late by its whole execution time. The instant
+  comes from the row's own `InProgress` transition in the audit trail, so a run STILL RUNNING answers for
+  itself; a run that finished is derived from its end less its measured duration when nothing recorded that
+  transition, and everything with no measured start — a row that never ran, a failure or a finalization
+  (neither records a duration), a row waiting for its next delivery — reports nothing instead of an invented
+  instant. The
+  schedule fields — `scheduleVersion` included, now nullable — are absent together on a task that belongs to
+  no schedule, instead of one of them reading 0 on every row in the store.
+- **Four new reads on `ITaskStorage`** — `GetOccurrencesPage`, `GetLastRunStarts`, `GetStatusAudits` and
+  `GetRunsAudits` (default members, so a custom storage keeps working). The occurrence list is ordered,
+  counted and sliced by the storage over the index the occurrence contract already needs, rather than read
+  whole and paged in memory. The other three read the audit trail, which nothing else can: no query
+  materializes `QueuedTask.StatusAudits` or `QueuedTask.RunsAudits`, so the recorded start of a page of rows,
+  the status-history tab and the runs-history tab answered over the in-memory store alone and handed back
+  nothing on SQL Server, PostgreSQL, MySQL and SQLite. Each is one indexed query over the audit table.
+- **`avgExecutionTimeMs` on the overview** is the mean of the durations the worker measured around the runs —
+  the same column `executionTimeMs` reports per task, and the same average the queue metrics already used. It
+  was computed from the status audit trail, which made the tile read `0.0` on every relational store and at
+  every audit level below `Full`. Runs nobody measured are left out rather than counted as zero.
+- **A catch-up says where a replay begins and when it is over** — `Catch-up of schedule … started from slot …`
+  and `… completed: N occurrence(s) materialized …`, one pair per episode. Everything between them is
+  reported per occurrence, which cannot say how big a backlog was or that it has drained. `docs/monitoring-events.md`
+  now also lists the three `Error` events the durable side publishes for a row this build cannot rebuild and
+  for a provider re-park that found nowhere to park.
+
+### Added (occurrence providers, #29)
+
+- **A schedule can take its grid from your own calendar.** Implement `INextOccurrenceProvider` — one method
+  answering "which occurrence comes after this instant" — register it with
+  `AddOccurrenceProvider<T>("key")`, and select it with `.UseOccurrenceProvider("key", config?)`. Business
+  days, a holiday table, opening hours: the schedules no interval and no cron expression can express. The row
+  persists the KEY and an opaque config string, never a type name a rename would orphan.
+- **Everything else keeps working over it**: misfire policies, durable occurrences, `InTimeZone` (whose id the
+  provider is handed), `MaxRuns` / `RunUntil`, skip-forward after a downtime, and
+  `ITaskScheduleManager.ReevaluateSchedule`. The two exceptions are stated rather than discovered:
+  `CatchUpOverflowPolicy.SkipOldest` needs a provider that declares `IsDeterministic`, and
+  `RescheduleMode.RebaseFromCursor` has no nominal period to carry.
+- **A provider that cannot answer is treated as an outage, not as a corrupt schedule.** Nothing is written,
+  the cursor stays exactly where it was, the schedule is parked to ask again after a backoff that doubles per
+  consecutive failure (`SetOccurrenceProviderRetry`, 1 minute to 15 minutes by default), and a warning event
+  carries the key and the failure count. The recovery poison counter is not touched: a calendar that is down
+  for an hour cannot mark a schedule as poison. An unknown key IS a configuration error — `ArgumentException`
+  at dispatch, terminal poison at recovery.
+- **A replay over a provider grid asks it once per slot, not once per occurrence.** The measurement that
+  decides the catch-up cap is taken once per episode and continued by the runs that follow it, so a backlog
+  of 360 slots costs hundreds of questions instead of tens of thousands. Counts that stop at the walk a
+  provider can afford say so (`MissedCountIsExact`, `NextRunResult.SkippedCountIsExact`) rather than passing a
+  lower bound off as a total.
+
+### Added (runtime schedule management, #28)
+
+- **`ITaskScheduleManager`** is registered next to `ITaskDispatcher` and changes a schedule while the
+  application runs, addressing it by task key: `Reschedule` (a new definition), `ReevaluateSchedule` (the same
+  definition, cursor recomputed), `ResumeSchedule` (release a halted catch-up and keep its backlog),
+  `RequeueFailedOccurrence` (a failed or cancelled occurrence back into the queue, same id and same history)
+  and `CancelSchedule` (the full cancel pipeline by key, pending occurrences included). `ITaskDispatcher` is
+  untouched.
+- **`RescheduleMode`** decides what happens to the schedule's position. `RecalculateFromNow` puts the cursor
+  at the new definition's first occurrence after now, discarding a durable backlog and reporting exactly how
+  much of it was discarded. `RebaseFromCursor` keeps the schedule inside the day, week or month the old cursor
+  was in, at the same POSITION inside that period — which is what stops a period holding several slots from
+  rewinding onto one that has already run. Only the time of day, the zone, the bounds and the misfire settings
+  may change that way; a different cadence, a cron schedule, or a period with no valid slot is refused and
+  writes nothing.
+- **Every advance of a managed schedule is a compare-and-swap.** A run completing while a reschedule commits
+  loses the swap, re-reads the row and applies the new definition instead of overwriting it — and the same
+  guard covers the cancel that lands in the middle. A delivery already handed to a worker queue may finish
+  under the old definition; one that has not fired is invalidated immediately. `ScheduleRescheduled` reports
+  the whole change: both versions, both cursors, the mode, the backlog discarded and whether a halt was
+  released.
+
+### Added (durable occurrences and misfire policies, #27)
+
+- **A recurring schedule can give every due slot its own row.** `WithDurableOccurrences()` turns the schedule
+  row into a definition plus a cursor and materializes each due slot as its own one-shot task: its own status,
+  its own retries, its own audit trail, its own execution logs, its own rate-limit budget. The schedule row
+  itself stops running the handler, and stops spending the handler's rate-limit budget with it. The insert of
+  the row and the advance of the cursor are ONE transaction guarded by a compare-and-swap, and a unique index
+  on (schedule, slot) is what makes a slot exist exactly once.
+- **`OnMisfire` says what a downtime does to the slots it covered.** `Skip()` is the default and what every
+  existing schedule keeps doing: the missed slots are dropped and the series moves on. `FireOnce(options?)`
+  collapses the whole run of missed slots into ONE occurrence, which tells the handler the range it stands for.
+  `CatchUp(options)` replays them, oldest first, one row each. Both replaying policies imply durable
+  occurrences, because a replayed slot needs a durable identity to be replayed exactly once.
+- **A catch-up is bounded, and the bounds are mandatory.** `CatchUpOptions(maxAge, maxOccurrences)` has no
+  defaults on purpose: how far back a replay may reach and how much work one episode may create are different
+  questions, and a per-second grid left behind by a three-month downtime owes eight million slots.
+  `MaxPendingOccurrences` (default 1, meaning strictly serial) bounds how many occurrences of the schedule may
+  be alive at once. When the backlog exceeds the cap, `OverflowPolicy` either keeps the most recent slots
+  (`SkipOldest`) or — the default — writes a durable `Halt` marker and replays nothing. A halt does not release
+  itself: not by the backlog ageing out of its own window, not by a restart. `ResumeSchedule` or `Reschedule`
+  is what releases it, which is the point.
+- **No slot is ever lost silently.** Every dropped slot is reported with the rule that dropped it, because the
+  three have different fixes: the age window, the overflow cap under `SkipOldest`, and the skip policy itself.
+  A count that had to stop at a cap says "at least", never a total it did not reach.
+- **`BackfillFrom(startUtc)`** starts a new durable registration's cursor in the past, so a schedule can own
+  the slots that came before it existed. It has no effect on any schedule that does not ask for it.
+- **New host knobs**: `SetMaterializationConcurrency` (how many schedules may materialize at once; defaults to
+  the worker parallelism) and `SetBacklogRetryInterval` (how long a schedule that could not make progress waits
+  before trying again; 1 minute, bounded to a day). `AuditRetentionPolicy.OccurrenceRetentionDays` prunes the
+  finished occurrences of durable schedules in EVERY terminal state — completed, failed and cancelled — while
+  keeping any occurrence that still owns execution logs.
+- **A handler learns what its delivery stands for** through `Context.Misfire`: the kind of missed work, the
+  range of slots it covers, how many they are, whether that count is exact, and how late the delivery actually
+  started.
+- **Storage grew three columns and a family of atomic operations.** `ParentTaskId` (with a self-referencing
+  foreign key, a unique index on (parent, slot) and a check constraint), `RuntimeInfo` and `ScheduleVersion`,
+  plus `MaterializeOccurrence`, `CancelSchedule`, `TryRequeueStaleOccurrence`, `TryHaltSchedule`,
+  `TrySetRecurringSeriesCompleted`, `UpdateSchedule`, `RequeueTerminal` and the compare-and-swap overloads of
+  the advance operations. Every one of them is written at the tier of its provider — stored procedures on SQL
+  Server and MySQL, a writable CTE on PostgreSQL, a single `SaveChanges` on the EF Core base — and two
+  capability flags (`SupportsDurableOccurrences`, `SupportsScheduleVersioning`) let a custom storage say it
+  does not implement them instead of half-implementing them. One migration per provider.
 
 ### Added (time zones, #26)
 
@@ -1300,7 +1435,7 @@ public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(3, TimeSpan.F
   - `ServiceScopeDbContextFactory` adapter for legacy scenarios
   - **Correction**: this used `AddDbContextFactory<T>`, which is **not** pooled — the original claims of
     "built-in DbContext pooling" and "30-50% improvement" here were inaccurate. Pooling was actually
-    enabled later via `AddPooledDbContextFactory<T>` (see the `[Unreleased]` Performance entry).
+    enabled later via `AddPooledDbContextFactory<T>` (see the 4.0.0 Performance entry).
 - **Smart configuration defaults** that scale automatically with CPU cores:
   - `MaxDegreeOfParallelism`: `Environment.ProcessorCount * 2` (minimum 4, replaces hardcoded 1)
   - `ChannelCapacity`: `Environment.ProcessorCount * 200` (minimum 1000, replaces hardcoded 500)
@@ -1312,7 +1447,7 @@ public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(3, TimeSpan.F
 - **Default scheduler**: `PeriodicTimerScheduler` now registered by default (replaces `TimerScheduler`)
 - **Storage implementations** (SqlServer, Sqlite):
   - Use `AddDbContextFactory<T>` instead of `AddDbContextPool` (note: `AddDbContextFactory` is not pooled;
-    actual pooling came later via `AddPooledDbContextFactory<T>` — see the `[Unreleased]` Performance entry)
+    actual pooling came later via `AddPooledDbContextFactory<T>` — see the 4.0.0 Performance entry)
   - Register `ITaskStoreDbContextFactory` for high-performance DbContext creation
   - Scoped `ITaskStoreDbContext` registration now uses factory internally
 - **EfCore storage**: `EfCoreTaskStorage` now depends on `ITaskStoreDbContextFactory` (breaking change for custom storage implementations)
@@ -1333,7 +1468,7 @@ public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(3, TimeSpan.F
 - **Storage improvements**:
   - DbContext factory abstraction (`ITaskStoreDbContextFactory`) — note: the factory registered here was
     **not** pooled; the "30-50% faster through DbContext pooling" claim was inaccurate. Real pooling and the
-    measured allocation win arrived later via `AddPooledDbContextFactory<T>` (see `[Unreleased]`).
+    measured allocation win arrived later via `AddPooledDbContextFactory<T>` (see 4.0.0).
   - Better connection pool utilization
   - **SQL Server optimized status updates**: 50% reduction in database roundtrips for status changes
     - New `SqlServerTaskStorage` with stored procedure-based `SetStatus()` implementation

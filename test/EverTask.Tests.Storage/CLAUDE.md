@@ -62,11 +62,20 @@ real engines.
   clustered key lookup) against four `SetStatus` loops (clustered row, then the two indexes carrying
   `Status`), plus two plain `Get` polls standing in for the caller that gets picked as the victim without
   being part of the cycle. The proof the run really collided is the storage's own EventId 2025, read through
-  a `RecordingLogger<SqlServerTaskStorage>` registered over the DI logger — the test stops as soon as it
-  counts two, so it costs a second or two, and a run where nothing collided FAILS rather than passing
-  vacuously. The status writes pass `CancellationToken.None` on purpose: `usp_SetTaskStatus` owns a
-  transaction, and cancelling one mid-flight strands it open on a pooled connection, holding the very locks
-  the Respawn cleanup then waits 30 s for.
+  a `RecordingLogger<SqlServerTaskStorage>` registered over the DI logger — the test stops at the FIRST one,
+  which is the whole claim and what it asserts, so it costs a few seconds, and a run where nothing collided
+  FAILS rather than passing vacuously. **Its 2-minute budget is not a performance expectation**: it exists
+  only so a run that never collides ends, and it is sized for a solution-wide `dotnet test`, where three
+  target frameworks share the cores and a cycle takes several times longer to form than it does alone. The
+  20 s it started with failed exactly that way — no collision yet, reported as a storage that does not
+  re-run its reads. **Nothing in it passes the stop token to a command** — every loop watches
+  `pressure.IsCancellationRequested` and every read and write carries `CancellationToken.None`. Reads,
+  because an attention sent to a query already on the wire comes back out of SqlClient as a bare
+  `SqlException` ("A severe error occurred on the current command … Operation cancelled by user") just as
+  readily as an `OperationCanceledException`, and cancelling is how this test stops: a read carrying the
+  token eventually reports a failure the test itself caused, on the very run that had just proved the
+  reread works. Writes, because `usp_SetTaskStatus` owns a transaction, and cancelling one mid-flight
+  strands it open on a pooled connection, holding the very locks the Respawn cleanup then waits 30 s for.
 - **Schema is asserted from the CATALOG, per provider** (`Should_have_the_durable_occurrence_schema_on_queued_tasks`
   in each provider class): the unique index and its SQL Server-only filter, `IX_QueuedTasks_ParentTaskId`,
   `CK_QueuedTasks_OccurrenceSlot`, the non-cascading self FK, and the four new procedures on SQL Server and

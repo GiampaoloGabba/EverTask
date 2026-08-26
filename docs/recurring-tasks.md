@@ -19,6 +19,10 @@ Recurring tasks run on a schedule you define with either a type-safe fluent API 
 - **Idempotent Registration**: Prevent duplicate tasks with task keys
 - **Flexible Starting Strategies**: Run immediately, delay, or schedule first run
 - **Execution Limits**: MaxRuns and RunUntil for time-limited tasks
+- **Time Zones**: Read a calendar schedule on a real clock, daylight saving included
+- **Durable Occurrences**: One row per occurrence, with misfire policies that replay what a downtime missed
+- **Runtime Management**: Reschedule, re-evaluate, resume and cancel a schedule while the app runs
+- **Occurrence Providers**: Take the grid from your own calendar when no interval or cron can express it
 - **Persistent Schedules**: Recurring tasks survive application restarts
 
 ## Quick Start
@@ -64,11 +68,17 @@ Use cron expressions for maximum scheduling flexibility. Learn the syntax, commo
 ### [Time Zones](recurring-tasks/time-zones.md)
 Run a calendar schedule on a real clock with `InTimeZone`, set a default zone for the whole application, and see what happens on the two days a year a local hour is skipped or repeated.
 
+### [Durable Occurrences](recurring-tasks/durable-occurrences.md)
+Give every due slot its own persisted row, and choose what a downtime does to the slots it missed: skip them, collapse them into one run, or replay them under explicit caps.
+
+### [Occurrence Providers](recurring-tasks/occurrence-providers.md)
+Take the occurrence grid from your own calendar — business days, a holiday table, opening hours — when no interval or cron expression can express it.
+
 ### [Idempotent Task Registration](recurring-tasks/idempotent-registration.md)
 Prevent duplicate recurring tasks using task keys. Learn about update behavior, startup registration patterns, and dynamic configuration.
 
 ### [Managing Recurring Tasks](recurring-tasks/managing-tasks.md)
-Cancel, retrieve information about, and monitor recurring tasks using lifecycle hooks and storage queries.
+Reschedule, re-evaluate, resume and cancel a running schedule with `ITaskScheduleManager`, requeue a failed occurrence, and monitor schedules through lifecycle hooks and storage queries.
 
 ### [Best Practices](recurring-tasks/best-practices.md)
 Follow best practices for task keys, schedule format selection, long-running tasks, time zones, execution limits, and health monitoring.
@@ -131,12 +141,28 @@ public async Task UpdateUserReportSchedule(string userId, TimeOnly newTime)
 }
 ```
 
+Re-dispatching under the same key is the registration-time way to change a schedule. To change one **while it
+is running** — and to decide what happens to the occurrences it had already planned — use
+[`ITaskScheduleManager`](recurring-tasks/managing-tasks.md):
+
+```csharp
+public async Task MoveUserReport(string userId, TimeOnly newTime)
+{
+    await _scheduleManager.Reschedule(
+        $"user-report-{userId}",
+        r => r.Schedule().EveryDay().AtTime(newTime),
+        RescheduleMode.RecalculateFromNow);
+}
+```
+
 ## Next Steps
 
 Start with the [Overview](recurring-tasks/overview.md) to learn about recurring task features, or jump directly to:
 - **[Fluent Scheduling API](recurring-tasks/fluent-api.md)** - Type-safe schedule building
 - **[Cron Expressions](recurring-tasks/cron-expressions.md)** - Complex scheduling patterns
 - **[Time Zones](recurring-tasks/time-zones.md)** - Local hours that survive daylight saving
+- **[Durable Occurrences](recurring-tasks/durable-occurrences.md)** - One row per occurrence, and what a downtime does to the ones it missed
+- **[Managing Tasks](recurring-tasks/managing-tasks.md)** - Change a schedule while the app runs
 - **[Best Practices](recurring-tasks/best-practices.md)** - Patterns and pitfalls
 
 ---

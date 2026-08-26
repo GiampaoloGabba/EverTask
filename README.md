@@ -30,6 +30,10 @@ Tasks can be CPU-bound or I/O-bound, long- or short-running. Works with ASP.NET 
 - **No database polling**: the scheduler lives in memory and runs through channels; the database is written, not polled in a loop
 - **Persistence**: tasks resume after a restart (SQL Server, PostgreSQL, MySQL/MariaDB, SQLite, In-Memory)
 - **Fluent scheduling**: recurring tasks by minute, hour, day, week, month, or cron
+- **Time zones**: schedule on local wall-clock hours that keep their meaning across daylight saving
+- **Durable occurrences & misfire policies**: give every due slot its own row, and choose what a downtime does
+  to the slots it missed — skip them, collapse them into one run, or replay them under explicit caps
+- **Runtime schedule management**: change, re-evaluate, resume or cancel a schedule while the app is running
 - **Idempotent registration**: a task key keeps duplicate recurring registrations out
 
 ### Performance & scalability
@@ -139,6 +143,8 @@ Then `/reload-plugins` and run `/evertask:integrate-evertask`. For other agents,
 - **[Task Creation](https://GiampaoloGabba.github.io/EverTask/task-creation.html)** - Requests, handlers, lifecycle hooks, and best practices
 - **[Task Dispatching](https://GiampaoloGabba.github.io/EverTask/task-dispatching.html)** - Fire-and-forget, delayed, and scheduled tasks
 - **[Recurring Tasks](https://GiampaoloGabba.github.io/EverTask/recurring-tasks.html)** - Fluent scheduling API, cron expressions, idempotent registration
+- **[Durable Occurrences](https://GiampaoloGabba.github.io/EverTask/recurring-tasks/durable-occurrences.html)** - One row per occurrence, misfire policies, and what to do with the slots a downtime missed
+- **[Time Zones](https://GiampaoloGabba.github.io/EverTask/recurring-tasks/time-zones.html)** - Local hours that survive daylight saving
 - **[Resilience & Error Handling](https://GiampaoloGabba.github.io/EverTask/resilience.html)** - Retry policies, timeouts, CancellationToken usage
 - **[Monitoring](https://GiampaoloGabba.github.io/EverTask/monitoring.html)** - Complete monitoring guide (Dashboard, Events, and Logs)
 - **[Scalability](https://GiampaoloGabba.github.io/EverTask/scalability.html)** - Multi-queue support, keyed rate limiting, and sharded scheduler for high-load scenarios
@@ -166,6 +172,29 @@ await dispatcher.Dispatch(
     new BackupTask(),
     builder => builder.Schedule().EveryWeek().OnDays(days).AtTime(new TimeOnly(9, 0)).RunUntil(DateTimeOffset.UtcNow.AddDays(30)));
 ```
+
+### Time Zones and Durable Occurrences
+
+A calendar schedule can name the zone its hours are read on, and a downtime no longer has to lose the slots it
+covered:
+
+```csharp
+// 02:00 in Rome, every day, whatever daylight saving does to the offset.
+// A downtime replays the slots it missed, one row each, up to 92 days back and 200 occurrences per episode.
+await dispatcher.Dispatch(
+    new NightlyReconciliationTask(),
+    r => r.Schedule()
+          .EveryDay().AtTime(new TimeOnly(2, 0))
+          .InTimeZone("Europe/Rome")
+          .OnMisfire(m => m.CatchUp(new CatchUpOptions(TimeSpan.FromDays(92), maxOccurrences: 200))),
+    taskKey: "nightly-reconciliation");
+```
+
+Each replayed slot becomes its own persisted row, with its own status, retries and audit trail, and the handler
+can read the slot it stands for from `Context.ScheduledAtLocal`. The caps are mandatory on purpose: a schedule
+is never allowed to replay an unbounded backlog, and every slot it does drop is reported. See
+[Durable Occurrences](https://GiampaoloGabba.github.io/EverTask/recurring-tasks/durable-occurrences.html) and
+[Time Zones](https://GiampaoloGabba.github.io/EverTask/recurring-tasks/time-zones.html).
 
 ### Multi-Queue Workload Isolation
 

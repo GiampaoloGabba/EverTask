@@ -1,4 +1,4 @@
-using EverTask.Monitor.Api.DTOs.Dashboard;
+﻿using EverTask.Monitor.Api.DTOs.Dashboard;
 using EverTask.Monitor.Api.DTOs.Queues;
 using EverTask.Monitor.Api.DTOs.Statistics;
 using EverTask.RateLimiting;
@@ -101,14 +101,9 @@ public class StatisticsService : IStatisticsService
                 var completedTasks = queueTasks.Count(t => t.Status == QueuedTaskStatus.Completed);
                 var failedTasks = queueTasks.Count(t => t.Status == QueuedTaskStatus.Failed);
 
-                // Calculate average execution time for completed tasks
-                var completedWithExecTime = queueTasks
-                    .Where(t => t is { Status: QueuedTaskStatus.Completed, ExecutionTimeMs: > 0 })
-                    .ToList();
-
-                var avgExecutionTimeMs = completedWithExecTime.Count > 0
-                    ? completedWithExecTime.Average(t => t.ExecutionTimeMs)
-                    : 0.0;
+                // The one average of execution time in the API (Services/TaskRunTiming): the duration a
+                // completion measured, never a duration nobody measured read as zero.
+                var avgExecutionTimeMs = TaskRunTiming.AverageMeasuredDurationMs(queueTasks);
 
                 // Calculate success rate
                 var totalFinished = completedTasks + failedTasks;
@@ -248,14 +243,8 @@ public class StatisticsService : IStatisticsService
             var completedTasks = queueTasks.Count(t => t.Status == QueuedTaskStatus.Completed);
             var failedTasks = queueTasks.Count(t => t.Status == QueuedTaskStatus.Failed);
 
-            // Calculate average execution time for completed tasks
-            var completedWithExecTime = queueTasks
-                .Where(t => t is { Status: QueuedTaskStatus.Completed, ExecutionTimeMs: > 0 })
-                .ToList();
-
-            var avgExecutionTimeMs = completedWithExecTime.Count > 0
-                ? completedWithExecTime.Average(t => t.ExecutionTimeMs)
-                : 0.0;
+            // Same one rule as everywhere else (Services/TaskRunTiming).
+            var avgExecutionTimeMs = TaskRunTiming.AverageMeasuredDurationMs(queueTasks);
 
             // Calculate success rate
             var totalFinished = completedTasks + failedTasks;

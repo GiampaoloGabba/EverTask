@@ -46,7 +46,7 @@ row is a landmine.**
 | Axis | How Postgres answered | What to determine for the new DB |
 |---|---|---|
 | **EF provider package + per-TFM versions** | Npgsql.EntityFrameworkCore.PostgreSQL 8/9/10 | Which package (e.g. MySQL → **Pomelo.EntityFrameworkCore.MySql**, not necessarily Oracle's)? Versions aligned to the repo's EF Core pins (net8/9/10) — check nuget; confirm the `Microsoft.EntityFrameworkCore.Relational` floor ≤ repo pins. |
-| **`DateTimeOffset` mapping + ordering translation** | → `timestamptz`, all `<`/`>`/`OrderBy`/keyset translate server-side → **no override** | Does the DB have a timezone-aware type? Do `RunUntil >= now`, the `CreatedAtUtc` keyset, and the cleanup cutoffs translate? **MySQL has no tz type** (Pomelo maps to `datetime(6)`/text) → likely needs the **SQLite override pattern** for `RetrievePending`/`Cleanup*`/stats. |
+| **`DateTimeOffset` mapping + ordering translation** | → `timestamptz`, all `<`/`>`/`OrderBy`/keyset translate server-side → **no override** | Does the DB have a timezone-aware type? Do `RunUntil >= now`, the `CreatedAtUtc` keyset, and the cleanup cutoffs translate? **MySQL has no tz type** (Pomelo maps to `datetime(6)`/text) → likely needs the **SQLite override pattern** for `RetrievePending`/`Cleanup*`/stats. Ask about ORDER BY separately from comparison: **SQLite refuses a `DateTimeOffset` in `ORDER BY` outright**, so the in-box SQLite provider writes `GetOccurrencesPage` as SQL (`FromSql`) instead of sorting the series in memory, while the comparisons it does translate stay in the WHERE. |
 | **`Guid` keyset `Id.CompareTo(x) > 0`** | `uuid >`, translates; ordering matches UUIDv7 | Native uuid type? Does `Guid.CompareTo` translate? Does the stored ordering match the GUID generator? (MySQL: `char(36)`/`binary(16)` — verify.) |
 | **`Take(n).ExecuteDeleteAsync` (cleanup)** | translates to `LIMIT` | Supported? (Postgres/MySQL: `DELETE … LIMIT` ✓. If not → override `Cleanup*` with client-side id-resolution like SQLite.) |
 | **Schema concept** | native schema, default `public`; lowercase default `"evertask"` | Does the DB have schemas? **MySQL: a "schema" IS a database** → `SchemaName` semantics change (closer to SQLite's `""`). Oracle: schema == user. |
@@ -68,8 +68,11 @@ LINQ + **SqlServer stored-proc pattern** for Phase-2.
 
 Mirror `EverTask.Storage.Postgres/` (or `.Sqlite/` if many axes diverge). Files:
 `*.csproj`, `GlobalUsings.cs`, `XTaskStoreOptions.cs` (set `SchemaName` per the matrix), `XTaskStoreContext.cs`,
-`DbContextFactoryAdapter.cs`, `ServiceCollectionExtensions.cs` (`AddXStorage`, `UseX(...)`, GUID generator,
-`MigrationsHistoryTable(name, schema)` if schemas exist), `XTaskStorage.cs` (empty if zero overrides; else
+`DbContextFactoryAdapter.cs` (BOTH members: `CreateDbContextAsync` + the sync `CreateDbContext()` forwarding to
+`IDbContextFactory.CreateDbContext()`), `ServiceCollectionExtensions.cs` (`AddXStorage`, `UseX(...)`, GUID generator,
+`MigrationsHistoryTable(name, schema)` if schemas exist; the scoped `ITaskStoreDbContext` registration calls
+`factory.CreateDbContext()` — NEVER `CreateDbContextAsync().GetAwaiter().GetResult()`, CA2012 is a build error, #33),
+`XTaskStorage.cs` (empty if zero overrides; else
 override ONLY the methods the matrix flagged), `TaskStoreEfDbContextFactory.cs` (`#if DEBUG`), `AGENTS.md`,
 and (if runtime schema needed) a copied `DbSchemaAwareMigrationAssembly.cs` + hand-edited `Initial`.
 
@@ -93,6 +96,8 @@ index, hand-edit for schema if Option B, then **the GATE** — do NOT call Phase
    keyset and the delete run **server-side** (no client-eval). If a construct throws / client-evals → add the
    minimal override (SQLite pattern) and re-run. Document every override + why.
 4. Cross-provider tests added in the base suite still pass on the existing providers (no regressions).
+5. Add the provider to `Providers()` in `test/EverTask.Tests.Storage/EfCore/DbContextFactorySyncCreationTests.cs`
+   (no Docker: `AutoApplyMigrations = false` + an explicit server version if the provider would otherwise connect).
 
 ## STEP 2 — Phase 2 (optional, perf): hot-write optimization
 
@@ -205,6 +210,27 @@ so every procedure that owns a transaction needs `SET XACT_ABORT ON`. MySQL/Mari
 writable CTE) is atomic for free. Pin it with a fault-injection test — give the occurrence the primary key of
 an existing row and assert the cursor did not move; nothing else surfaces this.
 
+The occurrence READS are the cheap half and are easy to leave behind: `GetOccurrences`,
+`GetOccurrencesPage` and `CountActiveOccurrences` default to a correct query over `Get`, and the base
+overrides all three onto the `(ParentTaskId, ScheduledExecutionUtc)` index. `GetOccurrencesPage` is the one
+the dashboard calls — order by slot descending, count and slice in the DATABASE, and return the page together
+with the total that matches the request. A provider inheriting the base gets it; one that reimplements the
+interface and forgets it reads the whole series to show a hundred rows.
+
+`GetLastRunStarts(taskIds, ct)` is the fourth read and the one whose default answers NOTHING on a relational
+store: it walks `QueuedTask.StatusAudits`, which no query materializes. The base overrides it with a
+correlated subquery over the audit table — the newest `InProgress` transition of each row — because that
+transition is the only record of when a run BEGAN (`LastExecutionUtc` is stamped when one ended, and a row
+still running has not written it). Order that subquery by the audit's identity, never by its timestamp: it is
+the same insertion order, and it is what keeps the query translatable where a `DateTimeOffset` in an
+`ORDER BY` is not.
+
+`GetStatusAudits(taskId, ct)` and `GetRunsAudits(taskId, ct)` are the fifth and sixth, and they fail the same
+way for the same reason: their defaults walk `QueuedTask.StatusAudits` / `QueuedTask.RunsAudits`, which no
+query materializes, so the dashboard's status-history and runs-history tabs answer an empty list over a store
+whose audit tables hold everything. The base overrides both with one indexed query over the audit table,
+newest first — ordered by the audit's identity, never by its timestamp, exactly as above.
+
 Also override `CleanupTerminalOccurrences(cutoff, preserveTasksWithLogs, ct)` if the DB cannot translate the
 `DateTimeOffset` age cutoff (the SQLite pattern) — or if it cannot be trusted with a correlated `EXISTS`
 inside a `DELETE … LIMIT`, which is the MySQL trap: the guard is silently dropped and every occurrence is
@@ -225,7 +251,7 @@ guard with `CleanupCompletedTasks`, so whichever shape you pick, pick it for bot
   (method table + `SchemaName`), `configuration-reference.md` (`AddXStorage` API), and remove the DB from any
   "implement custom storage for X" list (`storage/custom-storage.md`).
 - Root `AGENTS.md` (Key Features, Solution Structure, module table) + `EfCore/AGENTS.md` ("future …") +
-  the new provider `AGENTS.md` (operational gotchas only) + `CHANGELOG.md` (under `[Unreleased]`).
+  the new provider `AGENTS.md` (operational gotchas only) + `CHANGELOG.md` (under the unreleased section at the top; create `## [Unreleased]` if the last release closed it).
 - Run `/humanizer` on the public `.md` YOU authored (new page, CHANGELOG, README/docs prose) — surgical:
   remove AI tells (promotional language, copula avoidance, em-dash/significance inflation), do NOT inject
   first-person "personality" into reference docs (it clashes with the sibling pages' house style).

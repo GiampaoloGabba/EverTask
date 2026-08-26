@@ -111,10 +111,11 @@ internal static partial class OccurrenceMaterializerLog
                                                          Guid parentId);
 
     [LoggerMessage(EventId = 1818, Level = LogLevel.Warning,
-        Message = "Occurrence {OccurrenceId} of schedule {ParentId} is still {Status} after being marked " +
-                  "Failed: the status write did not land, so its slot of the concurrency budget stays taken " +
-                  "until a later run ends it for real")]
-    public static partial void OccurrenceTerminalizationLost(this ILogger logger, Guid occurrenceId, Guid parentId,
+        Message = "Occurrence {OccurrenceId} of schedule {ParentId} cannot be rebuilt from its row and could " +
+                  "not be marked Failed: the status write did not land and the row is still {Status}, so its " +
+                  "slot of the concurrency budget stays taken until a later run ends it for real")]
+    public static partial void OccurrenceTerminalizationLost(this ILogger logger, Exception exception,
+                                                             Guid occurrenceId, Guid parentId,
                                                              QueuedTaskStatus status);
 
     [LoggerMessage(EventId = 1819, Level = LogLevel.Warning,
@@ -137,6 +138,20 @@ internal static partial class OccurrenceMaterializerLog
                   "{FromUtc:O}: the skip policy does not replay a slot that is no longer the current one")]
     public static partial void OccurrencesSkippedByPolicy(this ILogger logger, Guid parentId, int skippedCount,
                                                           bool isExact, DateTimeOffset fromUtc);
+
+    // The two boundaries of a replay. Everything between them is reported per occurrence, and per occurrence
+    // there is no way to tell where a replay begins, how big it was, or that it is over.
+    [LoggerMessage(EventId = 1823, Level = LogLevel.Information,
+        Message = "Catch-up of schedule {ParentId} started from slot {FromUtc:O}: {DueCount} slot(s) are due " +
+                  "(exact count: {IsExact})")]
+    public static partial void CatchUpStarted(this ILogger logger, Guid parentId, DateTimeOffset fromUtc,
+                                              int dueCount, bool isExact);
+
+    [LoggerMessage(EventId = 1824, Level = LogLevel.Information,
+        Message = "Catch-up of schedule {ParentId} completed: {Materialized} occurrence(s) materialized in " +
+                  "{Elapsed}")]
+    public static partial void CatchUpCompleted(this ILogger logger, Guid parentId, int materialized,
+                                                TimeSpan elapsed);
 
     [LoggerMessage(EventId = 1822, Level = LogLevel.Debug,
         Message = "Re-park of schedule {ParentId} at {NextRunUtc:O} was refused: version {ScheduleVersion} is " +

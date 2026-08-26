@@ -8,6 +8,16 @@ Refer to the root CLAUDE.md for project-wide rules.
   query always stays in the `EfCoreTaskStorage` base; `SqliteTaskStorage` overrides only the methods that hit
   this limit and evaluates them client-side (resolve ids, then delete/update by key). **Never push a SQLite
   workaround down into the base** — add an override here instead.
+- **Client-side is the workaround, not the licence.** It is right where the set moved into memory is the one
+  the caller was going to get anyway (a recovery page, the ids of a cleanup batch). Where the whole point of
+  the member is that the set stays in the store, write the query as SQL instead: `GetOccurrencesPage` orders
+  and slices through `FromSql` (interpolated, so every value is still a parameter EF types), because reading
+  a whole series to hand back a hundred rows is the pathology it exists to prevent. SQLite keeps a
+  `DateTimeOffset` as ISO-8601 text with a fixed date-and-time prefix, so plain text ordering IS slot
+  ordering — the same representational equality `UX_QueuedTasks_Occurrence` already rests on (follow-up F1).
+  Pinned on all four providers by
+  `EfCoreTaskStorageTestsBase.GetOccurrencesPage_should_let_the_database_order_and_slice_the_series`, which
+  reads the command off the EF diagnostic source: asserting the rows alone passes on an in-memory slice.
 - The 9 overrides: `RetrievePending`, `TrySetQueuedIfRecoverable`, the retention cleanup
   (`CleanupStatusAudits`, `CleanupRunsAudits`, `CleanupExecutionLogsByAge`, `CleanupExecutionLogsByCount`,
   `CleanupCompletedTasks`) and the date-filtered statistics (`CountByStatusAsync`, `CountByQueueAndStatusAsync`
@@ -32,6 +42,8 @@ Refer to the root CLAUDE.md for project-wide rules.
   migration is thrown away here, which is why `ScheduleVersion` carries `HasDefaultValue(0)` in
   `TaskStoreEfDbContext`. Pinned by `MigrationSnapshots/Sqlite.AddDurableOccurrences.sql` and by a catalog
   assertion on `pragma_table_info`.
+- `GetOccurrencesPage` inlines its own copy of the base's `NonTerminalOccurrence` set, twice — once in LINQ
+  for the count, once in the SQL of the page. Change the base's and change both of these.
 - `RetrievePending` inlines its own copy of the recoverable-status list — keep it in sync with the other three
   copies listed in `../EverTask.Storage.EfCore/CLAUDE.md`. Only the STATUS set is pushed down: the `MaxRuns`
   gate stays client-side too, because a series to finalize is precisely a row whose budget is spent and a

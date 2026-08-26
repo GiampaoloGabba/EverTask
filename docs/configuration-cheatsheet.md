@@ -161,16 +161,16 @@ Defaults differ between the auto-created `default`/`recurring` queues (inherit t
 |--------------------|---------|-------|
 | `EnableUI` | `true` | Embedded React dashboard |
 | `EnableOpenApiDocument` | `false` | OpenAPI doc at `/evertask-monitoring/openapi/evertask-monitoring.json` (net9+; auto-enabled by `EverTask.Monitor.Api.Scalar`) |
-| `EnableSwagger` | `false` | Obsolete no-op since 3.12.0 (use `EnableOpenApiDocument`) |
+| `EnableSwagger` | `false` | Obsolete no-op since 4.0.0 (use `EnableOpenApiDocument`) |
 | `Username` / `Password` | `"admin"` / `"admin"` | CHANGE IN PRODUCTION |
 | `EnableAuthentication` | `true` | JWT on API + hub |
 | `JwtSecret` | `null` (random 256-bit per instance) | Set explicitly (≥ 32 bytes) for multi-instance deployments |
 | `JwtIssuer` / `JwtAudience` | `"EverTask.Monitor.Api"` | n/a |
 | `JwtExpirationHours` | `8` | Token TTL |
-| `EnableCors` | `true` | Applies the `EverTaskMonitoringApi` CORS policy to requests under `/evertask-monitoring` only (since 3.12.0); the host's CORS setup is untouched |
+| `EnableCors` | `true` | Applies the `EverTaskMonitoringApi` CORS policy to requests under `/evertask-monitoring` only (since 4.0.0); the host's CORS setup is untouched |
 | `CorsAllowedOrigins` | `[]` (allow all) | Origins for the monitoring CORS policy (non-empty adds `AllowCredentials`). Restrict in production |
 | `AllowedIpAddresses` | `[]` (allow all) | IPv4/IPv6/CIDR; checked before auth |
-| `MagicLinkToken` | `null` (disabled) | Instant auth via `/magic#token=...` (fragment + `POST /api/auth/magic`, since 3.12.0); `?token=` still works but lands in request logs |
+| `MagicLinkToken` | `null` (disabled) | Instant auth via `/magic#token=...` (fragment + `POST /api/auth/magic`, since 4.0.0); `?token=` still works but lands in request logs |
 | `EventDebounceMs` | `1000` | Dashboard SignalR refresh debounce |
 | `BasePath` | `/evertask-monitoring` | **read-only** computed; fixed |
 | `ApiBasePath` | `/evertask-monitoring/api` | **read-only** computed; fixed |

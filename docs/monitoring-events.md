@@ -14,6 +14,7 @@ EverTask gives you visibility into your background tasks through a flexible even
 ## Table of Contents
 
 - [Task Events](#task-events)
+- [Durable Occurrence and Schedule Events](#durable-occurrence-and-schedule-events)
 - [Event Data Structure](#event-data-structure)
 - [Basic Event Monitoring](#basic-event-monitoring)
 - [SignalR Real-Time Monitoring](#signalr-real-time-monitoring)
@@ -54,6 +55,85 @@ public enum SeverityLevel
 }
 ```
 
+## Durable Occurrence and Schedule Events
+
+Schedules that materialize their slots as rows — [durable occurrences](recurring-tasks/durable-occurrences.md)
+— and schedules changed at runtime through
+[`ITaskScheduleManager`](recurring-tasks/managing-tasks.md) publish through the same
+`TaskEventOccurredAsync` channel, carrying the schedule context described above.
+
+Grouping them by schedule takes both halves of that context, because the events are about two different rows.
+An event about an **occurrence** carries `ParentTaskId`, the schedule it belongs to. An event about the
+**schedule itself** — a halt, a reschedule, a provider that could not answer — is published on the schedule
+row, so its own `TaskId` is the schedule id and `ParentTaskId` is null, as it is for every row that is
+nobody's occurrence. `ScheduleVersion` is set on both.
+
+Messages are stable text, matched by consumers; the table quotes the shape, with `{}` for the values.
+
+| Event | Severity | Message |
+|-------|----------|---------|
+| Occurrence materialized | `Information` | `Materialized occurrence {id} of schedule {scheduleId} for slot {slot} (run {n})` |
+| Occurrence skipped | `Warning` | `Schedule {scheduleId} skipped {n} due slot(s) from {from}: {cause}` |
+| Slot already served | `Warning` | `Slot {slot} of schedule {scheduleId} already has an occurrence: the cursor was carried past it` |
+| Stale occurrence reconciled | `Warning` | `Stale occurrence {id} of schedule {scheduleId} was stranded in {status} and has been requeued` |
+| Occurrence requeued | `Information` | `Occurrence {id} of schedule {scheduleId} was requeued from {status}` |
+| Catch-up started | `Information` | `Catch-up of schedule {scheduleId} started from slot {from}: {n} slot(s) are due` |
+| Catch-up completed | `Information` | `Catch-up of schedule {scheduleId} completed: {n} occurrence(s) materialized since {start}` |
+| Catch-up halted | `Error` | `Catch-up of schedule {scheduleId} halted at cursor {cursor}: {n} slots are due, more than the configured cap` |
+| Schedule unusable | `Error` | `Schedule {scheduleId} cannot be rebuilt from its row and materializes nothing: {reason}` |
+| Occurrence unusable | `Error` | `Occurrence {id} of schedule {scheduleId} cannot be rebuilt from its row and was marked Failed: {reason}` |
+| Occurrence unusable, still not ended | `Error` | `Occurrence {id} of schedule {scheduleId} cannot be rebuilt from its row and could not be marked Failed (it is still {status}): {reason}` |
+| Provider re-park failed | `Error` | `Schedule {scheduleId} could not be parked to ask the occurrence provider '{key}' again: nothing was written and the series stays where it is until the next startup recovery` |
+| Schedule rescheduled | `Information` / `Warning` | `Schedule {id} rescheduled from version {a} to version {b} ({mode}): cursor {from} -> {to}` |
+| Re-park failed (reschedule) | `Error` | `Schedule {id} is at version {v} but could not be handed back to the scheduler: {reason}` |
+| Re-park failed (materialization) | `Error` | `Schedule {id} could not be re-parked after a failed materialization: it is parked nowhere and only the next startup recovery brings it back` |
+| Provider evaluation failed | `Warning` | `Occurrence provider '{key}' could not answer for schedule {id} ({n} consecutive failure(s)): …parked to ask again at {retryAt}` |
+
+Four of them repay a closer look.
+
+**Catch-up started** and **catch-up completed** are the two ends of one replay. Everything between them is
+reported per occurrence, and per occurrence there is no way to tell where a backlog began, how big it was, or
+that it has drained — a serial catch-up materializes its slots one delivery at a time, over as many
+materializer runs as it takes. The pair is per process: a host that restarts in the middle of a replay opens a
+new episode, which is what the schedule itself does with the backlog that is left. A replay that HALTS gets no
+completion event — the halt below is the event for that — and neither does one whose series is cancelled
+under it.
+
+**Occurrence skipped** is the only ordinary way a durable schedule loses a slot, and it always names the rule
+that dropped it, because the three have different fixes:
+
+- `outside the misfire window` — older than `now - MaxAge`. Widen the window, or accept the loss.
+- `older than the most recent slots the catch-up cap keeps` — the `SkipOldest` overflow policy kept the newest
+  `MaxOccurrences` and dropped the rest. Raise the cap, or accept it.
+- `the skip policy does not replay a slot that is no longer current` — the `Skip` policy, working as
+  configured.
+
+The count reads `at least {n}` instead of a bare number when the grid was counted under a cap: a lower bound
+is said to be one, never dressed up as a total.
+
+**Schedule rescheduled** is `Warning` instead of `Information` when the new definition discarded a backlog,
+and the message then ends with `; {n} due slot(s) were discarded` — plus `; the catch-up halt was released`
+when the call cleared a halt. The change is committed before the series is handed back to the scheduler, so
+this event is published even when the re-park then fails and the `Error` above follows it.
+
+**Schedule unusable**, **occurrence unusable** and **provider re-park failed** are the three an alert rule
+tends to miss, and they are the ones worth waking someone for. The first two mean this build cannot rebuild a
+row out of what is persisted — a payload that stopped deserializing, a zone id that has left the tz database,
+a handler nobody registers any more — so the schedule materializes nothing at all, or the occurrence is ended
+as `Failed` instead of holding a slot of the concurrency budget for ever. Occurrence unusable has a second
+wording, for the case where that ending did not take. `SetStatus` is best-effort on every relational provider,
+so the row is read back and the event says which of the two really happened. `could not be marked Failed`
+means the occurrence is still alive in the status the message names, still holding its slot of the budget, and
+the schedule materializes nothing more until a later run ends it for real. Same alert, one more thing wrong.
+The third means an
+[occurrence provider](recurring-tasks/occurrence-providers.md) could not answer AND the series could not be
+parked to ask it again. Nothing polls behind that one: the schedule stays where it is until the next startup
+recovery.
+
+**Catch-up halted** is rate-limited to one event per schedule every five minutes: the halt is a standing
+condition, not a stream of incidents. It is re-emitted when the marker is found again — on every kick and once
+per restart — until an operator resumes or reschedules the series.
+
 ## Event Data Structure
 
 Each event includes everything you need to track what happened:
@@ -67,8 +147,27 @@ public record EverTaskEventData(
     string TaskHandlerType,
     string TaskParameters,
     string Message,
-    string? Exception = null);
+    string? Exception = null,
+    IReadOnlyList<TaskExecutionLog>? ExecutionLogs = null)
+{
+    public Guid? ParentTaskId { get; init; }
+    public DateTimeOffset? ScheduledAtUtc { get; init; }
+    public int? ScheduleVersion { get; init; }
+}
 ```
+
+`ExecutionLogs` carries the [captured handler logs](monitoring-logs.md) of the delivery, when log capture is
+on and the event is one that reports a finished execution.
+
+The three schedule properties are `init` members in the record body, never appended constructor parameters:
+the primary constructor and `Deconstruct` signatures are what a subscriber compiled against an earlier
+version calls, so they stay exactly what they were.
+
+| Property | Set on |
+|----------|--------|
+| `ParentTaskId` | An [occurrence](recurring-tasks/durable-occurrences.md) of a durable schedule: the schedule row it belongs to |
+| `ScheduledAtUtc` | Any scheduled delivery: the **nominal slot** it stands for, not the moment it fired |
+| `ScheduleVersion` | A recurring schedule row and every occurrence of one; null for a task that belongs to no schedule |
 
 ### Example Event Data
 
@@ -81,7 +180,11 @@ public record EverTaskEventData(
   "TaskHandlerType": "MyApp.Handlers.SendEmailHandler",
   "TaskParameters": "{\"Email\":\"user@example.com\",\"Subject\":\"Welcome\"}",
   "Message": "Task with id dc49351d-476d-49f0-a1e8-3e2a39182d22 was completed in 12.5 ms",
-  "Exception": null
+  "Exception": null,
+  "ExecutionLogs": null,
+  "ParentTaskId": null,
+  "ScheduledAtUtc": null,
+  "ScheduleVersion": null
 }
 ```
 

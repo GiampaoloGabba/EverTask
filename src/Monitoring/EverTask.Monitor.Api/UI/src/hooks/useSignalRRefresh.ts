@@ -42,6 +42,11 @@ export const useSignalRRefresh = () => {
     // Always invalidate task counts (affects all pages)
     queryClient.invalidateQueries({ queryKey: ['taskCounts'] });
 
+    // Occurrences are task rows too, and the tab that lists them declares no refetch interval: every event
+    // that can add one, change its state or end it has to reach it, exactly like the counts above. Only the
+    // schedule whose tab is open is mounted, so this refetches one query at most.
+    queryClient.invalidateQueries({ queryKey: ['occurrences'] });
+
     // Process each event
     events.forEach((event) => {
       // If we have a specific taskId, invalidate that task's detail

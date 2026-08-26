@@ -359,6 +359,25 @@ public class SqlServerTaskStorage(
             nameof(GetOccurrences), ct);
 
     /// <inheritdoc />
+    public override Task<OccurrencePage> GetOccurrencesPage(Guid parentId, bool nonTerminalOnly, int skip, int take,
+                                                            CancellationToken ct = default) =>
+        RereadOnDeadlockAsync(token => base.GetOccurrencesPage(parentId, nonTerminalOnly, skip, take, token),
+            nameof(GetOccurrencesPage), ct);
+
+    /// <inheritdoc />
+    public override Task<IReadOnlyDictionary<Guid, DateTimeOffset>> GetLastRunStarts(
+        IReadOnlyCollection<Guid> taskIds, CancellationToken ct = default) =>
+        RereadOnDeadlockAsync(token => base.GetLastRunStarts(taskIds, token), nameof(GetLastRunStarts), ct);
+
+    /// <inheritdoc />
+    public override Task<StatusAudit[]> GetStatusAudits(Guid taskId, CancellationToken ct = default) =>
+        RereadOnDeadlockAsync(token => base.GetStatusAudits(taskId, token), nameof(GetStatusAudits), ct);
+
+    /// <inheritdoc />
+    public override Task<RunsAudit[]> GetRunsAudits(Guid taskId, CancellationToken ct = default) =>
+        RereadOnDeadlockAsync(token => base.GetRunsAudits(taskId, token), nameof(GetRunsAudits), ct);
+
+    /// <inheritdoc />
     public override Task<int> CountActiveOccurrences(Guid parentId, CancellationToken ct = default) =>
         RereadOnDeadlockAsync(token => base.CountActiveOccurrences(parentId, token),
             nameof(CountActiveOccurrences), ct);

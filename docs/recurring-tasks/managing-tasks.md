@@ -91,20 +91,26 @@ to call when something the schedule depends on has changed — a calendar, a fea
 provider's configuration — and the schedule itself has not.
 
 It moves the cursor to the next occurrence after now, so on a durable schedule that is behind, **the slots it
-still owed are dropped**, counted in `ScheduleUpdateResult.DiscardedBacklog` and reported as a
-`BacklogDiscarded` event. That is the right answer when the old backlog was computed from something that is no
-longer true, and the wrong one when the work is still owed: to release a late or halted catch-up while keeping
-its backlog, call `ResumeSchedule`, which is the one method that leaves the cursor where it is.
+still owed are dropped**, counted in `ScheduleUpdateResult.DiscardedBacklog` and carried on the
+`ScheduleRescheduled` event described below. That is the right answer when the old backlog was computed from
+something that is no longer true, and the wrong one when the work is still owed: to release a late or halted
+catch-up while keeping its backlog, call `ResumeSchedule`, which is the one method that leaves the cursor
+where it is.
 
 ### What the change publishes
 
-Every accepted change publishes one monitoring event, and it carries the whole change rather than the state it
-ended at: the version the schedule came from and the one it is now at, the cursor it stood on and the one it
-stands on, the mode that decided it, whether a catch-up halt was released, and how many due slots were
-discarded. The count is bounded, because a long one-minute backlog owes more slots than anything here needs to
-enumerate, so a truncated one is published as `at least N`; `ScheduleUpdateResult.DiscardedBacklogIsExact`
-says which of the two you are reading. The event's severity is a warning when slots were discarded and
-information otherwise.
+Every accepted change publishes one monitoring event, `ScheduleRescheduled`, and it carries the whole change
+rather than the state it ended at: the version the schedule came from and the one it is now at, the cursor it
+stood on and the one it stands on, the mode that decided it, whether a catch-up halt was released, and how
+many due slots were discarded. The count is bounded, because a long one-minute backlog owes more slots than
+anything here needs to enumerate, so a truncated one is published as `at least N`;
+`ScheduleUpdateResult.DiscardedBacklogIsExact` says which of the two you are reading. The event's severity is
+a warning when slots were discarded and information otherwise.
+
+There is no second event for the discarded backlog. A schedule change is one thing that happened, so it is
+one event, and a consumer that matches on a name matches `ScheduleRescheduled` and reads the count off it.
+`BacklogDiscarded` carries the same count in the logs, for whoever reads logs; it is not something a
+subscriber can match.
 
 The write commits before the schedule is handed back to whatever parks it, so a re-park that fails does not
 make the change disappear: the event is published all the same, followed by an error event saying the row

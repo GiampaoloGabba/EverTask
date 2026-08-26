@@ -253,19 +253,37 @@ app.Run("http://internal-monitor.local:5000");
 
 ## API Endpoints
 
-All endpoints are prefixed with `/evertask-monitoring/api` (fixed)
+All endpoints are prefixed with `/evertask-monitoring/api` (fixed). **Every one of them is read-only**:
+nothing here changes a task or a schedule. Changing a schedule at runtime is `ITaskScheduleManager`, called
+from your own code behind your own authorization — the dashboard credentials are a read credential shared by
+everyone who looks at it.
 
 ### Tasks
 
 - `GET /tasks` - Get paginated task list with filters
-  - Query params: `status`, `type`, `search`, `page`, `pageSize`, `sortBy`, `sortDirection`
+  - Query params: `statuses`, `taskType`, `queueName`, `searchTerm`, `isRecurring`, `createdAfter`,
+    `createdBefore`, `page`, `pageSize`, `sortBy`, `sortDescending`
+  - Durable schedules: `parentTaskId` (the occurrences of one schedule), `onlyOccurrences`, `onlyCatchUp`
+    (only the rows that stand for missed work)
 - `GET /tasks/{id}` - Get task details
 - `GET /tasks/{id}/status-audit` - Get status audit history
 - `GET /tasks/{id}/runs-audit` - Get runs audit history
+- `GET /tasks/{id}/execution-logs?skip=&take=&level=` - Get the captured handler logs of a task
+- `GET /tasks/{id}/occurrences?nonTerminalOnly=&skip=&take=` - The materialized occurrences of a durable
+  schedule, newest slot first, paged by the storage itself
+- `GET /tasks/counts` - Task counts by category (all, standard, recurring, failed, occurrences)
+
+Task DTOs carry the schedule context of a row: `parentTaskId`, `occurrenceMode`, `misfirePolicy`,
+`timeZoneId`, `scheduleVersion`, `nominalSlotUtc`, `misfireKind` and `startedAtUtc` (when the last run began —
+`lastExecutionUtc` is stamped when it ENDED; it is read from the row's `InProgress` audit, so a run still in
+flight has one, and it is absent wherever nothing measured a start). The schedule fields are null together on
+a task that belongs to no schedule.
 
 ### Dashboard
 
-- `GET /dashboard/overview?range=Today|Week|Month|All` - Get overview statistics
+- `GET /dashboard/overview?range=Today|Week|Month|All` - Get overview statistics, including `catchUpBacklog`:
+  the occurrences of every durable schedule by state, how far behind the oldest pending slot is, and how many
+  schedules stopped themselves over their catch-up cap
 - `GET /dashboard/recent-activity?limit=50` - Get recent activity
 
 ### Queues
@@ -278,6 +296,11 @@ All endpoints are prefixed with `/evertask-monitoring/api` (fixed)
 - `GET /statistics/success-rate-trend?period=Last7Days|Last30Days|Last90Days`
 - `GET /statistics/task-types?range=Today|Week|Month|All`
 - `GET /statistics/execution-times?range=Today|Week|Month|All`
+
+### Rate limits
+
+- `GET /rate-limits` - Per-key parked count, next slot, tracked keys and fail-open count. In-memory, so it
+  reports this process only.
 
 ### Config
 
@@ -429,7 +452,7 @@ All responses use `camelCase` property names:
   "type": "SendEmailTask",
   "status": "Completed",
   "createdAtUtc": "2025-10-19T10:30:00Z",
-  "executedAtUtc": "2025-10-19T10:30:01Z",
+  "lastExecutionUtc": "2025-10-19T10:30:01Z",
   "executionTimeMs": 250
 }
 ```
@@ -443,7 +466,7 @@ function TaskMonitor() {
     const [tasks, setTasks] = useState([]);
 
     useEffect(() => {
-        fetch('https://yourapp.com/evertask/api/tasks?status=Running', {
+        fetch('https://yourapp.com/evertask/api/tasks?statuses=InProgress', {
             headers: {
                 'Authorization': 'Basic ' + btoa('admin:admin')
             }

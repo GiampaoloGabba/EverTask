@@ -41,11 +41,11 @@ The monitoring system can be used in two modes:
 - **Full Mode** (default): API + embedded dashboard UI
 - **API-Only Mode**: REST API only, for custom frontend integrations
 
-### Version 3.3 - Feature Complete (Read-Only Monitoring)
+### Feature complete for read-only monitoring
 
-The dashboard and API are **feature complete for read-only monitoring** in version 3.3: observability and analytics over your task pipeline, without write operations.
+The dashboard and API are **feature complete for read-only monitoring**: observability and analytics over your task pipeline, without write operations.
 
-**Current Capabilities (v3.3):**
+**What it covers:**
 - ✅ Complete read-only monitoring and observability
 - ✅ Real-time task status updates via SignalR with event-driven cache invalidation
 - ✅ Analytics (success rates, execution times, task distribution)
@@ -53,15 +53,15 @@ The dashboard and API are **feature complete for read-only monitoring** in versi
 - ✅ Multi-queue monitoring and advanced task filtering
 - ✅ Audit trail visualization (status history, execution runs)
 - ✅ Terminal-style log viewer with color-coded severity levels
+- ✅ Durable occurrences: the backlog of every schedule by state, its lag, and the occurrences of a schedule with the misfire each of them stands for
 
-**Future Releases:**
-- ⏳ Task management operations (stop, restart, cancel running tasks)
+**Not there, and waiting on an authorization model rather than on endpoints:**
+- ⏳ Requeue, resume and cancel from the dashboard itself
 - ⏳ Runtime parameter modification for queued/scheduled tasks
 - ⏳ Queue management operations (pause/resume queues)
-- ⏳ Task retry/requeue functionality
 - ⏳ Bulk task operations
 
-> **Note**: Both the REST API and embedded dashboard currently operate in **read-only mode**. You can view, analyze, and export all task data, but cannot modify task execution or queue behavior through the UI or API. Task management capabilities will be introduced in future releases.
+> **Note**: Both the REST API and embedded dashboard operate in **read-only mode**. You can view, analyze and export all task data, but nothing you do there changes task execution or queue behavior. Changing a schedule at runtime — reschedule, resume a halted catch-up, requeue a failed occurrence, cancel a series — goes through [`ITaskScheduleManager`](recurring-tasks/managing-tasks.md) in your own code, behind your own authorization.
 
 ## Installation
 
@@ -155,7 +155,7 @@ All configuration is done through the `EverTaskApiOptions` class passed to `AddM
 |----------|------|---------|-------------|
 | `EnableUI` | bool | `true` | Enable embedded dashboard UI |
 | `EnableOpenApiDocument` | bool | `false` | Serve the monitoring OpenAPI document (net9.0+; auto-enabled by the Scalar package) |
-| `EnableSwagger` | bool | `false` | Obsolete no-op since 3.12.0 (use `EnableOpenApiDocument`) |
+| `EnableSwagger` | bool | `false` | Obsolete no-op since 4.0.0 (use `EnableOpenApiDocument`) |
 | `Username` | string | `"admin"` | JWT authentication username |
 | `Password` | string | `"admin"` | JWT authentication password |
 | `JwtSecret` | string? | auto-generated | Secret key for signing JWT tokens (min 256 bits recommended) |
@@ -163,7 +163,7 @@ All configuration is done through the `EverTaskApiOptions` class passed to `AddM
 | `JwtAudience` | string | `"EverTask.Monitor.Api"` | JWT token audience |
 | `JwtExpirationHours` | int | `8` | JWT token expiration time in hours |
 | `EnableAuthentication` | bool | `true` | Enable JWT authentication |
-| `EnableCors` | bool | `true` | Apply the `EverTaskMonitoringApi` CORS policy to requests under `/evertask-monitoring` (since 3.12.0; the host pipeline is untouched) |
+| `EnableCors` | bool | `true` | Apply the `EverTaskMonitoringApi` CORS policy to requests under `/evertask-monitoring` (since 4.0.0; the host pipeline is untouched) |
 | `CorsAllowedOrigins` | string[] | `[]` | CORS allowed origins (empty = allow all) |
 | `AllowedIpAddresses` | string[] | `[]` | IP whitelist (empty = allow all IPs). Supports IPv4/IPv6 and CIDR notation |
 | `MagicLinkToken` | string? | `null` | Static token for magic link access. If set, enables `/api/auth/magic` endpoint for instant authentication |
@@ -251,7 +251,7 @@ POST to `/evertask-monitoring/api/auth/login` to obtain a JWT token:
 
 ### Login Rate Limiting
 
-The login endpoint and the magic-link exchange endpoints (`/api/auth/magic`, since 3.12.0) carry
+The login endpoint and the magic-link exchange endpoints (`/api/auth/magic`, since 4.0.0) carry
 the `evertask-monitoring-login` rate-limit policy: 5 attempts per
 15 minutes per client IP, 429 once exhausted. The policy is registered by the package but
 ASP.NET Core enforces it only when your pipeline runs `app.UseRateLimiter()` (after
@@ -290,7 +290,7 @@ For external system integration (embedding in other dashboards, direct access fr
 });
 ```
 
-**Access URL** (since 3.12.0, put the token in the URL fragment):
+**Access URL** (since 4.0.0, put the token in the URL fragment):
 ```
 https://your-server/evertask-monitoring/magic#token=your-very-long-secret-token-here-min-32-chars
 ```
@@ -362,7 +362,7 @@ This is useful when:
 
 ### CORS Configuration
 
-Since 3.12.0 the CORS policy applies automatically to requests under `/evertask-monitoring`
+Since 4.0.0 the CORS policy applies automatically to requests under `/evertask-monitoring`
 (API, hub and UI) and only there: your application's CORS setup, or its absence, is untouched
 and there is nothing to add to the pipeline.
 
@@ -508,11 +508,11 @@ custom predicates.
 Up to 3.11.0 the package depended on Swashbuckle and hooked into the host's `SwaggerGen`
 configuration via `EnableSwagger`. That dependency crashed .NET 10 hosts using the built-in
 OpenAPI stack at startup (`ReflectionTypeLoadException` inside `MapControllers()`) and is gone in
-3.12.0. `EnableSwagger` is now an obsolete no-op: replace it with `EnableOpenApiDocument = true`
+4.0.0. `EnableSwagger` is now an obsolete no-op: replace it with `EnableOpenApiDocument = true`
 (or the Scalar package), and remove the `/swagger/evertask-monitoring/swagger.json` endpoint from
 your `UseSwaggerUI` call unless you opt into the recipe above.
 
-Also since 3.12.0 the monitoring route prefix applies only to the package's own controllers.
+Also since 4.0.0 the monitoring route prefix applies only to the package's own controllers.
 Earlier versions accidentally prepended `/evertask-monitoring` to every controller in the host
 application; if you relied on those prefixed routes, they are now back at their natural paths.
 

@@ -172,7 +172,7 @@ For each capability selected in Phase 1, read the matching reference and apply:
   Optional `.AddMonitoringApiScalar()` (package `EverTask.Monitor.Api.Scalar`, net9+) serves a
   Scalar API reference at `/evertask-monitoring/scalar`. Everything the monitoring API adds
   (routes, JSON contract, CORS, SPA fallback, OpenAPI document) stays under `/evertask-monitoring`
-  and never touches the host's own MVC/OpenAPI setup (3.12+).
+  and never touches the host's own MVC/OpenAPI setup (4.0+).
   **Change the default `admin`/`admin` credentials.**
 - **Serilog** (`07-monitoring-logging.md`): `.AddSerilog(...)` for a dedicated pipeline.
 - **Persistent logs** (`07-monitoring-logging.md`): `.WithPersistentLogger(...)`; pair with
