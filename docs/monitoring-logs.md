@@ -117,8 +117,8 @@ ILogger        Database
 ## Retrieving Persisted Logs
 
 ```csharp
-// Get all logs for a task
-var logs = await storage.GetExecutionLogsAsync(taskId);
+// Get all logs for a task, ordered by sequence number
+var logs = await storage.GetLogsAsync(taskId);
 
 foreach (var log in logs)
 {
@@ -127,9 +127,13 @@ foreach (var log in logs)
         Console.WriteLine($"Exception: {log.ExceptionDetails}");
 }
 
-// Get paginated logs
-var page = await storage.GetExecutionLogsAsync(taskId, skip: 0, take: 50);
+// Get a page (1-based page number, page size 1-1000)
+var page = await storage.GetLogsAsync(taskId, pageNumber: 1, pageSize: 50);
 ```
+
+`GetLogsAsync` is an extension over `ITaskStorage` and validates its arguments; the raw
+`GetExecutionLogsAsync(taskId, skip, take)` it delegates to is the storage-contract member (see
+[Custom Storage](storage/custom-storage.md)).
 
 ## Log Retention
 
