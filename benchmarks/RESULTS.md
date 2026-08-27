@@ -361,3 +361,52 @@ checks and one `Enum.IsDefined` per recurring dispatch — a path no cell dispat
 one-shots, LRA advances an existing schedule row without going through the dispatcher). That is a statement
 about which code runs, not something the table above measures; the table's job here is to show the columns,
 the navigation collection and the executor properties still cost nothing in wall-clock.
+
+## P-K — Issue #23 final: the whole 4.0 branch vs master (gate D7, release measurement)
+
+P-J measured phase 1 alone; this is the release-closing A/B of the ENTIRE `feature/issue23-durable-occurrences`
+branch (`ce5f054`, all seven phases) against master (`5fdd2a1`, the 3.x tip). Same four cells as P-J, same
+machine (Ryzen 9 7950X, 32 logical cores), .NET 10.0.11, Workstation GC, `--log Warning --sink none`.
+
+- **base** = a git worktree of master at `V:/Temp/claude/evertask-40-baseline`, with the branch's `LRA`
+  scenario and its `Program.cs` registration copied over verbatim (it compiles clean against the 3.x
+  surface), so both sides run the identical harness.
+- Checkouts alternated (base, patched, base, patched, …), 3 repetitions per side, medians reported. The
+  A4W deltas came out pairwise-consistent with base always first in the pair, so A4W got **two extra
+  control pairs in reversed order** (patched first): the gap survived the reversal, so it is not an
+  ordering/thermal artifact. A4W medians below are over all 5 runs per side.
+- Caveat on ambient noise: an IDE was open (idle) during the run. Same-side spread stayed within P-J's
+  observed 6–10% band on the engine cells and ≤1.6% on the SQLite cells; allocation numbers are
+  deterministic and unaffected.
+
+```bash
+# one repetition, per side; repeated 3× alternating (+2 reversed-order A4W control pairs)
+dotnet run -c Release --project benchmarks/EverTask.LoadHarness -- A4W --count 1m --parallelism 16 --producers 8 --warmup 3 --measured 7
+dotnet run -c Release --project benchmarks/EverTask.LoadHarness -- LRA --storage inmemory --count 2m --parallelism 8 --warmup 3 --measured 7
+dotnet run -c Release --project benchmarks/EverTask.LoadHarness -- LRA --storage sqlite   --count 2000 --parallelism 4 --warmup 2 --measured 5
+dotnet run -c Release --project benchmarks/EverTask.LoadHarness -- A4S --storage sqlite --parallelism 1 --count 1000 --warmup 2 --measured 5
+```
+
+| Cell | What it covers | base thr | patched thr | Δ thr | base B/task | patched B/task | Δ alloc |
+|------|----------------|---------:|------------:|------:|------------:|---------------:|--------:|
+| A4W (5 runs/side) | dispatch + execute, real engine, no persistence | 930,932/s | 871,660/s | **-6.4%** | 2,951 | 3,498 | **+18.5%** |
+| LRA in-memory | recurring advance, evaluator-dominated | 10.78 M/s | 10.76 M/s | -0.2% | 143.5 | 151.5 | +5.6% |
+| LRA SQLite | recurring advance on the widened table | 1,709/s | 1,701/s | -0.5% | 21,809 | 22,048 | +1.1% |
+| A4S SQLite (p1) | the 3 lifecycle writes on the widened table | 525/s | 525/s | 0.0% | 81,797 | 87,429 | +6.9% |
+
+**Production paths: parity.** The three cells that touch what a durable app actually pays — the lifecycle
+writes and the recurring advance — moved 0.0%, -0.5% and -0.2%, with A4S's p50 marginally better
+(1,817 → 1,804 µs). The durable write's +6.9% alloc is the P-J number carried through (the three columns
+plus the navigation collection on every tracked row); on a path that is fsync- and round-trip-bound it
+buys no wall-clock, exactly as in phase 1.
+
+**Engine ceiling: the branch costs ~6% in vitro, and it tracks the allocation growth.** A4W is the
+diagnostic cell — one-shot dispatch + execute over `NullTaskStorage`, no DB to hide behind — and the whole
+branch shows -6.4% throughput with +547 B/task (+18.5%). Phase 1 alone was +211 B/task at flat throughput
+(P-J); phases 2–6 added the rest: the execution-context state that now travels with every executor
+(`ScheduledAtUtc`/`ScheduledAtLocal`/misfire fields and their `with` copies), the wider `QueuedTask` row
+built per dispatch, and the schedule-manager/provider seams on the dispatch path. At ~900k tasks/s the
+extra ~550 B/task is ~500 MB/s of additional Gen0 pressure, which is where the 6% goes. No production cell
+sees it — their per-task cost is 6–25× larger and DB-bound — but reclaiming it is tracked with the storage
+allocation issues (#48–#53); the lazy navigation collections from P-J's follow-up note remain the first
+candidate, now joined by the executor's context fields.
