@@ -46,7 +46,6 @@
     <Project Path="src/Storage/EverTask.Storage.MySql/EverTask.Storage.MySql.csproj" />
   </Folder>
   <Folder Name="/test/">
-    <Project Path="test/EverTask.ConsumerCompatibility.Baseline/EverTask.ConsumerCompatibility.Baseline.csproj" />
     <Project Path="test/EverTask.Tests.Logging/EverTask.Tests.Logging.csproj" />
     <Project Path="test/EverTask.Tests.Monitoring/EverTask.Tests.Monitoring.csproj" />
     <Project Path="test/EverTask.Tests.Storage/EverTask.Tests.Storage.csproj" />

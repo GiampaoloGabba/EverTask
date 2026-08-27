@@ -197,10 +197,6 @@ PublishScripts/
 
 # NuGet Packages
 *.nupkg
-# ...except the issue23-baseline feed: the consumer-compatibility fixture is COMPILED against these two
-# packages (master before durable occurrences) and then run against the current assemblies, which is the only
-# way binary additivity can be demonstrated rather than asserted. They are test inputs, not build output.
-!nupkg/issue23-baseline/*.nupkg
 # What a failed migration-SQL snapshot test writes next to the baseline, for eyeballing the diff.
 *.actual.sql
 # NuGet Symbol Packages

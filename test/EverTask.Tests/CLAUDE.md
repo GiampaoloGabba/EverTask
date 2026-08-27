@@ -64,27 +64,8 @@ Docker or Testcontainers here. Subsets filter on namespace: `--filter "FullyQual
   and declares no `SetExecutionContext`, and `ExecutionContextIntegrationTests` also DISPATCHES it, so the
   interface's default body runs on a real delivery instead of only compiling. `RawInterfaceContextTaskHandler`
   is the other half — it implements that member, so the injector's call is proven to reach the interface slot.
-  Both are recompiled against the new sources; the assembly that is not is in the binary pin below.
-- **Binary compatibility pin**: `test/EverTask.ConsumerCompatibility.Baseline` is compiled against the
-  `issue23-baseline` packages in `nupkg/issue23-baseline` and RUN against the current assemblies by the same
-  test class, a major apart (3.11 → 4.0) — both its tests assert that distance, so a missed version bump
-  cannot turn the proof into 3.11 against 3.11. It is the only thing that catches an optional parameter
-  appended to an existing public method or constructor — source-level probes keep compiling while the IL
-  signature changes. Add a public method, not an optional parameter; see that project's `README.md` for the
-  wiring and for repacking the baseline.
-  Its `BaselineScheduleBuilders.cs` is the same proof for the fluent API: one type implementing all ten
-  schedule builder interfaces as the baseline declared them, so constructing it builds an interface map
-  against TODAY's interfaces and an `InTimeZone` that had arrived abstract would fail the type load. The test
-  then calls all eight `InTimeZone` slots on it — plus every member added since (`OnMisfire`,
-  `WithDurableOccurrences`, `BackfillFrom`, `UseOccurrenceProvider`) — and expects `NotSupportedException`: the
-  default bodies are reachable, and they refuse rather than silently drop what they were given.
-  Its `BaselineHandlers.cs` carries the other half: two handlers built when neither `SetExecutionContext` nor
-  `EverTaskHandler<T>.Context` existed — one implementing `IEverTaskHandler<T>` directly, one deriving from
-  the base class — dispatched on a REAL host by
-  `ConsumerCompatibilityTests.Handlers_compiled_against_the_baseline_are_still_executed_end_to_end`. Their
-  interface map is built against today's interface, so a member arriving abstract fails the type load where a
-  recompiled twin would just keep building. They record through a `BaselineHandlerProbe` the test registers,
-  because the fixture may reference nothing but the baseline packages.
+  (The 3.11-compiled binary fixture that once complemented these pins was development scaffolding and was
+  removed before release; recreate one against the published 4.0.0 packages if a 4.x minor ever needs it.)
 - **Fault injection**: `TestHelpers/FaultInjectingTaskStorage` wraps a REAL storage and throws only where the
   test arms it (`FailNext` / `FailAlways` / `Heal`), so the failure and the recovery from it both execute for
   real. Used by `RecoveryFinalizationFailureTests` and by the durable-occurrence kick test; a mock in its

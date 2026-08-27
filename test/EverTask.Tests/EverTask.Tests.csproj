@@ -33,7 +33,6 @@
       PrivateAssets="all", so only the fixture DLL crosses over and the 3.11 assemblies never reach this
       output — which is what makes Serialization/ConsumerCompatibilityTests a binary-compatibility proof.
     -->
-    <ProjectReference Include="..\EverTask.ConsumerCompatibility.Baseline\EverTask.ConsumerCompatibility.Baseline.csproj" />
   </ItemGroup>
 
   <ItemGroup>
