@@ -34,6 +34,12 @@ internal sealed class ManagementAuthorizationFilter(EverTaskApiOptions options, 
             return;
         }
 
+        if (IsCrossSiteBrowserRequest(context.HttpContext.Request))
+        {
+            context.Result = new StatusCodeResult(StatusCodes.Status403Forbidden);
+            return;
+        }
+
         var canManage = false;
 
         if (options.EnableAuthentication)
@@ -62,6 +68,40 @@ internal sealed class ManagementAuthorizationFilter(EverTaskApiOptions options, 
         if (!authorized)
             context.Result = new StatusCodeResult(StatusCodes.Status403Forbidden);
     }
+
+    private static bool IsCrossSiteBrowserRequest(HttpRequest request)
+    {
+        if (request.Headers.TryGetValue("Sec-Fetch-Site", out var fetchSite))
+        {
+            var value = fetchSite.ToString();
+
+            return !value.Equals("same-origin", StringComparison.OrdinalIgnoreCase) &&
+                   !value.Equals("same-site", StringComparison.OrdinalIgnoreCase) &&
+                   !value.Equals("none", StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (!request.Headers.TryGetValue("Origin", out var origin))
+            return false;
+
+        return !IsSameOrigin(request, origin.ToString());
+    }
+
+    private static bool IsSameOrigin(HttpRequest request, string origin)
+    {
+        if (!Uri.TryCreate(origin, UriKind.Absolute, out var originUri) ||
+            originUri.Scheme is not ("http" or "https"))
+        {
+            return false;
+        }
+
+        return originUri.Scheme.Equals(request.Scheme, StringComparison.OrdinalIgnoreCase) &&
+               originUri.Host.Equals(request.Host.Host, StringComparison.OrdinalIgnoreCase) &&
+               EffectivePort(originUri.Scheme, originUri.IsDefaultPort ? null : originUri.Port) ==
+               EffectivePort(request.Scheme, request.Host.Port);
+    }
+
+    private static int EffectivePort(string scheme, int? port) => port ??
+        (scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ? 443 : 80);
 
     /// <summary>
     /// The bearer token of the request, header only. <c>?access_token=</c> is deliberately not read here:

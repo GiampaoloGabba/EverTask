@@ -1,4 +1,5 @@
 using EverTask.Monitor.Api.Infrastructure;
+using EverTask.Monitor.Api.Options;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -19,6 +20,14 @@ namespace EverTask.Monitor.Api.Middleware;
 /// </remarks>
 public class JwtAuthenticationMiddleware(RequestDelegate next)
 {
+    /// <summary>
+    /// Initializes the middleware while the current request policy remains resolved from request services.
+    /// </summary>
+    public JwtAuthenticationMiddleware(RequestDelegate next, EverTaskApiOptions options) : this(next)
+    {
+        _ = options;
+    }
+
     /// <summary>Invokes the middleware.</summary>
     public async Task InvokeAsync(HttpContext context)
     {

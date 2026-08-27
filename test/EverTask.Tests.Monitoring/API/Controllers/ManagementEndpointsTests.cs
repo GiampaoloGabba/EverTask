@@ -148,6 +148,72 @@ public class ManagementEndpointsTests
         response.StatusCode.ShouldBe(HttpStatusCode.Forbidden);
     }
 
+    [Theory]
+    [InlineData("requeue")]
+    [InlineData("resume")]
+    [InlineData("cancel")]
+    public async Task Should_refuse_cross_site_browser_requests_on_every_management_route_when_the_host_uses_ambient_credentials(
+        string route)
+    {
+        await using var factory = CreateAmbientCookieFactory();
+        using var client = factory.CreateClient();
+        using var request = AmbientCookieRequest(RouteFor(route, Guid.NewGuid()));
+
+        request.Headers.Add("Sec-Fetch-Site", "cross-site");
+
+        var response = await client.SendAsync(request);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
+    public async Task Should_refuse_a_cross_origin_management_request_when_fetch_metadata_is_absent()
+    {
+        await using var factory = CreateAmbientCookieFactory();
+        using var client = factory.CreateClient();
+        using var request = AmbientCookieRequest(RouteFor("cancel", Guid.NewGuid()));
+
+        request.Headers.Add("Origin", "https://attacker.example");
+
+        var response = await client.SendAsync(request);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.Forbidden);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("same-origin")]
+    [InlineData("same-site")]
+    [InlineData("none")]
+    public async Task Should_allow_non_browser_and_trusted_site_management_requests(string? fetchSite)
+    {
+        await using var factory = CreateAmbientCookieFactory();
+        using var client = factory.CreateClient();
+        using var request = AmbientCookieRequest(RouteFor("cancel", Guid.NewGuid()));
+
+        if (fetchSite != null)
+            request.Headers.Add("Sec-Fetch-Site", fetchSite);
+
+        var response = await client.SendAsync(request);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.NotFound,
+            "the ambient session passed both the browser provenance check and the host hook");
+    }
+
+    [Fact]
+    public async Task Should_allow_a_same_origin_management_request_when_fetch_metadata_is_absent()
+    {
+        await using var factory = CreateAmbientCookieFactory();
+        using var client = factory.CreateClient();
+        using var request = AmbientCookieRequest(RouteFor("cancel", Guid.NewGuid()));
+
+        request.Headers.Add("Origin", "http://localhost");
+
+        var response = await client.SendAsync(request);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.NotFound);
+    }
+
     [Fact]
     public async Task Should_leave_the_read_endpoints_where_they_were_when_management_is_enabled()
     {
@@ -397,6 +463,29 @@ public class ManagementEndpointsTests
     }
 
     private const string HostOperatorRole = "evertask-operator";
+
+    private static MonitoringTestWebAppFactory CreateAmbientCookieFactory() =>
+        CreateFactory(
+            options => options.ManagementAuthorization = context =>
+                Task.FromResult(context.User.Identity?.IsAuthenticated == true),
+            requireAuthentication: false,
+            configurePipeline: app => app.Use(async (context, next) =>
+            {
+                if (context.Request.Headers.Cookie.ToString().Contains("session=ambient", StringComparison.Ordinal))
+                {
+                    context.User = new ClaimsPrincipal(
+                        new ClaimsIdentity([new Claim(ClaimTypes.Name, "ambient-user")], "TestCookieAuth"));
+                }
+
+                await next();
+            }));
+
+    private static HttpRequestMessage AmbientCookieRequest(string route)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, route);
+        request.Headers.TryAddWithoutValidation("Cookie", "session=ambient");
+        return request;
+    }
 
     private static MonitoringTestWebAppFactory CreateFactory(Action<EverTaskApiOptions>? configure = null,
                                                              bool requireAuthentication = true,

@@ -69,7 +69,7 @@ public class TasksController : ControllerBase
     /// </summary>
     /// <param name="id">The unique task identifier.</param>
     /// <param name="skip">Number of transitions to skip, from the newest (default: 0).</param>
-    /// <param name="take">Number of transitions to return (default: 100).</param>
+    /// <param name="take">Number of transitions to return (default: 100, maximum: 500).</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The page of status changes, with the total the task's trail holds.</returns>
     /// <response code="200">Returns the status audit history.</response>
@@ -92,7 +92,7 @@ public class TasksController : ControllerBase
     /// </summary>
     /// <param name="id">The unique task identifier.</param>
     /// <param name="skip">Number of runs to skip, from the newest (default: 0).</param>
-    /// <param name="take">Number of runs to return (default: 100).</param>
+    /// <param name="take">Number of runs to return (default: 100, maximum: 500).</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The page of execution attempts, with the total the task's trail holds.</returns>
     /// <response code="200">Returns the execution runs audit history.</response>
@@ -115,7 +115,7 @@ public class TasksController : ControllerBase
     /// </summary>
     /// <param name="id">The unique task identifier.</param>
     /// <param name="skip">Number of log entries to skip (default: 0).</param>
-    /// <param name="take">Number of log entries to return (default: 100).</param>
+    /// <param name="take">Number of log entries to return (default: 100, maximum: 500).</param>
     /// <param name="level">Optional log level filter (Trace, Debug, Information, Warning, Error, Critical).</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>Paginated list of execution log entries captured during task execution.</returns>
@@ -141,7 +141,7 @@ public class TasksController : ControllerBase
     /// <param name="id">The schedule row identifier.</param>
     /// <param name="nonTerminalOnly">Keep only the occurrences that can still lead to an execution (default: false).</param>
     /// <param name="skip">Number of occurrences to skip (default: 0).</param>
-    /// <param name="take">Number of occurrences to return (default: 100).</param>
+    /// <param name="take">Number of occurrences to return (default: 100, maximum: 500).</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>
     /// The occurrences of the schedule with the slot, run number and misfire metadata each of them carries.

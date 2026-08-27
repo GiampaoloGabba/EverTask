@@ -93,11 +93,44 @@ public class IpWhitelistTrustTests
         (await client.GetAsync($"{Monitoring}/api/tasks")).StatusCode.ShouldBe(HttpStatusCode.OK);
     }
 
+    [Theory]
+    [InlineData("10.0.0.0/-1", "10.0.0.7")]
+    [InlineData("10.0.0.0/33", "10.0.0.7")]
+    [InlineData("2001:db8::/-1", "2001:db8::7")]
+    [InlineData("2001:db8::/129", "2001:db8::7")]
+    public async Task Should_refuse_out_of_range_cidr_prefixes_instead_of_treating_them_as_matches(
+        string cidr, string clientIp)
+    {
+        await using var factory = HostSeenFrom(clientIp, allowedEntries: [cidr]);
+        using var client = factory.CreateClient();
+
+        (await client.GetAsync($"{Monitoring}/api/tasks")).StatusCode.ShouldBe(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
+    public async Task Should_match_an_ipv4_mapped_ipv6_client_to_an_exact_ipv4_entry()
+    {
+        await using var factory = HostSeenFrom("::ffff:203.0.113.7", allowedEntries: ["203.0.113.7"]);
+        using var client = factory.CreateClient();
+
+        (await client.GetAsync($"{Monitoring}/api/tasks")).StatusCode.ShouldBe(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task Should_match_an_ipv4_mapped_ipv6_client_to_an_ipv4_cidr_entry()
+    {
+        await using var factory = HostSeenFrom("::ffff:203.0.113.7", allowedEntries: ["203.0.113.0/24"]);
+        using var client = factory.CreateClient();
+
+        (await client.GetAsync($"{Monitoring}/api/tasks")).StatusCode.ShouldBe(HttpStatusCode.OK);
+    }
+
     /// <summary>A host whose whitelist holds <see cref="AllowedIp"/>, with the connection coming from <paramref name="clientIp"/>.</summary>
-    private static MonitoringTestWebAppFactory HostSeenFrom(string clientIp, bool ui = false) =>
+    private static MonitoringTestWebAppFactory HostSeenFrom(string clientIp, bool ui = false,
+                                                            string[]? allowedEntries = null) =>
         new(configureOptions: options =>
             {
-                options.AllowedIpAddresses = [AllowedIp];
+                options.AllowedIpAddresses = allowedEntries ?? [AllowedIp];
                 options.EnableUI           = ui;
             },
             configurePipeline: app => app.Use((context, next) =>

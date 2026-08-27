@@ -12,7 +12,7 @@ public interface ITaskQueryService
     /// blocks of the task detail alike. A long-lived recurring row holds one transition per state per run,
     /// so the whole trail is never the default answer.
     /// </summary>
-    public const int DefaultAuditPageSize = 100;
+    const int DefaultAuditPageSize = 100;
 
     /// <summary>
     /// Get paginated list of tasks with filters.
@@ -30,7 +30,7 @@ public interface ITaskQueryService
     /// </summary>
     /// <param name="id">The task whose transitions are wanted.</param>
     /// <param name="skip">Number of transitions to skip, from the newest.</param>
-    /// <param name="take">Number of transitions to return.</param>
+    /// <param name="take">Number of transitions to return, capped at 500.</param>
     /// <param name="ct">Cancellation token.</param>
     Task<StatusAuditsResponse> GetStatusAuditAsync(Guid id, int skip = 0, int take = DefaultAuditPageSize,
                                                    CancellationToken ct = default);
@@ -40,7 +40,7 @@ public interface ITaskQueryService
     /// </summary>
     /// <param name="id">The task whose runs are wanted.</param>
     /// <param name="skip">Number of runs to skip, from the newest.</param>
-    /// <param name="take">Number of runs to return.</param>
+    /// <param name="take">Number of runs to return, capped at 500.</param>
     /// <param name="ct">Cancellation token.</param>
     Task<RunsAuditsResponse> GetRunsAuditAsync(Guid id, int skip = 0, int take = DefaultAuditPageSize,
                                                CancellationToken ct = default);
@@ -48,6 +48,11 @@ public interface ITaskQueryService
     /// <summary>
     /// Get paginated execution logs for a task with optional level filtering.
     /// </summary>
+    /// <param name="taskId">The task whose logs are wanted.</param>
+    /// <param name="skip">Number of log entries to skip.</param>
+    /// <param name="take">Number of log entries to return, capped at 500.</param>
+    /// <param name="levelFilter">Optional case-insensitive log-level filter.</param>
+    /// <param name="ct">Cancellation token.</param>
     Task<ExecutionLogsResponse> GetExecutionLogsAsync(Guid taskId, int skip = 0, int take = 100, string? levelFilter = null, CancellationToken ct = default);
 
     /// <summary>
@@ -61,7 +66,7 @@ public interface ITaskQueryService
     /// <param name="scheduleId">The schedule row whose occurrences are wanted.</param>
     /// <param name="nonTerminalOnly">Keep only the occurrences that can still lead to an execution.</param>
     /// <param name="skip">Number of occurrences to skip.</param>
-    /// <param name="take">Number of occurrences to return.</param>
+    /// <param name="take">Number of occurrences to return, capped at 500.</param>
     /// <param name="ct">Cancellation token.</param>
     Task<OccurrencesResponse> GetOccurrencesAsync(Guid scheduleId, bool nonTerminalOnly = false, int skip = 0,
                                                   int take = 100, CancellationToken ct = default);

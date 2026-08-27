@@ -13,7 +13,7 @@ namespace EverTask.Tests.Monitoring.API.Controllers;
 /// <para>
 /// Nothing here asserts on the audit <c>id</c>: this suite runs over the in-memory store, which keeps the
 /// audits on the row object and never assigns them an identity. What the ORDER is asserted against is the
-/// unpaged read of the same storage — the sequence the endpoint has always answered — so the assertion means
+/// full page from the same storage — the sequence the endpoint has always answered — so the assertion means
 /// the same thing on every backend. The identity ordering itself is pinned where it exists, on a real
 /// relational store, by <c>API/Services/RelationalAuditReadTests</c>.
 /// </para>
@@ -58,10 +58,11 @@ public class AuditPagingEndpointTests : MonitoringTestBase
             walked.AddRange(page.Audits.Select(a => a.Exception));
         }
 
-        var whole = (await Storage.GetStatusAudits(taskId)).Select(a => a.Exception).ToList();
+        var whole = (await Storage.GetStatusAuditsPage(taskId, 0, int.MaxValue)).Audits
+            .Select(a => a.Exception).ToList();
 
         walked.ShouldBe(whole,
-            "the pages walked, in order, are exactly the trail the unpaged read answers — nothing repeated, " +
+            "the pages walked, in order, are exactly the trail a full page answers — nothing repeated, " +
             "nothing dropped, and still newest first");
     }
 

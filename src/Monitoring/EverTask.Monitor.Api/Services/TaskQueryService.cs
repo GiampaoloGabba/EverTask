@@ -8,30 +8,20 @@ namespace EverTask.Monitor.Api.Services;
 /// <summary>
 /// Service for querying tasks from storage.
 /// </summary>
-public class TaskQueryService : ITaskQueryService
+/// <param name="storage">The task storage.</param>
+/// <param name="rateLimiter">
+/// Optional rate-limiter introspection: sources the per-task <c>throttledUntil</c> overlay
+/// (in-memory join, single-node).
+/// </param>
+public class TaskQueryService(ITaskStorage storage, IRateLimiterIntrospection? rateLimiter = null) : ITaskQueryService
 {
-    private readonly ITaskStorage _storage;
-    private readonly IRateLimiterIntrospection? _rateLimiter;
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="TaskQueryService"/> class.
-    /// </summary>
-    /// <param name="storage">The task storage.</param>
-    /// <param name="rateLimiter">
-    /// Optional rate-limiter introspection: sources the per-task <c>throttledUntil</c> overlay
-    /// (in-memory join, single-node).
-    /// </param>
-    public TaskQueryService(ITaskStorage storage, IRateLimiterIntrospection? rateLimiter = null)
-    {
-        _storage     = storage;
-        _rateLimiter = rateLimiter;
-    }
+    private const int MaximumPageSize = 500;
 
     /// <inheritdoc />
     public async Task<TasksPagedResponse> GetTasksAsync(TaskFilter filter, PaginationParams pagination, CancellationToken ct = default)
     {
         // Get all tasks from storage
-        var allTasks = await _storage.GetAll(ct).ConfigureAwait(false);
+        var allTasks = await storage.GetAll(ct).ConfigureAwait(false);
         var query = allTasks.AsQueryable();
 
         // Apply filters
@@ -110,7 +100,7 @@ public class TaskQueryService : ITaskQueryService
             .ToList(); // project in memory: the throttledUntil overlay is an in-memory join
 
         // One query for the whole page: when a run STARTED is recorded in the audit trail, not in a column.
-        var starts = await TaskRunTiming.RecordedStartsAsync(_storage, page, ct).ConfigureAwait(false);
+        var starts = await TaskRunTiming.RecordedStartsAsync(storage, page, ct).ConfigureAwait(false);
 
         var items = page.Select(t => ToListDto(t, starts)).ToList();
 
@@ -122,7 +112,7 @@ public class TaskQueryService : ITaskQueryService
     /// <inheritdoc />
     public async Task<TaskDetailDto?> GetTaskDetailAsync(Guid id, CancellationToken ct = default)
     {
-        var tasks = await _storage.Get(t => t.Id == id, ct).ConfigureAwait(false);
+        var tasks = await storage.Get(t => t.Id == id, ct).ConfigureAwait(false);
         var task = tasks.FirstOrDefault();
 
         if (task == null)
@@ -135,7 +125,7 @@ public class TaskQueryService : ITaskQueryService
         var runsAudits   = await ReadRunsAuditsAsync(id, 0, ITaskQueryService.DefaultAuditPageSize, ct).ConfigureAwait(false);
 
         var facts  = TaskScheduleFacts.Read(task);
-        var starts = await TaskRunTiming.RecordedStartsAsync(_storage, [task], ct).ConfigureAwait(false);
+        var starts = await TaskRunTiming.RecordedStartsAsync(storage, [task], ct).ConfigureAwait(false);
 
         return new TaskDetailDto(
             task.Id,
@@ -160,7 +150,7 @@ public class TaskQueryService : ITaskQueryService
             task.ExecutionTimeMs,
             statusAudits.Audits,
             runsAudits.Audits,
-            _rateLimiter?.GetThrottledUntil(task.Id)
+            rateLimiter?.GetThrottledUntil(task.Id)
         )
         {
             StatusAuditsTotalCount = statusAudits.TotalCount,
@@ -207,7 +197,7 @@ public class TaskQueryService : ITaskQueryService
     {
         (skip, take) = ClampPage(skip, take);
 
-        var page = await _storage.GetStatusAuditsPage(id, skip, take, ct).ConfigureAwait(false);
+        var page = await storage.GetStatusAuditsPage(id, skip, take, ct).ConfigureAwait(false);
 
         var audits = page.Audits
                          .Select(a => new StatusAuditDto(a.Id, a.QueuedTaskId, a.UpdatedAtUtc, a.NewStatus,
@@ -222,7 +212,7 @@ public class TaskQueryService : ITaskQueryService
     {
         (skip, take) = ClampPage(skip, take);
 
-        var page = await _storage.GetRunsAuditsPage(id, skip, take, ct).ConfigureAwait(false);
+        var page = await storage.GetRunsAuditsPage(id, skip, take, ct).ConfigureAwait(false);
 
         var audits = page.Audits
                          .Select(a => new RunsAuditDto(a.Id, a.QueuedTaskId, a.ExecutedAt, a.ExecutionTimeMs,
@@ -233,22 +223,26 @@ public class TaskQueryService : ITaskQueryService
     }
 
     /// <summary>
-    /// Query-string values, so they are whatever a caller typed. Clamped rather than trusted: the storage
-    /// puts them in an OFFSET / FETCH clause, where a negative one is a database error and not an empty page.
+    /// Query-string values are clamped before they reach storage: negative offsets break OFFSET / FETCH, and
+    /// an unbounded page lets one request amplify both the indexed read and its response.
     /// </summary>
-    private static (int Skip, int Take) ClampPage(int skip, int take) => (Math.Max(0, skip), Math.Max(0, take));
+    private static (int Skip, int Take) ClampPage(int skip, int take) =>
+        (Math.Max(0, skip), Math.Min(MaximumPageSize, Math.Max(0, take)));
 
     /// <inheritdoc />
     public async Task<ExecutionLogsResponse> GetExecutionLogsAsync(Guid taskId, int skip = 0, int take = 100, string? levelFilter = null, CancellationToken ct = default)
     {
+        (skip, take) = ClampPage(skip, take);
+
         // Get all logs for the task
-        var allLogs = await _storage.GetExecutionLogsAsync(taskId, ct).ConfigureAwait(false);
+        var allLogs = await storage.GetExecutionLogsAsync(taskId, ct).ConfigureAwait(false);
 
         // Apply level filter if specified. Materialized once: the count and the page below both
         // enumerate it, and re-running the predicate per enumeration is pure waste.
-        var filteredLogs = string.IsNullOrWhiteSpace(levelFilter)
-                               ? allLogs
-                               : allLogs.Where(l => l.Level.Equals(levelFilter, StringComparison.OrdinalIgnoreCase)).ToList();
+        IReadOnlyList<TaskExecutionLog> filteredLogs = string.IsNullOrWhiteSpace(levelFilter)
+                                                           ? allLogs
+                                                           : [.. allLogs.Where(l => l.Level.Equals(levelFilter,
+                                                               StringComparison.OrdinalIgnoreCase))];
 
         var totalCount = filteredLogs.Count;
 
@@ -275,7 +269,7 @@ public class TaskQueryService : ITaskQueryService
         // The standard/recurring split needs IsRecurring, which ITaskStorageStatistics does not
         // expose: the list is materialized once and every count derives from it (a separate
         // statistics roundtrip would be strictly more work on top of the same materialization).
-        var allTasksList = (await _storage.GetAll(ct).ConfigureAwait(false)).ToList();
+        var allTasksList = (await storage.GetAll(ct).ConfigureAwait(false)).ToList();
 
         var all       = allTasksList.Count;
         var recurring = allTasksList.Count(t => t.IsRecurring);
@@ -300,10 +294,10 @@ public class TaskQueryService : ITaskQueryService
         // behind it holds hundreds of thousands of occurrence rows, and slicing them here would mean
         // transferring and sorting every one of them to show a hundred. The built-in providers answer it from
         // the (ParentTaskId, ScheduledExecutionUtc) index the occurrence contract already needs.
-        var page = await _storage.GetOccurrencesPage(scheduleId, nonTerminalOnly, skip, take, ct)
+        var page = await storage.GetOccurrencesPage(scheduleId, nonTerminalOnly, skip, take, ct)
                                  .ConfigureAwait(false);
 
-        var starts = await TaskRunTiming.RecordedStartsAsync(_storage, page.Occurrences, ct)
+        var starts = await TaskRunTiming.RecordedStartsAsync(storage, page.Occurrences, ct)
                                         .ConfigureAwait(false);
 
         var occurrences = page.Occurrences
@@ -358,7 +352,7 @@ public class TaskQueryService : ITaskQueryService
             t.CurrentRunCount,
             t.MaxRuns,
             t.ExecutionTimeMs,
-            _rateLimiter?.GetThrottledUntil(t.Id)
+            rateLimiter?.GetThrottledUntil(t.Id)
         )
         {
             ParentTaskId    = t.ParentTaskId,

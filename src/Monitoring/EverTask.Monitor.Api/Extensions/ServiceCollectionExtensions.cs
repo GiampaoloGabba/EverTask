@@ -2,9 +2,11 @@ using EverTask.Monitor.Api.Conventions;
 using EverTask.Monitor.Api.Infrastructure;
 using EverTask.Monitor.Api.Options;
 using EverTask.Monitor.Api.Services;
+using EverTask.Monitor.AspnetCore.SignalR;
 using EverTask.Monitoring;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
 #if NET9_0_OR_GREATER
 using Microsoft.AspNetCore.OpenApi;
@@ -60,6 +62,15 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<MonitoringAccessPolicy>();
         services.AddSingleton<MonitoringAccessFilter>();
         services.AddSingleton<ManagementAuthorizationFilter>();
+
+        if (options.EnableAuthentication)
+        {
+            services.AddSingleton<MonitoringTokenExpirationHubFilter>();
+            // AddHubOptions, not a bare Configure<HubOptions<THub>>: only it registers SignalR's per-hub
+            // options setup, without which the dispatcher never consumes the per-hub filter list.
+            services.AddSignalR().AddHubOptions<TaskMonitorHub>(hubOptions =>
+                hubOptions.AddFilter<MonitoringTokenExpirationHubFilter>());
+        }
 
         // NOTE: JWT authentication is handled by JwtAuthenticationMiddleware (custom middleware)
         // We do NOT use ASP.NET Core's .AddAuthentication().AddJwtBearer() because:
@@ -153,6 +164,15 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<MonitoringAccessPolicy>();
         services.AddSingleton<MonitoringAccessFilter>();
         services.AddSingleton<ManagementAuthorizationFilter>();
+
+        if (options.EnableAuthentication)
+        {
+            services.AddSingleton<MonitoringTokenExpirationHubFilter>();
+            // AddHubOptions, not a bare Configure<HubOptions<THub>>: only it registers SignalR's per-hub
+            // options setup, without which the dispatcher never consumes the per-hub filter list.
+            services.AddSignalR().AddHubOptions<TaskMonitorHub>(hubOptions =>
+                hubOptions.AddFilter<MonitoringTokenExpirationHubFilter>());
+        }
 
         // NOTE: JWT authentication is handled by JwtAuthenticationMiddleware (custom middleware)
         // We do NOT use ASP.NET Core's .AddAuthentication().AddJwtBearer() because:

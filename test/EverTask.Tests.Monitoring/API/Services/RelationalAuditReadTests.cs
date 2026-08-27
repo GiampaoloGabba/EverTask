@@ -128,8 +128,9 @@ public class RelationalAuditReadTests : IDisposable
         walked.ShouldBe(walked.OrderByDescending(id => id).ToList(), "newest first across the pages");
         walked.Distinct().Count().ShouldBe(20, "no page repeated or dropped an entry");
 
-        walked.ShouldBe((await _storage.GetStatusAudits(row.Id)).Select(a => a.Id).ToList(),
-            "the paged read walks exactly the order the unpaged one answers");
+        var whole = await _storage.GetStatusAuditsPage(row.Id, 0, int.MaxValue);
+        walked.ShouldBe(whole.Audits.Select(a => a.Id).ToList(),
+            "the paged read walks exactly the order a full page answers");
     }
 
     [Fact]

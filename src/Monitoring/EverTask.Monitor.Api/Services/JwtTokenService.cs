@@ -17,7 +17,6 @@ public class JwtTokenService : IJwtTokenService
 {
     private readonly EverTaskApiOptions _options;
     private readonly ILogger<JwtTokenService> _logger;
-    private readonly string _secret;
     private readonly SymmetricSecurityKey _signingKey;
 
     public JwtTokenService(IOptions<EverTaskApiOptions> options, ILogger<JwtTokenService> logger)
@@ -26,27 +25,31 @@ public class JwtTokenService : IJwtTokenService
         _logger = logger;
 
         // Generate or validate JWT secret
+        string secret;
         if (string.IsNullOrWhiteSpace(_options.JwtSecret))
         {
-            _secret = GenerateRandomSecret();
+            secret = GenerateRandomSecret();
             _logger.JwtSecretNotConfigured();
         }
         else
         {
-            _secret = _options.JwtSecret;
+            secret = _options.JwtSecret;
 
             // Validate minimum secret length (256 bits / 32 bytes)
-            if (Encoding.UTF8.GetByteCount(_secret) < 32)
+            if (Encoding.UTF8.GetByteCount(secret) < 32)
             {
                 _logger.JwtSecretTooShort();
             }
         }
 
-        _signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_secret));
+        _signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secret));
     }
 
     /// <inheritdoc />
-    public LoginResponse GenerateToken(string username, bool canManage = false)
+    public LoginResponse GenerateToken(string username) => GenerateToken(username, false);
+
+    /// <inheritdoc />
+    public LoginResponse GenerateToken(string username, bool canManage)
     {
         var now = DateTimeOffset.UtcNow;
         var expiresAt = now.AddHours(_options.JwtExpirationHours);
@@ -66,8 +69,10 @@ public class JwtTokenService : IJwtTokenService
             issuer: _options.JwtIssuer,
             audience: _options.JwtAudience,
             claims: claims,
-            notBefore: now.DateTime,
-            expires: expiresAt.DateTime,
+            // UtcDateTime, not DateTime: an Unspecified kind is read as LOCAL time here, which shifts the
+            // real expiry by the host's UTC offset while LoginResponse keeps advertising the intended one.
+            notBefore: now.UtcDateTime,
+            expires: expiresAt.UtcDateTime,
             signingCredentials: new SigningCredentials(_signingKey, SecurityAlgorithms.HmacSha256)
         );
 

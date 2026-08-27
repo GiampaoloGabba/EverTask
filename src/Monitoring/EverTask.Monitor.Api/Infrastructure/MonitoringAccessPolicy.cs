@@ -81,10 +81,9 @@ internal sealed class MonitoringAccessPolicy(EverTaskApiOptions options, IJwtTok
         if (options.AllowedIpAddresses.Length > 0 && !IsIpAllowed(ClientIpOf(context)))
             return MonitoringAccess.IpBlocked;
 
-        if (surface == MonitoringSurface.Ui || !options.EnableAuthentication)
-            return MonitoringAccess.Allowed;
-
-        if (surface == MonitoringSurface.Api && _anonymousApiPaths.Contains(path.Value ?? "",
+        if (surface == MonitoringSurface.Ui ||
+            !options.EnableAuthentication ||
+            surface == MonitoringSurface.Api && _anonymousApiPaths.Contains(path.Value ?? "",
                 StringComparer.OrdinalIgnoreCase))
         {
             return MonitoringAccess.Allowed;
@@ -92,9 +91,15 @@ internal sealed class MonitoringAccessPolicy(EverTaskApiOptions options, IJwtTok
 
         var token = TokenOf(context, surface);
 
-        return !string.IsNullOrEmpty(token) && jwtTokenService.ValidateToken(token).IsValid
-                   ? MonitoringAccess.Allowed
-                   : MonitoringAccess.Unauthenticated;
+        if (string.IsNullOrEmpty(token))
+            return MonitoringAccess.Unauthenticated;
+
+        var validation = jwtTokenService.ValidateToken(token);
+
+        if (!validation.IsValid)
+            return MonitoringAccess.Unauthenticated;
+
+        return MonitoringAccess.Allowed;
     }
 
     /// <summary>Writes the refusal an evaluation asked for. Shared so every enforcement point answers alike.</summary>
@@ -112,18 +117,22 @@ internal sealed class MonitoringAccessPolicy(EverTaskApiOptions options, IJwtTok
     }
 
     /// <summary>
-    /// The bearer token, from the header — or, on the hub alone, from the query string: the SignalR
-    /// handshake cannot set headers on the WebSocket upgrade.
+    /// The bearer token, from the hub query string when present, then from the header: a WebSocket upgrade
+    /// cannot set headers.
     /// </summary>
     private static string? TokenOf(HttpContext context, MonitoringSurface surface)
     {
+        if (surface == MonitoringSurface.Hub &&
+            context.Request.Query.TryGetValue("access_token", out var fromQuery) &&
+            !string.IsNullOrEmpty(fromQuery))
+        {
+            return fromQuery.ToString();
+        }
+
         var header = context.Request.Headers.Authorization.FirstOrDefault();
 
-        if (header?.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) == true)
-            return header["Bearer ".Length..].Trim();
-
-        return surface == MonitoringSurface.Hub && context.Request.Query.TryGetValue("access_token", out var fromQuery)
-                   ? fromQuery.ToString()
+        return header?.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) == true
+                   ? header["Bearer ".Length..].Trim()
                    : null;
     }
 
@@ -143,6 +152,8 @@ internal sealed class MonitoringAccessPolicy(EverTaskApiOptions options, IJwtTok
 
     private bool IsIpAllowed(IPAddress clientIp)
     {
+        clientIp = Normalize(clientIp);
+
         foreach (var allowedEntry in options.AllowedIpAddresses)
         {
             if (allowedEntry.Contains('/'))
@@ -150,7 +161,7 @@ internal sealed class MonitoringAccessPolicy(EverTaskApiOptions options, IJwtTok
                 if (IsIpInCidrRange(clientIp, allowedEntry))
                     return true;
             }
-            else if (IPAddress.TryParse(allowedEntry, out var allowedIp) && clientIp.Equals(allowedIp))
+            else if (IPAddress.TryParse(allowedEntry, out var allowedIp) && clientIp.Equals(Normalize(allowedIp)))
             {
                 return true;
             }
@@ -171,6 +182,9 @@ internal sealed class MonitoringAccessPolicy(EverTaskApiOptions options, IJwtTok
             if (!IPAddress.TryParse(parts[0], out var networkIp))
                 return false;
 
+            networkIp = Normalize(networkIp);
+            clientIp  = Normalize(clientIp);
+
             if (!int.TryParse(parts[1], out var prefixLength))
                 return false;
 
@@ -179,6 +193,11 @@ internal sealed class MonitoringAccessPolicy(EverTaskApiOptions options, IJwtTok
 
             // Must be same address family (IPv4/IPv6)
             if (clientBytes.Length != networkBytes.Length)
+                return false;
+
+            var addressBits = networkBytes.Length * 8;
+
+            if (prefixLength < 0 || prefixLength > addressBits)
                 return false;
 
             var maskBytes = new byte[networkBytes.Length];
@@ -197,4 +216,7 @@ internal sealed class MonitoringAccessPolicy(EverTaskApiOptions options, IJwtTok
             return false;
         }
     }
+
+    private static IPAddress Normalize(IPAddress address) =>
+        address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address;
 }

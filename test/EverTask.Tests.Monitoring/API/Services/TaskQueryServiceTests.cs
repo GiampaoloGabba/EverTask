@@ -194,6 +194,36 @@ public class TaskQueryServiceTests
     }
 
     [Fact]
+    public async Task Should_cap_storage_backed_pages_at_500_items()
+    {
+        var scheduleId = Guid.NewGuid();
+
+        _storageMock
+            .Setup(s => s.GetOccurrencesPage(scheduleId, false, 0, 500, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OccurrencePage([], 0));
+
+        var result = await _service.GetOccurrencesAsync(scheduleId, take: int.MaxValue);
+
+        result.Take.ShouldBe(500);
+        _storageMock.Verify(
+            s => s.GetOccurrencesPage(scheduleId, false, 0, 500, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task Should_cap_execution_log_pages_at_500_items()
+    {
+        var taskId = Guid.NewGuid();
+
+        _storageMock.Setup(s => s.GetExecutionLogsAsync(taskId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        var result = await _service.GetExecutionLogsAsync(taskId, take: int.MaxValue);
+
+        result.Take.ShouldBe(500);
+    }
+
+    [Fact]
     public async Task Should_derive_when_a_run_started_from_its_end_and_its_duration_when_the_row_has_no_audit()
     {
         // Nothing recorded the transition (any audit level below Full), so the start has to come from the two
@@ -386,7 +416,7 @@ public class TaskQueryServiceTests
         ScheduledExecutionUtc = DateTimeOffset.UtcNow.AddMinutes(-10)
     };
 
-    private List<QueuedTask> CreateSampleTasks(int count)
+    private static List<QueuedTask> CreateSampleTasks(int count)
     {
         var tasks = new List<QueuedTask>();
         for (var i = 0; i < count; i++)
@@ -406,7 +436,7 @@ public class TaskQueryServiceTests
         return tasks;
     }
 
-    private QueuedTask CreateTaskWithAudits(Guid taskId)
+    private static QueuedTask CreateTaskWithAudits(Guid taskId)
     {
         return new QueuedTask
         {

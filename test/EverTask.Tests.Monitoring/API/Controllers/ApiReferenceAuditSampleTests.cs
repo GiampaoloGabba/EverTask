@@ -162,8 +162,8 @@ public class ApiReferenceAuditSampleTests : MonitoringTestBase
 
         while (DateTimeOffset.UtcNow < deadline)
         {
-            var runs = await Storage.GetRunsAudits(taskId);
-            if (runs.Length > 0)
+            var runs = await Storage.GetRunsAuditsPage(taskId, 0, 1);
+            if (runs.Audits.Length > 0)
                 return taskId;
 
             await Task.Delay(50);

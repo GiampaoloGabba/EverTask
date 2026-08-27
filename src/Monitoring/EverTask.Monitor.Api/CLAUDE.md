@@ -55,7 +55,13 @@ REST API + embedded React dashboard, all under the fixed `/evertask-monitoring` 
     the pre-`UsePathBase` path, so under a path base the monitoring CORS policy is not applied.
 - JWT only — no Basic Auth, and deliberately not `AddAuthentication().AddJwtBearer()`: the policy must cover
   API + hub + UI and accept `?access_token=` for the SignalR handshake, which no host-registered scheme
-  would look at. The query-string token is accepted on the HUB surface alone.
+  would look at. The query-string token is accepted on the HUB surface alone. Token expiry on a live hub
+  connection is enforced by `MonitoringTokenExpirationHubFilter`, which re-reads and validates the
+  connection's own token in `OnConnectedAsync` and aborts at its expiry — self-contained on purpose: long
+  polling CLONES the HttpContext and drops custom features/items, so nothing set by the policy during the
+  request survives to the filter. Registered via `AddSignalR().AddHubOptions<TaskMonitorHub>` (a bare
+  `Configure<HubOptions<THub>>` is never consumed by the dispatcher), and only when `EnableAuthentication`
+  is on. No expiry means no timer.
 - `MagicLinkToken`: the UI reads the `/magic#token=` fragment (never sent to the server) and posts it to
   `POST /api/auth/magic`; `GET ?token=` is `[Obsolete]` and OpenAPI-deprecated because the query lands in
   request logs (#22). Both share the login rate-limit policy, use `FixedTimeEquals`, answer `no-store`.
@@ -75,12 +81,13 @@ REST API + embedded React dashboard, all under the fixed `/evertask-monitoring` 
   Both come back **newest-first**, ordered by the storage on the audit IDENTITY (insertion order; SQLite
   refuses a `DateTimeOffset` in an `ORDER BY`); so does `GET /tasks/{id}/occurrences`, on the nominal slot.
   - The paging is the STORAGE's, like `GetOccurrencesPage`'s and for the same reason (a long-lived recurring
-    row records one transition per state per run); `skip`/`take` are clamped non-negative before the call.
+    row records one transition per state per run); `skip` is clamped non-negative and `take` to `0..500`
+    before the call.
     The two endpoints answer `{audits, totalCount, skip, take}` — NOT a bare array — and the detail carries
     the first page plus `StatusAuditsTotalCount`/`RunsAuditsTotalCount`. `ITaskQueryService.DefaultAuditPageSize`
     is the one default the endpoints and the detail share.
   - The in-memory store assigns the audits **no identity** (every `Id` is 0), so a test that asserts the order
-    by id passes only over a relational provider: over memory, assert against the unpaged read of the same
+    by id passes only over a relational provider: over memory, assert against a full page from the same
     storage instead.
 - **The management endpoints are the ONE write surface, and they start from the authorization** (#42).
   `EnableManagementEndpoints` is off by default and, while it is, every path under `{ApiBasePath}/management`
@@ -107,9 +114,10 @@ REST API + embedded React dashboard, all under the fixed `/evertask-monitoring` 
   - **The operate credential is validated at registration** (`ValidateManagementCredentials`): half a pair,
     or a `ManagementPassword` equal to `Password` or to `MagicLinkToken`, throws. A username is not a secret,
     so an equal password promotes the shared read credential to operate at the first login.
-  - CSRF needs no token here: the API authenticates with a Bearer header and never a cookie, and
-    `?access_token=` is accepted on the hub path alone — and the filter deliberately does NOT read it, so the
-    write surface never takes a credential from a query string.
+  - The filter rejects cross-site browser requests before authorization: `Sec-Fetch-Site` allows only
+    same-origin/same-site/none, with an Origin-versus-request-origin fallback when fetch metadata is absent.
+    Requests with neither header pass as non-browser clients. This also covers a host hook that authorizes
+    from an ambient cookie principal; `?access_token=` remains hub-only and is never read by this filter.
   - `ITaskScheduleManager` is OPTIONAL in `ManagementService` (an optional constructor parameter, like
     `TaskQueryService`'s rate limiter): the standalone registration has no EverTask host, and 501 is the
     honest answer there. `resume`/`cancel` resolve the row's `TaskKey` — the only way a schedule can be named
@@ -153,9 +161,9 @@ REST API + embedded React dashboard, all under the fixed `/evertask-monitoring` 
   operators to alert on.
 - **`GET /tasks/{id}/occurrences` pages in the STORAGE** (`ITaskStorage.GetOccurrencesPage`), never in the
   service: a schedule with a long retention behind it holds hundreds of thousands of occurrence rows, and
-  ordering and slicing them here meant reading all of them to show a hundred. `skip`/`take` are clamped to
-  non-negative before the call — they end up in an OFFSET/FETCH clause, where a negative is an error rather
-  than an empty page.
+  ordering and slicing them here meant reading all of them to show a hundred. `skip` is clamped non-negative
+  and `take` to `0..500` before the call — they end up in an OFFSET/FETCH clause, where a negative is an error
+  rather than an empty page and an unbounded page amplifies the read and response.
 - `OverviewDto.CatchUpBacklog` counts occurrence ROWS by state over the WHOLE store, ignoring the selected
   range — a backlog is what is owed now. Slots a schedule dropped never became rows and are absent by
   construction; they are reported by the `OccurrenceSkipped` monitoring event instead.
