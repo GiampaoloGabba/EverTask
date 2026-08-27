@@ -921,3 +921,18 @@ Gli altri due, senza superficie nuova:
 1. M17 deciso (D5): single-active-host in 4.0; epic separata per la distribuzione di tutto EverTask.
 2. Round 5 Codex: **GO** — i 3 blocker del round 4 e i 3 non bloccanti risultano chiusi; nessun nuovo blocker.
 3. Naming definitivo (approvato): `WithDurableOccurrences`, `OnMisfire(m => m.Skip()/.FireOnce(o)/.CatchUp(o))`, `MaxPendingOccurrences`, `CatchUpOverflowPolicy { Halt, SkipOldest }`, `RescheduleMode { RecalculateFromNow, RebaseFromCursor }`, `ITaskScheduleManager`, `ReevaluateSchedule`, `ResumeSchedule`, `RequeueFailedOccurrence`, `INextOccurrenceProvider`, `UseOccurrenceProvider`, `BackfillFrom`.
+
+## 3.6 Ratifiche del maintainer — review Codex post-final (2026-08-27)
+
+- **Rimozione `ITaskStorage.GetCurrentRunCount`** (API pubblica pre-branch, zero chiamanti nella libreria:
+  il worker legge `CurrentRunCount` dalla row). Breaking accettato dentro il major 4.0; riga nel CHANGELOG.
+- **Rimozione `TimeOnly.ToUniversalTime`** (deprecata; la sua stessa doc prometteva la rimozione "in a
+  future major" — 4.0 è quel major). Sostituzione documentata: `InTimeZone`.
+- **Finding di performance della review → issue GitHub #48–#54 nel project Performance**, post-4.0: costi
+  reali ma limitati dai cap di design (`MaxOccurrences`, budget globale) e gate D7 di parità superato;
+  ridisegni (contratto bulk provider, materializzazione bulk, proiezioni di drain) fuori scope a ridosso
+  della release. L'indice `(ParentTaskId, Status)` mancante viaggia con #50 insieme alla proiezione che lo
+  sfrutta. `MemoryTaskStorage` (#51) esplicitamente a bassa priorità: è un veicolo di dev/test.
+- **Esclusione CI dei test container** confermata: SqlServer/Postgres girano in locale con Testcontainers
+  prima di ogni release; in GitHub Actions restano escluse. Le suite senza Docker aggiunte dal fix round 1
+  (Monitoring, Analyzers, Logging) restano in CI.

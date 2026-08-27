@@ -8,7 +8,7 @@ Exactly one storage call is mandatory after `AddEverTask(...)`.
 |---|---|---|
 | Local dev, unit/integration tests | **In-Memory** (or SQLite `:memory:`) | Zero infra; tasks lost on restart. |
 | Desktop / edge / small single-server app | **SQLite** | File-based, zero infra. |
-| Production, scale-out, high write concurrency, multi-instance | **SQL Server** or **PostgreSQL** | ACID, server-side queries, clustering. |
+| Production, high write concurrency, active/standby availability | **SQL Server** or **PostgreSQL** | ACID and server-side queries; one active EverTask host per store. |
 | Existing SQL Server / enterprise DBA stack | **SQL Server** | Stored procs, existing skills. |
 | Greenfield OSS stack, no license cost | **PostgreSQL** | Full SQL-Server parity, writable-CTE optimizations. |
 | Very large backlogs (>~10k pending) | **SQL Server / PostgreSQL** | SQLite recovery falls back to client-side keyset. |
@@ -17,6 +17,9 @@ Exactly one storage call is mandatory after `AddEverTask(...)`.
 Per-provider constraints: SQLite = no schema, single writer, client-side `DateTimeOffset`
 filtering; Postgres `SchemaName` lowercase only; MySQL/MariaDB = no schema (a "schema" is a
 database), net9.0/net10.0 only; In-Memory = no audit, no persistence, no cleanup.
+EverTask does not distribute execution across hosts: run one active host per store. A standby whose
+EverTask host is not started, or active hosts using separately scoped stores, are fine. See the
+single-active-host contract in `docs/scalability.md#horizontal-scaling-multiple-instances`.
 
 ## In-Memory (core `EverTask` package, no NuGet)
 
@@ -159,8 +162,8 @@ Durable recurring schedules add `ParentTaskId` (null on every ordinary row), `Ru
 
 Implement `ITaskStorage` and register: `services.AddSingleton<ITaskStorage, MyStorage>();`.
 Key surface: `Get/GetAll/Persist/UpdateTask/Remove`, `RetrievePending` (keyset recovery),
-`GetByTaskKey`, the `Set*` status transitions (all take `AuditLevel`), `GetCurrentRunCount` /
-`UpdateCurrentRun`, recurring helpers (`CompleteRecurringRun`, `SetRecurringSeriesCompleted`,
+`GetByTaskKey`, the `Set*` status transitions (all take `AuditLevel`), `UpdateCurrentRun`, recurring helpers
+(`CompleteRecurringRun`, `SetRecurringSeriesCompleted`,
 `SetRecurringTaskPoisoned`), recovery guards (`TrySetQueuedIfRecoverable`,
 `IncrementRecoveryFailure`, `ClearRecoveryFailure`), and execution logs (`SaveExecutionLogsAsync`,
 `GetExecutionLogsAsync`).
@@ -181,13 +184,19 @@ delegate to the legacy signatures, so an existing storage keeps working but reso
 
 Durable recurring schedules need atomic operations that no non-atomic emulation can provide
 (`MaterializeOccurrence`, `TryAdvanceScheduleCursor`, `CancelSchedule`, `RequeueTerminal`,
-`TryRequeueStaleOccurrence`, `UpdateSchedule`, `TryHaltSchedule`, `TrySetRecurringSeriesCompleted` and the
-compare-and-swap overloads of `UpdateCurrentRun` / `CompleteRecurringRun`). `TryAdvanceScheduleCursor` is
+`TryRequeueStaleOccurrence`, `UpdateSchedule`, `TryHaltSchedule`, `TrySetRecurringSeriesCompleted`,
+`TrySetTerminalOutcome` and the compare-and-swap overloads of `UpdateCurrentRun` / `CompleteRecurringRun`).
+`TryAdvanceScheduleCursor` is
 the write a SKIPPED slot needs — a compare-and-swap on version plus cursor that moves the cursor and
 nothing else: no run counted, no audit row. They default to throwing `NotSupportedException`, gated
 by `SupportsDurableOccurrences` / `SupportsScheduleVersioning` (both `false` by default). Implement them
 atomically before flipping either flag — a "best effort" version built from two writes is exactly the
 crash window they exist to close.
+
+`TrySetTerminalOutcome` is required when `SupportsScheduleVersioning` is `true`. It writes a delivery's
+terminal outcome only while the row still carries the version that delivery ran, and returns `false` when
+the version moved or the row is already `Cancelled` — unless the outcome being written is itself
+`Cancelled`.
 
 `TryReviveCancelledSchedule` sits beside them with one difference: its default WORKS (status write, then a
 read that confirms the row left `Cancelled`), because a re-dispatch under a cancelled schedule's task key —

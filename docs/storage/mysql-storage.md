@@ -7,7 +7,7 @@ nav_order: 6
 
 # MySQL / MariaDB Storage
 
-MySQL and MariaDB are open-source relational stores for production. Like the SQL Server and PostgreSQL providers, this provider handles multi-server concurrency and runs every recovery and cleanup query on the server.
+MySQL and MariaDB are open-source relational stores for production. Like the SQL Server and PostgreSQL providers, this provider handles high write concurrency and runs every recovery and cleanup query on the server. EverTask still requires [one active host per store](../scalability.md#horizontal-scaling-multiple-instances); an inactive standby is fine.
 
 The provider is built on [Microting.EntityFrameworkCore.MySql](https://www.nuget.org/packages/Microting.EntityFrameworkCore.MySql), the maintained fork of the (now abandoned) Pomelo provider. It targets **.NET 9 and .NET 10** and is tested against **MariaDB 10.11 LTS**; MySQL 8.0+ is also supported.
 
@@ -143,7 +143,7 @@ The hot writes (`SetStatus`, `UpdateCurrentRun`, `CompleteRecurringRun`) are opt
 
 - Production-ready
 - Open-source (no licensing cost)
-- Highly scalable, multi-server
+- High write concurrency on one active EverTask host per store
 - ACID transactions
 - Server-side querying for all recovery and cleanup operations
 - Targets .NET 9 and .NET 10; tested on MariaDB 10.11 LTS, supports MySQL 8.0+

@@ -83,7 +83,10 @@ Messages are stable text, matched by consumers; the table quotes the shape, with
 | Schedule unusable | `Error` | `Schedule {scheduleId} cannot be rebuilt from its row and materializes nothing: {reason}` |
 | Occurrence unusable | `Error` | `Occurrence {id} of schedule {scheduleId} cannot be rebuilt from its row and was marked Failed: {reason}` |
 | Occurrence unusable, still not ended | `Error` | `Occurrence {id} of schedule {scheduleId} cannot be rebuilt from its row and could not be marked Failed (it is still {status}): {reason}` |
+| Occurrence rebuild exhausted | `Error` | `Occurrence {id} of schedule {scheduleId} could not be rebuilt in {n} consecutive process start(s) and was marked Failed: {reason}` |
+| Occurrence rebuild exhausted, still not ended | `Error` | `Occurrence {id} of schedule {scheduleId} could not be rebuilt in {n} consecutive process start(s) and could not be marked Failed (it is still {status}): {reason}` |
 | Provider re-park failed | `Error` | `Schedule {scheduleId} could not be parked to ask the occurrence provider '{key}' again: nothing was written and the series stays where it is until the next startup recovery` |
+| Schedule revival failed | `Error` | `Schedule {scheduleId} was dispatched again under the task key '{taskKey}' but could not be taken out of Cancelled: the series is not restarted, and no recovery brings back a cancelled row` |
 | Schedule rescheduled | `Information` / `Warning` | `Schedule {id} rescheduled from version {a} to version {b} ({mode}): cursor {from} -> {to}` |
 | Re-park failed (reschedule) | `Error` | `Schedule {id} is at version {v} but could not be handed back to the scheduler: {reason}` |
 | Re-park failed (materialization) | `Error` | `Schedule {id} could not be re-parked after a failed materialization: it is parked nowhere and only the next startup recovery brings it back` |
@@ -116,15 +119,18 @@ and the message then ends with `; {n} due slot(s) were discarded` — plus `; th
 when the call cleared a halt. The change is committed before the series is handed back to the scheduler, so
 this event is published even when the re-park then fails and the `Error` above follows it.
 
-**Schedule unusable**, **occurrence unusable** and **provider re-park failed** are the three an alert rule
-tends to miss, and they are the ones worth waking someone for. The first two mean this build cannot rebuild a
-row out of what is persisted — a payload that stopped deserializing, a zone id that has left the tz database,
-a handler nobody registers any more — so the schedule materializes nothing at all, or the occurrence is ended
-as `Failed` instead of holding a slot of the concurrency budget for ever. Occurrence unusable has a second
-wording, for the case where that ending did not take. `SetStatus` is best-effort on every relational provider,
-so the row is read back and the event says which of the two really happened. `could not be marked Failed`
-means the occurrence is still alive in the status the message names, still holding its slot of the budget, and
-the schedule materializes nothing more until a later run ends it for real. Same alert, one more thing wrong.
+**Schedule unusable**, **occurrence unusable** and **provider re-park failed** are three events an alert rule
+tends to miss, and they are worth waking someone for. The first two mean this build cannot rebuild a row out
+of what is persisted — a payload that stopped deserializing, a zone id that has left the tz database, a
+handler nobody registers any more — so the schedule materializes nothing at all, or the occurrence is ended
+as `Failed` instead of holding a slot of the concurrency budget for ever. An occurrence whose registered
+handler repeatedly fails to build uses `could not be rebuilt in {n} consecutive process start(s)` after its
+recovery allowance is exhausted; other unusable rows use `cannot be rebuilt from its row`. Each cause also
+has a second wording for the case where ending the row did not take. `SetStatus` is best-effort on every
+relational provider, so the row is read back and the event says which outcome really happened. `could not be
+marked Failed` means the occurrence is still alive in the status the message names, still holding its slot of
+the budget, and the schedule materializes nothing more until a later run ends it for real. Same alert, one
+more thing wrong.
 The third means an
 [occurrence provider](recurring-tasks/occurrence-providers.md) could not answer AND the series could not be
 parked to ask it again. Nothing polls behind that one: the schedule stays where it is until the next startup

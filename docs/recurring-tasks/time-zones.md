@@ -49,22 +49,15 @@ Give EverTask the zone and it resolves the offset at each occurrence instead.
 `AtTime` and `AtTimes` store what you pass, unchanged. The time of day is read on whatever clock the schedule
 ends up on: the zone you named, or UTC when you named none. There is nothing for the builder to convert.
 
-### `TimeOnly.ToUniversalTime()` is Deprecated
+### `TimeOnly.ToUniversalTime()` Was Removed in 4.0
 
-`EverTask.Scheduler.Recurring.DateTimeOffsetExtensions.ToUniversalTime(this TimeOnly)` is public, and it is
-the same idea as the workaround above: declare every time of day in UTC. Despite the name it never converted
-anything. It rebuilt the value from today's UTC date, whose offset is zero, so all it has ever done is drop
-the milliseconds.
+`EverTask.Scheduler.Recurring.DateTimeOffsetExtensions.ToUniversalTime(this TimeOnly)` was the same idea as
+the workaround above: declare every time of day in UTC. Despite the name it never converted anything. It
+rebuilt the value from today's UTC date, whose offset is zero, so all it ever did was drop the milliseconds.
 
-Don't call it. It is still there, and still unmarked, because `[Obsolete]` would fail the build of every
-application compiling warnings-as-errors; it will go in a future major version. Pass the local time you mean
-and name the zone.
+Pass the local time you mean and name the zone.
 
 ```csharp
-// Deprecated: a no-op that loses sub-second precision
-r.Schedule().EveryDay().AtTime(new TimeOnly(9, 0).ToUniversalTime());
-
-// Say what you mean instead
 r.Schedule().EveryDay().AtTime(new TimeOnly(9, 0)).InTimeZone("Europe/Rome");
 ```
 

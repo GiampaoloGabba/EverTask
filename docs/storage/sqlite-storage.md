@@ -159,7 +159,7 @@ Use SQLite storage when:
 
 Consider alternatives when:
 - High concurrency requirements (use SQL Server)
-- Multi-server clustering (use SQL Server)
+- High-write-concurrency database deployments (use SQL Server or PostgreSQL, with one active EverTask host per store)
 - Very large backlogs (> 10,000 pending tasks)
 - Need stored procedures and advanced features
 

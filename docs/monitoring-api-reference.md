@@ -65,6 +65,10 @@ Content-Type: application/json
 (`ManagementUsername` / `ManagementPassword`) grants it: the dashboard credential is a read credential, and
 so is every magic link. `POST /auth/validate` reports the same field for a token it validated.
 
+An authenticated SignalR connection is aborted when that JWT reaches `expiresAt`; reconnect with a fresh
+token. A non-expiring token supplied by a custom validator, and a host with monitoring authentication off,
+has no expiry timer.
+
 > **Exception**: The `/config` and `/auth/magic` endpoints do not require authentication.
 
 ### Magic Link Authentication
@@ -277,7 +281,7 @@ table, so it answers the same history whichever storage provider is behind the A
 
 **Query Parameters:**
 - `skip` (int, optional): Number of transitions to skip, from the newest. Default: `0`
-- `take` (int, optional): Number of transitions to return. Default: `100`, `0` asks for the total alone
+- `take` (int, optional): Number of transitions to return. Default: `100`, maximum: `500`; `0` asks for the total alone
 
 **Example Request:**
 ```bash
@@ -317,7 +321,7 @@ Authorization: Bearer {token}
 `totalCount` is the whole trail, not the page: a long-lived recurring row records one transition per state per
 run, so the endpoint pages it (`skip`/`take`) instead of answering the entire history — exactly as
 `GET /tasks/{id}/occurrences` does on the other side of the detail. The page is ordered, counted and sliced by
-the storage, not in the API. `skip` and `take` are clamped to non-negative.
+the storage, not in the API. `skip` is clamped to non-negative and `take` to the range `0..500`.
 
 An entry records the status the row moved TO. There is no `oldStatus`: the one it left is the `newStatus` of
 the entry under it.
@@ -340,7 +344,7 @@ from the runs audit table.
 
 **Query Parameters:**
 - `skip` (int, optional): Number of runs to skip, from the newest. Default: `0`
-- `take` (int, optional): Number of runs to return. Default: `100`, `0` asks for the total alone
+- `take` (int, optional): Number of runs to return. Default: `100`, maximum: `500`; `0` asks for the total alone
 
 **Example Request:**
 ```bash
@@ -406,7 +410,7 @@ first. Answers an empty list for an inline schedule and for a task that is not a
 |-----------|------|----------|---------|-------------|
 | `nonTerminalOnly` | bool | No | `false` | Keep only the occurrences that can still lead to an execution |
 | `skip` | int | No | `0` | Occurrences to skip |
-| `take` | int | No | `100` | Occurrences to return |
+| `take` | int | No | `100` | Occurrences to return (maximum `500`) |
 
 **Example Request:**
 ```bash
@@ -763,8 +767,12 @@ the request routing resolves is the request it judges.
 
 Configuration and the full decision order are in
 [Monitoring Configuration](configuration-reference.md#enablemanagementendpoints-managementusername--managementpassword-managementauthorization).
-No anti-forgery token is needed: the API authenticates with a Bearer header and never with a cookie, so a
-cross-site request cannot carry a session.
+The built-in JWT is carried in a Bearer header, but `ManagementAuthorization` may rely on ambient browser
+credentials such as the host's authentication cookie. Every management POST therefore checks browser request
+provenance before authorization: `Sec-Fetch-Site` must be `same-origin`, `same-site` or `none`; when that
+header is absent, an `Origin` header must match the request scheme, host and effective port. Requests carrying
+neither header are treated as non-browser clients and continue to pass this provenance check. A refusal is
+`403` and the management action is not invoked.
 
 All three take the task id in the path and no body, and answer the same object:
 

@@ -242,7 +242,7 @@ opt.SetMisfireThreshold(TimeSpan.FromMinutes(5))
 ```
 
 **Notes:**
-- This is an **observation** threshold. It decides what gets *reported* about a delivery, never whether anything runs: a late task runs exactly as it did before, and no status, retry or scheduling decision reads it.
+- This is a **classification** threshold. It decides what gets *reported* about a delivery or persisted as durable-occurrence misfire metadata, never whether anything runs: a late task runs exactly as it did before, and no status, retry or execution decision depends on it.
 - Below the threshold `Misfire` is `null`, so a handler that does not care never has to inspect a kind. Above it, `Misfire.Kind` is `Late` and `Misfire.Lateness` is the real gap.
 - It is the same threshold a **durable schedule** applies one step earlier, when it materializes an occurrence: a slot that came due longer ago than this produces an occurrence stamped with the backlog it stands for (`Misfire.Kind` `CatchUp` or `FireOnce`, plus the missed range and count), while a slot inside it produces an ordinary occurrence. See [Durable Occurrences](recurring-tasks/durable-occurrences.md).
 - A run of **more than one** missed slot is reported whatever the threshold says. `FireOnce` is about to collapse those slots and `CatchUp` to replay them, and neither may happen unreported just because the grid ticks faster than the tolerance.
@@ -2080,7 +2080,8 @@ PRAGMA temp_store=MEMORY;
 **Notes / limitations:**
 - `SchemaName` lowercase-only (see above).
 - All `DateTimeOffset` values map to `timestamptz` (UTC).
-- Full multi-server / high-write-concurrency support (unlike SQLite).
+- High-write-concurrency support on one active EverTask host per store; an inactive standby is fine. See
+  [Horizontal Scaling](scalability.md#horizontal-scaling-multiple-instances).
 
 ### MySQL / MariaDB Storage Options
 
@@ -2122,7 +2123,8 @@ PRAGMA temp_store=MEMORY;
 - No schema concept (see above).
 - Built on Microting.EntityFrameworkCore.MySql (maintained Pomelo fork); MySQL 8.0+ and MariaDB 10.11+.
 - All `DateTimeOffset` values map to `datetime(6)` (UTC).
-- Full multi-server / high-write-concurrency support (unlike SQLite).
+- High-write-concurrency support on one active EverTask host per store; an inactive standby is fine. See
+  [Horizontal Scaling](scalability.md#horizontal-scaling-multiple-instances).
 
 ## Handler Configuration
 

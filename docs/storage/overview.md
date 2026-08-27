@@ -53,7 +53,7 @@ Relational, open-source storage for production, comparable to the SQL Server pro
 
 - Production-ready
 - Open-source (no licensing cost)
-- Highly scalable, multi-server
+- High write concurrency on [one active EverTask host per store](../scalability.md#horizontal-scaling-multiple-instances)
 - ACID transactions
 - Server-side querying for all recovery and cleanup operations
 - Writable-CTE optimizations for hot writes (single-statement, atomic)
@@ -67,7 +67,7 @@ Relational, open-source storage for production, comparable to the SQL Server and
 
 - Production-ready
 - Open-source (no licensing cost)
-- Highly scalable, multi-server
+- High write concurrency on [one active EverTask host per store](../scalability.md#horizontal-scaling-multiple-instances)
 - ACID transactions
 - Server-side querying for all recovery and cleanup operations
 - Supports MySQL 8.0+ and MariaDB 10.11+ (net9.0/net10.0 only)

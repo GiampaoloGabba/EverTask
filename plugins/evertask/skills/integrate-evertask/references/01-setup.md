@@ -146,6 +146,13 @@ var everTask = builder.Services.AddEverTask(opt => opt
     .SetUseLazyHandlerResolution(true)
     .SetMisfireThreshold(TimeSpan.FromSeconds(5))
     .SetDefaultScheduleTimeZone(TimeZoneInfo.FindSystemTimeZoneById("Europe/Rome"))
+    .SetMaterializationConcurrency(4)
+    .SetBacklogRetryInterval(TimeSpan.FromMinutes(1))
+    .SetOccurrenceProviderRetry(retry =>
+    {
+        retry.InitialBackoff = TimeSpan.FromMinutes(1);
+        retry.MaxBackoff     = TimeSpan.FromMinutes(15);
+    })
     .WithPersistentLogger(log => log.SetMinimumLevel(LogLevel.Information).SetMaxLogsPerTask(1000))
     .UseShardedScheduler(shardCount: 0)
     .SetRateLimiterOptions(o => { o.MaxParkedTasks = 5000; o.MaxTrackedKeys = 100_000; }))

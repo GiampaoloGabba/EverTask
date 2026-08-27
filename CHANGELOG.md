@@ -38,9 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instant. The
   schedule fields — `scheduleVersion` included, now nullable — are absent together on a task that belongs to
   no schedule, instead of one of them reading 0 on every row in the store.
-- **Four new reads on `ITaskStorage`** — `GetOccurrencesPage`, `GetLastRunStarts`, `GetStatusAudits` and
-  `GetRunsAudits` (default members, so a custom storage keeps working). The occurrence list is ordered,
-  counted and sliced by the storage over the index the occurrence contract already needs, rather than read
+- **Four new reads on `ITaskStorage`** — `GetOccurrencesPage`, `GetLastRunStarts`, `GetStatusAuditsPage` and
+  `GetRunsAuditsPage` (default members, so a custom storage keeps working). The occurrence and audit lists are
+  ordered, counted and sliced by the storage over the indexes their contracts already need, rather than read
   whole and paged in memory. The other three read the audit trail, which nothing else can: no query
   materializes `QueuedTask.StatusAudits` or `QueuedTask.RunsAudits`, so the recorded start of a page of rows,
   the status-history tab and the runs-history tab answered over the in-memory store alone and handed back
@@ -67,10 +67,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   role travels on the same JWT (`LoginResponse.CanManage`, `TokenValidationResponse.CanManage` say which one
   a token holds). `ManagementAuthorization` replaces the role check entirely when a host wants to decide for
   itself. Turning monitoring authentication off does NOT open the write surface: without a host hook the
-  endpoints answer `403`. Credentials are compared in fixed time, and the surface is Bearer-only with no
-  cookies, so it carries no CSRF exposure.
+  endpoints answer `403`. Credentials are compared in fixed time. The built-in surface is Bearer-only; a
+  host hook may use ambient credentials, which the request-provenance check below protects.
 - **A standalone monitoring host has no scheduler to command**, so the endpoints answer `501` there rather
   than pretending.
+
+### Security (monitoring API)
+
+- **Management POSTs reject cross-site browser requests.** `Sec-Fetch-Site` accepts only same-origin,
+  same-site and none; when fetch metadata is absent, `Origin` must match the request origin. Requests with
+  neither header remain available to non-browser clients. This closes the CSRF path when a host's
+  `ManagementAuthorization` hook relies on an ambient cookie principal; the built-in Bearer flow is
+  unchanged.
+- **IP whitelist parsing is fail-closed.** CIDR prefixes outside `0..32` for IPv4 or `0..128` for IPv6 no
+  longer produce a match, and IPv4-mapped IPv6 client addresses now match equivalent IPv4 exact and CIDR
+  entries. The client address remains `Connection.RemoteIpAddress`; forwarded headers are still ignored
+  unless the host's trusted-proxy middleware rewrites that address.
+- **Paged audit, occurrence and execution-log reads cap `take` at 500**, preventing one request from asking
+  for an unbounded response.
+- **Authenticated SignalR monitoring connections end when their JWT expires.** The validated expiry is
+  carried from the endpoint guard into a hub-specific filter, which aborts that connection at the expiry
+  instant. Non-expiring tokens and monitoring hosts with authentication disabled keep their existing
+  behavior.
 
 ### Changed (breaking — the two audit endpoints are paged, #44)
 
@@ -86,9 +104,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`TaskDetailDto.StatusAudits` / `RunsAudits` now carry the FIRST PAGE** (100 entries) rather than the whole
   trail, with `StatusAuditsTotalCount` / `RunsAuditsTotalCount` beside them and the two endpoints for the
   rest. The dashboard's detail grows Previous/Next on both tabs.
-- Two new `ITaskStorage` reads — `GetStatusAuditsPage` and `GetRunsAuditsPage` — as default members whose
-  default composes the unpaged read, so a custom storage keeps working; the EF base, the in-memory store and
-  the SQL Server deadlock re-read override them with an indexed count and slice.
+- Two new `ITaskStorage` reads — `GetStatusAuditsPage` and `GetRunsAuditsPage` — as default members that read
+  the row's audit data directly, so a custom storage keeps working; the EF base, the in-memory store and the
+  SQL Server deadlock re-read override them with an indexed count and slice.
 
 ### Added (occurrence providers, #29)
 
@@ -173,9 +191,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Storage grew three columns and a family of atomic operations.** `ParentTaskId` (with a self-referencing
   foreign key, a unique index on (parent, slot) and a check constraint), `RuntimeInfo` and `ScheduleVersion`,
   plus `MaterializeOccurrence`, `CancelSchedule`, `TryRequeueStaleOccurrence`, `TryHaltSchedule`,
-  `TrySetRecurringSeriesCompleted`, `UpdateSchedule`, `RequeueTerminal` and the compare-and-swap overloads of
-  the advance operations. Every one of them is written at the tier of its provider — stored procedures on SQL
-  Server and MySQL, a writable CTE on PostgreSQL, a single `SaveChanges` on the EF Core base — and two
+  `TrySetRecurringSeriesCompleted`, `TrySetTerminalOutcome`, `UpdateSchedule`, `RequeueTerminal` and the
+  compare-and-swap overloads of the advance operations. `TrySetTerminalOutcome` is required when a custom
+  storage advertises `SupportsScheduleVersioning`: it returns false if the row moved version or is already
+  `Cancelled`, unless the outcome is itself `Cancelled`. Every operation is written at the tier of its
+  provider — stored procedures on SQL Server and MySQL, a writable CTE on PostgreSQL, a single `SaveChanges`
+  on the EF Core base — and two
   capability flags (`SupportsDurableOccurrences`, `SupportsScheduleVersioning`) let a custom storage say it
   does not implement them instead of half-implementing them. One migration per provider.
 
@@ -224,13 +245,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rebuilt the instant to the second, so a sub-second component was dropped twice over. Nothing the
   builder could express before carried one, so every schedule written until now produces the same
   instants; a definition written by hand with a sub-second time now fires at the time it declares.
-- **`TimeOnly.ToUniversalTime()` is deprecated** in its XML documentation, with no `[Obsolete]`
-  attribute (that would fail the build of every consumer compiling warnings-as-errors) and no change in
-  what it returns. It never converted anything: it rebuilt the value from today's UTC date, whose offset
-  is zero, so dropping the milliseconds is the only thing it has ever done — it now does that without
-  reading the clock. Pass the local time you mean to `AtTime` and name the zone with `InTimeZone`
-  instead; converting a time of day yourself freezes one offset into the schedule and is wrong for half
-  the year. It will be removed in a future major.
+- **BREAKING: `TimeOnly.ToUniversalTime()` has been removed.** Pass the local time to `AtTime` and name the
+  zone with `InTimeZone`; converting a time of day freezes one offset into the schedule and is wrong across
+  daylight-saving changes.
+
+### Changed (storage API cleanup)
+
+- **BREAKING: `ITaskStorage.GetCurrentRunCount` has been removed.** The worker reads `CurrentRunCount` from
+  the queued row it already owns, so the separate storage round trip had no library caller.
 
 ### Added (execution context, #25)
 
@@ -248,9 +270,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the handler passing it down. A scoped accessor could not: an eagerly resolved handler and its
   dependencies are built in the dispatcher's scope, before the delivery exists.
 - **`SetMisfireThreshold(TimeSpan)`** (default 5 seconds) decides how late a delivery may start before
-  `Context.Misfire` reports it, with the real lateness. It is an observation threshold and nothing more:
-  a late task runs exactly as it did before, and the one-second tolerance of the recurring skip-forward
-  path is a separate rule, untouched.
+  `Context.Misfire` reports it, with the real lateness, and how old a due slot must be before the durable
+  planner stamps a materialized row with `CatchUp` / `FireOnce` misfire metadata. It is a classification
+  threshold, not an execution gate: a late task runs exactly as it did before, a backlog of multiple due slots
+  is always classified as missed work, and the one-second tolerance of the recurring skip-forward path is a
+  separate rule, untouched.
 - `IEverTaskHandler<TTask>` gained `SetExecutionContext` as a default interface member with an empty
   body, so a handler that implements the interface directly keeps compiling and running unchanged.
   The worker reaches it, and `SetLogCapture`, through delegates compiled once per handler type instead

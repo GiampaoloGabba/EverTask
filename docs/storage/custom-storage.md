@@ -37,7 +37,6 @@ public interface ITaskStorage
                    double? executionTimeMs = null, CancellationToken ct = default);
 
     // Recurring run accounting
-    Task<int> GetCurrentRunCount(Guid taskId);
     Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel);
 
     // Task execution log persistence (v3.0+)
@@ -178,6 +177,7 @@ ending a schedule on purpose. Its schedules just cannot be changed while they ru
 | `UpdateSchedule` | Replace the definition and bump the version, guarded by version + cursor and refused on a `Cancelled` row. A finished series expects a `null` cursor, so the guard has to read that as IS NULL; a cancel touches neither the version nor the cursor, so only the status can refuse it |
 | `TryHaltSchedule` | Write the halted marker, guarded by version + cursor + status |
 | `TryReviveCancelledSchedule` | Take a `Cancelled` schedule back to `WaitingQueue` and bump its version, guarded by status + version. The one member here whose default works; see the obligation above |
+| `TrySetTerminalOutcome` | Write the terminal status of a delivery that ended, only while the row still carries the version that delivery ran and — unless the outcome is itself a cancellation — is not `Cancelled` |
 | `UpdateCurrentRun` / `CompleteRecurringRun` (version overloads) | Advance only while the schedule version matches |
 
 `MaterializeOccurrence` must also classify what it finds the way every built-in store does, in this order:
@@ -219,8 +219,8 @@ transition your transaction never made. The three optimized in-box providers tak
 EF Core base re-reads inside the transaction, which is exact only while writers are serialized, as they are
 on SQLite.
 
-The eight read helpers (`GetOccurrences`, `GetOccurrencesPage`, `CountActiveOccurrences`, `GetLastRunStarts`,
-`GetStatusAudits`, `GetRunsAudits`, `GetStatusAuditsPage`, `GetRunsAuditsPage`) carry no atomicity contract, so their defaults are a correct query over `Get`. Override them for an indexed
+The five read helpers (`GetOccurrences`, `GetOccurrencesPage`, `GetLastRunStarts`, `GetStatusAuditsPage`,
+`GetRunsAuditsPage`) carry no atomicity contract, so their defaults are a correct query over `Get`. Override them for an indexed
 one. `GetOccurrencesPage` is the one worth the effort: it answers the dashboard's occurrence list, and the
 default reads the whole series to return one page of it — which on a schedule with a long retention behind it
 is hundreds of thousands of rows for a hundred. Order by slot descending, count and slice in the store, and
@@ -231,9 +231,9 @@ series in memory.
 
 `GetStatusAuditsPage` and `GetRunsAuditsPage` are the same argument on the other two trails: a long-lived
 recurring row records one transition per state per run, and the task detail shows twenty of them at a time.
-The defaults compose the unpaged reads — correct, and no faster than answering the whole history — so
+The defaults read the row's materialized audit navigations — correct, and no faster than answering the whole history — so
 override them with a count and a slice over the `(QueuedTaskId)` index the audit tables already need. Order
-them exactly as your unpaged reads do (the in-box providers order on the audit IDENTITY, which is insertion
+them newest first (the in-box providers order on the audit IDENTITY, which is insertion
 order and therefore total, so no page boundary can repeat or drop an entry), and answer the count alone for
 `take = 0` rather than emitting a zero-row `FETCH`, which is a syntax error on some engines.
 
@@ -245,13 +245,13 @@ materializes that navigation; the in-box providers override it with one indexed 
 Answer nothing for a row you have no recorded start for. The dashboard would rather show no lateness than an
 invented one.
 
-`GetStatusAudits(taskId)` and `GetRunsAudits(taskId)` answer the two audit trails of one row, newest first,
-and they exist for the same reason. Nothing populates `QueuedTask.StatusAudits` or `QueuedTask.RunsAudits` on
-a row a query hands back, so the dashboard's status-history and runs-history tabs read them through the
-storage. The defaults walk the two navigations, which is right only in a store that materializes them; the
-in-box providers override both with one indexed query over the audit table. Order on the audit identity, not
-on its timestamp: the rows of one task are inserted in transition order, and SQLite will not order by a
-`DateTimeOffset` at all. A task id you hold nothing for gets an empty list, not an error.
+`GetStatusAuditsPage(taskId, skip, take)` and `GetRunsAuditsPage(taskId, skip, take)` answer the two audit
+trails of one row, newest first, and they exist for the same reason. Nothing populates
+`QueuedTask.StatusAudits` or `QueuedTask.RunsAudits` on a row a query hands back, so the dashboard reads them
+through the storage. The defaults walk the two navigations, which is right only in a store that materializes
+them; the in-box providers override both with an indexed count and slice. Order on the audit identity, not on
+its timestamp: the rows of one task are inserted in transition order, and SQLite will not order by a
+`DateTimeOffset` at all. A task id you hold nothing for gets an empty page, not an error.
 
 Three columns back all of this: `ParentTaskId` (with a restrict self-foreign-key, a unique index on
 `(ParentTaskId, ScheduledExecutionUtc)` named `UX_QueuedTasks_Occurrence`, and a check constraint that an

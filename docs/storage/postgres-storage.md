@@ -7,7 +7,7 @@ nav_order: 5
 
 # PostgreSQL Storage
 
-PostgreSQL is an open-source relational store for production. Like the SQL Server provider, it handles multi-server concurrency and runs every recovery and cleanup query on the server.
+PostgreSQL is an open-source relational store for production. Like the SQL Server provider, it handles high write concurrency and runs every recovery and cleanup query on the server. EverTask still requires [one active host per store](../scalability.md#horizontal-scaling-multiple-instances); an inactive standby is fine.
 
 ## Installation
 
@@ -163,7 +163,7 @@ EverTask generates time-ordered GUIDs using the `UUIDNext` PostgreSQL (v7) famil
 
 - Production-ready
 - Open-source (no licensing cost)
-- Highly scalable, multi-server
+- High write concurrency on one active EverTask host per store
 - ACID transactions
 - Server-side querying for all recovery and cleanup operations
 - Writable-CTE optimizations for hot writes (single-statement, atomic)
