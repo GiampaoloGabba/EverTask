@@ -176,7 +176,19 @@ schedule cannot be rescheduled, it has to be dispatched again.
 Dispatching it again under the same key starts a new series rather than resuming the old one. The occurrences
 the cancel had already terminalized stay cancelled, including the ones whose delivery had gone past the queue
 by the time the cancel arrived, and a catch-up halt the cancelled series was holding is released with it: the
-halt belonged to the series that ended.
+halt belonged to the series that ended. A run of the old series that was still executing when the restart
+landed finishes on its own payload, since nothing can call it back, but it no longer writes anything about the
+row: the series that owns the row now is the one you just started.
+
+The dispatch that restarts a cancelled schedule can also fail, and it says so. Taking the row out of
+`Cancelled` is the write everything else rests on, so if storage loses it the call throws instead of handing
+back an id. The row stays cancelled, nothing is parked over it, and you can dispatch again once the database
+is back. With `SetThrowIfUnableToPersist(false)` it answers with the id like any other dispatch that could not
+persist, and reports the failure through the log and a monitoring event.
+
+A definition with nothing left to run (every remaining slot past its `RunUntil`, or its `MaxRuns` already
+spent) neither restarts a cancelled schedule nor closes it. The row stays cancelled, so the key still leads
+back to the same restart the day you dispatch a definition that has occurrences left.
 
 ## Retrieving Task Information
 

@@ -128,4 +128,17 @@ internal static partial class DispatcherLog
                   "no answer would let an occurrence the cancel ended run")]
     public static partial void OccurrencesOfRevivedScheduleLookupFailed(this ILogger logger, Exception exception,
                                                                         Guid scheduleId, int count);
+
+    [LoggerMessage(EventId = 1025, Level = LogLevel.Error,
+        Message = "Schedule {ScheduleId}, dispatched again under the task key '{TaskKey}', could not be taken " +
+                  "out of Cancelled: the row keeps the new definition but no delivery of it is ever accepted, " +
+                  "and no recovery predicate selects a cancelled row")]
+    public static partial void CancelledScheduleNotRestored(this ILogger logger, Exception? exception,
+                                                            Guid scheduleId, string taskKey);
+
+    [LoggerMessage(EventId = 1026, Level = LogLevel.Information,
+        Message = "Recovered series {ScheduleId} has no occurrence left to run, and it is CANCELLED: the row " +
+                  "is left terminal instead of being rewritten to Completed, which would erase the " +
+                  "cancellation an operator asked for")]
+    public static partial void ExhaustedSeriesLeftCancelled(this ILogger logger, Guid? scheduleId);
 }

@@ -1190,10 +1190,7 @@ public class WorkerExecutor(
     /// </remarks>
     private bool IsSupersededSchedule(TaskHandlerExecutor task)
     {
-        if (task.RecurringTask is not { IsDurable: false } || ScheduleVersions is not { } versions)
-            return false;
-
-        if (!versions.TryGetLatest(task.PersistenceId, out var published) || task.ScheduleVersion >= published)
+        if (!IsSupersededScheduleDelivery(task, out var published))
             return false;
 
         RegisterEvent(LogLevel.Information, SeverityLevel.Information, task, null, null,
@@ -1203,6 +1200,20 @@ public class WorkerExecutor(
                 $"Task with id {a.TaskId} carries schedule version {a.Delivered} and was superseded by version {a.Published}: the delivery is discarded"));
 
         return true;
+    }
+
+    /// <summary>
+    /// The bare question <see cref="IsSupersededSchedule"/> answers, without reporting it: asked again by the
+    /// paths that reach it while the delivery is already RUNNING, where the answer means something else.
+    /// </summary>
+    private bool IsSupersededScheduleDelivery(TaskHandlerExecutor task, out int published)
+    {
+        published = 0;
+
+        return task.RecurringTask is { IsDurable: false }
+               && ScheduleVersions is { } versions
+               && versions.TryGetLatest(task.PersistenceId, out published)
+               && task.ScheduleVersion < published;
     }
 
     private async Task<TaskExecutionResult> ExecuteTask(TaskHandlerExecutor task, object handler,
@@ -1559,6 +1570,21 @@ public class WorkerExecutor(
                                             ITaskStorage? taskStorage,
                                             CancellationToken serviceToken)
     {
+        // A run of a definition that was replaced WHILE it executed does not own the row any more, and both
+        // writes below are unconditional terminal ones: Failed and Cancelled are statuses no recovery
+        // predicate selects, so either of them lands on the series that is now live and kills it for good.
+        // The advance in the finally is already compare-and-swapped and re-aims itself; this is the half that
+        // could not, and it is reached by every ending that is not a completion — including the cancellation
+        // of the very run a cancel-then-redispatch restarted the series from.
+        // What is REPORTED does not change: the run really ended this way, and its callback and event say so.
+        var outcomeStore = taskStorage;
+
+        if (IsSupersededScheduleDelivery(task, out var supersededBy))
+        {
+            logger.SupersededScheduleOutcomeNotPersisted(task.PersistenceId, task.ScheduleVersion, supersededBy);
+            outcomeStore = null;
+        }
+
         if (ex is OperationCanceledException oce)
         {
             // A user cancel (blacklisted id) must classify as terminal Cancelled even when the service
@@ -1571,13 +1597,13 @@ public class WorkerExecutor(
             var userCancelled      = workerBlacklist.IsBlacklisted(task.PersistenceId)
                                      || IsScheduleCancelled(task, out _);
             var cancelledByService = serviceToken.IsCancellationRequested && !userCancelled;
-            if (taskStorage != null)
+            if (outcomeStore != null)
             {
                 if (cancelledByService)
-                    await taskStorage.SetCancelledByService(task.PersistenceId, oce, task.AuditLevel)
-                                     .ConfigureAwait(false);
+                    await outcomeStore.SetCancelledByService(task.PersistenceId, oce, task.AuditLevel)
+                                      .ConfigureAwait(false);
                 else
-                    await taskStorage.SetCancelledByUser(task.PersistenceId, task.AuditLevel).ConfigureAwait(false);
+                    await outcomeStore.SetCancelledByUser(task.PersistenceId, task.AuditLevel).ConfigureAwait(false);
             }
 
             await ExecuteCallback(GetErrorCallback(task, handler), task, oce,
@@ -1598,10 +1624,10 @@ public class WorkerExecutor(
         else
         {
             // Logica per le altre eccezioni
-            if (taskStorage != null)
-                await taskStorage.SetStatus(task.PersistenceId, QueuedTaskStatus.Failed, ex, task.AuditLevel, null,
-                                     serviceToken)
-                                 .ConfigureAwait(false);
+            if (outcomeStore != null)
+                await outcomeStore.SetStatus(task.PersistenceId, QueuedTaskStatus.Failed, ex, task.AuditLevel, null,
+                                      serviceToken)
+                                  .ConfigureAwait(false);
 
             // G11: the retry policy throws AggregateException("All retry attempts failed", ...) when
             // retries are exhausted. The PERSISTED status and the error log keep that aggregate (full

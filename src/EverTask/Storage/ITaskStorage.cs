@@ -539,6 +539,43 @@ public interface ITaskStorage
             $"{nameof(UpdateSchedule)} atomically and set {nameof(SupportsScheduleVersioning)} to true.");
 
     /// <summary>
+    /// Takes a cancelled schedule back to <see cref="QueuedTaskStatus.WaitingQueue"/> and bumps its
+    /// <see cref="QueuedTask.ScheduleVersion"/>, only while the row still stands <c>Cancelled</c> at
+    /// <paramref name="expectedScheduleVersion"/>. This is the write a re-dispatch under the schedule's own
+    /// task key makes: the documented way to restart a cancelled series.
+    /// </summary>
+    /// <remarks>
+    /// The version moves because a revival REPLACES the definition on a row that keeps its id, so every
+    /// delivery of the series the cancel ended is still addressed by that id and none of them can be told
+    /// apart by it: the version is the only thing that distinguishes them, and it is what
+    /// <c>IsSupersededSchedule</c>, the compare-and-swap advance and <see cref="IScheduler.TrySchedule"/>
+    /// each read to leave the revived series alone.
+    /// <para>
+    /// It also has to ANSWER, unlike <see cref="SetStatus"/>, which every relational provider implements as
+    /// best effort — it logs its own failed write and hands the caller a completed task. The un-cancel is the
+    /// one write the whole restart depends on: a swallowed failure leaves the row terminally <c>Cancelled</c>
+    /// behind a dispatch that reported success, in a state no recovery predicate ever selects again.
+    /// </para>
+    /// <para>
+    /// The default is the non-atomic two-write fallback a storage without the compare-and-swap can offer: the
+    /// status write, then a read that confirms the row really left <c>Cancelled</c>. It does NOT move the
+    /// version, so a storage that advertises <see cref="SupportsScheduleVersioning"/> must override it —
+    /// capability and implementation are inseparable (X2), and a revival that answered success without
+    /// bumping would hand the new registration a version the row does not carry.
+    /// </para>
+    /// </remarks>
+    /// <returns>True when the row was revived.</returns>
+    async Task<bool> TryReviveCancelledSchedule(Guid taskId, int expectedScheduleVersion, AuditLevel auditLevel,
+                                                CancellationToken ct = default)
+    {
+        await SetStatus(taskId, QueuedTaskStatus.WaitingQueue, null, auditLevel, null, ct).ConfigureAwait(false);
+
+        var rows = await Get(t => t.Id == taskId, ct).ConfigureAwait(false);
+
+        return rows.Length > 0 && rows[0].Status != QueuedTaskStatus.Cancelled;
+    }
+
+    /// <summary>
     /// Persists a durable "halted" marker in <see cref="QueuedTask.RuntimeInfo"/>, guarded by a full
     /// compare-and-swap on version, cursor and status.
     /// </summary>

@@ -54,7 +54,7 @@ writes: `TrySetQueuedIfRecoverable`, `CompleteRecurringRun`, `SetRecurringSeries
 if your backend can make the check-and-set atomic. See `src/EverTask/Storage/ITaskStorage.cs` for the
 full contract and the per-member rationale.
 
-### Three obligations that are not visible from the signatures
+### Four obligations that are not visible from the signatures
 
 **`Persist` and `UpdateTask` must store the row's timestamps at offset zero.** Both take a `QueuedTask` from
 a caller, and a caller may hand over a `DateTimeOffset.Now`: `+02:00` on a machine in Rome. Every
@@ -75,6 +75,20 @@ dispatcher reads the row before it rewrites it and hands the value straight back
 under its task key leaves a standing halt exactly where it was. It hands back `null` in one case: a series a
 cancel had ended and this dispatch is restarting. Skip the column there and the restarted series comes back
 still halted, so it materializes nothing until someone resumes it by hand.
+
+**A store that advertises `SupportsScheduleVersioning` must implement `TryReviveCancelledSchedule`.** This is
+the write a re-dispatch under a cancelled schedule's own task key makes, which is the documented way to
+restart one. Unlike the other default members it ships a fallback that works, so nothing fails fast if you
+leave it alone: the default writes the status and then reads the row back to see whether the write survived.
+What it cannot do is move `ScheduleVersion`, and a versioning store needs that moved. A recurring
+re-registration reuses the row, so a delivery of the series the cancel ended carries the same id the new
+registration does. The version is all that separates them, and the version is what the dispatcher stamps on
+the executor it is about to park: answer `true` without bumping it and every compare-and-swap that
+registration makes afterwards loses against its own row. The write is one conditional UPDATE. While the row is
+`Cancelled` at the expected version, set `WaitingQueue`, clear `Exception`, set the version to expected + 1,
+and write the status audit in the same transaction. It also has to answer honestly: a plain status write that
+swallows its own failure leaves the row terminally cancelled behind a dispatch that returned an id, in a state
+no recovery predicate selects again.
 
 ## The Scheduling Clock
 
@@ -163,6 +177,7 @@ ending a schedule on purpose. Its schedules just cannot be changed while they ru
 | `TryRequeueStaleOccurrence` | Compare-and-swap requeue of an occurrence stranded in a known status |
 | `UpdateSchedule` | Replace the definition and bump the version, guarded by version + cursor and refused on a `Cancelled` row. A finished series expects a `null` cursor, so the guard has to read that as IS NULL; a cancel touches neither the version nor the cursor, so only the status can refuse it |
 | `TryHaltSchedule` | Write the halted marker, guarded by version + cursor + status |
+| `TryReviveCancelledSchedule` | Take a `Cancelled` schedule back to `WaitingQueue` and bump its version, guarded by status + version. The one member here whose default works; see the obligation above |
 | `UpdateCurrentRun` / `CompleteRecurringRun` (version overloads) | Advance only while the schedule version matches |
 
 `MaterializeOccurrence` must also classify what it finds the way every built-in store does, in this order:

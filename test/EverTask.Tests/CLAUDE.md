@@ -99,8 +99,11 @@ Docker or Testcontainers here. Subsets filter on namespace: `--filter "FullyQual
   about to open (a cancel arriving mid-`MaterializeOccurrence`) or measure how many callers are inside one at
   once (the global materialization budget). A blocking hook blocks its caller — that is the point.
   `SwallowNext(operation, times)` is the third: the call RETURNS without reaching the store, which is the
-  shape of a write every relational provider swallows (`SetStatus` logs its own failure and returns), and the
-  only one honoured — a fault that throws is a different test, because there the caller sees the failure.
+  shape of a write every relational provider swallows (`SetStatus` logs its own failure and returns), and only
+  the writes that really behave that way honour it — a fault that throws is a different test, because there
+  the caller sees the failure. `TryReviveCancelledSchedule` honours it for the opposite reason: that one
+  ANSWERS, so a swallowed call comes back `false`, which is a database blip that rolled the un-cancel back
+  with the row untouched and the caller told so.
 - **Durable occurrences**: the policy is pure arithmetic and lives in `Occurrences/DueSlotEnumeratorTests`
   (including the two halves of a misfire agreeing with each other, a count that says whether it is a total or
   a lower bound, and a catch-up whose backlog CONTAINS a DST transition — checked against the grid itself,

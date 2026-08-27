@@ -303,6 +303,21 @@ public sealed class FaultInjectingTaskStorage(ITaskStorage inner) : ITaskStorage
             recurringInfo, nextRunUtc, maxRuns, runUntil, runtimeInfo, ct);
     }
 
+    /// <remarks>
+    /// <see cref="SwallowNext"/> is honoured here for a reason the best-effort writes do not have: this one
+    /// ANSWERS, and a storage that lost the write answers false. Swallowing it is the shape of a database blip
+    /// that rolled the un-cancel back — the row is untouched and the caller is told so.
+    /// </remarks>
+    public Task<bool> TryReviveCancelledSchedule(Guid taskId, int expectedScheduleVersion, AuditLevel auditLevel,
+                                                 CancellationToken ct = default)
+    {
+        Gate(nameof(TryReviveCancelledSchedule));
+
+        return Swallows(nameof(TryReviveCancelledSchedule))
+                   ? Task.FromResult(false)
+                   : inner.TryReviveCancelledSchedule(taskId, expectedScheduleVersion, auditLevel, ct);
+    }
+
     public Task<bool> TryHaltSchedule(Guid parentId, int expectedScheduleVersion, DateTimeOffset? expectedCursorUtc,
                                       QueuedTaskStatus expectedStatus, string runtimeInfo,
                                       CancellationToken ct = default)

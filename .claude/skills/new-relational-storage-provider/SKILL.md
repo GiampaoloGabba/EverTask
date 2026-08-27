@@ -132,6 +132,15 @@ procedure OR PL/SQL). **Invariants that MUST hold (verify with tests):**
   task key leaves a standing halt where it was; it hands back `null` only for a series a cancel had ended and
   this dispatch is restarting. Leave the column out and that restarted series comes back still halted, and
   materializes nothing until someone resumes it by hand.
+- **`TryReviveCancelledSchedule` is the one default member with a WORKING fallback, and a versioning provider
+  still owes it an override.** It is the write a re-dispatch under a cancelled schedule's own task key makes,
+  and the default writes the status and reads the row back to see whether the write survived. What it cannot
+  do is move `ScheduleVersion`. A recurring re-registration reuses the row, so a delivery of the series the
+  cancel ended carries the very id the new registration does and only the version separates them — and it is
+  the version the dispatcher stamps on the executor it parks. Answer `true` without bumping and every
+  compare-and-swap that registration makes afterwards fails against its own row. One conditional UPDATE:
+  while the row is `Cancelled` at the expected version, set `WaitingQueue`, clear `Exception`, set the version
+  to expected + 1, status audit in the same transaction. Inheriting `EfCoreTaskStorage` gives you all of it.
 
 ### Durable occurrences: not optional if you advertise them
 
@@ -143,8 +152,8 @@ bool SupportsDurableOccurrences => false;   // MaterializeOccurrence, TryAdvance
                                             // CancelSchedule, RequeueTerminal,
                                             // TryRequeueStaleOccurrence, TryHaltSchedule,
                                             // TrySetRecurringSeriesCompleted
-bool SupportsScheduleVersioning => false;   // UpdateSchedule + the CAS overloads of
-                                            // UpdateCurrentRun / CompleteRecurringRun
+bool SupportsScheduleVersioning => false;   // UpdateSchedule, TryReviveCancelledSchedule + the CAS
+                                            // overloads of UpdateCurrentRun / CompleteRecurringRun
 ```
 
 Inheriting `EfCoreTaskStorage` turns both on for a **relational** provider, because the base implements every

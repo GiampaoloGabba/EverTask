@@ -1276,6 +1276,44 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     }
 
     /// <inheritdoc />
+    public virtual async Task<bool> TryReviveCancelledSchedule(Guid taskId, int expectedScheduleVersion,
+                                                               AuditLevel auditLevel,
+                                                               CancellationToken ct = default)
+    {
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        var             efContext = RequireRelational(dbContext);
+
+        var now = UtcNowNormalized;
+
+        await using var transaction = await efContext.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+
+        // The version moves in the same statement as the status: a revival replaces the definition of a row
+        // that keeps its id, so the deliveries of the series the cancel ended are addressed by the very id the
+        // new registration uses, and the version is the only thing that tells them apart.
+        var rows = await dbContext.QueuedTasks
+                                  .Where(t => t.Id == taskId
+                                              && t.Status == QueuedTaskStatus.Cancelled
+                                              && t.ScheduleVersion == expectedScheduleVersion)
+                                  .ExecuteUpdateAsync(s => s
+                                                           .SetProperty(t => t.Status,
+                                                               QueuedTaskStatus.WaitingQueue)
+                                                           .SetProperty(t => t.Exception, (string?)null)
+                                                           .SetProperty(t => t.ScheduleVersion,
+                                                               expectedScheduleVersion + 1), ct)
+                                  .ConfigureAwait(false);
+
+        if (rows == 0)
+        {
+            await transaction.RollbackAsync(ct).ConfigureAwait(false);
+            return false;
+        }
+
+        await CommitWithStatusAuditAsync(dbContext, transaction, taskId, QueuedTaskStatus.WaitingQueue, null,
+            auditLevel, now, ct).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <inheritdoc />
     public virtual async Task<bool> TryHaltSchedule(Guid parentId, int expectedScheduleVersion,
                                                     DateTimeOffset? expectedCursorUtc, QueuedTaskStatus expectedStatus,
                                                     string runtimeInfo, CancellationToken ct = default)

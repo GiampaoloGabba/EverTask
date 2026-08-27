@@ -645,11 +645,23 @@ public class Dispatcher(
                 // new-task path inside the decision.
                 logger.RecoverySeriesExhausted(existingTaskId);
 
-                if (taskStorage != null && existingTaskId.HasValue && existingNextRunUtc.HasValue)
+                // X3: a CANCELLED series is already terminal and is never rewritten to Completed. Naming
+                // Cancelled as the compare-and-swap expectation makes the guard MATCH, so the conditional
+                // write erases the cancellation exactly as the unconditional one would — and the row leaves
+                // the one status a later re-dispatch under this key needs to see to undo the cancel, so the
+                // cancel's blacklist entry would be stranded with nothing left to drop it. It is the same
+                // exclusion recovery's own finalization carries in QueuedTask.IsRecurringSeriesToFinalize.
+                if (existingStatus is QueuedTaskStatus.Cancelled)
+                {
+                    logger.ExhaustedSeriesLeftCancelled(existingTaskId);
+                }
+                else if (taskStorage != null && existingTaskId.HasValue && existingNextRunUtc.HasValue)
+                {
                     await FinalizeExhaustedSeriesAsync(taskStorage, existingTaskId.Value,
                             existingNextRunUtc.Value, existingStatus, rowMetadata.ScheduleVersion,
                             auditLevel ?? serviceConfiguration.DefaultAuditLevel, ct)
                         .ConfigureAwait(false);
+                }
 
                 return existingTaskId ?? Guid.Empty;
             }
@@ -733,7 +745,21 @@ public class Dispatcher(
         // a revival that preceded the write would leave a live row on the definition the cancel ended if the
         // write then failed.
         if (revivedSchedule is { } revived)
-            await RestoreCancelledSchedule(revived, taskKey!, effectiveAuditLevel, ct).ConfigureAwait(false);
+        {
+            if (await RestoreCancelledSchedule(revived, taskKey!, rowMetadata.ScheduleVersion, effectiveAuditLevel,
+                        executor, ct)
+                    .ConfigureAwait(false) is not { } revivedVersion)
+            {
+                // The row is still terminally Cancelled and still covered by the cancel's entry, so there is
+                // nothing to park over it: a registration made here is refused at its first fire and consumed.
+                return executor.PersistenceId;
+            }
+
+            // The generation this dispatch runs is the one the ROW now carries: it is what every defence the
+            // old deliveries are measured against reads, from the pre-gate drop to the advance's
+            // compare-and-swap to the conditional re-park.
+            executor = executor with { ScheduleVersion = revivedVersion };
+        }
 
         // The executor is already lazy when useLazyExecutor is true (built by the wrapper
         // without a handler instance), eager otherwise
@@ -742,6 +768,13 @@ public class Dispatcher(
         if (executorToSchedule.ExecutionTime > nowUtc || recurring != null)
         {
             scheduler.Schedule(executorToSchedule, nextRun);
+
+            // Published only once the registration is really in, exactly as a reschedule publishes (S4): the
+            // lower bound drops every delivery of the definition the cancel ended that is still sitting in a
+            // queue, and publishing one whose executor never reached the scheduler would drop them with
+            // nothing left to take their place.
+            if (revivedSchedule is { } published)
+                ScheduleVersions?.Publish(published, executorToSchedule.ScheduleVersion);
         }
         else
         {
@@ -823,21 +856,91 @@ public class Dispatcher(
     /// <see cref="CoverOccurrencesTheCancelEndedAsync"/>). The two meanings it carries end at different
     /// moments — the schedule is alive again from here, those occurrences never will be.
     /// </para>
+    /// <para>
+    /// The un-cancel goes FIRST and it has to answer. A plain <c>SetStatus</c> is best effort on every
+    /// relational provider — it logs its own failed write and returns — so a swallowed failure used to leave
+    /// the row terminally <c>Cancelled</c> with its cover already dropped, behind a dispatch that had returned
+    /// an id and logged a restart. Nothing polls behind it: the parked registration is refused at its first
+    /// fire (<c>TrySetQueuedIfRecoverable</c> declines a <c>Cancelled</c> row), and no recovery predicate
+    /// selects it afterwards. A failure is therefore a log error plus a monitoring event, and it stops the
+    /// dispatch instead of finishing it.
+    /// </para>
+    /// <para>
+    /// The write also bumps the row's <see cref="QueuedTask.ScheduleVersion"/>, which is what protects the
+    /// series being started here from the deliveries of the one that was cancelled. A recurring
+    /// re-registration REUSES the row, so an in-flight delivery of the old definition carries the very id the
+    /// new registration does and the blacklist cannot tell them apart — only the version can, and every
+    /// defence S4 built reads it: the pre-gate drop of a superseded delivery, the compare-and-swap of the
+    /// advance, and the conditional re-park inside the scheduler's own registry swap.
+    /// </para>
     /// </remarks>
-    private async Task RestoreCancelledSchedule(Guid scheduleId, string taskKey, AuditLevel auditLevel,
-                                                CancellationToken ct)
+    /// <returns>The schedule version the row now carries, or null when nothing was revived.</returns>
+    private async Task<int?> RestoreCancelledSchedule(Guid scheduleId, string taskKey, int expectedScheduleVersion,
+                                                      AuditLevel auditLevel, TaskHandlerExecutor executor,
+                                                      CancellationToken ct)
     {
+        // A revival is decided from a persisted row, so there is always a store here: this is the nullable
+        // field's guard, not a path.
+        if (taskStorage is not { } store)
+            return expectedScheduleVersion;
+
+        bool       revived;
+        Exception? failure = null;
+
+        try
+        {
+            revived = await store.TryReviveCancelledSchedule(scheduleId, expectedScheduleVersion, auditLevel, ct)
+                                 .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception e)
+        {
+            revived = false;
+            failure = e;
+        }
+
+        if (!revived)
+        {
+            logger.CancelledScheduleNotRestored(failure, scheduleId, taskKey);
+            PublishRevivalFailedEvent(executor, failure, scheduleId, taskKey);
+
+            if (serviceConfiguration.ThrowIfUnableToPersist)
+            {
+                throw new InvalidOperationException(
+                    $"Schedule {scheduleId} was dispatched again under the task key '{taskKey}' but could not " +
+                    "be taken out of Cancelled, so the series was not restarted", failure);
+            }
+
+            return null;
+        }
+
+        // Only now does the schedule's entry stop covering the occurrences the cancel already ended.
         await CoverOccurrencesTheCancelEndedAsync(scheduleId, ct).ConfigureAwait(false);
 
         workerBlacklist.Remove(scheduleId);
 
-        if (taskStorage != null)
-        {
-            await taskStorage.SetStatus(scheduleId, QueuedTaskStatus.WaitingQueue, null, auditLevel, null, ct)
-                             .ConfigureAwait(false);
-        }
-
         logger.CancelledScheduleRedispatched(scheduleId, taskKey);
+
+        // A storage without the compare-and-swap keeps the row at the version it had: the fallback un-cancels
+        // and nothing reads a version there anyway (SupportsScheduleVersioning gates every defence that does).
+        return store.SupportsScheduleVersioning ? expectedScheduleVersion + 1 : expectedScheduleVersion;
+    }
+
+    /// <summary>Tells a monitoring subscriber that a schedule a dispatch meant to restart is still cancelled.</summary>
+    private void PublishRevivalFailedEvent(TaskHandlerExecutor executor, Exception? failure, Guid scheduleId,
+                                           string taskKey)
+    {
+        if (serviceProvider.GetService<IEverTaskWorkerExecutor>() is not { HasEventSubscribers: true } worker)
+            return;
+
+        worker.PublishExternalEvent(executor, SeverityLevel.Error,
+            string.Create(CultureInfo.InvariantCulture,
+                $"Schedule {scheduleId} was dispatched again under the task key '{taskKey}' but could not be " +
+                $"taken out of Cancelled: the series is not restarted, and no recovery brings back a " +
+                $"cancelled row"), failure);
     }
 
     /// <summary>

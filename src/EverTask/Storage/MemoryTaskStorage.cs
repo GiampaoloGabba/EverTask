@@ -646,6 +646,30 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
     }
 
     /// <inheritdoc />
+    public Task<bool> TryReviveCancelledSchedule(Guid taskId, int expectedScheduleVersion, AuditLevel auditLevel,
+                                                 CancellationToken ct = default)
+    {
+        lock (_pendingTasksLock)
+        {
+            var task = _pendingTasks.FirstOrDefault(t => t.Id == taskId);
+
+            if (task == null || task.Status != QueuedTaskStatus.Cancelled ||
+                task.ScheduleVersion != expectedScheduleVersion)
+            {
+                return Task.FromResult(false);
+            }
+
+            // The version moves with the status: a revival replaces the definition of a row that keeps its id,
+            // so the deliveries of the series the cancel ended answer to the id the new registration uses too,
+            // and the version is the only thing left that tells them apart.
+            task.Exception       = null;
+            task.ScheduleVersion = expectedScheduleVersion + 1;
+            TransitionLocked(task, QueuedTaskStatus.WaitingQueue, auditLevel);
+            return Task.FromResult(true);
+        }
+    }
+
+    /// <inheritdoc />
     public Task<bool> TryHaltSchedule(Guid parentId, int expectedScheduleVersion, DateTimeOffset? expectedCursorUtc,
                                       QueuedTaskStatus expectedStatus, string runtimeInfo,
                                       CancellationToken ct = default)

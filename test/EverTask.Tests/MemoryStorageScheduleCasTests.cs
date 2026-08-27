@@ -290,6 +290,51 @@ public class MemoryStorageScheduleCasTests
     }
 
     [Fact]
+    public async Task Should_uncancel_and_move_the_version_when_a_cancelled_schedule_is_revived()
+    {
+        // The memory store's half of what EfCoreTaskStorageTestsBase pins on the four relational ones: the
+        // write a re-dispatch under a cancelled schedule's own key makes. It answers — a SetStatus does not —
+        // and it moves the version, because the revived row keeps its id and the deliveries of the series the
+        // cancel ended answer to that same id.
+        var id = await SeedScheduleAsync();
+
+        await _storage.SetStatus(id, QueuedTaskStatus.Cancelled, new InvalidOperationException("ended"),
+            AuditLevel.Full);
+
+        (await _storage.TryReviveCancelledSchedule(id, 0, AuditLevel.Full)).ShouldBeTrue();
+
+        var row = await ReloadAsync(id);
+        row.Status.ShouldBe(QueuedTaskStatus.WaitingQueue);
+        row.ScheduleVersion.ShouldBe(1);
+        row.Exception.ShouldBeNull();
+        row.NextRunUtc.ShouldBe(Cursor, "the cursor belongs to the dispatch, not to this write");
+        row.StatusAudits.ShouldContain(a => a.NewStatus == QueuedTaskStatus.WaitingQueue);
+    }
+
+    [Fact]
+    public async Task Should_refuse_a_revival_of_a_row_that_is_not_cancelled_or_has_moved()
+    {
+        // Both halves of the guard, on the store the integration suite runs on: only a Cancelled row is a
+        // revival target, and only at the version the caller decided against.
+        var live = await SeedScheduleAsync();
+
+        (await _storage.TryReviveCancelledSchedule(live, 0, AuditLevel.Full))
+            .ShouldBeFalse("a live schedule is not a cancellation to undo");
+
+        (await ReloadAsync(live)).Status.ShouldBe(QueuedTaskStatus.Queued);
+
+        var moved = await SeedScheduleAsync(scheduleVersion: 3);
+        await _storage.SetStatus(moved, QueuedTaskStatus.Cancelled, null, AuditLevel.Full);
+
+        (await _storage.TryReviveCancelledSchedule(moved, 0, AuditLevel.Full))
+            .ShouldBeFalse("the row belongs to whoever moved it");
+
+        var row = await ReloadAsync(moved);
+        row.Status.ShouldBe(QueuedTaskStatus.Cancelled);
+        row.ScheduleVersion.ShouldBe(3);
+    }
+
+    [Fact]
     public async Task Should_refuse_a_null_expected_cursor_on_both_conditional_schedule_writes()
     {
         // The memory store's half of the contract pinned for the relational providers in

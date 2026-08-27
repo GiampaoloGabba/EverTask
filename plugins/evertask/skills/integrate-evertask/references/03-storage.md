@@ -189,6 +189,13 @@ by `SupportsDurableOccurrences` / `SupportsScheduleVersioning` (both `false` by 
 atomically before flipping either flag — a "best effort" version built from two writes is exactly the
 crash window they exist to close.
 
+`TryReviveCancelledSchedule` sits beside them with one difference: its default WORKS (status write, then a
+read that confirms the row left `Cancelled`), because a re-dispatch under a cancelled schedule's task key —
+the documented way to restart one — has to work on any storage. What the default cannot do is bump
+`ScheduleVersion`, so a storage advertising `SupportsScheduleVersioning` owes it a real override: the revived
+row keeps its id, and the version is the only thing separating the new registration from a delivery of the
+series the cancel ended.
+
 > To add a new **EF Core relational** provider package (MySQL, Oracle, …), use the separate
 > `new-relational-storage-provider` skill: it has the mandatory per-DB verification matrix.
 

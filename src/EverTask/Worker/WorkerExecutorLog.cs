@@ -226,4 +226,11 @@ internal static partial class WorkerExecutorLog
                   "recovery")]
     public static partial void ProviderRetryParkFailed(this ILogger logger, Exception? exception, Guid taskId,
                                                        string providerKey);
+
+    [LoggerMessage(EventId = 1242, Level = LogLevel.Warning,
+        Message = "The run of task {TaskId} ended without a persisted outcome: it carries schedule version " +
+                  "{DeliveredVersion} and version {PublishedVersion} owns the row now, so a terminal status " +
+                  "written here would end the series that replaced it")]
+    public static partial void SupersededScheduleOutcomeNotPersisted(this ILogger logger, Guid taskId,
+                                                                     int deliveredVersion, int publishedVersion);
 }

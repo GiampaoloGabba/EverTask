@@ -32,6 +32,17 @@ public sealed class RescheduleRecorder
     /// <summary>Holds every delivery inside the handler until <see cref="Release"/>.</summary>
     public bool Hold { get; set; }
 
+    /// <summary>
+    /// Makes the held delivery ignore its cancellation token and unwind with an
+    /// <see cref="OperationCanceledException"/> once released.
+    /// </summary>
+    /// <remarks>
+    /// The shape of the one run a cancel cannot stop in time: the handler is already past the point where the
+    /// token would have turned it back, so it is still running when the schedule is dispatched again — and it
+    /// is its ENDING, not its execution, that then lands on a row somebody else owns.
+    /// </remarks>
+    public bool CancelAfterHold { get; set; }
+
     public void Release() => _released.TrySetResult();
 
     public async Task RecordAsync(ITaskExecutionContext context, CancellationToken ct)
@@ -43,7 +54,16 @@ public sealed class RescheduleRecorder
             return;
 
         _entered.TrySetResult();
-        await _released.Task.WaitAsync(ct);
+
+        if (!CancelAfterHold)
+        {
+            await _released.Task.WaitAsync(ct);
+            return;
+        }
+
+        await _released.Task;
+
+        throw new OperationCanceledException("the run of the cancelled series unwound after the revival");
     }
 }
 

@@ -1,4 +1,4 @@
-# Decisioni di design — Occorrenze durevoli, misfire, timezone e schedule dinamici (issue #23)
+﻿# Decisioni di design — Occorrenze durevoli, misfire, timezone e schedule dinamici (issue #23)
 
 > **Stato: v1.0 — APPROVATA dal maintainer (2026-08-22)**, dopo 5 round di critica avversariale con Codex
 > (gpt-5.6-sol, xhigh, read-only; round 5 = GO senza blocker). Questo file **prevale su qualsiasi default** del piano
@@ -883,6 +883,38 @@ Gli altri dieci, senza deviazione:
   `new-relational-storage-provider` (`.claude/` + mirror `.agents/`). Nello stesso passaggio la voce del
   marketplace del plugin, ferma a 1.1.1 attraverso tutta la riscrittura 4.0.0 (494 righe), passa a **2.0.0** —
   altrimenti un `update` non scarica niente — e la sua descrizione smette di fermarsi a ET0008.
+
+### Secondo giro della review finale (2026-08-27) — DA RATIFICARE
+
+Quattro finding confermati sul path del **re-dispatch di uno schedule cancellato** (la deviazione ratificata
+poco sopra). Due sono correzioni dirette; due aggiungono superficie e vanno ratificate qui, perché il gate 0.3
+non lascia passare una modifica non scritta.
+
+| Punto | Deviazione |
+|-------|------------|
+| **Il revival è una nuova GENERAZIONE della riga**: `TryReviveCancelledSchedule` porta la riga a `WaitingQueue` **e** incrementa `ScheduleVersion`; il dispatch marca l'executer con la versione nuova e la pubblica in `ScheduleVersionRegistry` **dopo** il park (S4) | **DEVIAZIONE RATIFICATA, ed è la sola forma che chiude il finding [high] #1.** Il cover del cancel si costruisce da `TaskDeliveryRegistry.OccurrencesOf(scheduleId)`, che matcha le **occorrenze** di uno schedule; la delivery di uno schedule **inline** è registrata sotto se stessa, quindi era invisibile al cover — e togliere la voce di blacklist la scopriva del tutto. Non esiste un modo di separarle per id: una ri-registrazione ricorrente **riusa la riga**, quindi la vecchia delivery e la nuova registrazione hanno lo **stesso** id, e blacklist, `TrySetQueuedIfRecoverable` e `IsCancelled` sono tutti per-id. La versione è l'unico discriminante, ed è esattamente la macchina che S4 ha costruito per «un executor della definizione appena sostituita ancora in mano a qualcuno»: il drop pre-gate (`IsSupersededSchedule`), il CAS dell'advance e il rifiuto di `IScheduler.TrySchedule` dentro lo swap del registro. Senza di essa l'advance della vecchia delivery vinceva il CAS a parità di versione (scrivendo `Completed` e il cursore della **vecchia** griglia sopra la definizione nuova) e ri-parcheggiava se stesso al posto della registrazione appena creata: da lì in poi il payload cancellato girava sulla cadenza cancellata per la vita del processo, mentre lo storage mostrava la definizione nuova e il chiamante aveva in mano un id di successo. Pinnata da `RescheduleIntegrationTests.A_run_of_the_series_a_cancel_ended_cannot_take_the_row_back_from_the_revival` (il cancel + re-dispatch atterra dentro la finestra dell'advance con `FaultInjectingTaskStorage.RunBefore(CompleteRecurringRun)`). |
+| **Nuovo membro di `ITaskStorage`: `TryReviveCancelledSchedule(taskId, expectedScheduleVersion, auditLevel, ct)`**, DIM con **fallback funzionante** (SetStatus + rilettura di conferma), override atomico in base EF e in memoria | **AGGIUNTA RATIFICATA** (finding [medium] #2 e [high] #3). L'un-cancel era un `taskStorage.SetStatus` e ogni provider relazionale lo inghiotte (catch, rollback, `StatusUpdateFailed`, return): una singola perdita lasciava la riga terminalmente `Cancelled` con il cover già tolto, dietro un dispatch che aveva risposto un id e loggato 1022 — e dietro non polla nessuno (la registrazione parcheggiata è rifiutata al primo scatto, e nessun predicato di recovery seleziona un `Cancelled`). Il membro nuovo **risponde**, è un CAS su stato + versione, ed è la stessa scrittura che porta il bump di versione della riga sopra: due scritture separate non sarebbero atomiche fra loro. La firma è un DIM **mai rilasciato prima** e, a differenza degli altri della famiglia, ha un default che **funziona** (nessun `NotSupportedException`), perché questo path è raggiungibile da qualunque storage — anche uno custom che non implementa nulla di #23: `LegacyMinimalTaskStorage` continua a compilare. Un provider che dichiara `SupportsScheduleVersioning` deve sovrascriverlo (obbligo scritto in `docs/storage/custom-storage.md` e nella skill `new-relational-storage-provider` + mirror `.agents/`); nessun provider ottimizzato lo sovrascrive, quindi il tier D7 resta la singola UPDATE condizionale della base. Ordine invertito di conseguenza: **prima** la scrittura, **poi** il cover delle occorrenze e la rimozione della voce di blacklist — un fallimento non scopre più niente. Un fallimento è log error 1025 **più** evento di monitoring (la barra V4) e **ferma** il dispatch: `throw` sotto il default `ThrowIfUnableToPersist`, altrimenti si torna l'id senza parcheggiare nulla. Pinnata da `A_revival_whose_un_cancel_is_lost_fails_the_dispatch_instead_of_reporting_a_restart`, dal suo gemello con l'opzione a `false`, dai tre test contratto su quattro provider e dalla `[Theory]` sui livelli di audit in `EfCoreTaskStorageTestsBase`, più i due in memoria in `MemoryStorageScheduleCasTests`. |
+
+Gli altri due, senza superficie nuova:
+
+- **`FinalizeExhaustedSeriesAsync` non finalizza più una riga `Cancelled`** (finding [medium] #4). Sul ramo
+  taskKey l'aspettativa del CAS è lo **stato letto dalla riga**, quindi nominare `Cancelled` lo faceva
+  **combaciare**: la scrittura condizionale cancellava la cancellazione esattamente come farebbe quella
+  incondizionata, scrivendo `Completed`, azzerando `Exception` e timbrando `LastExecutionUtc` su una serie che
+  un operatore aveva fermato. È ciò che X3 vieta per iscritto e ciò che la copia di recovery della stessa
+  finalizzazione porta già nel predicato (`QueuedTask.IsRecurringSeriesToFinalize`, `Status != Cancelled`).
+  Effetto di secondo ordine chiuso insieme: la riga non lascia più l'unico stato su cui `revivedSchedule` si
+  aggancia, quindi la voce di blacklist del cancel non resta orfana. Log 1026. Pinnato da
+  `An_exhausted_definition_dispatched_under_a_cancelled_key_leaves_the_cancellation_alone`, che pretende anche
+  la seconda metà: dopo il rifiuto, la chiave riporta ancora al restart.
+- **La fine di una delivery superata non viene persistita** (`WorkerExecutor.HandleExceptionAsync`). Una run
+  già in esecuzione quando la definizione è stata sostituita è oltre il drop pre-gate, e le due scritture
+  terminali di quella **fine** erano incondizionate: `Cancelled` è lo stato che nessun predicato di recovery
+  seleziona e che `QueueNextOccourrence` rifiuta di superare, quindi una fine che atterra tardi uccideva la
+  serie che aveva appena preso la riga — sia dopo un cancel-e-ridispatch (dove il token del cancel è proprio
+  ciò che fa finire quella run) sia dopo un `Reschedule` normale. Salta **solo** la scrittura di storage:
+  callback `OnError` ed evento continuano a raccontare la fine che c'è stata (log 1242). Pinnato da
+  `The_ending_of_a_run_a_new_definition_outlived_is_not_written_over_the_series_that_owns_the_row`.
 
 ## 4. Stato finale
 

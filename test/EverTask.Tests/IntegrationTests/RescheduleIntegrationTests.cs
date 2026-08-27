@@ -596,6 +596,238 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
             "and the schedule stays where the halt left it: nothing is replayed");
     }
 
+    [Fact]
+    public async Task A_run_of_the_series_a_cancel_ended_cannot_take_the_row_back_from_the_revival()
+    {
+        // The revival drops the schedule's blacklist entry, and for an INLINE schedule that entry was the only
+        // thing standing between its OWN in-flight delivery and every write it makes: the cover the revival
+        // moves is built from the deliveries registered as occurrences OF a schedule, and a schedule's own
+        // delivery is not one of them. A re-registration REUSES the row, so the two deliveries answer to the
+        // same id and no blacklist can separate them — the version can, which is why the revival is a new
+        // generation of the row and not the same one.
+        var faulty = new FaultInjectingTaskStorage(_shared);
+
+        await StartHostAsync(storage: faulty);
+
+        var id = await Dispatcher.Dispatch(new RescheduleProbeTask("cancelled-series"),
+            r => r.Schedule().Every(1).Seconds(), taskKey: "reschedule-revival-race");
+
+        var  revived = Guid.Empty;
+        var  landed  = 0;
+
+        // The documented restart, landing INSIDE the window the old run's advance is about to close: its
+        // blacklist check and its reading of the row are both behind it already, so nothing else can speak
+        // for the row it is about to write.
+        faulty.RunBefore(nameof(ITaskStorage.CompleteRecurringRun), () =>
+        {
+            if (Interlocked.Exchange(ref landed, 1) == 1)
+                return;
+
+            Dispatcher.Cancel(id).GetAwaiter().GetResult();
+
+            revived = Dispatcher.Dispatch(new RescheduleProbeTask("restarted"),
+                                    r => r.Schedule().Every(1).Hours(), taskKey: "reschedule-revival-race")
+                                .GetAwaiter().GetResult();
+        });
+
+        await TaskWaitHelper.WaitForConditionAsync(() => Volatile.Read(ref landed) == 1 && revived != Guid.Empty,
+            20000);
+
+        revived.ShouldBe(id, "a recurring re-registration keeps the row, which is why the cancel follows it");
+
+        var row = await TaskWaitHelper.WaitUntilAsync(() => _shared.Get(t => t.Id == id),
+            rows => rows[0].CurrentRunCount >= 1, 20000);
+
+        row[0].NextRunUtc!.Value.ShouldBeGreaterThan(Clock.GetUtcNow().AddMinutes(50),
+            "the old run's advance lost its compare-and-swap and left the revival's cursor alone");
+        row[0].Status.ShouldNotBe(QueuedTaskStatus.Cancelled, "the series really restarted");
+        row[0].RecurringTask!.ShouldContain("HourInterval", Case.Insensitive,
+            "and the row still carries the definition the restart wrote");
+
+        var runsWhenRevived = _recorder.Count;
+        await Task.Delay(2500);
+
+        _recorder.Count.ShouldBe(runsWhenRevived,
+            "and the per-second grid the cancel ended is not re-parked over the hourly one that replaced it");
+
+        // What all of the above rests on: the two deliveries answer to the same id, so only the version can
+        // tell them apart.
+        row[0].ScheduleVersion.ShouldBe(1, "the revival replaces the definition, so it moves the version too");
+
+        Versions.TryGetLatest(id, out var published).ShouldBeTrue(
+            "and it publishes the lower bound every delivery of the old definition is measured against");
+        published.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task The_ending_of_a_run_a_new_definition_outlived_is_not_written_over_the_series_that_owns_the_row()
+    {
+        // The other half of the same id being reused: a run that was already executing when its definition
+        // was replaced — by a reschedule, or by the dispatch that revives a cancelled series — is past the
+        // pre-gate drop, and both terminal writes of its ENDING are unconditional. Cancelled is the one no
+        // recovery predicate selects and no advance moves past, so an ending that lands late killed the
+        // series that had just taken the row over. The advance beside it was already compare-and-swapped;
+        // this is the half that had nothing to lose to.
+        _recorder.Hold            = true;
+        _recorder.CancelAfterHold = true;
+
+        await StartHostAsync();
+
+        var id = await Dispatcher.Dispatch(new RescheduleProbeTask("outlived"),
+            r => r.Schedule().Every(1).Seconds(), taskKey: "reschedule-outlived-run");
+
+        await _recorder.Entered.WaitAsync(TimeSpan.FromSeconds(20));
+
+        var result = await Manager.Reschedule("reschedule-outlived-run", r => r.Schedule().Every(1).Hours());
+
+        result.ScheduleVersion.ShouldBe(1, "the premise: the row belongs to a new generation now");
+
+        // The run ends here, on a definition nobody is waiting for any more.
+        _recorder.Release();
+
+        var row = await TaskWaitHelper.WaitUntilAsync(() => _shared.Get(t => t.Id == id),
+            rows => rows[0].CurrentRunCount >= 1 || rows[0].Status == QueuedTaskStatus.Cancelled, 20000);
+
+        row[0].Status.ShouldNotBe(QueuedTaskStatus.Cancelled,
+            "the run that ended belonged to the definition that was replaced, not to the one that owns the row");
+        row[0].NextRunUtc.ShouldBe(result.NextRunUtc,
+            "and the advance that recorded it kept the cursor the new definition wrote");
+    }
+
+    [Fact]
+    public async Task A_revival_whose_un_cancel_is_lost_fails_the_dispatch_instead_of_reporting_a_restart()
+    {
+        // SetStatus is best effort on every relational provider — it logs its own failed write and hands the
+        // caller a completed task — so the one write the whole restart depends on could be lost while the
+        // dispatch returned an id and logged a restart. Nothing polls behind it: the registration is refused
+        // at its first fire because the row is still Cancelled, and no recovery predicate selects one either.
+        var faulty = new FaultInjectingTaskStorage(_shared);
+
+        await StartHostAsync(storage: faulty);
+
+        var id = await Dispatcher.Dispatch(new RescheduleProbeTask("lost-uncancel"),
+            r => r.Schedule().Every(1).Hours(), taskKey: "reschedule-lost-uncancel");
+
+        await Manager.CancelSchedule("reschedule-lost-uncancel");
+
+        // The shape of a database blip that rolled the un-cancel back: the call returns without reaching the
+        // store, exactly as the swallowing writes do.
+        faulty.SwallowNext(nameof(ITaskStorage.TryReviveCancelledSchedule), 1);
+
+        var events = await EventsOfAsync(async () =>
+            {
+                var failure = await Should.ThrowAsync<InvalidOperationException>(() =>
+                    Dispatcher.Dispatch(new RescheduleProbeTask("restarted"),
+                        r => r.Schedule().Every(1).Seconds(), taskKey: "reschedule-lost-uncancel"));
+
+                failure.Message.ShouldContain("could not be taken out of Cancelled", Case.Sensitive,
+                    "the caller has to learn that the dispatch it was told about did nothing");
+            },
+            "could not be taken out of Cancelled");
+
+        events.ShouldNotBeEmpty("a log line alone is not enough where nothing polls behind the write (V4)");
+
+        (await RowAsync(id)).Status.ShouldBe(QueuedTaskStatus.Cancelled,
+            "the row is exactly where the cancel left it");
+
+        WorkerBlacklist.IsBlacklisted(id).ShouldBeTrue(
+            "and its cover survives: the entry is dropped only once the un-cancel is committed");
+
+        Scheduler.IsScheduled(id).ShouldBeFalse("nothing is parked over a row that is still cancelled");
+
+        Versions.TryGetLatest(id, out _).ShouldBeFalse(
+            "and no version is published for a generation the row does not carry");
+
+        await Task.Delay(1500);
+
+        _recorder.Count.ShouldBe(0, "the series does not run");
+    }
+
+    [Fact]
+    public async Task A_revival_whose_un_cancel_is_lost_parks_nothing_even_when_the_dispatch_may_not_throw()
+    {
+        // ThrowIfUnableToPersist(false) buys a dispatch that does not fail when storage does. It does not buy
+        // a registration over a terminal row: WorkerQueue refuses one at its first fire while the scheduler
+        // consumes it, so parking here would only make the loss quieter.
+        var faulty = new FaultInjectingTaskStorage(_shared);
+
+        await StartHostAsync(storage: faulty, configureEverTask: cfg => cfg.SetThrowIfUnableToPersist(false));
+
+        var id = await Dispatcher.Dispatch(new RescheduleProbeTask("lost-uncancel-quiet"),
+            r => r.Schedule().Every(1).Hours(), taskKey: "reschedule-lost-uncancel-quiet");
+
+        await Manager.CancelSchedule("reschedule-lost-uncancel-quiet");
+
+        faulty.SwallowNext(nameof(ITaskStorage.TryReviveCancelledSchedule), 1);
+
+        var answered = await Dispatcher.Dispatch(new RescheduleProbeTask("restarted"),
+            r => r.Schedule().Every(1).Seconds(), taskKey: "reschedule-lost-uncancel-quiet");
+
+        answered.ShouldBe(id);
+
+        (await RowAsync(id)).Status.ShouldBe(QueuedTaskStatus.Cancelled);
+        WorkerBlacklist.IsBlacklisted(id).ShouldBeTrue();
+        Scheduler.IsScheduled(id).ShouldBeFalse();
+
+        await Task.Delay(1500);
+
+        _recorder.Count.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task An_exhausted_definition_dispatched_under_a_cancelled_key_leaves_the_cancellation_alone()
+    {
+        // The taskKey branch hands the row's own status to the finalization as its compare-and-swap
+        // expectation, and Cancelled MATCHES: the guard confirmed the very state it exists to lose to, so an
+        // exhausted re-registration wrote Completed over a series an operator had ended — erasing the record
+        // of the cancellation and, with it, the one status a later re-dispatch needs to see to undo it (X3).
+        await StartHostAsync(startHost: false);
+
+        // The same seeder with an INLINE definition, and a cursor a downtime left in the past: that is what
+        // makes the definition below exhausted instead of merely future.
+        var cursor = Clock.GetUtcNow().AddHours(-3).AddMinutes(-30);
+        var id = await SeedDurableScheduleAsync(new RecurringTask { HourInterval = new HourInterval(1) }, cursor,
+            "reschedule-exhausted-cancel");
+
+        await Host!.StartAsync();
+
+        await TaskWaitHelper.WaitForConditionAsync(() => Scheduler.IsScheduled(id), 20000);
+
+        await Manager.CancelSchedule("reschedule-exhausted-cancel");
+
+        (await RowAsync(id)).Status.ShouldBe(QueuedTaskStatus.Cancelled, "the premise: an operator ended it");
+
+        // Every slot this definition has left falls past its own bound, so the dispatch decides the series is
+        // exhausted — the branch that used to finalize the row it was handed.
+        var answered = await Dispatcher.Dispatch(new RescheduleProbeTask("exhausted"),
+            r => r.Schedule().Every(1).Hours().RunUntil(Clock.GetUtcNow().AddMinutes(1)),
+            taskKey: "reschedule-exhausted-cancel");
+
+        answered.ShouldBe(id);
+
+        var row = await RowAsync(id);
+
+        row.Status.ShouldBe(QueuedTaskStatus.Cancelled,
+            "a cancelled series is already terminal and is never rewritten to Completed");
+        row.NextRunUtc.ShouldBe(cursor, "and its cursor is left where the cancel found it");
+
+        (await _shared.GetStatusAudits(id)).ShouldNotContain(a => a.NewStatus == QueuedTaskStatus.Completed,
+            "the trail must not say a series ran to completion at the moment of a deploy that ran nothing");
+
+        // The second-order half: because the row is still Cancelled, the key still leads back to the revival.
+        await Dispatcher.Dispatch(new RescheduleProbeTask("restarted"),
+            r => r.Schedule().Every(1).Seconds(), taskKey: "reschedule-exhausted-cancel");
+
+        (await RowAsync(id)).Status.ShouldNotBe(QueuedTaskStatus.Cancelled);
+
+        WorkerBlacklist.IsBlacklisted(id).ShouldBeFalse(
+            "the entry a row flipped to Completed would have stranded, with nothing left to drop it");
+
+        await TaskWaitHelper.WaitForConditionAsync(() => _recorder.Count > 0, 20000);
+
+        _recorder.Count.ShouldBeGreaterThan(0, "and the series really runs again");
+    }
+
     /// <summary>The occurrence rows of a schedule, whatever state they are in.</summary>
     private async Task<QueuedTask[]> OccurrencesOfAsync(Guid scheduleId) =>
         await _shared.Get(t => t.ParentTaskId == scheduleId);

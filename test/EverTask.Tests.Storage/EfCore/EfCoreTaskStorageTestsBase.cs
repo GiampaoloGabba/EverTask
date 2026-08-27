@@ -2879,6 +2879,25 @@ public abstract class EfCoreTaskStorageTestsBase
     [InlineData(AuditLevel.Full, 1)]
     [InlineData(AuditLevel.Minimal, 0)]
     [InlineData(AuditLevel.None, 0)]
+    public async Task TryReviveCancelledSchedule_should_audit_the_revival_only_at_the_level_that_asks_for_it(
+        AuditLevel auditLevel, int expectedAudits)
+    {
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor, status: QueuedTaskStatus.Cancelled);
+
+        (await _storage.TryReviveCancelledSchedule(schedule.Id, 0, auditLevel)).ShouldBeTrue();
+
+        var row = (await _storage.Get(t => t.Id == schedule.Id))[0];
+        row.Status.ShouldBe(QueuedTaskStatus.WaitingQueue, "what is WRITTEN never depends on the audit level");
+        row.ScheduleVersion.ShouldBe(1);
+
+        _mockedDbContext.StatusAudit.Count(a => a.QueuedTaskId == schedule.Id).ShouldBe(expectedAudits);
+    }
+
+    [Theory]
+    [InlineData(AuditLevel.Full, 1)]
+    [InlineData(AuditLevel.Minimal, 0)]
+    [InlineData(AuditLevel.None, 0)]
     public async Task RequeueTerminal_should_audit_the_requeue_only_at_the_level_that_asks_for_it(
         AuditLevel auditLevel, int expectedAudits)
     {
@@ -3174,6 +3193,61 @@ public abstract class EfCoreTaskStorageTestsBase
             .ShouldBeTrue();
 
         (await _storage.Get(t => t.Id == schedule.Id))[0].ScheduleVersion.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task TryReviveCancelledSchedule_should_uncancel_the_row_and_move_its_version()
+    {
+        // The write a re-dispatch under a cancelled schedule's own task key makes. It ANSWERS, unlike the
+        // SetStatus it replaces — which every provider here implements as best effort — because it is the one
+        // write the whole restart depends on. And it moves the version, because the row keeps its id: the
+        // deliveries of the series the cancel ended answer to the same id the new registration uses, so the
+        // version is the only thing that tells them apart.
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor, status: QueuedTaskStatus.Cancelled);
+
+        await _storage.SetStatus(schedule.Id, QueuedTaskStatus.Cancelled, new InvalidOperationException("ended"),
+            AuditLevel.Full);
+
+        (await _storage.TryReviveCancelledSchedule(schedule.Id, 0, AuditLevel.Full)).ShouldBeTrue();
+
+        var row = (await _storage.Get(t => t.Id == schedule.Id))[0];
+        row.Status.ShouldBe(QueuedTaskStatus.WaitingQueue, "where a brand new dispatch leaves a row");
+        row.ScheduleVersion.ShouldBe(1);
+        row.Exception.ShouldBeNull("the error the cancel recorded belongs to the series that ended");
+        row.NextRunUtc.ShouldBe(cursor, "the cursor is the dispatch's business, not this write's");
+    }
+
+    [Fact]
+    public async Task TryReviveCancelledSchedule_should_refuse_a_row_that_is_not_cancelled()
+    {
+        // Nothing else is a revival: a live schedule taken back to WaitingQueue would be pulled out of
+        // whatever state it is really in, and the caller would be told a cancellation had been undone.
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor, status: QueuedTaskStatus.InProgress);
+
+        (await _storage.TryReviveCancelledSchedule(schedule.Id, 0, AuditLevel.Full)).ShouldBeFalse();
+
+        var row = (await _storage.Get(t => t.Id == schedule.Id))[0];
+        row.Status.ShouldBe(QueuedTaskStatus.InProgress);
+        row.ScheduleVersion.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task TryReviveCancelledSchedule_should_refuse_a_version_the_row_no_longer_carries()
+    {
+        // The compare-and-swap half: the dispatch decided on the version it read, and the executor it is
+        // about to park carries the generation this write produces. A row somebody else has moved in between
+        // belongs to that somebody, and a revival written over it would hand the new registration a version
+        // the row does not have.
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor, scheduleVersion: 4, status: QueuedTaskStatus.Cancelled);
+
+        (await _storage.TryReviveCancelledSchedule(schedule.Id, 0, AuditLevel.Full)).ShouldBeFalse();
+
+        var row = (await _storage.Get(t => t.Id == schedule.Id))[0];
+        row.Status.ShouldBe(QueuedTaskStatus.Cancelled);
+        row.ScheduleVersion.ShouldBe(4);
     }
 
     [Fact]

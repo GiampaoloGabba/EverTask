@@ -20,6 +20,19 @@ in-memory storage.
     `WaitingQueue` (where a brand new dispatch leaves it) AFTER the new definition is written, and the
     transition is audited. A one-shot needs none of this: a terminal row is removed and recreated under a new
     id.
+    - **The un-cancel is `TryReviveCancelledSchedule`, and it both ANSWERS and moves the version.** A plain
+      `SetStatus` is best effort on every relational provider, so a swallowed failure left the row terminally
+      `Cancelled` — with its cover already dropped — behind a dispatch that returned an id and logged a
+      restart, and nothing polls behind that: the parked registration is refused at its first fire and no
+      recovery predicate selects the row again. So the write goes FIRST, and a failure is a log error plus a
+      monitoring event that stops the dispatch (throwing under the default `ThrowIfUnableToPersist`, as a
+      failed `Persist` does) instead of finishing it. The version bump is what protects the series being
+      started from the deliveries of the one that was cancelled: the row keeps its id, so an in-flight
+      delivery of the old definition answers to the very id the new registration uses and no blacklist can
+      separate them — only `ScheduleVersion` can, which is why the dispatch stamps the new generation on the
+      executor it parks and publishes it to `ScheduleVersionRegistry` (S4, after the park). Without it the old
+      delivery's advance compare-and-swapped at an equal version, wrote the OLD grid's cursor over the new
+      definition and re-parked itself in place of the revival's registration — for the life of the process.
     - **The entry is MOVED, not dropped.** It carries two meanings that end at different moments: the
       schedule is alive again from here, the occurrences the cancel already terminalized never will be, and
       that same entry is the only thing covering the ones past the enqueue boundary — a delivery in a channel
@@ -535,6 +548,15 @@ dropping it would consume the registration that produced it); the absence of an 
 zero, which is what keeps a recovered executor alive across a restart. `AdvanceVersionedRunAsync` is the CAS
 advance, and on a mismatch it re-aims at the row's own cursor instead of dropping the write, because the run
 happened and has to be recorded.
+
+- **A run that was already EXECUTING when its definition was replaced does not persist its ending either.**
+  The same question is asked again in `HandleExceptionAsync`, where it means something else: that delivery is
+  past the pre-gate drop, and both writes there are unconditional terminal ones. `Cancelled` is the status no
+  recovery predicate selects and no advance moves past, so an ending that lands late killed the series that
+  had just taken the row over — a cancel-then-redispatch restart and a plain reschedule reach it the same
+  way. The advance beside it was already compare-and-swapped; this is the half that had nothing to lose to.
+  Only the storage write is skipped: the run really ended that way, and its `OnError` callback and its
+  monitoring event still say so.
 
 - **Past the last re-aim the GUARD is given up, never the write.** The bound exists so a third party rewriting
   the row in a loop cannot spin an advance; reaching it recorded nothing at all, which left the row in the
