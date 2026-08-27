@@ -253,6 +253,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **BREAKING: `ITaskStorage.GetCurrentRunCount` has been removed.** The worker reads `CurrentRunCount` from
   the queued row it already owns, so the separate storage round trip had no library caller.
+- **4.0 is an upgrade boundary for durable schedules: do not roll a store back to 3.x while durable
+  occurrences exist.** A 3.x reader ignores `OccurrenceMode`, `Misfire` and `Provider` on the parent and
+  knows nothing about occurrence child rows: a provider-backed schedule silently degrades to an inline one,
+  and during an overlapping rollout an old host can run the slot a 4.0 child row already represents. The
+  migration's `Down` deletes the child rows precisely so a rollback cannot execute them as standalone
+  tasks — pending occurrences are LOST on downgrade by design. Disable durable occurrences and drain the
+  children before any planned rollback.
+- **A custom `IScheduler` that does not implement `TrySchedule` keeps unconditional registration.** The
+  default interface body forwards to `Schedule`, so runtime rescheduling over such a scheduler cannot
+  refuse a stale in-flight registration: an old delivery can replace the newly parked one until the next
+  restart. Implement `TrySchedule` (compare the offered version against the parked one) to take part in
+  versioned re-registration; the built-in schedulers both do.
 
 ### Added (execution context, #25)
 

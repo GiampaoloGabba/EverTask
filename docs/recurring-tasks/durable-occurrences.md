@@ -163,6 +163,13 @@ but EXECUTION is not claimed by anyone: a second live host recovers an occurrenc
 and runs it again. Run one active instance (a standby that is not started is fine). Distributed execution is a
 separate epic; see [Scalability](../scalability.md).
 
+**4.0 is an upgrade boundary — no rollback to 3.x with durable schedules active.** A 3.x reader ignores the
+occurrence mode and the misfire policy on the parent and knows nothing about occurrence child rows: a
+provider-backed schedule silently degrades to an inline one, and during an overlapping rollout an old host
+can run the slot a 4.0 child row already represents. The migration's `Down` deletes the child rows so a
+rolled-back store cannot execute them as standalone tasks — pending occurrences are lost on downgrade by
+design. Disable durable occurrences and drain the children before any planned rollback.
+
 **A failed occurrence does not stop the series.** It ends `Failed`, keeps its trail, and the schedule advances
 to the next slot. Putting one back in a queue is a separate, explicit act:
 `ITaskScheduleManager.RequeueFailedOccurrence(occurrenceId)` returns it to `Queued` with its id, its history

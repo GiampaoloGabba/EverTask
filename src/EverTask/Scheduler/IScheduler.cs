@@ -24,7 +24,9 @@ public interface IScheduler
     /// <para>
     /// The default implementation schedules unconditionally and answers true (binary compatibility for external
     /// schedulers compiled against older versions): a scheduler that cannot compare versions keeps exactly the
-    /// behaviour it always had.
+    /// behaviour it always had. The cost of that default is that runtime rescheduling cannot refuse a stale
+    /// in-flight registration over such a scheduler — implement this member to take part in versioned
+    /// re-registration.
     /// </para>
     /// </remarks>
     bool TrySchedule(TaskHandlerExecutor item, DateTimeOffset? nextRecurringRun = null)
