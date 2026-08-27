@@ -57,9 +57,8 @@ public class DashboardService : IDashboardService
         var totalFinished = completedCount + failedCount;
         var successRate = totalFinished > 0 ? (decimal)completedCount / totalFinished * 100 : 0m;
 
-        // Average execution time (actual execution duration, not including queue time), from the duration the
-        // worker measured around each run. Deriving it from StatusAudits instead read a navigation no storage
-        // read populates, so the tile answered 0.0 on every relational store.
+        // Execution duration only, queue time excluded, from what the worker measured around each run:
+        // deriving it from StatusAudits reads a navigation no storage read populates.
         var avgExecutionTimeMs = TaskRunTiming.AverageMeasuredDurationMs(filteredTasks);
 
         // Status distribution
@@ -116,9 +115,8 @@ public class DashboardService : IDashboardService
     /// not started already is.
     /// </summary>
     /// <remarks>
-    /// Counted from the rows themselves: an occurrence IS a task row, so the backlog is a fact the store
-    /// holds rather than a figure to estimate. Slots a schedule dropped never became rows and are therefore
-    /// absent here by construction — they are reported when they happen, by the OccurrenceSkipped event.
+    /// Slots a schedule dropped never became rows, so they are absent here by construction: they are reported
+    /// when they happen, by the OccurrenceSkipped event.
     /// </remarks>
     private static CatchUpBacklogDto SummarizeCatchUpBacklog(IEnumerable<QueuedTask> allTasks, DateTimeOffset now)
     {
@@ -134,9 +132,8 @@ public class DashboardService : IDashboardService
         {
             if (task.ParentTaskId == null)
             {
-                // A halt lives on the SCHEDULE row, in the same column an occurrence uses for its own
-                // metadata, and it only counts while the series is still one that could run: a cancelled or
-                // finished schedule keeps the marker it was written with, and nothing ever clears it.
+                // A halt lives on the SCHEDULE row and counts only while the series could still run: nothing
+                // clears the marker when a schedule is cancelled or finishes.
                 if (TaskScheduleFacts.HasStandingHalt(task))
                     halted++;
 
@@ -170,7 +167,7 @@ public class DashboardService : IDashboardService
         }
 
         // A slot still in the future is not lateness: a durable schedule materializes ahead of its own time
-        // whenever its budget allows, and reporting that as a negative lag would read as time travel.
+        // whenever its budget allows.
         var lag = oldestPendingSlot is { } oldest && oldest < now ? (now - oldest).TotalSeconds : 0d;
 
         return new CatchUpBacklogDto(pending, active, failed, skipped, completed, oldestPendingSlot,

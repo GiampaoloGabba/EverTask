@@ -10,12 +10,9 @@ public abstract class TaskStoreEfDbContext<T>(DbContextOptions<T> options)
 
     /// <summary>
     /// Body of the check constraint that keeps an occurrence from existing without its nominal slot.
+    /// Unquoted identifiers, which SQL Server, SQLite and MySQL resolve case-insensitively; PostgreSQL folds
+    /// them to lower case while EF emits quoted mixed-case names, so it overrides this with a quoted form.
     /// </summary>
-    /// <remarks>
-    /// Unquoted identifiers, which SQL Server, SQLite and MySQL all resolve case-insensitively. PostgreSQL
-    /// folds unquoted identifiers to lower case while EF always emits quoted, mixed-case column names, so it
-    /// overrides this with a quoted form — the one place the constraint cannot be written portably.
-    /// </remarks>
     protected virtual string OccurrenceSlotCheckSql =>
         "ParentTaskId IS NULL OR ScheduledExecutionUtc IS NOT NULL";
 
@@ -98,9 +95,8 @@ public abstract class TaskStoreEfDbContext<T>(DbContextOptions<T> options)
         // The DEFAULT belongs to the MODEL, not just to the AddColumn of one migration: SQLite cannot ALTER a
         // foreign key or a check constraint in, so its migration rebuilds the table from the model and the
         // rebuilt column would come out NOT NULL with no default, diverging from the other three providers.
-        // A writer that omits the column — an operator script, a support fix-up, an older binary — would then
-        // fail on SQLite alone. ValueGeneratedNever keeps EverTask itself writing the value on every insert,
-        // so the default only ever serves those outside writers and no insert changes shape.
+        // ValueGeneratedNever keeps EverTask writing the value itself, so the default only serves an outside
+        // writer that omits the column.
         modelBuilder.Entity<QueuedTask>()
                     .Property(q => q.ScheduleVersion)
                     .HasDefaultValue(0)

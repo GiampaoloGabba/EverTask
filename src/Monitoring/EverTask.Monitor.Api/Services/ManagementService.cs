@@ -10,9 +10,8 @@ namespace EverTask.Monitor.Api.Services;
 /// </summary>
 /// <remarks>
 /// The schedule manager is OPTIONAL because the API can be registered standalone, against a storage no
-/// EverTask host is running behind (<c>AddEverTaskMonitoringApiStandalone</c>). There is nothing to operate
-/// on in that case, and answering "not supported" is the honest reply — the alternative would be a container
-/// that fails to build the moment someone maps the controllers.
+/// EverTask host is running behind (<c>AddEverTaskMonitoringApiStandalone</c>): there is nothing to operate
+/// on then, so the operations answer 501 rather than failing the container at build time.
 /// </remarks>
 /// <param name="storage">The task storage, used to resolve the row an id names.</param>
 /// <param name="logger">Logger.</param>

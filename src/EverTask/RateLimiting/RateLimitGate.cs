@@ -15,7 +15,7 @@ internal sealed class RateLimitGate(
     IEverTaskLogger<RateLimitGate> logger,
     TimeProvider? timeProvider = null) : IRateLimitGate
 {
-    // The gate hands slots to the scheduler, so it must read the SAME clock the scheduler sleeps on (P9).
+    // The gate hands slots to the scheduler, so it must read the SAME clock the scheduler sleeps on.
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
 
     private long _lastSeenFailOpenCount;
@@ -88,22 +88,20 @@ internal sealed class RateLimitGate(
         if (decision.Acquired)
             return Proceed();
 
-        // L8 Discard: no waiting, no parking — the task is terminally rejected when no budget
-        // is immediately available. The freed reservation is released best-effort.
+        // Discard: no waiting, no parking — the task is terminally rejected when no budget is
+        // immediately available. The freed reservation is released best-effort.
         if (policy.OverflowBehavior == RateLimitOverflowBehavior.Discard)
         {
             _ = ReleaseBestEffortAsync(taskType, key, task.PersistenceId);
             return Reject(RateLimitRejectionKind.Discarded, decision.RetryAt);
         }
 
-        // L14: never wait inline on the consumer. A near slot is re-parked to the scheduler (Defer)
-        // exactly like a far slot, so the consumer is immediately free for the next item — on a
-        // single-consumer queue an inline Task.Delay here head-of-line-blocked every following item,
-        // INCLUDING tasks without any policy. The task still fires at its reserved slot via redelivery
-        // (the reservation is redeemed then, see InMemoryKeyedRateLimiter; honored even under congested
-        // redelivery latency, L22). The previous in-slot wait only saved a scheduler round-trip for
-        // near slots — a latency optimisation not worth blocking the consumer. (RateLimitPolicy.
-        // MaxInSlotWait is retained for binary compatibility but no longer drives an inline wait.)
+        // Never wait inline on the consumer. A near slot is re-parked to the scheduler (Defer) exactly
+        // like a far slot, so the consumer is immediately free for the next item — on a single-consumer
+        // queue an inline Task.Delay here head-of-line-blocks every following item, INCLUDING tasks
+        // without any policy. The task still fires at its reserved slot via redelivery, which redeems the
+        // reservation. (RateLimitPolicy.MaxInSlotWait is retained for binary compatibility but no longer
+        // drives an inline wait.)
         return Defer(task, taskType, key, decision.RetryAt, epoch);
     }
 
@@ -142,13 +140,12 @@ internal sealed class RateLimitGate(
 
         if (task.RecurringTask != null)
         {
-            // F14: same RunUntil guard as the Defer path — an occurrence whose re-park slot falls past
-            // RunUntil must never be fired late. Drop this redelivery; the in-flight original advances
-            // the series (its next-occurrence calculation lands past RunUntil and ends the series).
+            // Same RunUntil guard as the Defer path — an occurrence whose re-park slot falls past RunUntil
+            // must never be fired late. Drop this redelivery; the in-flight original advances the series.
             var runUntil = task.RecurringTask.RunUntil;
-            // H: RunUntil is EXCLUSIVE for the recurrence (CalculateNextRun drops an occurrence whose time
-            // is >= RunUntil), so the gate drops a reserved slot AT or past RunUntil for consistency — an
-            // occurrence the recurrence would consider ended must not be fired by the limiter at the boundary tick.
+            // RunUntil is EXCLUSIVE for the recurrence (CalculateNextRun drops an occurrence whose time is
+            // >= RunUntil), so the gate drops a reserved slot AT or past it for consistency: an occurrence
+            // the recurrence would consider ended must not be fired by the limiter at the boundary tick.
             if (runUntil.HasValue && slot >= runUntil.Value)
             {
                 logger.InFlightRedeliveryDroppedPastRunUntil(
@@ -174,8 +171,8 @@ internal sealed class RateLimitGate(
             return;
         }
 
-        // L2 accounting: the redelivery's enqueue already removed the original lot entry, so
-        // the re-park must re-register it (idempotent) or the bound under-counts
+        // The redelivery's enqueue already removed the original lot entry, so the re-park must
+        // re-register it (idempotent) or the parking-lot bound under-counts
         if (!string.IsNullOrEmpty(task.RateLimitKey))
             parkingLot.Park(task.PersistenceId, EffectiveQueueName(task), task.RateLimitKey, slot);
 
@@ -318,7 +315,7 @@ internal sealed class RateLimitGate(
     {
         var now = _timeProvider.GetUtcNow();
 
-        // L3 horizon: far-future slots are never parked (the limiter did not book them either).
+        // Horizon: far-future slots are never parked (the limiter did not book them either).
         // The caller applies the terminal outcome: one-shot → persisted Failed + OnError with
         // the typed exception; recurring → occurrence skipped, series alive.
         if (slot - now > task.RateLimitPolicy!.MaxReservationHorizon)
@@ -333,7 +330,7 @@ internal sealed class RateLimitGate(
         if (slot <= now)
             slot = now + PastSlotFloor;
 
-        // Unconditional lazy re-park (L1): a parked task must never pin a handler instance
+        // Unconditional lazy re-park: a parked task must never pin a handler instance
         var parked = task.ToLazy();
 
         // Whether the registration was actually made. It is refused when a NEWER schedule version is already
@@ -344,9 +341,9 @@ internal sealed class RateLimitGate(
         if (task.RecurringTask != null)
         {
             var runUntil = task.RecurringTask.RunUntil;
-            // H: RunUntil is EXCLUSIVE for the recurrence (CalculateNextRun drops an occurrence whose time
-            // is >= RunUntil), so the gate drops a reserved slot AT or past RunUntil for consistency — an
-            // occurrence the recurrence would consider ended must not be fired by the limiter at the boundary tick.
+            // RunUntil is EXCLUSIVE for the recurrence (CalculateNextRun drops an occurrence whose time is
+            // >= RunUntil), so the gate drops a reserved slot AT or past it for consistency: an occurrence
+            // the recurrence would consider ended must not be fired by the limiter at the boundary tick.
             if (runUntil.HasValue && slot >= runUntil.Value)
             {
                 // Never fire late: the occurrence is skipped (same semantics as downtime; the
@@ -384,7 +381,7 @@ internal sealed class RateLimitGate(
             return new RateLimitGateResult(RateLimitGateOutcome.Deferred, slot);
         }
 
-        // L2 accounting: distinct parked tasks (idempotent re-registration on re-park)
+        // Parking-lot accounting: distinct parked tasks (idempotent re-registration on re-park)
         parkingLot.Park(task.PersistenceId, EffectiveQueueName(task), key, slot);
 
         // Set-then-check: a Cancel or same-taskKey immediate re-dispatch that happened while

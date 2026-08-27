@@ -1,6 +1,6 @@
 namespace EverTask.Scheduler.Recurring.Builder;
 
-// The scheduling clock (P9) travels down the whole chain: RunNow and every RunUntil guard resolve on it,
+// The scheduling clock travels down the whole chain: RunNow and every RunUntil guard resolve on it,
 // so a schedule built under a test clock is judged by that clock and not by the wall clock.
 internal class RecurringTaskBuilder(TimeProvider? timeProvider = null) : IRecurringTaskBuilder
 {
@@ -30,7 +30,7 @@ internal class RecurringTaskBuilder(TimeProvider? timeProvider = null) : IRecurr
 public class ThenableSchedulerBuilder(RecurringTask recurringTask, TimeProvider? timeProvider)
     : IThenableSchedulerBuilder
 {
-    /// <summary>The pre-P9 constructor, kept for binary compatibility (P6/X6).</summary>
+    /// <summary>The historical constructor, kept so an assembly compiled against an earlier release binds.</summary>
     public ThenableSchedulerBuilder(RecurringTask recurringTask) : this(recurringTask, null) { }
 
     public IIntervalSchedulerBuilder Then() => new IntervalSchedulerBuilder(recurringTask, timeProvider);
@@ -38,7 +38,7 @@ public class ThenableSchedulerBuilder(RecurringTask recurringTask, TimeProvider?
 
 public class BuildableSchedulerBuilder(RecurringTask task, TimeProvider? timeProvider) : IBuildableSchedulerBuilder
 {
-    /// <summary>The pre-P9 constructor, kept for binary compatibility (P6/X6).</summary>
+    /// <summary>The historical constructor, kept so an assembly compiled against an earlier release binds.</summary>
     public BuildableSchedulerBuilder(RecurringTask task) : this(task, null) { }
 
     public IBuildableSchedulerBuilder RunUntil(DateTimeOffset runUntil)

@@ -1,7 +1,7 @@
 namespace EverTask.Scheduler.Occurrences;
 
 // EventId range 2300–2399 (ProviderScheduleGrid: the occurrence provider seam). Ranges are allocated per
-// component in the #32 plan; keep every new log line inside this range and never reuse an id.
+// component (issue #32); keep every new log line inside this range and never reuse an id.
 internal static partial class OccurrenceProviderLog
 {
     [LoggerMessage(EventId = 2300, Level = LogLevel.Warning,

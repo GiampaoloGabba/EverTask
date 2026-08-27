@@ -11,25 +11,18 @@ namespace EverTask.Storage.EfCore;
 public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTaskLogger<EfCoreTaskStorage> logger)
     : ITaskStorage, ITaskStorageStatistics
 {
-    /// <summary>
-    /// Gets the current UTC time with explicit +00:00 offset.
-    /// Ensures consistent timezone handling regardless of server timezone configuration.
-    /// </summary>
+    /// <summary>Current UTC time with an explicit +00:00 offset, whatever the server timezone is.</summary>
     private static DateTimeOffset UtcNowNormalized => new(DateTime.UtcNow, TimeSpan.Zero);
 
     /// <summary>
-    /// The half of category (i) EVERY relational provider can translate: the recoverable status set and the
-    /// run budget. Split out of <see cref="RecoverableForExecutionQuery"/> so a provider that has to decide
-    /// the temporal half in memory — SQLite — can still put this half in the WHERE clause of its conditional
-    /// UPDATE, instead of trusting a preceding SELECT for the whole predicate.
+    /// The half of the recovery filter EVERY relational provider can translate: the recoverable status set
+    /// and the run budget. Split out of <see cref="RecoverableForExecutionQuery"/> so SQLite, which has to
+    /// decide the temporal half in memory, can still assert this half in the WHERE clause of its conditional
+    /// UPDATE instead of trusting a preceding SELECT for the whole predicate.
     /// </summary>
-    /// <remarks>
-    /// Status and <see cref="QueuedTask.MaxRuns"/> are ANDed in FRONT of the temporal term (X3) and are never
-    /// bypassed, which is exactly what makes this half safe to assert on its own.
-    /// </remarks>
     protected static readonly Expression<Func<QueuedTask, bool>> RecoverableStatusAndBudget =
-        // < MaxRuns (not <=): a series at CurrentRunCount == MaxRuns is exhausted (CU11/L27); null
-        // CurrentRunCount counts as 0 (L34). Mirrors QueuedTask.IsRecoverableForExecution.
+        // < MaxRuns (not <=): a series at CurrentRunCount == MaxRuns is exhausted; a null CurrentRunCount
+        // counts as 0. Mirrors QueuedTask.IsRecoverableForExecution.
         t => (t.MaxRuns == null || (t.CurrentRunCount ?? 0) < t.MaxRuns)
              && (t.Status == QueuedTaskStatus.WaitingQueue ||
                  t.Status == QueuedTaskStatus.Queued ||
@@ -41,17 +34,13 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                    t.Status == QueuedTaskStatus.Failed)));
 
     /// <summary>
-    /// Category (i) of the recovery filter as an EF-translatable expression: the server-side mirror of
+    /// The execution half of the recovery filter as an EF-translatable expression: the server-side mirror of
     /// <see cref="QueuedTask.IsRecoverableForExecution"/>, shared by <see cref="RetrievePending"/> and
     /// <see cref="TrySetQueuedIfRecoverable"/> so the two queries can never drift. SQLite cannot translate
     /// the <c>RunUntil</c> DateTimeOffset comparison and overrides both methods to evaluate it client-side.
+    /// The last branch keeps a recurring series recoverable when the slot it had already scheduled precedes
+    /// the boundary that elapsed during the downtime.
     /// </summary>
-    /// <remarks>
-    /// The temporal term is GROUPED (X3): status and <see cref="QueuedTask.MaxRuns"/> stay ANDed in front,
-    /// while <c>RunUntil</c> gains the branch that keeps a recurring series recoverable when the slot it had
-    /// already scheduled (<c>NextRunUtc</c>) precedes the boundary that elapsed during the downtime. The
-    /// column-to-column comparison translates on SQL Server, PostgreSQL and MySQL (same type on both sides).
-    /// </remarks>
     private static Expression<Func<QueuedTask, bool>> RecoverableForExecutionQuery(DateTimeOffset now) =>
         Compose(RecoverableStatusAndBudget,
             t => t.RunUntil == null
@@ -60,8 +49,8 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             Expression.AndAlso);
 
     /// <summary>
-    /// Category (ii) of the recovery filter: a recurring series with a cursor but nothing left to run, which
-    /// recovery must FINALIZE rather than execute. Mirrors <see cref="QueuedTask.IsRecurringSeriesToFinalize"/>.
+    /// A recurring series with a cursor but nothing left to run, which recovery must FINALIZE rather than
+    /// execute. Mirrors <see cref="QueuedTask.IsRecurringSeriesToFinalize"/>.
     /// </summary>
     private static readonly Expression<Func<QueuedTask, bool>> SeriesToFinalizeQuery =
         t => t.IsRecurring
@@ -122,8 +111,9 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
     public async Task Persist(QueuedTask taskEntity, CancellationToken ct = default)
     {
-        // What a cursor compare-and-swap later matches is the STORED representation, and on SQLite that is
-        // text carrying the offset — so the row is stored at offset zero whatever the caller handed over (F1).
+        // A cursor compare-and-swap matches the STORED representation, and SQLite compares a DateTimeOffset
+        // as the text it stored, offset included: a row written at +02:00 would lose every compare-and-swap
+        // against the same instant in UTC (#37).
         taskEntity.NormalizeTimestampsToUtc();
 
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
@@ -139,12 +129,10 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     /// Which pre-4.0 signatures the CONCRETE storage type overrides, computed once per type.
     /// </summary>
     /// <remarks>
-    /// A provider written before the clock-carrying overloads existed overrides only the legacy signatures —
-    /// that is where its query-translation workaround and its own atomicity live. The core now calls the
-    /// <c>nowUtc</c> overloads exclusively (P9), and a base-class virtual resolves statically to the base
-    /// body, so without this probe the base would answer them itself and the derived override would silently
-    /// become dead code. The promise is the same the <see cref="ITaskStorage"/> defaults make: the legacy
-    /// override keeps being called, at the cost of resolving the clock itself.
+    /// A provider written before the clock-carrying overloads existed overrides only the legacy signatures.
+    /// The core calls the <c>nowUtc</c> overloads exclusively and a base-class virtual binds statically, so
+    /// without this probe the base would answer them itself and the derived override would silently become
+    /// dead code.
     /// </remarks>
     private readonly record struct LegacyOverrides(bool RetrievePending, bool TrySetQueuedIfRecoverable);
 
@@ -191,15 +179,8 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         // caller already on UTC (DateTimeOffset comparison is instant-based).
         var now = nowUtc.ToUniversalTime();
 
-        // Recoverable statuses (see QueuedTask.IsRecoverableForExecution for the canonical definition):
-        // - WaitingQueue: persisted but never delivered to a worker queue (parked in the in-memory
-        //   scheduler at shutdown, or dropped by a full queue) - without it delayed tasks are lost on restart
-        // - Queued: written to the in-memory channel but not executed before shutdown
-        // - InProgress / ServiceStopped: interrupted mid-execution
-        // - Pending: legacy status, kept for backward compatibility
-        // - Recurring tasks between two runs (Completed/Failed with a future NextRunUtc): without
-        //   them a recurring task not re-registered at startup dies after the first restart
-        // Plus category (ii): recurring series that only need finalizing (X3).
+        // Whatever this filter excludes is silently lost on restart. The canonical status list lives in
+        // QueuedTask.IsRecoverableForExecution; the page is the union of it and the series to finalize.
         var query = dbContext.QueuedTasks
                              .AsNoTracking()
                              .Where(RecoveryPageQuery(now));
@@ -256,11 +237,9 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             return transitionedClientSide;
         }
 
-        // Relational: the atomic conditional UPDATE and its Queued audit must commit TOGETHER (L20),
-        // so a recovery transition is never persisted without its audit (a refused transition leaves
-        // no trace; a failed audit rolls the transition back). The startup recovery must never
-        // resurrect a task that terminally finished after its page was read (SetQueued over Completed
-        // would cause a second execution). Recoverable predicate shared with RetrievePending.
+        // Relational: the conditional UPDATE and its Queued audit must commit TOGETHER, so a recovery
+        // transition is never persisted without its audit and a refused one leaves no trace. The condition
+        // is what stops recovery resurrecting a task that terminally finished after its page was read.
         await using var transaction = await efContext.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
 
         var rowsAffected = await dbContext.QueuedTasks
@@ -282,8 +261,8 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
     /// <summary>
     /// Commits a recovery transition the conditional UPDATE has already applied, together with its Queued
-    /// status audit, so the pair lands or is rolled back as one (L20) and a refused transition leaves no
-    /// trace. The shape a provider overriding the transition has to reuse.
+    /// status audit, so the pair lands or is rolled back as one and a refused transition leaves no trace.
+    /// The shape a provider overriding the transition has to reuse.
     /// </summary>
     protected static Task CommitQueuedTransitionAsync(ITaskStoreDbContext dbContext,
                                                       IDbContextTransaction transaction, Guid taskId,
@@ -293,14 +272,13 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
     /// <summary>
     /// Recoverable transition evaluated client-side, for the providers that can express NO conditional
-    /// UPDATE at all (EF Core InMemory). Loads the task, applies the canonical
-    /// <see cref="QueuedTask.IsRecoverable"/> predicate and, only if recoverable, sets it Queued AND stages
-    /// its audit in the SAME SaveChanges, so the transition and its audit are written atomically (L20).
+    /// UPDATE at all (EF Core InMemory): the transition and its audit go in the SAME SaveChanges, so they
+    /// are written atomically.
     /// </summary>
     /// <remarks>
     /// The read and the write are two steps, so this is NOT a compare-and-swap: a transition that
-    /// linearizes in between is overwritten. Every relational provider — SQLite included, whichever half of
-    /// the predicate it can translate — must put its condition in the WHERE clause instead.
+    /// linearizes in between is overwritten. Every relational provider must put its condition in the WHERE
+    /// clause instead.
     /// </remarks>
     protected static async Task<bool> TrySetQueuedClientSideAsync(ITaskStoreDbContext dbContext, Guid taskId,
                                                                   DateTimeOffset now, AuditLevel auditLevel, CancellationToken ct)
@@ -318,9 +296,8 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     }
 
     /// <summary>
-    /// Stages the Queued status audit for a recovery transition WITHOUT saving: it is committed in
-    /// the SAME unit of work as the transition (a single SaveChanges or the wrapping transaction), so
-    /// the pair is atomic. Audited only when the transition actually happens (unlike
+    /// Stages the Queued status audit for a recovery transition WITHOUT saving: it is committed in the SAME
+    /// unit of work as the transition. Audited only when the transition actually happens (unlike
     /// <see cref="SetStatus"/>, which audits optimistically): a refused transition leaves no trace.
     /// </summary>
     private static void AddQueuedTransitionAudit(ITaskStoreDbContext dbContext, Guid taskId, AuditLevel auditLevel)
@@ -373,9 +350,9 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             return;
         }
 
-        // Relational: the StatusAudit insert and the row UPDATE must commit TOGETHER (F20), so a failure
-        // in between never leaves an audit without the row update (or vice versa) — matching the
-        // transactional usp_SetTaskStatus stored procedure. A failed update rolls the audit back too.
+        // Relational: the StatusAudit insert and the row UPDATE must commit TOGETHER, so a failure in
+        // between never leaves an audit without the row update, or the reverse — matching the transactional
+        // usp_SetTaskStatus stored procedure.
         await using var transaction = await efContext.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
         try
         {
@@ -409,13 +386,10 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     }
 
     /// <summary>
-    /// When a transition stamps the end of a run, and when it PRESERVES the timestamp of the last one.
+    /// When a transition stamps the end of a run, and when it PRESERVES the timestamp of the last one: only
+    /// a terminal transition means a run actually finished, so a full-queue revert to WaitingQueue must not
+    /// stamp a fake execution time and a re-queued recurring task must keep the timestamp of its last run.
     /// </summary>
-    /// <remarks>
-    /// Only a terminal transition means a run actually finished: a full-queue revert to WaitingQueue must not
-    /// stamp a fake execution time, and re-queueing a recurring task must not wipe the timestamp of its last
-    /// real run. Shared by every write that applies the status column, so the rule cannot drift between them.
-    /// </remarks>
     private static DateTimeOffset? LastExecutionUtcFor(QueuedTaskStatus status, DateTimeOffset now) =>
         status is QueuedTaskStatus.WaitingQueue or QueuedTaskStatus.Queued or QueuedTaskStatus.InProgress
             or QueuedTaskStatus.Cancelled or QueuedTaskStatus.Pending
@@ -456,8 +430,8 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     }
 
     /// <summary>
-    /// Applies the status/last-execution/exception columns for a task via a single bulk UPDATE.
-    /// A seam so the atomicity of audit + update can be exercised under fault injection.
+    /// Applies the status/last-execution/exception columns for a task via a single bulk UPDATE. Virtual so
+    /// a provider — or a fault-injecting test — can substitute the statement.
     /// </summary>
     protected virtual Task<int> ExecuteStatusUpdateAsync(
         ITaskStoreDbContext dbContext, Guid taskId, QueuedTaskStatus status, string? exception,
@@ -523,7 +497,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         {
             // Fast path: with AuditLevel.None no audit is ever created and the run counter can be
             // incremented server-side, so the whole update is a single roundtrip with no SELECT.
-            // Advance by exactly one real execution (Option B): skipped occurrences never count.
+            // Exactly one real execution is counted — a skipped occurrence never is.
             if (auditLevel == AuditLevel.None)
             {
                 var rowsAffected = await dbContext.QueuedTasks
@@ -567,33 +541,28 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
             task.ExecutionTimeMs = executionTimeMs;
             task.NextRunUtc      = nextRun;
-            // Saturating increment (Option B): at int.MaxValue the counter FREEZES instead of overflowing.
-            // An unbounded recurring series (MaxRuns == null) that reaches int.MaxValue real executions keeps
-            // running with the counter pinned at its max, rather than wrapping to int.MinValue and corrupting
-            // the run accounting. Bounded series end at MaxRuns (<= int.MaxValue) long before this. Every path
-            // (here, the AuditLevel.None fast-path above, CompleteRecurringRun, the server-side procs/CTEs and
-            // MemoryTaskStorage) applies the same cap. Tradeoff documented in docs/recurring-tasks.
+            // Saturating: at int.MaxValue the counter FREEZES rather than wrapping to int.MinValue and
+            // corrupting the run accounting of an unbounded series. Every path that counts a run — here, the
+            // fast path above, CompleteRecurringRun, the server-side procs/CTEs, MemoryTaskStorage — caps it
+            // the same way.
             task.CurrentRunCount = task.CurrentRunCount >= int.MaxValue ? int.MaxValue : (task.CurrentRunCount ?? 0) + 1;
 
             await dbContext.SaveChangesAsync(CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception e)
         {
-            // Residual D: do NOT swallow. A failed counter persist must propagate so WorkerExecutor does
-            // not advance the schedule on unpersisted state; the recoverable row is re-run instead. The
-            // consumer (WorkerService.ConsumeAsync) catches this defensively and continues with other tasks.
+            // Do NOT swallow: a failed counter persist must propagate so WorkerExecutor does not advance the
+            // schedule on unpersisted state; the recoverable row is re-run instead.
             logger.CurrentRunUpdateFailed(e, taskId);
             throw;
         }
     }
 
     /// <summary>
-    /// Atomically marks a recurring occurrence Completed AND advances the run counter / next run in a
-    /// SINGLE tracked SaveChanges (= one transaction), so a crash can never split the two and resurrect
-    /// the finished occurrence at recovery (CU14/L29). Inherited unchanged by Sqlite and the in-memory
-    /// provider. SQL Server overrides it with the <c>usp_CompleteRecurringRun</c> stored procedure, which
-    /// preserves the exact same atomicity (one transaction) while collapsing it into a single roundtrip on
-    /// the recurring success path.
+    /// Atomically marks a recurring occurrence Completed AND advances the run counter / next run in a SINGLE
+    /// tracked SaveChanges, so a crash can never split the two and resurrect the finished occurrence at
+    /// recovery. SQL Server overrides it with the <c>usp_CompleteRecurringRun</c> stored procedure, which
+    /// keeps the same atomicity in a single roundtrip.
     /// </summary>
     public virtual async Task CompleteRecurringRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
                                                    AuditLevel auditLevel)
@@ -647,14 +616,14 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             task.LastExecutionUtc = now;
             task.ExecutionTimeMs  = executionTimeMs;
             task.NextRunUtc       = nextRun;
-            task.CurrentRunCount  = task.CurrentRunCount >= int.MaxValue ? int.MaxValue : (task.CurrentRunCount ?? 0) + 1; // one real execution (Option B); saturating, see UpdateCurrentRun
+            task.CurrentRunCount  = task.CurrentRunCount >= int.MaxValue ? int.MaxValue : (task.CurrentRunCount ?? 0) + 1; // one real execution; saturating, see UpdateCurrentRun
 
             await dbContext.SaveChangesAsync(CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception e)
         {
-            // Residual D: propagate (do not swallow) so a failed completion does not advance the schedule
-            // on unpersisted state — the row stays recoverable (the transaction rolled back) and is re-run.
+            // Propagate: a failed completion must not advance the schedule on unpersisted state — the row
+            // stays recoverable (the transaction rolled back) and is re-run.
             logger.RecurringRunCompletionFailed(e, taskId);
             throw;
         }
@@ -663,10 +632,8 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     /// <summary>
     /// Finalizes a recurring series that ended on a SKIPPED occurrence (next slot past RunUntil): sets
     /// Completed AND clears <see cref="QueuedTask.NextRunUtc"/> in ONE tracked SaveChanges, WITHOUT
-    /// advancing the run counter and WITHOUT a runs-audit row — the skipped occurrence never executed
-    /// (Option B). Clearing NextRunUtc is what keeps the terminal row out of
-    /// <see cref="QueuedTask.IsRecoverable"/>. Inherited unchanged by Sqlite and SQL Server (the
-    /// counter/next-run procs are not involved here — this is a once-per-series terminal write).
+    /// advancing the run counter and WITHOUT a runs-audit row — the skipped occurrence never executed.
+    /// Clearing NextRunUtc is what keeps the terminal row out of <see cref="QueuedTask.IsRecoverable"/>.
     /// </summary>
     public virtual async Task SetRecurringSeriesCompleted(Guid taskId, double executionTimeMs, AuditLevel auditLevel)
     {
@@ -691,7 +658,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
             // Status audit (when the level audits a Completed) + the status transition + the NextRunUtc
             // clear flush in ONE SaveChanges. No runs audit and no counter advance: the occurrence was
-            // skipped, not executed (Option B).
+            // skipped, not executed.
             if (AuditPolicy.ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Completed, null))
             {
                 dbContext.StatusAudit.Add(new StatusAudit
@@ -713,7 +680,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         }
         catch (Exception e)
         {
-            // Residual D: propagate so a failed finalize does not advance the schedule on unpersisted state.
+            // Propagate: a failed finalize must not advance the schedule on unpersisted state.
             logger.RecurringSeriesFinalizationFailed(e, taskId);
             throw;
         }
@@ -721,13 +688,11 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
     /// <summary>
     /// Terminally poisons a recurring row during recovery: sets Failed AND clears
-    /// <see cref="QueuedTask.NextRunUtc"/> in ONE tracked SaveChanges (= one transaction), so the row stops
-    /// satisfying <see cref="QueuedTask.IsRecoverable"/> and is never resurrected (P0-1). Inherited unchanged
-    /// by Sqlite and SQL Server (a once-per-row terminal write — no counter/next-run proc is involved, exactly
-    /// like <see cref="SetRecurringSeriesCompleted"/>). Errors are SWALLOWED (logged, not rethrown), matching
-    /// <see cref="SetStatus"/>: a failed poison must not break the recovery of sibling tasks; the row simply
-    /// stays recoverable and is retried at the next restart. Which is why returning normally is not an
-    /// outcome: the recovery re-reads the row and reports what it finds, never what this call did not say.
+    /// <see cref="QueuedTask.NextRunUtc"/> in ONE tracked SaveChanges, so the row stops satisfying
+    /// <see cref="QueuedTask.IsRecoverable"/> and is never resurrected. Errors are logged, not rethrown
+    /// (like <see cref="SetStatus"/>): a failed poison must not break the recovery of sibling tasks — the
+    /// row stays recoverable and is retried at the next restart, so returning normally is not a success
+    /// signal.
     /// </summary>
     public virtual async Task SetRecurringTaskPoisoned(Guid taskId, Exception exception, AuditLevel auditLevel,
                                                        CancellationToken ct = default)
@@ -754,7 +719,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
             // Status audit (Failed always audits) + the status transition + the NextRunUtc clear flush in ONE
             // SaveChanges. Clearing NextRunUtc atomically with Failed is what keeps the poisoned recurring row
-            // out of IsRecoverable (else recovery revives and re-poisons it at every restart — P0-1).
+            // out of IsRecoverable, else recovery revives and re-poisons it at every restart.
             if (AuditPolicy.ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Failed, exception))
             {
                 dbContext.StatusAudit.Add(new StatusAudit
@@ -794,7 +759,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
     public virtual async Task UpdateTask(QueuedTask task, CancellationToken ct = default)
     {
-        // Same reason as Persist: this is the other public write, and it rewrites the cursor itself (F1).
+        // Same reason as Persist: the other public write, and it rewrites the cursor itself (#37).
         task.NormalizeTimestampsToUtc();
 
         logger.UpdatingTask(task.Id, task.TaskKey);
@@ -895,15 +860,11 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     /// Whether the configured EF Core provider is a relational one, resolved once and cached.
     /// </summary>
     /// <remarks>
-    /// The capability and the implementation are inseparable (X2): every operation the two capabilities
-    /// advertise opens with <see cref="RequireRelational"/>, which refuses a provider that can express
-    /// neither a conditional UPDATE nor a transaction — and this class deliberately still supports one, EF
-    /// Core InMemory, with the client-side fallbacks in <c>TrySetQueuedIfRecoverable</c> and
-    /// <c>SetStatus</c>. Answering an unconditional <c>true</c> there would let a caller's
-    /// <c>SupportsDurableOccurrences</c> guard pass and turn a clean refusal at dispatch into a
+    /// Both capabilities answer from here: every operation they advertise opens with
+    /// <see cref="RequireRelational"/>, and this class still supports EF Core InMemory through the
+    /// client-side fallbacks in <c>TrySetQueuedIfRecoverable</c> and <c>SetStatus</c>. Answering an
+    /// unconditional <c>true</c> there would turn a clean refusal at dispatch into a
     /// <see cref="NotSupportedException"/> later, at materialization.
-    /// Resolving it needs a context, which the pooled factory hands out without opening a connection; the
-    /// answer cannot change for the lifetime of this storage (a singleton), so it is computed at most once.
     /// </remarks>
     private bool IsRelationalProvider => _isRelationalProvider.Value;
 
@@ -939,10 +900,8 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         occurrence.NormalizeTimestampsToUtc();
 
         // A schedule with no cursor is over — finalized, or poisoned — so a NULL expected cursor can never
-        // describe a live one. Left to EF, the compare-and-swap would be rewritten to "NextRunUtc IS NULL"
-        // and match exactly those rows, inserting an occurrence on a finished series and giving it a cursor
-        // back. The stored procedures, the Postgres decision CTE and the memory store all refuse this
-        // server-side; here it is refused before the write and classified like any other lost race.
+        // describe a live one. Left to EF the compare-and-swap becomes "NextRunUtc IS NULL" and matches
+        // exactly those rows, inserting an occurrence on a finished series and giving it a cursor back.
         if (expectedCursorUtc?.ToUniversalTime() is not { } expectedCursor)
             return await ClassifyMaterializationLossAsync(dbContext, parentId, expectedScheduleVersion, ct)
                 .ConfigureAwait(false);
@@ -1010,8 +969,8 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         logger.FinalizingRecurringSeries(taskId);
 
         // A schedule with no cursor is already over, so no live series can be described by a null expectation.
-        // Left to EF the comparison becomes "NextRunUtc IS NULL", which matches exactly the rows that are
-        // already finalized or poisoned: the guard MaterializeOccurrence spells out, applied to its siblings.
+        // Left to EF the comparison becomes "NextRunUtc IS NULL" and matches exactly the rows that are
+        // already finalized or poisoned — the same guard MaterializeOccurrence applies.
         if (expectedCursorUtc is not { } expected)
             return false;
 
@@ -1042,7 +1001,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             return false;
         }
 
-        // No runs audit and no counter advance: the remaining slots were never executed (Option B).
+        // No runs audit and no counter advance: the remaining slots were never executed.
         await CommitWithStatusAuditAsync(dbContext, transaction, taskId, QueuedTaskStatus.Completed, null,
             auditLevel, now, ct).ConfigureAwait(false);
         return true;
@@ -1087,7 +1046,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
         // Occurrences already InProgress own a live delivery and are left to finish on their own; every other
         // non-terminal one is cancelled, so a materializer racing this cancel can only see an inactive
-        // schedule and never adds one more. ServiceStopped belongs in that set (R7): startup recovery puts a
+        // schedule and never adds one more. ServiceStopped belongs in that set: startup recovery puts a
         // ServiceStopped row back in a queue, so leaving it out would run an occurrence of a schedule the user
         // cancelled, one restart later. The cancelled set is the exact complement of the requeued one.
         var candidateChildren = await dbContext.QueuedTasks
@@ -1116,13 +1075,10 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
         if (AuditPolicy.ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Cancelled, null))
         {
-            // Audit what the UPDATE really changed, not what the lookup found. ExecuteUpdate reports a count
-            // and no ids, and the two statements are not one: an occurrence that reached InProgress in
-            // between is skipped by the UPDATE and would otherwise get a Cancelled audit row for a status it
-            // never took. Reading the candidates back inside the same transaction is what turns the id list
-            // into the set that actually moved — the procedures and the Postgres CTE get it from OUTPUT /
-            // RETURNING on the UPDATE itself, which EF cannot express. None of the candidates was Cancelled
-            // when the lookup ran, so "Cancelled now" means this transaction is the one that cancelled it.
+            // Audit what the UPDATE really changed, not what the lookup found: ExecuteUpdate reports a count
+            // and no ids, and an occurrence that reached InProgress between the two statements is skipped by
+            // the UPDATE and must not get a Cancelled audit row for a status it never took. None of the
+            // candidates was Cancelled when the lookup ran, so "Cancelled now" means this transaction did it.
             List<Guid> cancelledChildren = [];
             if (candidateChildren.Count > 0)
             {
@@ -1238,7 +1194,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         // Cancelled is refused apart from the version and the cursor because it is the one state NEITHER of
         // them answers for: a cancel writes the status and leaves both exactly as they were, so a reschedule
         // that read the row first matches on both and writes a live definition over a series an operator has
-        // ended. Every other status stays a legitimate target — a schedule that is running is rescheduled (S3).
+        // ended. Every other status stays a legitimate target — a schedule that is running is rescheduled.
         var candidates = dbContext.QueuedTasks
                                   .Where(t => t.Id == taskId
                                               && t.ScheduleVersion == expectedScheduleVersion
@@ -1444,8 +1400,8 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         }
         catch (Exception e)
         {
-            // Residual D: propagate, exactly like the unversioned overload — a failed counter persist must
-            // not let the scheduler advance on unpersisted state.
+            // Propagate, exactly like the unversioned overload — a failed counter persist must not let the
+            // scheduler advance on unpersisted state.
             logger.CurrentRunUpdateFailed(e, taskId);
             throw;
         }
@@ -1626,16 +1582,12 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     }
 
     /// <summary>
-    /// The paging both audit trails share: the count and the slice are asked of the DATABASE over the
-    /// <c>(QueuedTaskId)</c> index the table already has, because a page exists so the whole trail is never
-    /// materialized — and counting it in memory would materialize it anyway.
+    /// The paging both audit trails share: the count and the slice are asked of the DATABASE, because a page
+    /// exists so the whole trail is never materialized. Ordered on the audit IDENTITY, never on its
+    /// timestamp: SQLite refuses a <see cref="DateTimeOffset"/> in an <c>ORDER BY</c>, and the audits of one
+    /// row are inserted in transition order, so the newest id IS the newest entry — and the order is total,
+    /// so a page boundary can never repeat or drop an entry.
     /// </summary>
-    /// <remarks>
-    /// Ordered on the audit IDENTITY, never on its timestamp, for two provider and ordering constraints:
-    /// SQLite refuses a <see cref="DateTimeOffset"/> in an <c>ORDER BY</c>, and the audits of one row are
-    /// inserted in transition order, so the newest id IS the newest entry — which also makes the order
-    /// total, so a page boundary can never repeat or drop an entry.
-    /// </remarks>
     private static async Task<AuditPage<TAudit>> PageAsync<TAudit>(IQueryable<TAudit> query,
                                                                    Expression<Func<TAudit, long>> auditId,
                                                                    int skip, int take, CancellationToken ct)
@@ -1775,13 +1727,11 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     public async Task SaveExecutionLogsAsync(Guid taskId, IReadOnlyList<TaskExecutionLog> logs,
                                              CancellationToken cancellationToken)
     {
-        // Performance optimization: skip if no logs
         if (logs.Count == 0)
             return;
 
         await using var dbContext = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
 
-        // Bulk insert all logs in a single operation
         await dbContext.TaskExecutionLogs.AddRangeAsync(logs, cancellationToken).ConfigureAwait(false);
         await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -1818,11 +1768,8 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                  .ThenBy(log => log.SequenceNumber); // preserve sequence within same timestamp
 
     // ---- Retention cleanup ------------------------------------------------------------------------
-    // The base implementations are the optimized, server-side versions for transactional providers
-    // (SQL Server, and any future Postgres/MySQL provider that inherits this class). They run as
-    // set-based deletes / ordered offsets the database executes directly. SQLite cannot translate
-    // DateTimeOffset ordering comparisons, so SqliteTaskStorage overrides every method below with a
-    // client-side equivalent. The hosted AuditCleanupHostedService drives these from the policy.
+    // The base implementations are the server-side, set-based ones. SQLite cannot translate DateTimeOffset
+    // ordering comparisons, so SqliteTaskStorage overrides every method below with a client-side equivalent.
 
     /// <summary>
     /// Deletes StatusAudit rows older than the cutoffs (errors keep <paramref name="errorCutoff"/>,
@@ -1872,15 +1819,13 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     /// </summary>
     /// <remarks>
     /// The final <c>Id</c> tie-breaker (UUIDv7) gives a total order, so the survivor is deterministic and
-    /// matches the read path's <c>OrderBy(Id)</c> instead of depending on the query plan. Residual caveat:
-    /// the SQLite override sorts <c>Id</c> in memory (.NET <see cref="Guid"/> order) while this base sorts it
-    /// in the database (<c>uniqueidentifier</c>), so on an exact <c>(TimestampUtc, SequenceNumber)</c> tie the
-    /// two providers may keep different (but each internally deterministic) rows. The kept <em>count</em> is
-    /// always identical; chasing byte-order parity across providers is out of scope.
+    /// matches the read path's <c>OrderBy(Id)</c> instead of depending on the query plan. The SQLite override
+    /// sorts <c>Id</c> in memory while this base sorts it in the database, so on an exact
+    /// <c>(TimestampUtc, SequenceNumber)</c> tie the two may keep different rows; the kept count is identical.
     /// </remarks>
     public virtual async Task<int> CleanupExecutionLogsByCount(int maxPerTask, CancellationToken ct = default)
     {
-        // <= 0 is disabled (Cluster B): keeping zero logs would let Skip(0) delete every row of every task.
+        // <= 0 is disabled: keeping zero logs would let Skip(0) delete every row of every task.
         if (maxPerTask <= 0)
             return 0;
 
@@ -1903,7 +1848,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                 .Where(l => l.TaskId == taskId)
                 .OrderByDescending(l => l.TimestampUtc)
                 .ThenByDescending(l => l.SequenceNumber)
-                .ThenByDescending(l => l.Id)   // Cluster C: total order on (Timestamp, Seq) ties; aligns with the read path's OrderBy(Id)
+                .ThenByDescending(l => l.Id)   // total order on (Timestamp, Seq) ties; aligns with the read path's OrderBy(Id)
                 .Skip(maxPerTask)
                 .Select(l => l.Id)
                 .ToListAsync(ct)
@@ -1923,10 +1868,9 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     /// </summary>
     /// <param name="cutoff">Age threshold: only tasks last executed (or created) strictly before it are purged.</param>
     /// <param name="preserveTasksWithLogs">
-    /// When true, a task that still has any <c>TaskExecutionLog</c> row is NOT purged. The log-age/count
-    /// passes run earlier in the same cycle, so any surviving log is one a configured log-retention window
-    /// chose to keep — purging the task would cascade-delete it. The caller sets this only when a log
-    /// retention is actually active; with no log retention the historic cascade-on-purge behavior stands.
+    /// When true, a task that still has any <c>TaskExecutionLog</c> row is NOT purged: the log passes run
+    /// earlier in the same cycle, so a surviving log is one a log-retention window chose to keep and
+    /// purging the task would cascade-delete it. Set only when a log retention is actually active.
     /// </param>
     /// <param name="ct">Cancellation token.</param>
     public virtual async Task<int> CleanupCompletedTasks(DateTimeOffset cutoff, bool preserveTasksWithLogs,
@@ -1957,24 +1901,18 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     /// </remarks>
     /// <param name="cutoff">Age threshold: only occurrences last executed (or created) strictly before it are purged.</param>
     /// <param name="preserveTasksWithLogs">
-    /// Same guard as <see cref="CleanupCompletedTasks"/>, for the same reason: deleting a row cascades to its
-    /// <c>TaskExecutionLog</c> rows, and the log passes run earlier in the same cycle, so any log still there
-    /// is one a configured log-retention window chose to keep. Without it a 7-day occurrence window would
-    /// destroy logs a 90-day window was holding.
+    /// Same guard as <see cref="CleanupCompletedTasks"/>: deleting a row cascades to its
+    /// <c>TaskExecutionLog</c> rows, so a shorter occurrence window would destroy logs a longer log window
+    /// is holding.
     /// </param>
     /// <param name="preserveStatusAudits">
-    /// The same guard again, for the status trail: <c>FK_StatusAudit_QueuedTasks</c> cascades on delete, so
-    /// purging an occurrence destroys every transition recorded under it — including the ones the status-audit
-    /// pass, which runs earlier in the same cycle, deliberately kept. A 7-day occurrence window would
-    /// otherwise erase a failure recorded under a 90-day error window on day eight, silently, and the failure
-    /// history of every occurrence of every durable schedule with it.
+    /// The same guard for the status trail: <c>FK_StatusAudit_QueuedTasks</c> cascades on delete, so purging
+    /// an occurrence destroys the transitions the status-audit window kept.
     /// </param>
     /// <param name="preserveRunsAudits">
-    /// The same guard for the RUNS trail (<c>FK_RunsAudit_QueuedTasks</c>, cascading likewise). One flag per
-    /// trail, and never one for both: each audit pass is conditional on its own retention knob, so a policy
-    /// that configures one window and leaves the other unlimited would otherwise switch this guard on for a
-    /// trail nothing is ever going to prune — and every occurrence carries the <c>StatusAudit</c> row its own
-    /// materialization wrote, so the purge would delete nothing at all.
+    /// The same guard for the runs trail (<c>FK_RunsAudit_QueuedTasks</c>, cascading likewise). One flag per
+    /// trail, never one for both: each is set only when its OWN window is active, and since every occurrence
+    /// owns the <c>StatusAudit</c> row its materialization wrote, a shared flag would purge nothing at all.
     /// </param>
     /// <param name="ct">Cancellation token.</param>
     public virtual async Task<int> CleanupTerminalOccurrences(DateTimeOffset cutoff, bool preserveTasksWithLogs,
@@ -1995,20 +1933,15 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             ct).ConfigureAwait(false);
     }
 
-    // Bounded delete batch: large enough to be efficient, small enough to avoid lock escalation on
-    // transactional providers (SQL Server escalates around ~5000 row locks per statement). Shared by the
-    // age-based base deletes (BatchDeleteAsync), the count-cap trim and the SQLite client-side overrides
-    // (DeleteByIdsAsync), so the whole storage layer deletes in one consistent granularity. protected internal
-    // so a derived provider in another assembly (e.g. MySqlTaskStorage) can bound its own select-then-delete loop.
+    // Bounded delete batch: small enough to avoid lock escalation on transactional providers (SQL Server
+    // escalates around ~5000 row locks per statement). protected internal so a derived provider in another
+    // assembly can bound its own select-then-delete loop the same way.
     protected internal const int CleanupBatchSize = 100;
 
     /// <summary>
     /// Deletes rows matching <paramref name="predicate"/> in bounded batches of <see cref="CleanupBatchSize"/>
-    /// instead of a single unbounded <c>ExecuteDelete</c>, so a large backlog (a first run over an accumulated
-    /// table, or a misconfigured window) cannot escalate to a table lock that stalls the live audit/log
-    /// inserts done by task execution. The predicate is evaluated server-side; only matching rows are touched.
-    /// SQLite overrides every cleanup method with its own client-side batched path, so this base form runs on
-    /// transactional providers (SQL Server today, future Postgres/MySQL by inheritance).
+    /// instead of a single unbounded <c>ExecuteDelete</c>, so a large backlog cannot escalate to a table lock
+    /// that stalls the live audit/log inserts done by task execution.
     /// </summary>
     protected static async Task<int> BatchDeleteAsync<TEntity>(
         DbSet<TEntity> set, Expression<Func<TEntity, bool>> predicate, CancellationToken ct)

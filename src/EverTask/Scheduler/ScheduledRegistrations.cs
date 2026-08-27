@@ -9,13 +9,12 @@ namespace EverTask.Scheduler;
 /// <remarks>
 /// Shared by <see cref="PeriodicTimerScheduler"/> and every shard of <see cref="ShardedScheduler"/>, because
 /// what it holds is not a data structure but two RULES that have to be the same in both: latest-wins
-/// registration, and the S4 refusal that leaves a registration carrying a newer
-/// <see cref="TaskHandlerExecutor.ScheduleVersion"/> alone. Written twice, a fix to either would have landed
-/// on whichever scheduler the failing test happened to use and left the other with the old behaviour.
+/// registration, and the refusal that leaves a registration carrying a newer
+/// <see cref="TaskHandlerExecutor.ScheduleVersion"/> alone.
 /// </remarks>
 /// <param name="queue">
-/// The heap the scheduler dequeues from. A replaced or removed registration is evicted from it immediately
-/// (CU19), so far-future registrations cannot remain held until their former due time.
+/// The heap the scheduler dequeues from. A replaced or removed registration is evicted from it immediately, so
+/// far-future registrations cannot remain held until their former due time.
 /// </param>
 /// <param name="reportSuperseded">
 /// How this scheduler logs a refused registration: the id, the version offered and the version parked.

@@ -14,8 +14,8 @@ public class WorkerService(
     TimeProvider? timeProvider) : BackgroundService
 {
     /// <summary>
-    /// The pre-P9 constructor, kept as a real overload so an assembly compiled against the previous release
-    /// still binds (P6/X6). <c>AddEverTask</c> constructs the clock-carrying one explicitly.
+    /// The clock-less constructor, kept as a real overload so an assembly compiled against the previous
+    /// release still binds. <c>AddEverTask</c> constructs the clock-carrying one explicitly.
     /// </summary>
     public WorkerService(
         IWorkerQueueManager queueManager,
@@ -26,29 +26,27 @@ public class WorkerService(
         IEverTaskLogger<WorkerService> logger)
         : this(queueManager, serviceScopeFactory, taskDispatcher, configuration, workerExecutor, logger, null) { }
 
-    // The scheduling clock (P9): the recovery cutoff and every recoverable predicate below are evaluated
-    // against it, so recovery and the schedulers can never disagree about "now".
+    // The recovery cutoff and every recoverable predicate below are evaluated against it, so recovery and
+    // the schedulers can never disagree about "now".
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
         logger.BackgroundServiceRunning();
 
-        // Surface handler-registration diagnostics collected during assembly scanning (duplicate
-        // closed handlers, unsupported open-generic handlers) — see HandlerRegistrar (G1/G2).
+        // Diagnostics collected during assembly scanning (duplicate closed handlers, unsupported
+        // open-generic handlers) have no other place to surface — see HandlerRegistrar.
         foreach (var warning in configuration.HandlerRegistrationWarnings)
         {
             logger.HandlerRegistrationWarning(warning);
         }
 
-        // Warn if using suboptimal MaxDegreeOfParallelism configuration
         if (configuration.MaxDegreeOfParallelism == 1)
         {
             var recommendedParallelism = Math.Max(4, Environment.ProcessorCount * 2);
             logger.SingleDegreeOfParallelism(recommendedParallelism);
         }
 
-        // Get all configured queues
         var queues = queueManager.GetAllQueues().ToList();
 
         // Guarded explicitly: the queue-name join is eager, and the generated method's own level check
@@ -56,19 +54,14 @@ public class WorkerService(
         if (logger.IsEnabled(LogLevel.Information))
             logger.StartingQueueConsumption(queues.Count, string.Join(", ", queues.Select(q => q.Name)));
 
-        // Create N dedicated consumers for each queue using the official Microsoft pattern
-        // This is the recommended approach for channel-based background workers
         var queueConsumptionTasks = queues
             .SelectMany(q => StartConsumers(q.Name, q.Queue, ct))
             .ToList();
 
-        // Recover pending tasks from storage CONCURRENTLY with the consumers.
-        // Consumers must already be draining the bounded queues while recovery re-enqueues:
-        // otherwise a backlog larger than a queue's capacity deadlocks the startup
-        // (recovery blocks on a full channel that nobody is consuming yet).
+        // Recovery runs CONCURRENTLY with the consumers: they must already be draining the bounded queues
+        // while it re-enqueues, or a backlog larger than a queue's capacity deadlocks the startup.
         queueConsumptionTasks.Add(RunRecoveryAsync(ct));
 
-        // Wait for all consumers (and the recovery) to complete
         await Task.WhenAll(queueConsumptionTasks).ConfigureAwait(false);
     }
 
@@ -92,19 +85,9 @@ public class WorkerService(
         }
     }
 
-    /// <summary>
-    /// Starts N dedicated long-lived consumers for a queue.
-    /// This is the official Microsoft-recommended pattern for channel consumption.
-    /// Benefits over semaphore+list approach:
-    /// - Zero per-item allocation (no Task.Run per task)
-    /// - Stable memory footprint (N fixed workers)
-    /// - No manual task list management
-    /// - Natural backpressure with bounded channels
-    /// - Graceful shutdown via cancellation token
-    /// </summary>
+    // Starts N dedicated long-lived consumers competing for the same channel.
     private IEnumerable<Task> StartConsumers(string queueName, IWorkerQueue queue, CancellationToken ct)
     {
-        // Get the configuration for this specific queue
         var queueConfig = queue switch
         {
             WorkerQueue wq => wq.Configuration,
@@ -115,8 +98,8 @@ public class WorkerService(
             }
         };
 
-        // Clamp to at least one consumer: a queue with zero consumers and FullMode=Wait deadlocks
-        // every producer (dispatch, scheduler, recovery) once its channel fills (F5).
+        // Clamp to at least one consumer: a queue with zero consumers and FullMode=Wait deadlocks every
+        // producer (dispatch, scheduler, recovery) once its channel fills.
         var consumerCount = queueConfig.MaxDegreeOfParallelism;
         if (consumerCount < 1)
         {
@@ -126,7 +109,6 @@ public class WorkerService(
 
         logger.StartingConsumers(consumerCount, queueName);
 
-        // Spawn N long-lived consumers that compete for items from the channel
         for (var i = 0; i < consumerCount; i++)
         {
             var consumerId = i; // Capture for logging
@@ -155,34 +137,24 @@ public class WorkerService(
         }
     }
 
-    /// <summary>
-    /// Long-lived consumer loop that processes items from the queue.
-    /// Each consumer competes with others for items from the same channel.
-    /// </summary>
     private async Task ConsumeAsync(IWorkerQueue queue, string queueName, int consumerId, CancellationToken ct)
     {
-        // Multiple consumers will compete for items from DequeueAll
-        // Channel guarantees each item is delivered to exactly one consumer
         await foreach (var task in queue.DequeueAll(ct).ConfigureAwait(false))
         {
             try
             {
-                // Direct execution - no Task.Run overhead, no semaphore, no list management
-                // Worker is already running in its own Task from StartConsumers
                 await workerExecutor.DoWork(task, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
-                // Graceful shutdown - service is stopping
                 logger.ConsumerCancelledDuringExecution(consumerId, queueName);
                 return;
             }
             catch (Exception ex)
             {
-                // DoWork should handle errors internally, but catch defensively
-                // Don't let one task failure kill the entire consumer
+                // DoWork handles its own errors: this is the defensive net that keeps one task failure
+                // from killing the consumer.
                 logger.ConsumerTaskProcessingError(ex, consumerId, queueName, task.PersistenceId);
-                // Continue consuming next item
             }
         }
 
@@ -190,19 +162,16 @@ public class WorkerService(
     }
 
     /// <summary>
-    /// Number of consecutive failed startup-recovery re-dispatch attempts after which a task is
-    /// poisoned (marked <see cref="QueuedTaskStatus.Failed"/>) instead of being retried at every
-    /// restart forever (L18). Internal for testing purposes.
+    /// Number of consecutive failed startup-recovery re-dispatch attempts after which a task is poisoned
+    /// (marked <see cref="QueuedTaskStatus.Failed"/>) instead of being retried at every restart forever.
+    /// Internal for testing purposes.
     /// </summary>
     internal int MaxRecoveryDispatchAttempts { get; set; } = 5;
 
     /// <summary>
-    /// How many recovery pages may be in flight at the same time (#39). The reader hands a page over to its
-    /// wave and goes straight back for the next one, so a slow delivery no longer holds the page behind it —
-    /// and with it the recovery of rows belonging to queues that are completely idle. The cap is the other
-    /// half of that: it is what keeps a recovery's memory bounded by a constant instead of by the backlog
-    /// (R8), and it bounds the concurrent re-dispatches at that many times the per-queue fan-out of one wave.
-    /// Internal for testing purposes.
+    /// How many recovery pages may be in flight at the same time (#39). It bounds the recovery's memory by a
+    /// constant instead of by the backlog, and the concurrent re-dispatches at that many times the per-queue
+    /// fan-out of one wave. Internal for testing purposes.
     /// </summary>
     internal int MaxRecoveryPagesInFlight { get; set; } = 4;
 
@@ -228,8 +197,7 @@ public class WorkerService(
         Guid? lastId = null;
         var totalProcessed = 0;
 
-        // L18 outcome accounting: a persistent re-dispatch failure must NOT be masked by a success
-        // summary log. Tracked across pages, written to the summary at the end.
+        // Tracked across pages so a persistent re-dispatch failure is not masked by a success summary log.
         var recovered         = 0;
         var transientFailures = 0;
         var permanentFailures = 0;
@@ -238,28 +206,18 @@ public class WorkerService(
         // this point, so tasks dispatched while recovery is paginating are not re-enqueued twice.
         var recoveryCutoff = _timeProvider.GetUtcNow();
 
-        // M7 barrier — children before parents, across the WHOLE recovered set and not page by page.
-        // A durable schedule row, once recovered, immediately asks "how many of my occurrences are still
-        // active?" to decide how many new ones to create; answering that while an occurrence of its own is
-        // still sitting in a later page reads a phantom low count and overshoots the concurrency budget.
-        // NOTHING is held back to achieve it (R8): the second wave is a SECOND KEYSET SCAN over the same
-        // cutoff that keeps only the durable schedules, so the memory of a recovery stays one page whatever
-        // the backlog is. Buffering rows kept a deserialized payload and definition alive per schedule;
-        // buffering their ids kept a list that still grew with the number of schedules. What is carried
-        // instead is two scalars: whether the first pass saw a durable schedule at all — a host with none
-        // never pays for the second scan — and the keyset position just BEFORE the first one, so the scan
-        // starts where the durable schedules start instead of at the beginning.
+        // Children before parents, across the WHOLE recovered set and not page by page: a recovered durable
+        // schedule immediately counts its active occurrences to decide how many to create, and one still
+        // sitting in a later page reads a phantom low count. The second wave is a SECOND KEYSET SCAN rather
+        // than a buffer, so only two scalars cross the loop — whether a durable schedule was seen at all,
+        // and the keyset position just before the first one.
         var durableSchedules = 0;
         DateTimeOffset? durableFromCreatedAt = null;
         Guid? durableFromId = null;
 
-        // #39: the reader does not wait for the page it has just handed over. Awaiting the whole wave meant
-        // one slow delivery — a blocking enqueue toward a saturated queue, a storage hiccup — held the NEXT
-        // page too, so rows belonging to queues that were completely idle waited behind it: the per-queue
-        // fan-out inside a wave only ever protected them from each other WITHIN a page. Up to
-        // MaxRecoveryPagesInFlight waves therefore run at once and the reader blocks only when that cap is
-        // reached, on whichever wave finishes first — a single wedged page costs one slot of the pipeline
-        // instead of stopping it.
+        // The reader does not wait for the page it has just handed over (#39), or one blocking enqueue
+        // toward a saturated queue holds the rows behind it — including those belonging to idle queues.
+        // It blocks only at MaxRecoveryPagesInFlight, on whichever wave finishes first.
         var pipeline = new WavePipeline(MaxRecoveryPagesInFlight);
 
         try
@@ -279,15 +237,9 @@ public class WorkerService(
                 if (page.Length == 0)
                     break;
 
-                // STRICT cutoff (<, not <=): live dispatches happen after this host captured the cutoff,
-                // but the wall clock is coarse (DateTimeOffset.UtcNow resolves to ~15 ms on Windows), so a
-                // live dispatch can land in the SAME tick as the cutoff. A <= filter then grabs that live
-                // row and re-dispatches it via ExecuteDispatch(isRecovery:true), racing the live delivery —
-                // wasted re-park churn for rate-limited tasks and, worse, the re-dispatch used to drop the
-                // per-dispatch audit level (see the auditLevel propagation below). < excludes the same-tick
-                // tie up front; the cutoff stays a best-effort first pass — the channel-write
-                // TaskDeliveryRegistry is still the correctness defense for any residual race (stale page),
-                // and the conditional SetQueued refuses a row that terminally finished since the page read.
+                // STRICT (<, not <=): the wall clock is coarse (~15 ms on Windows), so a live dispatch can
+                // land in the same tick as the cutoff and <= would re-dispatch it. The cutoff is only a
+                // first pass — TaskDeliveryRegistry is the actual defense against a residual race.
                 var pendingTasks = page.Where(t => t.CreatedAtUtc < recoveryCutoff).ToArray();
 
                 logger.ProcessingPendingBatch(pendingTasks.Length, lastCreatedAt, lastId);
@@ -329,30 +281,26 @@ public class WorkerService(
                     break;
             }
 
-            // The M7 barrier is the whole recovered set, not the pages the reader happens to have handed
-            // over: every ordinary row must really be BACK before a durable schedule counts its live
-            // occurrences, so the pipeline is drained here and not merely emptied of its finished waves.
+            // The barrier is the whole recovered set, not the pages the reader happens to have handed over:
+            // every ordinary row must really be BACK before a durable schedule counts its live occurrences,
+            // so the pipeline is DRAINED here, not merely emptied of its finished waves.
             await pipeline.DrainAsync().ConfigureAwait(false);
         }
         catch
         {
-            // A wave that failed ends the recovery exactly as it did when the reader awaited each page in
-            // turn — but the waves still running are not abandoned: one would go on re-dispatching rows after
-            // the summary line, and its own failure would surface as an unobserved task exception.
+            // The running waves are not abandoned: one would go on re-dispatching rows after the summary
+            // line, and its own failure would surface as an unobserved task exception.
             await pipeline.SettleAsync().ConfigureAwait(false);
             throw;
         }
 
-        // Second wave: every ordinary row (occurrences included) of every page is back by now, so a schedule
-        // row that asks how many of its occurrences are alive gets the real answer. The same keyset scan as
-        // above, over the same cutoff, keeping only the durable schedules — one page of rows in memory at a
-        // time, exactly like the first pass. A row the first pass already recovered reappears here and is
-        // filtered out; one that stopped matching the filter in between (cancelled, or finalized by the kick
-        // of an occurrence this recovery just put back) is a row the second wave has nothing left to do for.
+        // Second wave: every ordinary row (occurrences included) is back by now, so a schedule row asking
+        // how many of its occurrences are alive gets the real answer. A row that stopped matching the filter
+        // in between is one the second wave has nothing left to do for.
         if (durableSchedules > 0)
             await RecoverDurableSchedulesAsync().ConfigureAwait(false);
 
-        // L18: the summary must reflect failures, never report plain success when re-dispatches failed.
+        // The summary must reflect failures, never report plain success when re-dispatches failed.
         if (transientFailures > 0 || permanentFailures > 0)
             logger.RecoverySummaryWithFailures(totalProcessed, recovered, transientFailures, permanentFailures);
         else
@@ -360,9 +308,8 @@ public class WorkerService(
 
         return;
 
-        // The second wave's own pagination (R8). It re-walks the recovery page query from the position just
-        // before the first durable schedule the first pass met, keeping only the durable schedules: no list
-        // grows with the backlog, and the rows of a page are released as soon as that page is recovered.
+        // Re-walks the recovery page query from the position just before the first durable schedule the first
+        // pass met, keeping only the durable schedules: no list grows with the backlog.
         async Task RecoverDurableSchedulesAsync()
         {
             var fromCreatedAt = durableFromCreatedAt;
@@ -413,19 +360,16 @@ public class WorkerService(
             }
         }
 
-        // Recovers one wave of rows: partitioned PER TARGET QUEUE and each group fanned out concurrently.
-        // A single global Parallel.ForEachAsync let blocking enqueues toward one saturated queue occupy every
-        // global slot and head-of-line-block the recovery of other, idle queues (L34). The partition key
-        // mirrors ExecuteDispatch's routing (stored QueueName, else Recurring/Default), so a group maps to
-        // exactly one worker queue: a wedged queue can only stall its own group's slots.
+        // Partitioned PER TARGET QUEUE, each group fanned out concurrently: under a single global fan-out,
+        // blocking enqueues toward one saturated queue occupy every slot and head-of-line-block the idle
+        // queues. The key mirrors ExecuteDispatch's routing, so a group maps to exactly one worker queue.
         async Task RecoverWaveAsync(IEnumerable<PreparedRow> wave)
         {
             var rows = wave as PreparedRow[] ?? wave.ToArray();
 
             var options = new ParallelOptions
             {
-                // Clamp to >= 1: ParallelOptions rejects 0, and a misconfigured zero must never abort
-                // recovery (F5).
+                // Clamp to >= 1: ParallelOptions rejects 0, and a misconfigured zero must never abort recovery.
                 MaxDegreeOfParallelism = Math.Max(1, configuration.MaxDegreeOfParallelism),
                 CancellationToken      = ct
             };
@@ -441,12 +385,9 @@ public class WorkerService(
                       .ConfigureAwait(false);
         }
 
-        // Which of this wave's occurrences belong to a schedule the user cancelled. A cancel terminalizes
-        // every occurrence it finds waiting, so the only ones that can reach here are the InProgress ones a
-        // cancel deliberately leaves running (M15) and that a HARD crash then froze: no delivery ever wrote
-        // their outcome, and InProgress is a status the recovery filter accepts. Requeuing one would execute
-        // an occurrence of a cancelled series. ONE query per wave, and only when the wave carries occurrences
-        // at all — a host with no durable schedule never pays for it.
+        // Which of this wave's occurrences belong to a schedule the user cancelled. Only the InProgress ones
+        // a cancel deliberately leaves running can reach here, frozen by a hard crash before any delivery
+        // wrote their outcome; requeuing one would execute an occurrence of a cancelled series.
         async ValueTask<HashSet<Guid>> ReadCancelledSchedulesAsync(PreparedRow[] rows)
         {
             var scheduleIds = rows.Where(p => p.Row.ParentTaskId != null)
@@ -477,10 +418,9 @@ public class WorkerService(
             if (prepared.Recovered.ScheduleError != null)
                 logger.RecurringMetadataDeserializationFailed(prepared.Recovered.ScheduleError, taskInfo.Id);
 
-            // An occurrence of a cancelled schedule is cancelled, however it was left behind. The in-memory
-            // blacklist that covers the same case while the host lives does not survive a restart, and no
-            // recovery predicate consults the parent, so this is where the schedule's Cancelled status has to
-            // be honoured: terminalize the row instead of handing it to a queue.
+            // The in-memory blacklist covering this case while the host lives does not survive a restart and
+            // no recovery predicate consults the parent, so the schedule's Cancelled status has to be
+            // honoured here: terminalize the row instead of handing it to a queue.
             if (taskInfo.ParentTaskId is { } scheduleId && cancelledSchedules.Contains(scheduleId))
             {
                 await taskStorage.SetCancelledByUser(taskInfo.Id, auditLevel).ConfigureAwait(false);
@@ -488,11 +428,9 @@ public class WorkerService(
                 return;
             }
 
-            // X3 category (ii): a recurring series with nothing left to run but a cursor still set. It must be
-            // FINALIZED, not executed — and before any grace decision, since a slot at or past RunUntil is not
-            // a slot to grant grace to. Such a row used to match no predicate at all once RunUntil elapsed and
-            // stayed Queued forever. No payload is needed to end a series, so this runs before the poison
-            // guards below.
+            // A recurring series with nothing left to run but a cursor still set must be FINALIZED, not
+            // executed — and before any grace decision, since a slot at or past RunUntil is not one to grant
+            // grace to. No payload is needed to end a series, so this runs before the poison guards below.
             if (taskInfo.IsRecurringSeriesToFinalize())
             {
                 await FinalizeRecurringSeriesAsync(taskInfo, auditLevel, token).ConfigureAwait(false);
@@ -504,11 +442,9 @@ public class WorkerService(
             var payloadError           = prepared.Recovered.PayloadError;
             var recurringMetadataError = prepared.Recovered.ScheduleError;
 
-            // Poisons this row through TryPoisonAsync (which picks the right primitive and CONFIRMS the row
-            // really left the recovery set) and does the accounting the answer allows: a poison that landed is
-            // the permanent failure the summary calls terminalized, one that did not is the transient failure
-            // it really is — the row is still recoverable and comes back at the next restart. Counting it as
-            // permanent told an operator a restart had made progress it had not, on the one line they read.
+            // The accounting follows what the poison actually achieved: a poison that did NOT land leaves the
+            // row recoverable, so counting it as permanent tells an operator a restart made progress it did
+            // not.
             async Task<bool> PoisonAsync(ITaskStorage storage, Exception error)
             {
                 var poisoned = await TryPoisonAsync(storage, taskInfo, auditLevel, error, token)
@@ -522,13 +458,10 @@ public class WorkerService(
                 return poisoned;
             }
 
-            // CU3/L44 + P0-2: a recurring row that cannot be reconstructed as a recurring schedule must NOT be
-            // silently demoted to a one-shot. This covers BOTH corrupt metadata (RecurringTask present but it no
-            // longer deserializes) AND missing metadata (RecurringTask null/empty): in either case scheduledTask
-            // stays null. As a one-shot it would dispatch successfully (so the L18 poison counter never fires),
-            // recovery would skip UpdateTask, the row would stay recurring and recoverable, and the same
-            // occurrence would be re-executed once per restart forever. This is not transient (it cannot heal
-            // across restarts), so poison the row TERMINALLY (Failed + NextRunUtc cleared) instead of running it.
+            // A recurring row that cannot be reconstructed as a schedule — corrupt OR missing metadata — must
+            // NOT be demoted to a one-shot: it would dispatch successfully, stay recurring and recoverable,
+            // and re-execute the same occurrence once per restart for ever. It cannot heal across restarts,
+            // so the row is poisoned terminally instead of run.
             if (taskInfo.IsRecurring && scheduledTask == null)
             {
                 var error = recurringMetadataError
@@ -548,26 +481,18 @@ public class WorkerService(
                     // resumes from its scheduled time. Resolved once by the recovery factory.
                     var executionTime = prepared.Recovered.ExecutionTime;
 
-                    // isRecovery: recovery must never drop tasks, so full queues exert
-                    // backpressure here (consumers are draining concurrently), the stored
-                    // NextRunUtc is preserved for recurring tasks and the task definition
-                    // is not rewritten in storage.
-                    // auditLevel: carry the PERSISTED per-task audit level through the re-dispatch.
-                    // Omitting it let ExecuteDispatch fall back to the global DefaultAuditLevel, so a
-                    // recovered task silently reverted to the global default (e.g. a Minimal task got
-                    // Full-audited after a restart, or vice versa) — and the same loss surfaced as a
-                    // flaky test whenever a same-tick cutoff tie made recovery win the delivery race.
-                    // taskKey and rowMetadata: the same reasoning applied to the rest of the row's identity.
-                    // Dropping them re-derived the queue from the handler attribute (while this loop groups
-                    // the row by its STORED queue) and handed the executor back parentless, with no
-                    // occurrence metadata and at schedule version 0.
+                    // isRecovery: never drop a task (full queues exert backpressure, consumers are draining
+                    // concurrently), preserve the stored NextRunUtc, do not rewrite the task definition.
+                    // auditLevel, taskKey and rowMetadata carry the row's PERSISTED identity: without them the
+                    // re-dispatch falls back to the global audit level, re-derives the queue from the handler
+                    // attribute rather than the stored one, and rebuilds the executor parentless at version 0.
                     await taskDispatcher.ExecuteDispatch(task, executionTime, scheduledTask,
                         taskInfo.CurrentRunCount, token, taskInfo.Id, prepared.Recovered.TaskKey,
                         auditLevel, isRecovery: true, rowMetadata: prepared.Recovered.RowMetadata)
                         .ConfigureAwait(false);
 
-                    // L18: a task that previously failed re-dispatch but now succeeded clears its failure
-                    // counter, so transient failures never accumulate toward the poison limit across restarts.
+                    // A success clears the failure counter, so transient failures never accumulate toward the
+                    // poison limit across restarts.
                     if ((taskInfo.RecoveryDispatchFailureCount ?? 0) > 0)
                         await taskStorage.ClearRecoveryFailure(taskInfo.Id, token).ConfigureAwait(false);
 
@@ -581,21 +506,17 @@ public class WorkerService(
                 }
                 catch (ScheduleDeferredByProviderException)
                 {
-                    // V4: the schedule's occurrence provider could not answer, so the dispatcher wrote
-                    // nothing and parked the row to ask again — it has already said so, as a log line and a
-                    // monitoring event. The row IS back in the scheduler, which is what this loop exists to
-                    // achieve, so it counts as recovered; what must not happen is the L18 line above. An
-                    // outage of somebody else's calendar neither proves this row healthy nor adds a failure
-                    // to it, so a counter a previous restart really earned is left exactly where it was.
+                    // The occurrence provider could not answer, so the dispatcher wrote nothing and parked the
+                    // row to ask again, saying so itself. The row IS back in the scheduler, so it counts as
+                    // recovered; the failure counter is neither cleared nor incremented, since an outage of
+                    // somebody else's calendar proves nothing about this row.
                     Interlocked.Increment(ref recovered);
                 }
                 catch (Exception ex)
                 {
-                    // L18: a re-dispatch failure is typically transient (storage hiccup) and must stay
-                    // recoverable — but a PERSISTENT failure used to be retried at every restart while the
-                    // summary logged success, masking a constant error. Count the failure durably and
-                    // poison the task (mark Failed) once it has failed too many times, so it stops being
-                    // retried forever; genuinely transient failures still recover (counter reset on success).
+                    // A re-dispatch failure is usually transient and must stay recoverable, so the count is
+                    // durable and only the limit poisons: a permanently failing row must stop being retried
+                    // at every restart.
                     var attempts = await taskStorage.IncrementRecoveryFailure(taskInfo.Id, token).ConfigureAwait(false);
 
                     if (attempts >= MaxRecoveryDispatchAttempts)
@@ -612,15 +533,10 @@ public class WorkerService(
             }
             else if (typeWasLoadable)
             {
-                // B3/F7: the task TYPE is loadable but it produced no runnable instance (task == null). Either
-                // the persisted payload could not be deserialized (payloadError != null, an unrecognized
-                // legacy/serializer format) OR it deserialized to null (P2-1: e.g. a literal "null" Request) —
-                // which previously fell into the "type not loadable" branch below and was poisoned immediately
-                // with a misleading reason, bypassing the bounded retry. Both are a loadable type with an
-                // unusable payload that MIGHT heal (a serializer fix, a code change), so do NOT terminalize on
-                // the first restart: count it durably with the SAME bounded mechanism as a transient
-                // re-dispatch failure (recoverable until the attempt limit, then poisoned so it does not retry
-                // forever).
+                // The TYPE is loadable but produced no instance: the payload either failed to deserialize or
+                // deserialized to null. Both MIGHT heal (a serializer fix, a code change), so the row goes
+                // through the same bounded retry as a transient re-dispatch failure rather than being
+                // terminalized on the first restart.
                 var error = payloadError
                             ?? new InvalidOperationException(
                                 "Task payload deserialized to null for a loadable type");
@@ -656,12 +572,10 @@ public class WorkerService(
             }
         }
 
-        // Ends a recurring series whose remaining slots all fall past RunUntil, or whose run budget is
-        // spent: Completed with the cursor cleared, in one write. No handler runs and no run is counted —
-        // nothing executed. Wherever the storage can do it, that write is a compare-and-swap on the cursor,
-        // status and version of THIS page's row, which is what makes it safe during recovery: a Cancel or a
-        // reschedule that linearized first wins and this call reports the loss instead of overwriting a
-        // status the user chose.
+        // Ends a recurring series with nothing left to run: Completed with the cursor cleared, in one write,
+        // counting no run. Wherever the storage can, that write compare-and-swaps on the cursor, status and
+        // version of THIS page's row, so a Cancel or a reschedule that linearized first wins and this call
+        // reports the loss instead of overwriting a status the user chose.
         async ValueTask FinalizeRecurringSeriesAsync(QueuedTask row, AuditLevel auditLevel, CancellationToken token)
         {
             bool finalized;
@@ -680,8 +594,8 @@ public class WorkerService(
             }
             catch (Exception ex)
             {
-                // A failing finalization is counted by the SAME bounded L18 mechanism as a failing
-                // re-dispatch, so a row that can never be finalized stops being retried at every restart.
+                // Counted by the same bounded mechanism as a failing re-dispatch, so a row that can never be
+                // finalized stops being retried at every restart.
                 var attempts = await taskStorage.IncrementRecoveryFailure(row.Id, token).ConfigureAwait(false);
 
                 if (attempts >= MaxRecoveryDispatchAttempts)
@@ -714,11 +628,9 @@ public class WorkerService(
 
             Interlocked.Increment(ref recovered);
 
-            // Same L18 hygiene as a successful re-dispatch: earlier transient failures must not accumulate
-            // toward the poison limit once the row reaches its terminal state. Deliberately OUTSIDE the try
-            // above — the terminal write is already committed, and letting this bookkeeping share that catch
-            // would let it increment the very counter it exists to clear and overwrite a Completed row with
-            // Failed.
+            // Deliberately OUTSIDE the try above: the terminal write is already committed, and sharing that
+            // catch would let this bookkeeping increment the very counter it exists to clear, and overwrite a
+            // Completed row with Failed.
             if (!finalized || (row.RecoveryDispatchFailureCount ?? 0) == 0)
                 return;
 
@@ -737,32 +649,12 @@ public class WorkerService(
         }
     }
 
-    /// <summary>
-    /// Terminalizes a row the recovery cannot run, and answers whether it REALLY left the recovery set.
-    /// </summary>
-    /// <remarks>
-    /// A recovery POISON must be TERMINAL for a recurring row (P0-1):
-    /// <see cref="ITaskStorage.SetRecurringTaskPoisoned"/> clears <c>NextRunUtc</c> atomically with
-    /// <see cref="QueuedTaskStatus.Failed"/>, so <see cref="QueuedTask.IsRecoverable"/> stops returning it. A
-    /// plain <see cref="ITaskStorage.SetStatus"/>(Failed) leaves the cursor set, and a recurring Failed row
-    /// with a cursor is revived and re-poisoned at every restart (or re-executed once per restart if the
-    /// cause healed); a one-shot has no cursor to clear, so SetStatus terminalizes it correctly. This is used
-    /// ONLY on poison paths — never on a recurring run's transient failure, which must keep its cursor to
-    /// retry the next occurrence.
-    /// <para>
-    /// Neither write speaks for itself: both are best effort on every relational provider — they log their
-    /// own failed write and return — so "the call returned" says nothing about the row. The outcome is
-    /// therefore CONFIRMED by re-reading it and measuring it against the two canonical predicates a recovery
-    /// page is the union of, exactly as the occurrence reconciliation confirms a terminal status before it
-    /// frees a slot of its schedule's budget. Reporting an unconfirmed poison as a terminalization declared
-    /// progress a restart had not made, on the row that then repeated the same cycle at the next one.
-    /// </para>
-    /// <para>
-    /// A write that throws is contained here too (a custom storage inherits the interface's non-swallowing
-    /// two-write default): it is the same answer — the row is still recoverable — and letting it out would
-    /// abort the whole wave over one unusable row, leaving every sibling of its page unrecovered.
-    /// </para>
-    /// </remarks>
+    // Terminalizes a row the recovery cannot run, and answers whether it REALLY left the recovery set.
+    // A recurring row needs the cursor cleared atomically with Failed, or it is revived and re-poisoned at
+    // every restart. Both writes are best effort on every relational provider, so the outcome is CONFIRMED by
+    // re-reading the row against both recovery predicates; a write that throws answers the same way, since
+    // letting it out aborts the whole wave over one unusable row. Poison paths only — a recurring run's
+    // transient failure must keep its cursor.
     private async Task<bool> TryPoisonAsync(ITaskStorage storage, QueuedTask row, AuditLevel auditLevel,
                                             Exception error, CancellationToken ct)
     {
@@ -804,26 +696,20 @@ public class WorkerService(
     /// <summary>A recovered row paired with everything the factory could rebuild from it.</summary>
     private readonly record struct PreparedRow(QueuedTask Row, RecoveredTask Recovered);
 
-    /// <summary>
-    /// The bounded pipeline of recovery waves a paginating pass hands its pages to (#39): at most
-    /// <paramref name="maxInFlight"/> of them run at once, and the reader waits only when they all do.
-    /// </summary>
-    /// <remarks>
-    /// A slot is freed by whichever wave finishes FIRST, not by the oldest: a page wedged behind a slow
-    /// delivery would otherwise stop the pipeline as surely as awaiting each page in turn did, instead of
-    /// costing it the one slot it is holding.
-    /// </remarks>
+    // The bounded pipeline of recovery waves a paginating pass hands its pages to (#39). A slot is freed by
+    // whichever wave finishes FIRST, not by the oldest, so a page wedged behind a slow delivery costs the one
+    // slot it holds instead of stopping the pipeline.
     private sealed class WavePipeline(int maxInFlight)
     {
-        // Clamped to >= 1, like every other parallelism knob (F5): at zero the reader would wait for a wave
-        // it has not added yet, and at one it reads exactly as it did before the pipeline existed.
+        // Clamped to >= 1, like every other parallelism knob: at zero the reader would wait for a wave it has
+        // not added yet.
         private readonly int _maxInFlight = Math.Max(1, maxInFlight);
 
         private readonly List<Task> _waves = [];
 
         /// <summary>
         /// Waits until a wave may be added. A failure is reported HERE, on the wave that carried it, so a
-        /// broken recovery stops reading pages exactly as it did before the pipeline existed.
+        /// broken recovery stops reading pages.
         /// </summary>
         public async ValueTask WaitForSlotAsync()
         {

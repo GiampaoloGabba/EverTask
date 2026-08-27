@@ -50,7 +50,7 @@ public class SqliteTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             .ToArrayAsync(ct)
             .ConfigureAwait(false);
 
-        // X3, evaluated client-side: rows with work left to execute, plus recurring series that only need
+        // Evaluated client-side: rows with work left to execute, plus recurring series that only need
         // finalizing. Canonical predicates on QueuedTask — the same ones the other providers translate.
         var filtered = tasks
             .Where(t => (t.IsRecoverableForExecution(nowUtc) || t.IsRecurringSeriesToFinalize())
@@ -72,13 +72,11 @@ public class SqliteTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
     /// <summary>
     /// Compare-and-swaps the recoverable transition, with only the untranslatable half of the predicate
-    /// decided in memory. The temporal term compares <c>RunUntil</c> (DateTimeOffset), which SQLite cannot
-    /// translate — the same limitation that forces the RetrievePending override — so the row is read first
-    /// and that term is evaluated on it; everything else stays in the WHERE clause of the UPDATE, next to a
-    /// by-value re-assertion of the two columns the in-memory half was decided from. The write is therefore
-    /// a real check-and-set: a Cancel (or any other transition) that linearizes between the read and the
-    /// write leaves no row to update and this caller loses, instead of overwriting it with Queued. The
-    /// transition and its audit commit together (L20).
+    /// decided in memory: the row is read first for the <c>RunUntil</c> term SQLite cannot translate, while
+    /// everything else stays in the WHERE clause of the UPDATE next to a by-value re-assertion of the two
+    /// columns that half was decided from. The write is therefore a real check-and-set: a Cancel landing
+    /// between the read and the write leaves no row to update and this caller loses, instead of overwriting
+    /// it with Queued. The transition and its audit commit together.
     /// </summary>
     public override async Task<bool> TrySetQueuedIfRecoverable(DateTimeOffset nowUtc, Guid taskId,
                                                                AuditLevel auditLevel, CancellationToken ct = default)
@@ -130,14 +128,11 @@ public class SqliteTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     /// The occurrence page ordered, counted and sliced by SQLite, like every other provider.
     /// </summary>
     /// <remarks>
-    /// EF Core refuses to translate an <c>ORDER BY</c> over a <see cref="DateTimeOffset"/> here, and that
-    /// ordering is the whole member: without it the only way to answer is to read the entire series and slice
-    /// it in memory, which is exactly what a page exists to avoid — a schedule with a year of retention behind
-    /// it is hundreds of thousands of rows for a hundred. The slice is therefore written as SQL instead of
-    /// being moved into the process. SQLite keeps a <c>DateTimeOffset</c> as ISO-8601 text with a fixed
-    /// date-and-time prefix, so its plain text ordering IS the slot ordering: the fractional part is trimmed
-    /// from the right and both offset signs sort below every digit. That is the same representational
-    /// equality the occurrence unique index already rests on here.
+    /// EF Core refuses to translate an <c>ORDER BY</c> over a <see cref="DateTimeOffset"/> here, and reading
+    /// the whole series to slice it in memory is exactly the pathology a page exists to prevent, so the slice
+    /// is written as SQL. SQLite keeps a <c>DateTimeOffset</c> as ISO-8601 text with a fixed date-and-time
+    /// prefix, so its plain text ordering IS the slot ordering — the same representational equality the
+    /// occurrence unique index rests on here.
     /// </remarks>
     public override async Task<OccurrencePage> GetOccurrencesPage(Guid parentId, bool nonTerminalOnly, int skip,
                                                                   int take, CancellationToken ct = default)
@@ -301,7 +296,7 @@ public class SqliteTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     /// <inheritdoc />
     public override async Task<int> CleanupExecutionLogsByCount(int maxPerTask, CancellationToken ct = default)
     {
-        // <= 0 is disabled (Cluster B): keeping zero logs would let Skip(0) delete every row of every task.
+        // <= 0 is disabled: keeping zero logs would let Skip(0) delete every row of every task.
         if (maxPerTask <= 0)
             return 0;
 
@@ -316,7 +311,7 @@ public class SqliteTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             .SelectMany(g => g
                 .OrderByDescending(x => x.TimestampUtc)
                 .ThenByDescending(x => x.SequenceNumber)
-                .ThenByDescending(x => x.Id)   // Cluster C: total order on (Timestamp, Seq) ties; aligns with the read path's OrderBy(Id)
+                .ThenByDescending(x => x.Id)   // total order on (Timestamp, Seq) ties; aligns with the read path's OrderBy(Id)
                 .Skip(maxPerTask))
             .Select(x => x.Id)
             .ToList();

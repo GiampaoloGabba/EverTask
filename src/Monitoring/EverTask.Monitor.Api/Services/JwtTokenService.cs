@@ -54,9 +54,8 @@ public class JwtTokenService : IJwtTokenService
         var now = DateTimeOffset.UtcNow;
         var expiresAt = now.AddHours(_options.JwtExpirationHours);
 
-        // The role is written on every token, read one included: a session that carries no role at all would
-        // be indistinguishable from one minted before the claim existed, and the management gate must never
-        // have to guess.
+        // The role is written on every token, read one included: a token carrying no role at all is
+        // indistinguishable from one minted before the claim existed.
         var claims = new[]
         {
             new Claim(JwtRegisteredClaimNames.Sub, username),

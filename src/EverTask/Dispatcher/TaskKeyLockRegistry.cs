@@ -7,12 +7,10 @@ namespace EverTask.Dispatcher;
 /// can never both act on the row they each read before the other wrote.
 /// </summary>
 /// <remarks>
-/// It started inside the dispatcher, guarding the <c>GetByTaskKey</c> → decide → <c>Persist</c>/<c>UpdateTask</c>
-/// of a dispatch against a concurrent dispatch of the same key. A runtime reschedule is the same shape of
-/// critical section over the same row — read the schedule, decide the new definition and cursor, write it — and
-/// it needs the SAME lock, not one of its own: <c>UpdateTask</c> rewrites the definition and the cursor without
-/// touching the schedule version, so a dispatch that interleaved with a reschedule would overwrite it with the
-/// row it had read before. Hence one registry, resolved from the container by both.
+/// A dispatch (<c>GetByTaskKey</c> → decide → <c>Persist</c>/<c>UpdateTask</c>) and a runtime reschedule are the
+/// same critical section over the same row, and they need the SAME lock rather than one each: <c>UpdateTask</c>
+/// rewrites the definition and the cursor without touching the schedule version, so a dispatch interleaved with
+/// a reschedule would overwrite it with the row it had read before. Hence one registry, resolved by both.
 /// </remarks>
 internal sealed class TaskKeyLockRegistry
 {

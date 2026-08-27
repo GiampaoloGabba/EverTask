@@ -78,9 +78,9 @@ public interface IIntervalSchedulerBuilder
 
 /// <summary>
 /// What the default bodies of the schedule builder interfaces do. Every member added after 3.11 arrives as a
-/// default interface member so an outside implementation of these interfaces keeps compiling (T3/P6) — and
-/// throws here rather than silently doing nothing, because a schedule that quietly dropped its time zone
-/// would run at the wrong hour instead of failing.
+/// default interface member so an outside implementation of these interfaces keeps compiling — and throws
+/// here rather than silently doing nothing, because a schedule that quietly dropped its time zone would run
+/// at the wrong hour instead of failing.
 /// </summary>
 internal static class SchedulerBuilderDefaults
 {

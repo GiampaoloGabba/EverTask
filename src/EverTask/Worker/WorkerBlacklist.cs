@@ -1,18 +1,10 @@
 namespace EverTask.Worker;
 
 /// <summary>
-/// Dictionary with lock instead of ConcurrentDictionary for better memory efficiency.
-/// Rationale: Blacklist operations are infrequent (only on user cancellation), but IsBlacklisted
-/// is called for every task. A locked dictionary provides O(1) performance with lower memory overhead.
-/// Lock contention is negligible since Add/Remove are rare operations.
+/// Ids of cancelled tasks. Entries are timestamped and swept after <see cref="EntryTtl"/>, on
+/// <see cref="Add"/> only: cancelling a task that is no longer delivered leaves an entry no consumer will
+/// ever <see cref="Remove"/>, and <see cref="IsBlacklisted"/> runs for every task.
 /// </summary>
-/// <remarks>
-/// Entries are timestamped and swept after <see cref="EntryTtl"/>: cancelling a task whose
-/// occurrence is no longer delivered (e.g. it was parked in the scheduler and unscheduled by
-/// <c>Cancel</c>) leaves an entry that no consumer will ever <see cref="Remove"/>. Without the
-/// sweep those entries would accumulate for the process lifetime.
-/// The sweep runs on <see cref="Add"/> only, keeping the hot <see cref="IsBlacklisted"/> path lean.
-/// </remarks>
 internal sealed class WorkerBlacklist : IWorkerBlacklist
 {
     private readonly Dictionary<Guid, DateTimeOffset> _blacklist = new();

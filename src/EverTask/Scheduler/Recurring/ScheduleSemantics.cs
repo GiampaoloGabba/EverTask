@@ -1,7 +1,7 @@
 namespace EverTask.Scheduler.Recurring;
 
 /// <summary>
-/// What a schedule's occurrence grid is anchored to, and therefore whether a time zone can govern it (T5).
+/// What a schedule's occurrence grid is anchored to, and therefore whether a time zone can govern it.
 /// </summary>
 public enum ScheduleSemantics
 {

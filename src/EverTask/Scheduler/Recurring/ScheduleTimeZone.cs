@@ -3,7 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 namespace EverTask.Scheduler.Recurring;
 
 /// <summary>
-/// Resolution and normalization of the time zone id a schedule persists (T2).
+/// Resolution and normalization of the time zone id a schedule persists.
 /// </summary>
 /// <remarks>
 /// A schedule stores the id, never the <see cref="TimeZoneInfo"/>: the row outlives the process and the zone's
@@ -59,13 +59,13 @@ internal static class ScheduleTimeZone
 
     /// <summary>
     /// <paramref name="utcInstant"/> read on the clock of <paramref name="timeZoneId"/>, offset included so the
-    /// two passes of a DST fall-back are distinguishable (T13).
+    /// two passes of a DST fall-back are distinguishable.
     /// </summary>
     /// <remarks>
     /// Null when there is no instant or no zone to read it on, and null rather than a throw when the id no
     /// longer resolves: a delivery must not fail over what it reports about itself. It takes the ID and not a
-    /// schedule because a durable OCCURRENCE has no definition of its own — the zone of the series it belongs
-    /// to reaches it stamped on its row — and both must answer this question the same way.
+    /// schedule because a durable OCCURRENCE has no definition of its own, and both must answer this question
+    /// the same way.
     /// </remarks>
     internal static DateTimeOffset? ToLocalTime(string? timeZoneId, DateTimeOffset? utcInstant) =>
         utcInstant is { } instant && TryResolve(timeZoneId, out var zone)
@@ -100,13 +100,13 @@ internal static class ScheduleTimeZone
 
     /// <summary>
     /// Resolves <paramref name="timeZoneId"/> and returns the id to persist for it — the two steps a builder
-    /// does together, so an id that will not come back on the next run is refused before it is stored (T2).
+    /// does together, so an id that will not come back on the next run is refused before it is stored.
     /// </summary>
     internal static string Normalize(string timeZoneId) => Normalize(Resolve(timeZoneId));
 
     /// <summary>
-    /// Stamps the host's configured default zone (T4) onto a freshly built schedule that is calendar-anchored
-    /// and did not name one itself.
+    /// Stamps the host's configured default zone onto a freshly built schedule that is calendar-anchored and
+    /// did not name one itself.
     /// </summary>
     /// <remarks>
     /// It belongs to the moment a definition is BUILT, and nowhere else: the zone becomes part of what gets

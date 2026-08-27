@@ -4,7 +4,7 @@ namespace EverTask.Storage;
 /// Single source of truth for audit-trail creation decisions, shared by every <see cref="ITaskStorage"/>
 /// provider (MemoryTaskStorage, the EF Core base and its derivatives). Keeping the rules here means the
 /// audit trail for the same event is identical regardless of the storage backend — the relational
-/// providers and the in-memory provider can never drift (F19/L29).
+/// providers and the in-memory provider can never drift.
 /// </summary>
 public static class AuditPolicy
 {

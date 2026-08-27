@@ -59,13 +59,11 @@ public record TaskDetailDto(
 )
 {
     // Schedule and occurrence context lives in INIT properties, never as appended positional parameters:
-    // appending would change the primary constructor and Deconstruct signatures of a public record (X4).
+    // appending would change the primary constructor and Deconstruct signatures of a public record.
 
     /// <summary>
-    /// How many status transitions the task's trail holds in total. <c>StatusAudits</c> carries only the
-    /// first page of it — a schedule that has run for a year holds one transition per state per run — so
-    /// this is what tells a consumer there is more, and <c>GET /tasks/{id}/status-audit</c> is where the
-    /// rest is asked for.
+    /// How many status transitions the task's trail holds in total. <c>StatusAudits</c> carries only the first
+    /// page of it; the rest is asked for with <c>GET /tasks/{id}/status-audit</c>.
     /// </summary>
     public int StatusAuditsTotalCount { get; init; }
 

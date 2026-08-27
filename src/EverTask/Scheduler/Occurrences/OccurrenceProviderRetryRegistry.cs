@@ -4,7 +4,7 @@ namespace EverTask.Scheduler.Occurrences;
 
 /// <summary>
 /// How many times in a row each schedule's occurrence provider has failed on this host, and therefore how long
-/// the next attempt waits (V4).
+/// the next attempt waits.
 /// </summary>
 /// <remarks>
 /// In memory on purpose, and per host: it is a backoff, not state. A crash loses nothing that matters —
@@ -40,11 +40,9 @@ internal sealed class OccurrenceProviderRetryRegistry(EverTaskServiceConfigurati
     /// Forgets a schedule that will not ask again: it was cancelled, removed, or its series ended.
     /// </summary>
     /// <remarks>
-    /// An answer is the ordinary way an entry goes away, and a schedule that ends while its provider is
-    /// healthy has none left to forget. The entries this exists for belong to the schedules that never got
-    /// one — cancelled mid-outage, or moved onto a grid with no provider at all — and without it a host would
-    /// keep an entry per schedule it ever had. Same lifetime, and the same call sites, as the published
-    /// schedule version (S4).
+    /// An answer is the ordinary way an entry goes away; this covers the schedules that never got one —
+    /// cancelled mid-outage, or moved onto a grid with no provider at all — so a host does not keep an entry
+    /// per schedule it ever had. Same lifetime, and the same call sites, as the published schedule version.
     /// </remarks>
     public void Forget(Guid scheduleId)
     {

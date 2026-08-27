@@ -34,13 +34,13 @@ public record TaskHandlerExecutor(
     string? RateLimitKey = null,
     // Eager mode only: the EverTask-owned DI scope the carried handler instance was resolved from.
     // The worker disposes it right after execution so eager handlers are NOT pinned in the singleton
-    // dispatcher's root container until shutdown (L27). Memory-only; null for lazy executors and
+    // dispatcher's root container until shutdown. Memory-only; null for lazy executors and
     // dropped by ToLazy(). Never persisted.
     IAsyncDisposable? HandlerScope = null)
 {
     // Occurrence metadata lives in INIT properties declared in the body, never as appended positional
     // parameters: appending would change the primary constructor and Deconstruct signatures, breaking every
-    // consumer that constructs or deconstructs an executor (X4). `with` expressions copy them for free.
+    // consumer that constructs or deconstructs an executor. `with` expressions copy them for free.
 
     /// <summary>
     /// The recurring schedule row this executor is an occurrence of, or null for a schedule row / plain task.
@@ -74,7 +74,7 @@ public record TaskHandlerExecutor(
 
     /// <summary>
     /// True when this delivery exists only to ask a schedule's grid AGAIN — an
-    /// <see cref="INextOccurrenceProvider"/> that could not answer (V4) — and must not run the handler.
+    /// <see cref="INextOccurrenceProvider"/> that could not answer — and must not run the handler.
     /// </summary>
     /// <remarks>
     /// Internal and set in exactly one place, the provider re-park. What the schedule owes is decided from the
@@ -89,7 +89,7 @@ public record TaskHandlerExecutor(
     /// </summary>
     /// <remarks>
     /// It exists for the one host that has nowhere else to read it: with a storage the retry re-reads the row
-    /// and the cursor there is the answer, but a storage-less series (F18) lives entirely on its delivery, and
+    /// and the cursor there is the answer, but a storage-less series lives entirely on its delivery, and
     /// re-deciding from the retry instant instead of from the slot would silently skip everything in between.
     /// </remarks>
     internal DateTimeOffset? ScheduleRetryFromUtc { get; init; }
@@ -111,9 +111,9 @@ public record TaskHandlerExecutor(
     /// <summary>
     /// The slot this delivery stands for: the occurrence's own slot, the scheduled time of a delayed task, or
     /// null for a task dispatched to run immediately. Never the moving slot a rate-limit deferral parked it at
-    /// (C4) — reporting that one would make a deferred task look as if it had been scheduled for it, and never
-    /// the moment an overdue occurrence happened to be fired at either (C4 again): an occurrence's slot comes
-    /// from its own row, whether it was stamped on the executor or is still only in the row's metadata.
+    /// — reporting that one would make a deferred task look as if it had been scheduled for it — and never the
+    /// moment an overdue occurrence happened to be fired at either: an occurrence's slot comes from its own
+    /// row, whether it was stamped on the executor or is still only in the row's metadata.
     /// </summary>
     internal DateTimeOffset? NominalSlotOfDelivery =>
         NominalSlotUtc ?? RowOccurrence?.SlotUtc ?? (ExecutionTimeIsReservedSlot ? null : ExecutionTime);
@@ -262,7 +262,7 @@ public record TaskHandlerExecutor(
     public TaskHandlerExecutor ToLazy() =>
         // ALWAYS a new instance, even when already lazy: the channel consumer needs a NEW reference so
         // Parallel.ForEachAsync can process recurring tasks. `with` copies every member — the positional
-        // ones AND the init-only occurrence metadata — so a new member can never be forgotten here (X4);
+        // ones AND the init-only occurrence metadata — so a new member can never be forgotten here;
         // only the handler instance, its callbacks and its owned scope are dropped. The handler type name
         // is reused when stamped at dispatch, else derived from the instance being dropped.
         this with
@@ -285,8 +285,8 @@ public static class TaskHandlerExecutorExtensions
     /// Maps an executor to the row that persists it, stamped from the real clock.
     /// </summary>
     /// <remarks>
-    /// The zero-extra-argument shape is preserved exactly (P6/X6): an assembly compiled against the previous
-    /// release calls THIS signature, and turning it into an optional parameter would have removed it.
+    /// The zero-extra-argument shape is preserved exactly: an assembly compiled against the previous release
+    /// calls THIS signature, and turning it into an optional parameter would have removed it.
     /// </remarks>
     public static QueuedTask ToQueuedTask(this TaskHandlerExecutor executor) => executor.ToQueuedTask(null);
 
@@ -350,9 +350,8 @@ public static class TaskHandlerExecutorExtensions
                 nextRun = result.NextRun;
             }
 
-            // Computed inline (F22): the previous static cache was keyed by RecurringTask reference
-            // identity, but every persisted dispatch builds a fresh instance, so it never hit between
-            // distinct dispatches — it only retained one entry per dispatch forever (an unbounded leak).
+            // Computed inline, never cached: every persisted dispatch builds a fresh RecurringTask, so a
+            // cache keyed by reference identity never hits and only retains one entry per dispatch for ever.
             scheduleTaskInfo = executor.RecurringTask.ToString() ?? "Recurring Task";
 
             maxRuns  = executor.RecurringTask.MaxRuns;

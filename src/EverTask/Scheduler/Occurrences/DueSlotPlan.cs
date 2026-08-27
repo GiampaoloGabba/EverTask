@@ -26,15 +26,13 @@ internal enum DueSlotStopReason
 /// Which rule dropped a run of slots that will never become occurrences.
 /// </summary>
 /// <remarks>
-/// Losing a slot is the one thing a durable schedule may do quietly in terms of work, and never quietly in
-/// terms of reporting (P5) — so every dropped run says which rule dropped it. The three are different
-/// decisions with different fixes: an age window too narrow for the outage, a per-episode cap under
-/// <see cref="CatchUpOverflowPolicy.SkipOldest"/>, and the skip policy doing exactly what it says. Reporting
-/// one under another's cause told an operator to widen a window that had dropped nothing.
+/// The three are different decisions with different fixes — an age window too narrow for the outage, a
+/// per-episode cap under <see cref="CatchUpOverflowPolicy.SkipOldest"/>, and the skip policy doing what it
+/// says — so a dropped run is never reported under another's cause.
 /// </remarks>
 internal enum SlotLossReason
 {
-    /// <summary>Older than <c>now - MaxAge</c>: the age window of a replaying policy (M10).</summary>
+    /// <summary>Older than <c>now - MaxAge</c>: the age window of a replaying policy.</summary>
     MisfireWindowExceeded = 0,
 
     /// <summary>
@@ -57,7 +55,7 @@ internal enum SlotLossReason
 /// <param name="Count">How many slots went.</param>
 /// <param name="IsExact">
 /// Whether <paramref name="Count"/> is the real total or only a lower bound: a grid that has to be walked is
-/// counted under a cap, and dropped runs are the one loss nobody may read as smaller than it was.
+/// counted under a cap.
 /// </param>
 internal readonly record struct SlotLoss(SlotLossReason Reason, DateTimeOffset FromUtc, int Count, bool IsExact);
 
@@ -67,14 +65,10 @@ internal readonly record struct SlotLoss(SlotLossReason Reason, DateTimeOffset F
 /// </summary>
 /// <remarks>
 /// The slots are CONSECUTIVE grid points, so the cursor that follows slot <c>i</c> is slot <c>i + 1</c>, and
-/// the one that follows the last is <see cref="NextCursorUtc"/>. That is what lets each occurrence be written
-/// with its own compare-and-swap on the cursor it advances, instead of one big write nobody could resume.
-/// <para>
-/// Skipping needs no write of its own while at least one slot survives: the first materialization carries the
-/// cursor from the slot that was dropped to the one that was kept. An empty plan whose
-/// <see cref="NextCursorUtc"/> differs from the current cursor is the case where nothing survived, and there
-/// the cursor moves on its own.
-/// </para>
+/// the one that follows the last is <see cref="NextCursorUtc"/>: each occurrence can then be written under its
+/// own compare-and-swap on the cursor it advances, rather than one write nobody could resume. Skipping
+/// therefore costs no write of its own while at least one slot survives; an empty plan whose
+/// <see cref="NextCursorUtc"/> differs from the current cursor is the case where nothing survived.
 /// </remarks>
 internal sealed record DueSlotPlan
 {
@@ -89,14 +83,12 @@ internal sealed record DueSlotPlan
 
     /// <summary>
     /// Whether the null cursor above comes from the RUN BUDGET rather than from the grid: this plan grants the
-    /// last occurrence <c>MaxRuns</c> allows, so creating it ends the series (M14).
+    /// last occurrence <c>MaxRuns</c> allows, so creating it ends the series.
     /// </summary>
     /// <remarks>
-    /// The two reasons for a null cursor answer differently once a run walks past a slot that already had a
-    /// row. A grid that ended is a fact about the SLOT the plan named, so the walk has to ask the grid again
-    /// about the slot it reaches instead; a spent run budget is a fact about the WRITE, and
-    /// <see cref="MaxRuns"/> counts materializations, so whichever slot the last authorised occurrence lands
-    /// on is still the one that ends the series — in the same commit that creates it, never in a later run.
+    /// The two reasons diverge once a run walks past a slot that already had a row: an ended grid is a fact
+    /// about the SLOT the plan named, so the walk asks the grid again about the slot it reaches, while a spent
+    /// budget is a fact about the WRITE and ends the series in the same commit that creates the last row.
     /// </remarks>
     public bool RunBudgetEndsSeries { get; init; }
 
@@ -106,10 +98,9 @@ internal sealed record DueSlotPlan
     /// The runs of due slots this plan drops without ever running them, each with the rule that dropped it.
     /// </summary>
     /// <remarks>
-    /// A list rather than one count, because a single catch-up plan can lose slots twice for different
-    /// reasons — the age window first, then the per-episode cap under
-    /// <see cref="CatchUpOverflowPolicy.SkipOldest"/> — and adding the second number into the first reported
-    /// the whole loss under a cause that had not produced most of it.
+    /// A list rather than one count: a single catch-up plan can lose slots twice for different reasons — the
+    /// age window first, then the per-episode cap under <see cref="CatchUpOverflowPolicy.SkipOldest"/> — and
+    /// the two must not be summed under one cause.
     /// </remarks>
     public IReadOnlyList<SlotLoss> Losses { get; init; } = [];
 
@@ -128,10 +119,8 @@ internal sealed record DueSlotPlan
     /// count for every row of one run, and the collapsed range for the single row of a fire-once.
     /// </summary>
     /// <remarks>
-    /// The range and the count are two halves of one statement and always agree — the count is how many grid
-    /// slots fall inside the range. Across successive runs of the same catch-up both shrink together, because
-    /// each run states the backlog as it stood when its rows were created; the count never describes a wider
-    /// run of slots than the range it comes with.
+    /// The range and the count are two halves of one statement and must always agree: the count is how many
+    /// grid slots fall inside the range, and across successive runs of the same catch-up both shrink together.
     /// </remarks>
     public OccurrenceMisfire? Misfire { get; init; }
 }

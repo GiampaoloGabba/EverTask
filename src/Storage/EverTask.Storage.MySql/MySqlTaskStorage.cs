@@ -17,15 +17,15 @@ namespace EverTask.Storage.MySql;
 /// correlated <c>EXISTS</c> guard).
 /// </para>
 /// <para>
-/// PHASE 2 (hot writes): MySQL/MariaDB have READ-ONLY CTEs and no <c>UPDATE ... RETURNING</c>, so the
-/// single-roundtrip optimization for <c>SetStatus</c> / <c>UpdateCurrentRun</c> / <c>CompleteRecurringRun</c>
-/// uses STORED PROCEDURES (the SQL Server template), each a single atomic transaction. The procs are created
-/// by the <c>AddHotWriteStoredProcedures</c> migration; the audit decisions match <see cref="AuditPolicy"/>
-/// exactly (the <c>ErrorsOnly</c> RunsAudit gate is decided server-side from the row's own Status/Exception).
+/// MySQL/MariaDB have READ-ONLY CTEs and no <c>UPDATE ... RETURNING</c>, so the hot writes
+/// (<c>SetStatus</c>, <c>UpdateCurrentRun</c>, <c>CompleteRecurringRun</c>) go through STORED PROCEDURES,
+/// each a single atomic transaction, created by the <c>AddHotWriteStoredProcedures</c> migration. The audit
+/// decisions match <see cref="AuditPolicy"/> exactly (the <c>ErrorsOnly</c> RunsAudit gate is decided
+/// server-side from the row's own Status/Exception).
 /// </para>
 /// </summary>
-// NOTE: not a primary constructor. The base captures contextFactory/logger too, so a primary
-// constructor whose parameters are used in the body would capture them twice (CS9107).
+// The primary-ctor parameters are deliberately re-declared as private fields: the base captures them too,
+// and using a parameter directly from a method body would capture the same value twice (CS9107).
 public class MySqlTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTaskLogger<MySqlTaskStorage> logger)
     : EfCoreTaskStorage(contextFactory, logger)
 {
@@ -80,7 +80,7 @@ public class MySqlTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTa
     /// Advances the run counter via <c>usp_UpdateCurrentRun</c>. The RunsAudit decision for ErrorsOnly depends
     /// on the ROW's Status/Exception (NOT a constant), so it is evaluated SERVER-SIDE in the proc — it cannot be
     /// a single C# boolean. The run counter SATURATES at int.MaxValue, matching the base and the other providers;
-    /// failures propagate (Residual D) so the scheduler never advances on unpersisted state.
+    /// failures propagate so the scheduler never advances on unpersisted state.
     /// </summary>
     public override async Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
                                                 AuditLevel auditLevel)
@@ -110,7 +110,7 @@ public class MySqlTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTa
         }
         catch (Exception e)
         {
-            // Residual D: propagate (do NOT swallow) — a failed counter persist must not advance the schedule on
+            // Propagate (do NOT swallow) — a failed counter persist must not advance the schedule on
             // unpersisted state; the recoverable row is re-run instead.
             logger.CurrentRunUpdateFailed(e, taskId);
             throw;
@@ -123,7 +123,7 @@ public class MySqlTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTa
     /// occurrence at recovery. The audited Status/Exception are the CONSTANTS <c>Completed</c>/<c>NULL</c>, so the
     /// audit gates depend only on the AuditLevel and are computed in C# (StatusAudit at Full; RunsAudit at
     /// Full+Minimal). NextRunUtc is assigned unconditionally (a null makes the series terminal). Propagates on
-    /// failure (Residual D), same as <see cref="UpdateCurrentRun"/>.
+    /// failure, same as <see cref="UpdateCurrentRun(Guid,double,DateTimeOffset?,AuditLevel)"/>.
     /// </summary>
     public override async Task CompleteRecurringRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
                                                     AuditLevel auditLevel)
@@ -147,33 +147,27 @@ public class MySqlTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTa
         }
         catch (Exception e)
         {
-            // Residual D: propagate — a failed completion must not advance the schedule on unpersisted state.
+            // Propagate — a failed completion must not advance the schedule on unpersisted state.
             logger.RecurringRunCompletionFailed(e, taskId);
             throw;
         }
     }
 
     /// <summary>
-    /// MySQL/MariaDB override of the completed-task purge. The base resolves the rows with
-    /// <c>Where(predicate).Take(n).ExecuteDelete()</c> → <c>DELETE ... LIMIT</c>, but on MySQL a
-    /// <c>DELETE ... LIMIT</c> does not reliably honor a correlated <c>EXISTS</c> guard in its <c>WHERE</c>:
-    /// the <c>preserveTasksWithLogs</c> guard (<c>!TaskExecutionLogs.Any(...)</c>) was dropped and a completed
-    /// task that still owned execution logs got purged, cascade-deleting the very logs a retention window meant
-    /// to keep. The fix mirrors the SQLite override shape: resolve the matching ids with a SELECT — where the
-    /// <c>EXISTS</c> subqueries AND the <c>DateTimeOffset</c> cutoff translate server-side on MySQL — then delete
-    /// by primary key in bounded batches. The other <c>Cleanup*</c> methods carry no <c>EXISTS</c> guard and
-    /// inherit the optimized base unchanged.
+    /// MySQL/MariaDB override of the completed-task purge: a <c>DELETE ... LIMIT</c> does not reliably honor a
+    /// correlated <c>EXISTS</c> guard in its <c>WHERE</c>, so the base form drops <c>preserveTasksWithLogs</c>
+    /// and purges tasks that still own execution logs, cascade-deleting them. The ids are resolved with a
+    /// <c>SELECT</c> — where the <c>EXISTS</c> subqueries and the cutoff do translate — and deleted by primary
+    /// key. The other <c>Cleanup*</c> methods carry no <c>EXISTS</c> guard and inherit the base unchanged.
     /// </summary>
     public override async Task<int> CleanupCompletedTasks(DateTimeOffset cutoff, bool preserveTasksWithLogs,
                                                           CancellationToken ct = default)
     {
         await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
-        // Resolve a BOUNDED page of ids, delete them by PK, repeat — never materializing the whole candidate set
-        // (a large first/backlog run would otherwise load millions of Guids into memory). Each iteration re-runs
-        // the full predicate server-side, so a row that gains an audit/log between pages drops out of the next
-        // page (keeps the per-batch re-check the base BatchDeleteAsync relies on). Deleting a page removes it from
-        // the predicate, so the loop makes progress and terminates.
+        // A BOUNDED page of ids per iteration, never the whole candidate set: a backlog run would otherwise load
+        // millions of Guids into memory. Each iteration re-runs the full predicate server-side, so a row that
+        // gains an audit or a log between pages drops out of the next one.
         var total = 0;
         List<Guid> ids;
         do
@@ -203,11 +197,9 @@ public class MySqlTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTa
 
     /// <summary>
     /// MySQL/MariaDB override of the occurrence purge, for the same reason as
-    /// <see cref="CleanupCompletedTasks"/>: its <c>preserveTasksWithLogs</c> and the two audit-trail guards
-    /// are correlated <c>EXISTS</c> subqueries, which a
-    /// <c>DELETE … LIMIT</c> does not reliably honor here — they are dropped, and occurrences that still own
-    /// execution logs or audit rows are purged, cascade-deleting what a retention window meant to keep. Same
-    /// shape: resolve a bounded page of ids with a <c>SELECT</c>, delete by primary key.
+    /// <see cref="CleanupCompletedTasks"/>: its three preserve guards are correlated <c>EXISTS</c> subqueries,
+    /// which a <c>DELETE … LIMIT</c> does not reliably honor here. Same shape: resolve a bounded page of ids
+    /// with a <c>SELECT</c>, delete by primary key.
     /// </summary>
     public override async Task<int> CleanupTerminalOccurrences(DateTimeOffset cutoff, bool preserveTasksWithLogs,
                                                                bool preserveStatusAudits, bool preserveRunsAudits,
@@ -338,7 +330,7 @@ public class MySqlTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTa
         }
         catch (Exception e)
         {
-            // Residual D: propagate, exactly like the unversioned overload.
+            // Propagate, exactly like the unversioned overload.
             logger.CurrentRunUpdateFailed(e, taskId);
             throw;
         }

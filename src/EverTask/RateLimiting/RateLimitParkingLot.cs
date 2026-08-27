@@ -20,7 +20,7 @@ namespace EverTask.RateLimiting;
 /// </remarks>
 internal sealed class RateLimitParkingLot(RateLimiterOptions options, TimeProvider? timeProvider = null)
 {
-    // Same clock as the schedulers and the limiter: the pause deadline is a scheduling decision (P9).
+    // Same clock as the schedulers and the limiter: the pause deadline is a scheduling decision.
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
 
     internal readonly record struct ParkedTaskInfo(string QueueName, string Key, DateTimeOffset SlotUtc);

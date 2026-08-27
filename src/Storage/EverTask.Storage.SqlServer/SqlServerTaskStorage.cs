@@ -23,10 +23,8 @@ public class SqlServerTaskStorage(
     private readonly ITaskStoreDbContextFactory _contextFactory = contextFactory;
     private readonly string _schema = string.IsNullOrEmpty(storeOptions.Value.SchemaName) ? "dbo" : storeOptions.Value.SchemaName!;
 
-    // Must match the migrations' schema fallback (dbo) so the hot-path procs resolve to where they were
-    // created. A null/empty SchemaName lands the procs in dbo; the old `?? "EverTask"` made runtime EXEC
-    // a different schema than the procs lived in -> proc-not-found, swallowed in SetStatus, recoverable
-    // row -> re-dispatch -> double execution. Mirrors PostgresTaskStorage's `?? "public"`.
+    // The dbo fallback must match the migrations' one, or EXEC targets a schema the procs do not live in:
+    // proc-not-found, swallowed by SetStatus, and the recoverable row is re-dispatched — double execution.
 
     /// <summary>
     /// Sets task status using optimized stored procedure.
@@ -43,8 +41,6 @@ public class SqlServerTaskStorage(
 
         try
         {
-            // Cast to DbContext to access Database property
-            // Build SQL command with schema name (sanitized from configuration)
             var sql = $"EXEC [{_schema}].[usp_SetTaskStatus] @TaskId, @Status, @Exception, @AuditLevel, @ExecutionTimeMs";
 
             await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(
@@ -72,7 +68,7 @@ public class SqlServerTaskStorage(
     /// </summary>
     /// <remarks>
     /// The proc advances <c>CurrentRunCount</c> by exactly one real execution: occurrences skipped to
-    /// realign the schedule after a downtime do NOT consume the MaxRuns budget (Option B accounting).
+    /// realign the schedule after a downtime do NOT consume the MaxRuns budget.
     /// </remarks>
     public override async Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
                                                 AuditLevel auditLevel)
@@ -94,8 +90,8 @@ public class SqlServerTaskStorage(
         }
         catch (Exception e)
         {
-            // Residual D: propagate (do not swallow) so a failed counter persist does not advance the
-            // schedule on unpersisted state; the recoverable row is re-run instead.
+            // Propagate (do not swallow) so a failed counter persist does not advance the schedule on
+            // unpersisted state; the recoverable row is re-run instead.
             logger.CurrentRunUpdateFailed(e, taskId);
             throw;
         }
@@ -105,11 +101,11 @@ public class SqlServerTaskStorage(
     /// Completes a recurring occurrence using the optimized stored procedure: marks the task Completed and
     /// advances the run counter / next run in a single atomic database roundtrip (one transaction), so a
     /// crash can never split the status transition from the counter advance and resurrect the finished
-    /// occurrence at recovery (CU14/L29).
+    /// occurrence at recovery.
     /// </summary>
     /// <remarks>
-    /// The proc advances <c>CurrentRunCount</c> by exactly one real execution (Option B accounting) and
-    /// assigns <c>NextRunUtc</c> unconditionally: a null clears it, making a terminal series unrecoverable.
+    /// The proc advances <c>CurrentRunCount</c> by exactly one real execution and assigns
+    /// <c>NextRunUtc</c> unconditionally: a null clears it, making a terminal series unrecoverable.
     /// </remarks>
     public override async Task CompleteRecurringRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
                                                     AuditLevel auditLevel)
@@ -131,9 +127,8 @@ public class SqlServerTaskStorage(
         }
         catch (Exception e)
         {
-            // Residual D: propagate (do not swallow) — a failed completion must NOT advance the schedule on
-            // unpersisted state; the recoverable row is re-run instead. Same contract as UpdateCurrentRun,
-            // deliberately NOT the swallow pattern of SetStatus.
+            // Propagate (do not swallow) — a failed completion must NOT advance the schedule on unpersisted
+            // state; the recoverable row is re-run instead. Deliberately NOT the swallow pattern of SetStatus.
             logger.RecurringRunCompletionFailed(e, taskId);
             throw;
         }
@@ -242,7 +237,7 @@ public class SqlServerTaskStorage(
         }
         catch (Exception e)
         {
-            // Residual D: propagate, exactly like the unversioned overload.
+            // Propagate, exactly like the unversioned overload.
             logger.CurrentRunUpdateFailed(e, taskId);
             throw;
         }
@@ -291,29 +286,15 @@ public class SqlServerTaskStorage(
     }
 
     // ---- Reads chosen as deadlock victims ---------------------------------------------------------
-    // SQL Server takes shared locks to read, and a read that resolves a row through a nonclustered index
-    // takes them in the OPPOSITE order to a write: the read locks the index entry and then the clustered
-    // row it points at, while an UPDATE locks the clustered row and then every index entry that has to
-    // follow it. The startup recovery page is exactly that kind of read -- it walks IX_QueuedTasks_Recovery
-    // in (CreatedAtUtc, Id) order and looks the rows up in the clustered index -- and it runs while
-    // occurrences and tasks are already executing and writing their Status, which IX_QueuedTasks_Recovery
-    // and IX_QueuedTasks_Status both carry. The cycle that pair forms is a genuine deadlock, and the engine
-    // resolves it by killing whichever transaction is cheapest to roll back: a read, having written
-    // nothing, is always cheaper than the write it collided with, and any OTHER read queued behind the
-    // same clustered row can be picked instead. So the victim is a read that never asked for anything but
-    // a consistent answer.
+    // A read through a nonclustered index takes its shared locks in the OPPOSITE order to a write, so a read
+    // racing status updates (the startup recovery page above all) can form a genuine deadlock cycle, and the
+    // engine picks the read as the victim because it is the cheapest to roll back. Re-running a read is
+    // indistinguishable from having asked a moment later, while letting 1205 out on the recovery path aborts
+    // the whole startup recovery and leaves the backlog for the next restart. SQL Server only: PostgreSQL and
+    // MySQL answer plain reads from a snapshot, SQLite serializes writers.
     //
-    // The answer SQL Server gives with error 1205 is "Rerun the transaction", and for a read that is
-    // literally all it takes: a read has no effect to undo and no state to reconcile, so re-running it is
-    // indistinguishable from having asked a moment later. What is NOT acceptable is the alternative --
-    // letting 1205 out of the storage -- because on the recovery path it aborts the whole startup recovery
-    // (WorkerService logs RecoveryFailed and the rest of the backlog waits for the next restart).
-    // This applies to SQL Server alone: PostgreSQL and MySQL answer plain reads from a consistent snapshot
-    // and take no shared locks, and SQLite serializes writers outright.
-    //
-    // Writes are deliberately NOT re-run here. Each of them is a compare-and-swap or a single-transaction
-    // procedure whose caller already knows what to do with a lost race, and re-running one behind its
-    // caller's back would decide that for it.
+    // Writes are deliberately NOT re-run: each is a compare-and-swap or a single-transaction procedure whose
+    // caller already knows what to do with a lost race.
 
     /// <summary>SQL Server error 1205 — "was deadlocked on lock resources … Rerun the transaction".</summary>
     private const int DeadlockVictim = 1205;
@@ -337,7 +318,7 @@ public class SqlServerTaskStorage(
     /// <remarks>
     /// Only the clock-carrying overload is overridden: overriding the legacy one would make the base take
     /// this provider for a pre-4.0 storage and route every call through it, dropping the caller's
-    /// <paramref name="nowUtc"/> (P9). The core calls this overload exclusively.
+    /// <paramref name="nowUtc"/>.
     /// </remarks>
     public override Task<QueuedTask[]> RetrievePending(DateTimeOffset nowUtc, DateTimeOffset? lastCreatedAt,
                                                        Guid? lastId, int take, CancellationToken ct = default) =>

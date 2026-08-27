@@ -10,10 +10,9 @@ namespace EverTask.Monitor.Api.Infrastructure;
 /// SignalR hub, the dashboard files, the OpenAPI document and whatever a companion package maps.
 /// </summary>
 /// <remarks>
-/// Controllers carry <see cref="MonitoringAccessFilter"/> instead, which MVC applies whoever maps them. The
-/// hub is not MVC and exposes no convention builder of its own, so the guard is attached to the route GROUP
-/// everything non-MVC is mapped into: the wrapper then runs inside routing, where the path is the one
-/// routing resolved and a host's <c>UsePathBase</c> has already been applied.
+/// Controllers carry <see cref="MonitoringAccessFilter"/> instead. The hub is not MVC and exposes no
+/// convention builder of its own, so the guard is attached to the route GROUP everything non-MVC is mapped
+/// into — inside routing, where a host's <c>UsePathBase</c> has already been applied (#46).
 /// </remarks>
 internal static class MonitoringEndpointGuard
 {

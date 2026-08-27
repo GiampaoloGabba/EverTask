@@ -4,16 +4,15 @@ public class DailyTimeSchedulerBuilder(RecurringTask task, TimeProvider? timePro
     : IDailyTimeSchedulerBuilder
 {
     /// <summary>
-    /// The pre-P9 constructor, kept as a real overload so an assembly compiled against the previous release
-    /// still binds (P6/X6). Every builder in this namespace keeps its original arity for the same reason.
+    /// The constructor the previous release shipped, kept as a real overload so an assembly compiled against
+    /// it still binds. Every builder in this namespace keeps its original arity for the same reason.
     /// </summary>
     public DailyTimeSchedulerBuilder(RecurringTask task) : this(task, null) { }
 
     /// <summary>
-    /// Stores <paramref name="time"/> VERBATIM (T12). It is a time of day, read on whatever clock the
-    /// schedule ends up on — the zone named by <c>InTimeZone</c>, or UTC when there is none — so the builder
-    /// has nothing to convert: the old pass through <c>TimeOnly.ToUniversalTime()</c> only ever rounded the
-    /// value down to the second.
+    /// Stores <paramref name="time"/> VERBATIM. It is a time of day, read on whatever clock the schedule ends
+    /// up on — the zone named by <c>InTimeZone</c>, or UTC when there is none — so the builder has nothing to
+    /// convert.
     /// </summary>
     public IBuildableSchedulerBuilder AtTime(TimeOnly time)
     {

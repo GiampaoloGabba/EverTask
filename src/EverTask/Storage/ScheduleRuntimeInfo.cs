@@ -39,7 +39,7 @@ internal sealed record ScheduleRuntimeInfo
 /// <summary>
 /// Why and when a catch-up stopped itself, kept DURABLY so the passage of time cannot restart it: aging past
 /// <see cref="CatchUpOptions.MaxAge"/> would eventually bring the backlog under the cap and quietly resume a
-/// schedule an operator was supposed to look at (M10).
+/// schedule an operator was supposed to look at.
 /// </summary>
 internal sealed record ScheduleHaltInfo
 {

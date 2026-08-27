@@ -22,23 +22,22 @@ public class RecurringTask
     /// default) is the legacy behaviour: the schedule row runs the handler itself.
     /// </summary>
     /// <remarks>
-    /// Omitted from the JSON while it holds the default, so the serialized form of every schedule written
-    /// before durable occurrences existed stays byte-identical (the EverTask serializer writes nulls and
-    /// defaults by design, so the attribute — not a convention — is what preserves those bytes).
+    /// Omitted from the JSON while it holds the default, so schedules written before durable occurrences
+    /// existed stay byte-identical: the EverTask serializer writes nulls and defaults by design, so the
+    /// attribute and not a convention is what preserves those bytes.
     /// </remarks>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public OccurrenceMode OccurrenceMode { get; set; }
 
     /// <summary>
     /// The IANA id of the time zone this schedule's calendar is read on, or <c>null</c> for the legacy
-    /// behaviour, where every wall-clock component means UTC (T1).
+    /// behaviour, where every wall-clock component means UTC.
     /// </summary>
     /// <remarks>
-    /// Omitted from the JSON while it is null, so the serialized form of every schedule written before zones
-    /// existed stays byte-identical: the EverTask serializer writes nulls by design, so the attribute — not a
-    /// convention — is what preserves those bytes. The id is stored, never the resolved
-    /// <see cref="TimeZoneInfo"/>: the row outlives the process and the zone's rules change under it.
-    /// Only a <see cref="ScheduleSemantics.Calendar"/> schedule may carry one; see <see cref="Validate"/>.
+    /// Omitted from the JSON while it is null, so schedules written before zones existed stay byte-identical.
+    /// The id is stored, never the resolved <see cref="TimeZoneInfo"/>: the row outlives the process and the
+    /// zone's rules change under it. Only a <see cref="ScheduleSemantics.Calendar"/> schedule may carry one;
+    /// see <see cref="Validate"/>.
     /// </remarks>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? TimeZoneId { get; set; }
@@ -57,7 +56,7 @@ public class RecurringTask
 
     /// <summary>
     /// Where a durable schedule's cursor starts, when it should not start at the first occurrence after the
-    /// dispatch: the first occurrence on or after this instant, inclusive (M11).
+    /// dispatch: the first occurrence on or after this instant, inclusive.
     /// </summary>
     /// <remarks>
     /// Omitted from the JSON while it is null, for the same byte-parity reason as the members above. Only a
@@ -68,7 +67,7 @@ public class RecurringTask
 
     /// <summary>
     /// The registered <see cref="INextOccurrenceProvider"/> this schedule takes its occurrences from, or
-    /// <c>null</c> for the built-in grid (V2).
+    /// <c>null</c> for the built-in grid.
     /// </summary>
     /// <remarks>
     /// Omitted from the JSON while it is null, for the same byte-parity reason as the members above. It is
@@ -87,7 +86,7 @@ public class RecurringTask
 
     /// <summary>
     /// What this schedule's grid is anchored to, and therefore whether <see cref="TimeZoneId"/> can govern it.
-    /// Derived from the definition, never stored (T5).
+    /// Derived from the definition, never stored.
     /// </summary>
     [JsonIgnore]
     public ScheduleSemantics Semantics => IsCalendarAnchored()
@@ -95,15 +94,13 @@ public class RecurringTask
                                               : ScheduleSemantics.Elapsed;
 
     /// <summary>
-    /// The calendar unit one occurrence of this schedule belongs to (M18): what a rebased cursor has to stay
-    /// inside. Derived from the definition, never stored.
+    /// The calendar unit one occurrence of this schedule belongs to: what a rebased cursor has to stay inside.
+    /// Derived from the definition, never stored.
     /// </summary>
     /// <remarks>
-    /// The DOMINANT selector decides, coarsest first, because that is the unit inside which the finer ones only
-    /// choose a position: a monthly schedule that also names a time of day still belongs to its month. Cron is
-    /// <see cref="SchedulePeriodKind.None"/> — an expression states no period anything could rely on — and so
-    /// is a provider, for the same reason and more so: nothing outside it knows what its calendar even means.
-    /// An hour cadence that selects hours belongs to the day those hours are counted in.
+    /// The DOMINANT selector decides, coarsest first, since that is the unit inside which the finer ones only
+    /// choose a position. Cron and a provider are <see cref="SchedulePeriodKind.None"/>: neither states a
+    /// period anything outside it could rely on.
     /// </remarks>
     [JsonIgnore]
     internal SchedulePeriodKind PeriodKind =>
@@ -144,7 +141,7 @@ public class RecurringTask
     /// <summary>
     /// The zone that actually moves this schedule's occurrences: null for an
     /// <see cref="ScheduleSemantics.Elapsed"/> grid, for a schedule with no zone, and for plain UTC — all
-    /// three are exactly what the legacy arithmetic already computes, so they keep taking that path (T5/T8).
+    /// three are exactly what the legacy arithmetic already computes, so they keep taking that path.
     /// </summary>
     internal TimeZoneInfo? GoverningZone =>
         TimeZoneId is null || TimeZoneId == ScheduleTimeZone.UtcId || Semantics != ScheduleSemantics.Calendar
@@ -153,16 +150,16 @@ public class RecurringTask
 
     /// <summary>
     /// <paramref name="utcInstant"/> read on the schedule's own clock, offset included so the two passes of a
-    /// DST fall-back are distinguishable (T13). Null when the schedule carries no zone, and null rather than
-    /// a throw when the id no longer resolves: a delivery must not fail over what it reports about itself.
+    /// DST fall-back are distinguishable. Null when the schedule carries no zone, and null rather than a
+    /// throw when the id no longer resolves: a delivery must not fail over what it reports about itself.
     /// </summary>
     internal DateTimeOffset? ToScheduleLocalTime(DateTimeOffset? utcInstant) =>
         ScheduleTimeZone.ToLocalTime(TimeZoneId, utcInstant);
 
     /// <summary>
-    /// Stores <paramref name="timeZone"/> as the id that will bring it back on the next run (T2). The one
-    /// place the builders' <c>InTimeZone</c> goes through, so an id that would not resolve later is refused
-    /// now, before it reaches a row.
+    /// Stores <paramref name="timeZone"/> as the id that will bring it back on the next run. The one place
+    /// the builders' <c>InTimeZone</c> goes through, so an id that would not resolve later is refused now,
+    /// before it reaches a row.
     /// </summary>
     internal void SetTimeZone(TimeZoneInfo timeZone) => TimeZoneId = ScheduleTimeZone.Normalize(timeZone);
 
@@ -171,9 +168,9 @@ public class RecurringTask
 
     /// <summary>
     /// True when the grid is anchored to a wall clock or a calendar rather than being a constant step in
-    /// elapsed time (T5). Day, week and month intervals always are: each of them snaps its result to a time
-    /// of day, and a time of day only means something on some clock. So is a provider: its calendar is
-    /// whatever the application says it is, and it is handed the zone id to read it on.
+    /// elapsed time. Day, week and month intervals always are: each snaps its result to a time of day, and a
+    /// time of day only means something on some clock. So is a provider, which is handed the zone id to read
+    /// its own calendar on.
     /// </summary>
     private bool IsCalendarAnchored() =>
         Provider != null
@@ -186,9 +183,9 @@ public class RecurringTask
     /// <summary>
     /// Validates every interval present on this schedule, throwing on corrupt-but-deserializable metadata: an
     /// unparseable cron, an out-of-range OnDays/OnHours/OnMonths selector, a negative Interval, or an
-    /// <see cref="Abstractions.OccurrenceMode"/> outside the defined values. Invoked right
-    /// after a recovery deserialize so corrupt schedule metadata is routed to the TERMINAL poison path (B1)
-    /// instead of throwing downstream at next-run (a bounded per-restart failure) or producing a wrong schedule.
+    /// <see cref="Abstractions.OccurrenceMode"/> outside the defined values. Invoked right after a recovery
+    /// deserialize, so corrupt schedule metadata takes the terminal poison path instead of throwing
+    /// downstream at next-run or producing a wrong schedule.
     /// </summary>
     public void Validate() => Validate(null);
 
@@ -201,12 +198,10 @@ public class RecurringTask
     /// </param>
     internal void Validate(Occurrences.OccurrenceProviderRegistry? providers)
     {
-        // The tolerant enum converter maps an unknown numeric value through verbatim rather than failing the
-        // whole payload; enforcing the defined set is this method's job (B2). Without it an out-of-range mode
-        // is not Durable, so the row silently degrades to the inline path and the schedule row runs the
-        // handler itself — the wrong semantics, where every other corrupt schedule value is poisoned.
-        // The generic overload, not the Type-based one: Validate runs on every recurring dispatch, and the
-        // non-generic form boxes the value and walks the enum's names through reflection.
+        // The tolerant enum converter maps an unknown numeric value through verbatim, so enforcing the
+        // defined set is this method's job: an out-of-range mode is not Durable, and the row would silently
+        // degrade to the inline path where every other corrupt schedule value is poisoned. The generic
+        // overload, since the Type-based one boxes and walks the enum's names through reflection.
         if (!Enum.IsDefined(OccurrenceMode))
             throw new ArgumentException(
                 $"Invalid OccurrenceMode '{(int)OccurrenceMode}': not a defined value.", nameof(OccurrenceMode));
@@ -225,12 +220,11 @@ public class RecurringTask
     }
 
     /// <summary>
-    /// V2: a provider REPLACES the grid, so it cannot sit beside one, and the key it names has to resolve.
+    /// A provider REPLACES the grid, so it cannot sit beside one, and the key it names has to resolve.
     /// </summary>
     /// <remarks>
-    /// Exclusivity is refused rather than resolved by precedence. Cron already wins silently over every
-    /// interval (that namespace's gotcha 1), and adding a second silent winner on top of it would make a
-    /// schedule that names both mean something nobody wrote.
+    /// Exclusivity is refused rather than resolved by precedence: cron already wins silently over every
+    /// interval, and a second silent winner would make a schedule naming both mean something nobody wrote.
     /// </remarks>
     private void ValidateProvider(Occurrences.OccurrenceProviderRegistry? providers)
     {
@@ -262,13 +256,13 @@ public class RecurringTask
     internal MisfirePolicy MisfirePolicy => Misfire?.Policy ?? Abstractions.MisfirePolicy.Skip;
 
     /// <summary>
-    /// The two rules that tie a misfire policy to an occurrence mode (M3): a policy that REPLAYS missed work
-    /// needs somewhere durable to put the replay, and an inline schedule has nowhere.
+    /// The two rules that tie a misfire policy to an occurrence mode: a policy that REPLAYS missed work needs
+    /// somewhere durable to put the replay, and an inline schedule has nowhere.
     /// </summary>
     /// <remarks>
     /// Refused rather than promoted silently. The fluent builders set both together, so this only fires for a
-    /// definition built by hand or deserialized from a row someone edited — and for those, quietly turning an
-    /// inline schedule durable would change where its executions live.
+    /// hand-built or hand-edited definition, and for those, quietly turning an inline schedule durable would
+    /// change where its executions live.
     /// </remarks>
     private void ValidateMisfire()
     {
@@ -291,24 +285,17 @@ public class RecurringTask
     }
 
     /// <summary>
-    /// T10: the zone is checked on every path that accepts a schedule — the fluent build, a definition handed
-    /// to the dispatcher directly, and a recovery deserialize. An id this machine cannot resolve is corrupt
+    /// The zone is checked on every path that accepts a schedule — the fluent build, a definition handed to
+    /// the dispatcher directly, and a recovery deserialize. An id this machine cannot resolve is corrupt
     /// schedule metadata like an unparseable cron, and takes the same terminal poison route.
     /// </summary>
     /// <remarks>
-    /// It is also where the id is CANONICALIZED to its IANA spelling (T2), because this is the one gate all
-    /// those paths share: the fluent builders normalize in <c>InTimeZone</c>, but a definition handed straight
-    /// to the public <c>ExecuteDispatch</c> never meets them, and would be serialized into the row with
-    /// whatever spelling the caller used — a Windows id that resolves to nothing on a Linux replica of the
-    /// same deployment. Validation runs before the schedule is serialized on every one of those paths, so the
-    /// row gets the canonical form regardless of how the definition was built.
-    /// <para>
-    /// A zone on an <see cref="ScheduleSemantics.Elapsed"/> schedule is refused rather than ignored: the grid
-    /// is the same set of instants in every zone, so accepting the call would promise something the schedule
-    /// cannot deliver. The check lives here and not in <c>InTimeZone</c> because the builder chain has no
-    /// final shape yet — <c>Schedule().InTimeZone(z).EveryDay()</c> is calendar-anchored by the time it is
-    /// built, and only the built definition knows that.
-    /// </para>
+    /// Also where the id is CANONICALIZED to its IANA spelling, this being the one gate all those paths
+    /// share: a definition handed straight to the public <c>ExecuteDispatch</c> never meets a builder, and
+    /// would reach the row with a Windows id that resolves to nothing on a Linux replica. A zone on an
+    /// <see cref="ScheduleSemantics.Elapsed"/> schedule is refused rather than ignored, since that grid is the
+    /// same set of instants in every zone; the check lives here and not in <c>InTimeZone</c> because only the
+    /// built definition knows the chain's final shape.
     /// </remarks>
     private void ValidateTimeZone()
     {
@@ -329,9 +316,9 @@ public class RecurringTask
 
 
     /// <summary>
-    /// The historical signature, kept BYTE-FOR-BYTE so an assembly compiled against the previous release
-    /// still binds (P6/X6): appending an optional parameter would have replaced this method's IL signature
-    /// and greeted every such consumer with a <c>MissingMethodException</c>. It resolves the clock itself.
+    /// The historical signature, kept byte-for-byte so an assembly compiled against the previous release
+    /// still binds: appending an optional parameter replaces the IL signature and greets every such consumer
+    /// with a <c>MissingMethodException</c>. It resolves the clock itself.
     /// </summary>
     public DateTimeOffset? CalculateNextRun(DateTimeOffset current, int currentRun, bool isRecovery = false) =>
         CalculateNextRun(current, currentRun, isRecovery, null);
@@ -346,9 +333,9 @@ public class RecurringTask
 
     /// <inheritdoc cref="CalculateNextRun(DateTimeOffset,int,bool,DateTimeOffset?)"/>
     /// <param name="collapsedSlots">
-    /// How many nominal wall-clock slots a daylight-saving transition folded into the returned occurrence
-    /// (T6). Internal: it travels out to the worker on <see cref="NextRunResult.CollapsedSlotCount"/>, which
-    /// is where a consumer reads it.
+    /// How many nominal wall-clock slots a daylight-saving transition folded into the returned occurrence.
+    /// Internal: it travels out to the worker on <see cref="NextRunResult.CollapsedSlotCount"/>, which is
+    /// where a consumer reads it.
     /// </param>
     internal DateTimeOffset? CalculateNextRun(DateTimeOffset current, int currentRun, bool isRecovery,
                                               DateTimeOffset? nowUtc, out int collapsedSlots)
@@ -385,10 +372,9 @@ public class RecurringTask
 
         DateTimeOffset? runtime = null;
 
-        // For first run (currentRun == 0), apply the initial run configuration — UNLESS this is a
-        // recovery recompute: the first run's absolute time was already decided at dispatch (and stored
-        // as NextRunUtc), so re-applying InitialDelay/RunNow/SpecificRunTime here would shift the entire
-        // grid forward by the delay at every restart (L25-firstrun).
+        // The initial run configuration applies to the first run only, and NOT on a recovery recompute: the
+        // first run's absolute time was decided at dispatch and stored as NextRunUtc, so re-applying
+        // InitialDelay/RunNow/SpecificRunTime here shifts the whole grid forward at every restart.
         if (currentRun == 0 && !isRecovery)
         {
             if (RunNow)
@@ -468,8 +454,8 @@ public class RecurringTask
 
     /// <summary>
     /// The first occurrence (RunNow / SpecificRunTime / InitialDelay) must be validated against
-    /// <see cref="RunUntil"/> too — only subsequent occurrences were, so a first run beyond it would fire
-    /// anyway (CU8).
+    /// <see cref="RunUntil"/> too: only subsequent occurrences are, so a first run beyond it would fire
+    /// anyway.
     /// </summary>
     private DateTimeOffset? FirstRunOrNull(DateTimeOffset? candidate) =>
         candidate.HasValue && RunUntil.HasValue && candidate.Value >= RunUntil.Value ? null : candidate;
@@ -482,7 +468,7 @@ public class RecurringTask
     /// <returns>Minimum interval between executions</returns>
     /// <remarks>
     /// Kept as its own zero-argument method rather than an optional parameter on the overload below: the
-    /// original IL signature is what an assembly compiled against the previous release calls (P6/X6).
+    /// original IL signature is what an assembly compiled against the previous release calls.
     /// </remarks>
     public TimeSpan GetMinimumInterval() => GetMinimumInterval(null);
 
@@ -556,9 +542,8 @@ public class RecurringTask
     private DateTimeOffset? GetNextOccurrence(DateTimeOffset current) => GetNextOccurrence(current, out _);
 
     /// <param name="collapsedSlots">
-    /// How many nominal wall-clock slots a daylight-saving transition folded into the returned occurrence
-    /// (T6). Always 0 for a schedule the zone does not govern and for cron, whose transition rules are
-    /// Cronos's own.
+    /// How many nominal wall-clock slots a daylight-saving transition folded into the returned occurrence.
+    /// Always 0 for a schedule the zone does not govern and for cron, whose transition rules are Cronos's own.
     /// </param>
     private DateTimeOffset? GetNextOccurrence(DateTimeOffset current, out int collapsedSlots)
     {
@@ -579,8 +564,8 @@ public class RecurringTask
 
         if (!string.IsNullOrEmpty(CronInterval?.CronExpression))
         {
-            // Cronos owns the DST rules for a cron expression, and T9 makes it the oracle the fluent API is
-            // measured against — so the zone is handed to it rather than reimplemented around it.
+            // Cronos owns the DST rules for a cron expression and is the oracle the fluent API is measured
+            // against, so the zone is handed to it rather than reimplemented around it.
             var nextCron = CronInterval.GetNextOccurrence(current, zone ?? TimeZoneInfo.Utc);
             if (nextCron == null || RunUntil <= nextCron)
                 return null;
@@ -613,20 +598,16 @@ public class RecurringTask
 
     /// <summary>
     /// The same grid, walked on <paramref name="zone"/>'s clock: the cascade reads and writes local
-    /// components, and the nominal slot it lands on is mapped back to an instant with the DST rules of T6/T7.
+    /// components, and the nominal slot it lands on is mapped back to an instant.
     /// </summary>
     /// <remarks>
     /// The loop exists for the one case a single mapping cannot answer: a slot whose instant is at or before
     /// the one we started from — a nominal time a DST gap collapsed onto an instant already served, or the
     /// second reading of a repeated hour. It advances from the NOMINAL wall slot, never from the shifted
-    /// instant, so several nominal slots inside one gap produce exactly one occurrence (T6) and the repeated
-    /// hour fires once, on its first pass (T7).
-    /// <para>
-    /// Every slot that produces no occurrence of its own is counted into
-    /// <see cref="WallMapping.CollapsedCount"/>, which is what the worker logs when a transition compresses a
-    /// schedule (T6). They arrive two ways: the loop's own discards, and — for a slot a gap moved — the later
-    /// slots up to the gap's exit, which the walk would never see because it resumes AT the exit, past them.
-    /// </para>
+    /// instant, so several nominal slots inside one gap produce exactly one occurrence and the repeated hour
+    /// fires once, on its first pass. Slots producing no occurrence of their own are counted into
+    /// <see cref="WallMapping.CollapsedCount"/> from two places: the loop's own discards, and — for a slot a
+    /// gap moved — the later slots up to the gap's exit, which the walk resumes AT and never sees.
     /// </remarks>
     private WallMapping? NextGridOccurrenceInZone(DateTimeOffset current, TimeZoneInfo zone)
     {
@@ -715,10 +696,9 @@ public class RecurringTask
     // guarantees termination against a pathological/misbehaving interval.
     private const int MaxNextRunWalkIterations = 2_000_000;
 
-    // The walk's bound for the ask that carries NO cap — the logging-only skip count (Option B: it never
-    // consumes MaxRuns), where under-reporting costs nothing but a smaller number in a log line. Matches the
-    // historical cron cap. It is NOT a second bound on a caller that passed one: a walk that stopped here
-    // would answer "10,001" to a question asked with a larger cap, and 10,001 <= cap reads as a total.
+    // The walk's bound for the ask that carries NO cap — the logging-only skip count, where under-reporting
+    // costs nothing but a smaller number in a log line. It is NOT a second bound on a caller that passed one:
+    // a walk stopping here would answer "10,001" to a question asked with a larger cap, read as a total.
     private const int MaxSkipCountIterations = 10_000;
 
     /// <summary>
@@ -726,13 +706,14 @@ public class RecurringTask
     /// occurrence <paramref name="anchor"/> (with <c>anchor &lt;= after</c>). This is the single
     /// skip-forward primitive shared by every schedule kind — the calendar-aware generalisation of the
     /// cron realignment. Returns <c>null</c> if the series ends (<see cref="RunUntil"/>) before any such
-    /// occurrence. The normal first-run path (<see cref="CalculateNextRun"/> / <see cref="GetNextOccurrence"/>)
+    /// occurrence. The normal first-run path (<see cref="CalculateNextRun(DateTimeOffset,int,bool)"/> /
+    /// <see cref="GetNextOccurrence(DateTimeOffset)"/>)
     /// is the single source of truth for the occurrence grid; this method never re-derives it.
     /// </summary>
     internal DateTimeOffset? NextOccurrenceStrictlyAfter(DateTimeOffset anchor, DateTimeOffset after)
     {
         // Series already ended at `after`: any occurrence strictly after it is past RunUntil. O(1) for every
-        // path, and it stops a uniform series from walking millions of steps just to discover the end (U3).
+        // path, and it stops a uniform series from walking millions of steps just to discover the end.
         if (RunUntil.HasValue && after >= RunUntil.Value)
             return null;
 
@@ -768,9 +749,8 @@ public class RecurringTask
             occurrence = next.Value;
         }
 
-        // Cap hit (pathological — a real coarse schedule never reaches it). NEVER return a value <= after:
-        // a stale past next-run would be scheduled immediately and re-fire, consuming MaxRuns (U1). Return
-        // the next occurrence only if it is genuinely in the future, otherwise null (stop the series).
+        // Cap hit (pathological — a real coarse schedule never reaches it). NEVER return a value <= after: a
+        // stale past next-run is scheduled immediately, re-fires and consumes a run.
         var tail = GetNextOccurrence(occurrence);
         return tail.HasValue && tail.Value > after ? tail : null;
     }
@@ -791,17 +771,15 @@ public class RecurringTask
 
     /// <summary>
     /// The first occurrence at or ON <paramref name="instant"/> — the cursor a backfilled durable schedule
-    /// starts from (M11). Null when the grid produces none, or when the series already ends before it.
+    /// starts from. Null when the grid produces none, or when the series already ends before it.
     /// </summary>
     /// <remarks>
     /// Every other question the grid answers is "strictly after", and a probe placed just before
-    /// <paramref name="instant"/> would be wrong for most of them: a Day, Week or Month interval advances its
-    /// PERIOD before choosing a time inside it, so the first answer from such a probe already sits a whole
-    /// period past the slot the caller asked to start from — and a forward-only walk can never come back for
-    /// it. The probe therefore steps BACK by a period first (doubling while the grid still answers past
-    /// <paramref name="instant"/>, since the period estimate is approximate for months and for day-of-week
-    /// selectors) and the walk then comes forward to the first slot that is not earlier than
-    /// <paramref name="instant"/>.
+    /// <paramref name="instant"/> is wrong for most of them: a Day, Week or Month interval advances its
+    /// PERIOD before choosing a time inside it, so its first answer already sits a whole period past the slot
+    /// asked for, and a forward-only walk never comes back for it. The probe therefore steps BACK by a period
+    /// first, doubling while the grid still answers past <paramref name="instant"/>, since the period
+    /// estimate is approximate for months and for day-of-week selectors.
     /// </remarks>
     internal DateTimeOffset? FirstOccurrenceOnOrAfter(DateTimeOffset instant)
     {
@@ -826,21 +804,17 @@ public class RecurringTask
     private DateTimeOffset? FirstOccurrenceAfterBackfillProbe(DateTimeOffset instant)
     {
         // Anchored on `instant`, never on the wall clock: this runs on the dispatch path, where every
-        // scheduling decision reads the injected clock (P9), and a cron's period is measured by probing it.
+        // scheduling decision reads the injected clock, and a cron's period is measured by probing it.
         var period = GetMinimumInterval(instant);
 
         if (period <= TimeSpan.Zero)
             period = TimeSpan.FromSeconds(1);
 
-        // A MONTH period is the one a span cannot express, and the flat 30 days the estimate uses is a
-        // DIFFERENT DAY OF THE MONTH on every month that is not 30 days long. That matters here and nowhere
-        // else, because a month grid keeps the day its anchor had — `AddMonths` first, then the day selectors
-        // walk FORWARD from what it landed on — so a probe one or two days off carries a different PHASE and
-        // the forward-only walk can never come back for the day the caller asked about:
-        // `EveryMonth().OnDays(1, 15).BackfillFrom(the 15th)` answered the 1st of the NEXT month (February is
-        // 28 days, so -30d lands on January 2 instead of January 1), and a rebase inside a month answered a
-        // day the cursor had never been on. Every other period is a constant step, where subtracting the span
-        // and stepping the calendar are the same instant.
+        // A MONTH is the one period a span cannot express: the estimate's flat 30 days lands on a different
+        // day of the month whenever the month is not 30 days long, and a month grid keeps the day its anchor
+        // had (AddMonths first, then the day selectors walk FORWARD from it), so a probe one or two days off
+        // carries a different PHASE the forward-only walk can never come back for. Every other period is a
+        // constant step, where subtracting the span and stepping the calendar are the same instant.
         int? months = ProbeStepsByMonths ? 1 : null;
 
         DateTimeOffset? first = null;
@@ -915,9 +889,9 @@ public class RecurringTask
     /// <see cref="FirstOccurrenceOnOrAfter"/> on the natural grid, with the termination bounds IGNORED.
     /// </summary>
     /// <remarks>
-    /// What a rebase counts with (M18): how far into its period a cursor stood is a question about the GRID,
-    /// and a <see cref="RunUntil"/> that falls inside the period would otherwise truncate the count and move
-    /// the answer to an earlier slot — one that has already run.
+    /// What a rebase counts with: how far into its period a cursor stood is a question about the GRID, and a
+    /// <see cref="RunUntil"/> falling inside the period would truncate the count and move the answer to an
+    /// earlier slot — one that has already run.
     /// </remarks>
     internal DateTimeOffset? FirstGridOccurrenceOnOrAfter(DateTimeOffset instant) =>
         Unbounded().FirstOccurrenceOnOrAfter(instant);
@@ -954,27 +928,25 @@ public class RecurringTask
     /// is the real total or only a lower bound.
     /// </summary>
     /// <remarks>
-    /// The uncapped ask is the one that falls back to the walk's own bound, so its answer can stop short with
-    /// nothing on the number itself to say so. This is the one place that rule is written down, because the
-    /// bound is private and the callers that REPORT the count (the skip-forward log line and its monitoring
-    /// event) are the ones that must not present a truncated walk as a total.
+    /// The uncapped ask falls back to the walk's own bound, so its answer can stop short with nothing on the
+    /// number to say so. The rule lives here because that bound is private and the callers that REPORT the
+    /// count must not present a truncated walk as a total.
     /// </remarks>
     internal bool IsExactUncappedCount(int count) =>
         CountsMissedInConstantTime() || count <= MaxSkipCountIterations;
 
     /// <summary>
-    /// Number of occurrences missed in <c>(anchor, after]</c>, reported for LOGGING ONLY (Option B: it
-    /// never consumes the <see cref="MaxRuns"/> budget). Uniform grids count in O(1) by division;
-    /// calendar/cron schedules walk the real schedule, bounded.
+    /// Number of occurrences missed in <c>(anchor, after]</c>, reported for LOGGING ONLY: it never consumes
+    /// the <see cref="MaxRuns"/> budget. Uniform grids count in O(1) by division; calendar/cron schedules
+    /// walk the real schedule, bounded.
     /// </summary>
     /// <param name="cap">
     /// Upper bound on the returned count: the walk stops at <c>cap + 1</c> and the arithmetic result is
-    /// clamped there, so a one-second grid over a long window never enumerates millions of slots just to
-    /// report a number. Whatever cap is passed is HONOURED — a walked grid takes as many steps as the cap
-    /// asks for — which is what makes <c>result &lt;= cap</c> the test that tells a real total from a lower
-    /// bound. The default, <c>int.MaxValue</c>, is "no cap": the walk then keeps
-    /// <see cref="MaxSkipCountIterations"/> as its own bound and the answer may be a lower bound with
-    /// nothing to say so, which is why it is only asked for where the number goes to a log line.
+    /// clamped there. Whatever cap is passed is HONOURED — a walked grid takes as many steps as the cap asks
+    /// for — which is what makes <c>result &lt;= cap</c> the test that tells a real total from a lower bound.
+    /// The default, <c>int.MaxValue</c>, is "no cap": the walk then keeps
+    /// <see cref="MaxSkipCountIterations"/> as its own bound and the answer may be a lower bound with nothing
+    /// to say so, which is why it is only asked for where the number goes to a log line.
     /// </param>
     internal int CountMissedOccurrences(DateTimeOffset anchor, DateTimeOffset after, int cap = int.MaxValue)
     {
@@ -993,12 +965,10 @@ public class RecurringTask
             if (stepTicks <= 0)
                 return 1;
 
-            // Clamp the horizon to RunUntil: occurrences past series end are not real and must not be counted
-            // (U9 — logging-only over-report). RunUntil is EXCLUSIVE everywhere else on the grid — a slot
-            // landing exactly on it is not an occurrence, which is why the walk below can never reach one — so
-            // the clamped span stops one tick short of it. Without that tick this path answers one more than
-            // the walk, and a catch-up cap of ten reads eleven due slots where there are ten. The span runs
-            // from the anchor INCLUSIVE, to match the walk's convention below (U8 — boundary off-by-one).
+            // Clamp the horizon to RunUntil, which is EXCLUSIVE everywhere else on the grid: the clamped span
+            // stops one tick short of it, or this path answers one more than the walk and a catch-up cap of
+            // ten reads eleven due slots where there are ten. The span runs from the anchor INCLUSIVE, to
+            // match the walk's convention below.
             var spanTicks = (after - anchor).Ticks;
 
             if (RunUntil is { } end && end <= after)
@@ -1012,10 +982,9 @@ public class RecurringTask
         }
 
         // Calendar / cron: walk the real schedule (the anchor itself is the first missed occurrence). The
-        // caller's cap IS the bound — the walk is O(cap) on purpose, because a caller that decides on this
-        // number (a catch-up cap can be far above ten thousand) must be able to tell "cap + 1, so there are
-        // more" from "this many, and that is all there is". Only int.MaxValue, which is not a cap but the
-        // absence of one, falls back to the walk's own bound.
+        // caller's cap IS the bound and the walk is O(cap) on purpose, because a caller deciding on this
+        // number must be able to tell "cap + 1, so there are more" from "this many, and that is all". Only
+        // int.MaxValue, the absence of a cap, falls back to the walk's own bound.
         var maxSteps = cap == int.MaxValue ? MaxSkipCountIterations : ceiling - 1;
 
         var skipped    = 1;
@@ -1038,14 +1007,14 @@ public class RecurringTask
     /// least one positive cadence field. MULTIPLE pure-cadence fields are allowed (e.g. every-5-min-at-:30
     /// is a constant 5-minute grid): <see cref="TryJumpUniformGrid"/> self-verifies the constant step and a
     /// non-constant combination safely falls back to the walk. Calendar arrays are rejected regardless of
-    /// the field's <c>Interval</c> value, because <c>OnDays</c> rides on <c>DayInterval(Interval=0)</c>
-    /// (F8/U10). Conservative: when in doubt the answer is "not uniform", which is always correct (slower).
+    /// the field's <c>Interval</c> value, because <c>OnDays</c> rides on <c>DayInterval(Interval=0)</c>.
+    /// Conservative: when in doubt the answer is "not uniform", which is always correct (slower).
     /// </summary>
     internal bool IsUniformGrid()
     {
-        // T8: a calendar schedule read on a real clock has no constant step — local midnight is 24 hours
-        // after the previous one on every day but the two the zone changes offset on. The walk is the only
-        // answer there. Elapsed grids and plain-UTC calendars keep the arithmetic they always had.
+        // A calendar schedule read on a real clock has no constant step — local midnight is 24 hours after
+        // the previous one on every day but the two the zone changes offset on. Elapsed grids and plain-UTC
+        // calendars keep the arithmetic they always had.
         if (GoverningZone != null) return false;
 
         // A provider names no cadence at all, so it can never be a fixed progression — and the O(1) jump would
@@ -1081,8 +1050,8 @@ public class RecurringTask
     {
         // Measure the step from the STEADY grid (first -> second), NOT from the anchor -> first gap. When the
         // anchor is an off-grid first-run point (RunNow/SpecificRunTime/InitialDelay) the first gap is
-        // irregular and would be mistaken for the cadence, landing off-grid (U7). `first` is always a real
-        // on-grid occurrence, so jumping from it stays grid-aligned.
+        // irregular and would be mistaken for the cadence, landing off-grid. `first` is always a real on-grid
+        // occurrence, so jumping from it stays grid-aligned.
         var first = GetNextOccurrence(anchor);
         if (first == null)
             return null;
@@ -1100,8 +1069,8 @@ public class RecurringTask
         var spanTicks = (after - first.Value).Ticks; // >= 0 (first <= after here)
         var jumps     = spanTicks / stepTicks;        // floor
 
-        // Overflow-safe (U14): never let the tick arithmetic run past DateTimeOffset.MaxValue — return null
-        // (no representable future occurrence) instead of throwing ArgumentOutOfRangeException.
+        // Never let the tick arithmetic run past DateTimeOffset.MaxValue — return null (no representable
+        // future occurrence) instead of throwing ArgumentOutOfRangeException.
         var maxJumps = (DateTimeOffset.MaxValue.Ticks - first.Value.Ticks) / stepTicks;
         if (jumps >= maxJumps)
             return null;
@@ -1118,7 +1087,7 @@ public class RecurringTask
         // Self-verify the candidate is a genuine on-grid occurrence: the previous grid point must produce
         // EXACTLY it via the real calendar step. This rejects a non-constant combination -> bail to the walk.
         // SKIPPED at/after RunUntil, where GetNextOccurrence would null any candidate >= RunUntil and force a
-        // needless walk (U3): the caller gates RunUntil once on the returned candidate.
+        // needless walk: the caller gates RunUntil once on the returned candidate.
         if (!RunUntil.HasValue || candidate < RunUntil.Value)
         {
             var previous = candidate.AddTicks(-stepTicks);
@@ -1243,12 +1212,10 @@ public class RecurringTask
     /// <see cref="AppendModifiers"/> prints right after it — and UTC, named, for a schedule that has none.
     /// </summary>
     /// <remarks>
-    /// Never the HOST's zone, which is what <c>ToLocalTime</c> gave it. This string is persisted as
-    /// <c>QueuedTask.RecurringInfo</c> and is what the monitoring dashboard shows, so the same definition
-    /// dispatched from a UTC container and from a developer machine wrote two different sentences for one
-    /// bound — and the zone id appended at the end labelled a wall time that belonged to neither. Falls back
-    /// to UTC rather than throwing when the stored id no longer resolves, for the same reason
-    /// <see cref="ToScheduleLocalTime"/> does: a task must not fail over what it reports about itself.
+    /// Never the HOST's zone: this string is persisted as <c>QueuedTask.RecurringInfo</c> and shown by the
+    /// dashboard, so the same definition dispatched from a UTC container and from a developer machine would
+    /// write two different sentences for one bound. Falls back to UTC rather than throwing when the stored id
+    /// no longer resolves, like <see cref="ToScheduleLocalTime"/>.
     /// </remarks>
     private string OnScheduleClock(DateTimeOffset instant) =>
         ToScheduleLocalTime(instant) is { } local
@@ -1256,10 +1223,9 @@ public class RecurringTask
             : $"{instant.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC";
 
     /// <summary>
-    /// T13: the zone is part of what the schedule MEANS, and so is how it treats a missed slot, so the
-    /// human-readable form — which is also what the row's <c>RecurringInfo</c> column and the dashboard show —
-    /// names both. Absent for a schedule that declares neither, which keeps every description written before
-    /// they existed unchanged.
+    /// The zone is part of what the schedule MEANS, and so is how it treats a missed slot, so the
+    /// human-readable form names both. Absent for a schedule that declares neither, which keeps every
+    /// description written before they existed unchanged.
     /// </summary>
     private void AppendModifiers(List<string> parts)
     {

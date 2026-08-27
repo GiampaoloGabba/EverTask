@@ -2,18 +2,15 @@ namespace EverTask.Scheduler;
 
 /// <summary>
 /// A scheduler loop's sleep: a race between the wake-up signal a registration raises and the scheduling
-/// clock's own delay (P9).
+/// clock's own delay.
 /// </summary>
 /// <remarks>
 /// Shared by <see cref="PeriodicTimerScheduler"/> and every shard of <see cref="ShardedScheduler"/>. It is a
 /// race and not <c>SemaphoreSlim.WaitAsync(timeout)</c>, whose timeout is hard-wired to the real clock: the
 /// loop would keep sleeping in wall time no matter which <see cref="TimeProvider"/> the rest of the pipeline
-/// follows.
-/// <para>
-/// It also carries the invariant a second copy would eventually lose: the signal waiter is created ONCE and
-/// KEPT across iterations when the delay wins the race. Abandoning it would let it silently consume the next
-/// <c>Release</c> that nobody is watching for, and the scheduler would miss a wake-up.
-/// </para>
+/// follows. The signal waiter is created ONCE and KEPT across iterations when the delay wins the race —
+/// abandoning it would let it silently consume a <c>Release</c> nobody is watching for, and the scheduler
+/// would miss a wake-up.
 /// </remarks>
 internal sealed class SchedulerWakeUp(TimeProvider timeProvider) : IDisposable
 {

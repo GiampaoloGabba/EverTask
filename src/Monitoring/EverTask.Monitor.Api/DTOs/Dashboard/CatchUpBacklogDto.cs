@@ -5,10 +5,8 @@ namespace EverTask.Monitor.Api.DTOs.Dashboard;
 /// run yet is.
 /// </summary>
 /// <remarks>
-/// Each counter is a row state, not an estimate: an occurrence is a real task row, so "how big is the backlog"
-/// is a question storage can answer exactly. Slots a schedule DROPPED — outside the misfire window, over the
-/// overflow cap, or no longer current — never became rows and are therefore not counted here; they are
-/// reported as they happen, by the <c>OccurrenceSkipped</c> monitoring event.
+/// Slots a schedule DROPPED — outside the misfire window, over the overflow cap, or no longer current — never
+/// became rows and are not counted here; they are reported by the <c>OccurrenceSkipped</c> monitoring event.
 /// </remarks>
 /// <param name="Pending">Occurrences that are materialized and waiting to start.</param>
 /// <param name="Active">Occurrences running right now.</param>

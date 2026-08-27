@@ -34,11 +34,9 @@ internal enum MonitoringAccess
 /// belongs to, the IP whitelist and the JWT check.
 /// </summary>
 /// <remarks>
-/// It is evaluated only INSIDE routing — <see cref="MonitoringAccessFilter"/> for the controllers,
+/// Evaluated only INSIDE routing — <see cref="MonitoringAccessFilter"/> for the controllers,
 /// <see cref="MonitoringEndpointGuard"/> for everything else — because both of its inputs are the host's to
-/// change: the path a request really has after <c>UsePathBase</c> (#46) and the address it really comes from
-/// after <c>UseForwardedHeaders</c> (#47). Evaluated any earlier it would judge a path the surface does not
-/// have and an address that belongs to the proxy.
+/// change: the path after <c>UsePathBase</c> (#46) and the address after <c>UseForwardedHeaders</c> (#47).
 /// </remarks>
 internal sealed class MonitoringAccessPolicy(EverTaskApiOptions options, IJwtTokenService jwtTokenService)
 {
@@ -140,11 +138,9 @@ internal sealed class MonitoringAccessPolicy(EverTaskApiOptions options, IJwtTok
     /// The address the connection really came from — never a header.
     /// </summary>
     /// <remarks>
-    /// This used to read <c>X-Forwarded-For</c> and trust it, which any direct caller can set: the whitelist
-    /// was advisory rather than a boundary (#47). A host behind a reverse proxy makes the header true by
-    /// configuring <c>UseForwardedHeaders</c> with its <c>KnownProxies</c>, which rewrites this address
-    /// before the request is routed — the framework's own answer, and the only one that knows which peer may
-    /// be believed.
+    /// Any direct caller can set <c>X-Forwarded-For</c>, so trusting it makes the whitelist advisory rather
+    /// than a boundary (#47). A host behind a reverse proxy makes the header true with
+    /// <c>UseForwardedHeaders</c> and its <c>KnownProxies</c>, which rewrites this address before routing.
     /// </remarks>
     private static IPAddress ClientIpOf(HttpContext context) =>
         // ::1 when there is no connection address at all, as in a test server.

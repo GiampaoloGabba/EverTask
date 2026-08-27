@@ -13,15 +13,12 @@ namespace EverTask.Monitor.Api.Controllers;
 /// <para>
 /// Every route here is refused unless <c>EnableManagementEndpoints</c> is on (404 otherwise) AND the caller
 /// carries the operate role or passes the host's <c>ManagementAuthorization</c> hook (403 otherwise). The
-/// check is in <c>JwtAuthenticationMiddleware</c>, which gates the whole <c>api/management</c> prefix, so a
-/// route added here cannot forget to ask for it.
+/// check is <c>ManagementAuthorizationFilter</c>, attached by ROUTE, so a route added here inherits it.
 /// </para>
 /// <para>
-/// <b>CSRF does not apply.</b> The API authenticates a session with a Bearer token in the
-/// <c>Authorization</c> header, never with a cookie, and the <c>?access_token=</c> fallback exists on the
-/// SignalR hub path alone. A browser attaches neither to a cross-site request, so a page the operator did
-/// not open cannot make one of these calls in their name — which is why these endpoints need no anti-forgery
-/// token of their own, and why the dashboard must keep its token out of cookies.
+/// <b>CSRF does not apply.</b> A session is authenticated by a Bearer token in the <c>Authorization</c>
+/// header, never by a cookie, and the <c>?access_token=</c> fallback exists on the SignalR hub path alone —
+/// which is also why the dashboard must keep its token out of cookies.
 /// </para>
 /// </remarks>
 [ApiController]

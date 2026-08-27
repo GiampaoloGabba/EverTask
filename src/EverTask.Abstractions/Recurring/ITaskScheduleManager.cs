@@ -1,7 +1,7 @@
 namespace EverTask.Abstractions;
 
 /// <summary>
-/// Changes a recurring schedule that is already running, without going through a dispatch (S2).
+/// Changes a recurring schedule that is already running, without going through a dispatch.
 /// </summary>
 /// <remarks>
 /// <para>

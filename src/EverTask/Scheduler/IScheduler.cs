@@ -14,20 +14,12 @@ public interface IScheduler
     /// <returns>False when a newer registration was preserved and <paramref name="item"/> was NOT parked.</returns>
     /// <remarks>
     /// The conditional half of latest-wins, and the counterpart of
-    /// <see cref="TryUnschedule(Guid,TaskHandlerExecutor)"/>. A runtime reschedule commits the new definition,
-    /// parks its executor and only then publishes the version (S4), so anything still holding an executor of
-    /// the definition that was replaced — an advance that was computing its next occurrence, the rate-limit
-    /// gate re-parking a delivery it had been holding — would otherwise replace that registration with one of a
-    /// grid nobody owns any more, and the schedule would be dropped as superseded the moment it fired, parked
-    /// nowhere. The comparison is made INSIDE the registry's own atomic swap, because every ordering outside it
-    /// still has a window.
-    /// <para>
+    /// <see cref="TryUnschedule(Guid,TaskHandlerExecutor)"/>: it is how everything still holding an executor of
+    /// a definition that was replaced avoids parking a grid nobody owns any more. The comparison must be made
+    /// INSIDE the registration swap, since every ordering outside it has a window.
     /// The default implementation schedules unconditionally and answers true (binary compatibility for external
-    /// schedulers compiled against older versions): a scheduler that cannot compare versions keeps exactly the
-    /// behaviour it always had. The cost of that default is that runtime rescheduling cannot refuse a stale
-    /// in-flight registration over such a scheduler — implement this member to take part in versioned
-    /// re-registration.
-    /// </para>
+    /// schedulers compiled against older versions), so runtime rescheduling cannot refuse a stale in-flight
+    /// registration over such a scheduler — implement this member to take part in versioned re-registration.
     /// </remarks>
     bool TrySchedule(TaskHandlerExecutor item, DateTimeOffset? nextRecurringRun = null)
     {
@@ -81,11 +73,9 @@ public interface IScheduler
     /// conservative "assume scheduled" default.
     /// </summary>
     /// <remarks>
-    /// The durable-occurrence reconciliation asks "is this occurrence still parked anywhere?" to tell a lost
-    /// registration from a live one. With the default <see cref="IsScheduled"/> the answer is always yes,
-    /// which is safe for the gate's cleanup but useless as evidence: a scheduler that cannot introspect must
-    /// say so, and reconciliation is then disabled rather than trusting a constant. Defaults to false so an
-    /// external scheduler compiled before this member is never mistaken for one that can.
+    /// The durable-occurrence reconciliation tells a lost registration from a live one through
+    /// <see cref="IsScheduled"/>, so it is disabled entirely when the answer is the constant default.
+    /// Defaults to false: an external scheduler compiled before this member cannot introspect.
     /// </remarks>
     bool SupportsScheduleInspection => false;
 }

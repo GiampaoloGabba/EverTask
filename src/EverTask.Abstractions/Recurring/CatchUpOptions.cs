@@ -6,8 +6,7 @@ namespace EverTask.Abstractions;
 /// <remarks>
 /// The two caps are mandatory and have no defaults on purpose: they answer two different questions — how far
 /// back a replay may reach, and how much work one episode may create — and neither has an answer that is right
-/// for every schedule. A per-second grid left behind by a three-month downtime owes eight million slots; the
-/// age window alone would not stop it.
+/// for every schedule.
 /// </remarks>
 public sealed class CatchUpOptions
 {

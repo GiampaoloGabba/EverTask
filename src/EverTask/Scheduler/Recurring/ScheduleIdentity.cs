@@ -2,7 +2,7 @@ namespace EverTask.Scheduler.Recurring;
 
 /// <summary>
 /// Who is asking the grid: the schedule an evaluator call is about, in the terms an
-/// <see cref="INextOccurrenceProvider"/> is given them (V1).
+/// <see cref="INextOccurrenceProvider"/> is given them.
 /// </summary>
 /// <param name="ScheduleId">
 /// The schedule row, or <see cref="Guid.Empty"/> before it exists — the first occurrence of a brand-new

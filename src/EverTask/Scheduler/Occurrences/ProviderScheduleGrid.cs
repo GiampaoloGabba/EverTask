@@ -2,22 +2,16 @@ namespace EverTask.Scheduler.Occurrences;
 
 /// <summary>
 /// The occurrence grid of a schedule whose slots come from an <see cref="INextOccurrenceProvider"/>: the same
-/// questions <see cref="RecurringTask"/> answers by arithmetic, answered by asking the provider (V1/V3).
+/// questions <see cref="RecurringTask"/> answers by arithmetic, answered by asking the provider.
 /// </summary>
 /// <remarks>
-/// <para>
 /// Every question reduces to the ONE thing a provider can answer — "which occurrence follows this instant" —
-/// so a walk here is a series of round trips, and every walk is bounded. That is also why the shared parts of
-/// the schedule math are REUSED rather than mirrored: the first-run configuration
-/// (<c>RunNow</c>/<c>SpecificRunTime</c>/<c>InitialDelay</c>), the termination bounds and the realignment past
-/// a downtime are decided by the same code the built-in grid uses, with a provider call where it would have
-/// stepped an interval.
-/// </para>
-/// <para>
-/// A provider that throws, or answers out of contract, is TRANSIENT (V4): the failure is wrapped in an
-/// <see cref="OccurrenceProviderException"/> carrying the backoff its schedule has earned, and nothing here
-/// writes anything. Whoever asked the question decides what to do with a schedule that has no answer yet.
-/// </para>
+/// so a walk here is a series of round trips and every walk is bounded. The non-grid parts of the schedule
+/// math (first-run configuration, termination bounds, realignment past a downtime) are REUSED from the
+/// built-in path rather than mirrored, with a provider call where it would have stepped an interval.
+/// A provider that throws, or answers out of contract, is TRANSIENT: the failure is wrapped in an
+/// <see cref="OccurrenceProviderException"/> carrying the backoff its schedule has earned, nothing here
+/// writes anything, and the caller decides what to do with a schedule that has no answer yet.
 /// </remarks>
 internal sealed class ProviderScheduleGrid(
     OccurrenceProviderRegistry registry,
@@ -25,9 +19,8 @@ internal sealed class ProviderScheduleGrid(
     IEverTaskLogger<ProviderScheduleGrid> logger)
 {
     /// <summary>
-    /// How far any diagnostic count over a provider grid may walk. Each step is a round trip, so the bound
-    /// that costs a built-in grid nothing is the difference between a log line and a thousand queries; the
-    /// number it produces travels as a lower bound and says so, exactly as a walked calendar count does.
+    /// How far any diagnostic count over a provider grid may walk. Each step is a round trip, so a number
+    /// produced past this bound travels as a lower bound and says so.
     /// </summary>
     internal const int MaxDiagnosticWalk = 250;
 
@@ -36,11 +29,9 @@ internal sealed class ProviderScheduleGrid(
     /// when the walk happens in memory, <see cref="MaxDiagnosticWalk"/> when every step of it is a round trip.
     /// </summary>
     /// <remarks>
-    /// One rule, one place. A count that feeds a DECISION — how many slots a catch-up owes against its cap —
-    /// keeps the bound its caller passed whatever the grid is, because a second smaller bound would make
-    /// "more than the cap" indistinguishable from "exactly the cap". This is for the counts that only ever
-    /// reach a log line, an event or a result field, where a lower bound reported AS one is the right answer
-    /// and ten thousand queries to produce it is not.
+    /// For diagnostic counts only — those reaching a log line, an event or a result field. A count that feeds
+    /// a DECISION keeps the bound its caller passed whatever the grid is, since a second smaller bound would
+    /// make "more than the cap" indistinguishable from "exactly the cap".
     /// </remarks>
     internal static int DiagnosticCapFor(RecurringTask definition, int walkedCap) =>
         definition.Provider is null ? walkedCap : MaxDiagnosticWalk;
@@ -48,13 +39,11 @@ internal sealed class ProviderScheduleGrid(
     /// <summary>
     /// How many slots a count over a provider grid may walk for a given cap: <paramref name="cap"/><c> + 1</c>,
     /// which is what tells "more than the cap" from "exactly the cap", or
-    /// <see cref="MaxDiagnosticWalk"/><c> + 1</c> for the ask that carries no cap at all — a count nothing
-    /// bounds is a count no grid of round trips can afford.
+    /// <see cref="MaxDiagnosticWalk"/><c> + 1</c> for the ask that carries no cap at all.
     /// </summary>
     /// <remarks>
-    /// Shared with the <c>SkipOldest</c> search in <see cref="DueSlotEnumerator"/>, whose probes count this
-    /// very chain with a memo in front of it: two copies of this rule would answer differently for the same
-    /// question, and the search compares its answers with the ones this class gives.
+    /// Shared with the <c>SkipOldest</c> search in <see cref="DueSlotEnumerator"/>, which compares its own
+    /// memoized probes against the counts this class gives: two copies of the rule would diverge.
     /// </remarks>
     internal static long CountCeiling(int cap) =>
         cap == int.MaxValue ? MaxDiagnosticWalk + 1 : Math.Min((long)cap + 1, int.MaxValue);
@@ -87,10 +76,8 @@ internal sealed class ProviderScheduleGrid(
         // a run the occurrence that just executed did not.
         var countAnchor = isRecovery ? scheduledTime : nextRun.Value;
 
-        // Bounded far shorter than a walked calendar's, because every step of this one is a round trip: a
-        // three-month outage of a per-minute provider grid is not worth a hundred thousand queries to produce
-        // a log line. What it costs is exactness past the bound, and the number says so instead of arriving
-        // as a total.
+        // Bounded far shorter than a walked calendar's, because every step here is a round trip. What it costs
+        // is exactness past the bound, and the number says so instead of arriving as a total.
         var skipped = computeSkippedCount
                           ? await CountMissedAsync(definition, countAnchor, now, MaxDiagnosticWalk, identity, ct)
                                 .ConfigureAwait(false)
@@ -126,8 +113,7 @@ internal sealed class ProviderScheduleGrid(
     /// <remarks>
     /// One call, against the tick before the instant: a provider answers about an absolute instant, so
     /// "strictly after one tick earlier" IS "on or after". The built-in grid cannot do that — its day, week
-    /// and month intervals advance their period before choosing a time inside it, so a probe placed just
-    /// before the instant already answers a period late.
+    /// and month intervals advance their period before choosing a time inside it.
     /// </remarks>
     public ValueTask<DateTimeOffset?> FirstOccurrenceOnOrAfterAsync(RecurringTask definition, DateTimeOffset instant,
                                                                     ScheduleIdentity identity, CancellationToken ct) =>
@@ -142,9 +128,8 @@ internal sealed class ProviderScheduleGrid(
                                                  DateTimeOffset after, int cap, ScheduleIdentity identity,
                                                  CancellationToken ct)
     {
-        // A cap of int.MaxValue means "no cap", which no provider grid can afford: every step is a round trip,
-        // so the walk keeps its own bound and the count says it is a lower bound by exceeding whatever the
-        // caller compares it against.
+        // A cap of int.MaxValue means "no cap", which no provider grid can afford: the walk keeps its own
+        // bound instead.
         var ceiling = CountCeiling(cap);
 
         var walked = await BoundedOccurrenceWalker
@@ -226,9 +211,8 @@ internal sealed class ProviderScheduleGrid(
 
         if (utc <= request.AfterUtc)
         {
-            // A bug in the provider, and it is reported as one — but it is still handled as transient, because
-            // the alternative is a series that dies of somebody else's arithmetic. Scheduling the answer would
-            // fire an occurrence in the past and immediately ask for the next one, which is the same answer.
+            // A bug in the provider, reported as one but handled as transient: the alternative is a series
+            // that dies of somebody else's arithmetic.
             logger.OccurrenceProviderBrokeContract(settings.Key, identity.ScheduleId, request.AfterUtc, utc);
 
             throw Transient(identity, settings.Key,

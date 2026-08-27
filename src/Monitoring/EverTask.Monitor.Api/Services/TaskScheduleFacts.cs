@@ -11,10 +11,9 @@ namespace EverTask.Monitor.Api.Services;
 /// What a row says about the schedule it belongs to, read once and shared by every DTO that reports it.
 /// </summary>
 /// <remarks>
-/// Three of the facts a durable schedule is watched by — the occurrence mode, the misfire policy and the time
-/// zone — live inside the serialized definition, and two more — the occurrence metadata and the catch-up halt
-/// — inside the runtime column. Reading them is a JSON parse per row, so it happens once per row and only for
-/// a row that can carry them: an ordinary one-shot answers <see cref="None"/> without touching either column.
+/// Occurrence mode, misfire policy and time zone live inside the serialized definition; the occurrence
+/// metadata and the catch-up halt inside the runtime column. Both reads are a JSON parse, so a one-shot
+/// answers <see cref="None"/> without touching either column.
 /// </remarks>
 internal sealed record TaskScheduleFacts
 {
@@ -78,10 +77,8 @@ internal sealed record TaskScheduleFacts
     /// that could run.
     /// </summary>
     /// <remarks>
-    /// The marker is runtime state of a live schedule, and nothing clears it when the series ends — a cancel
-    /// and the recovery finalization both leave it where it is, because neither has anything left to halt.
-    /// Reading the marker alone therefore kept a cancelled series alarming for ever, on a counter the docs
-    /// call the one to alert on, telling an operator to resume a schedule they had deliberately ended.
+    /// Nothing clears the marker when a series ends — neither a cancel nor the recovery finalization has
+    /// anything left to halt — so the marker alone would keep a cancelled schedule alarming for ever.
     /// </remarks>
     public static bool HasStandingHalt(QueuedTask row) =>
         row.ParentTaskId == null
@@ -111,8 +108,8 @@ internal sealed record TaskScheduleFacts
     }
 
     /// <summary>
-    /// The persisted definition, or null when this build cannot read it. A dashboard row that cannot say which
-    /// misfire policy a schedule carries is a far better outcome than a list endpoint that fails on one row.
+    /// The persisted definition, or null when this build cannot read it: an unreadable row loses a badge
+    /// rather than failing the whole list endpoint.
     /// </summary>
     private static RecurringTask? TryReadDefinition(string? json)
     {

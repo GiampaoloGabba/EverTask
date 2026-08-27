@@ -26,12 +26,10 @@ public class Dispatcher(
     // Cache for compiled TaskHandlerWrapper constructors to avoid reflection overhead
     private static readonly ConcurrentDictionary<Type, Func<TaskHandlerWrapper>> WrapperFactoryCache = new();
 
-    // Per-taskKey critical-section lock: serializes the GetByTaskKey -> decide -> Persist/Update of a
-    // single taskKey across concurrent dispatches so two dispatches can never both insert (or one
-    // delete under the other), the source of the taskKey dedup races (G13/G14/CU23/G17). It lives in the
-    // container so a runtime reschedule — the same read-decide-write over the same row — holds the SAME
-    // section: UpdateTask rewrites the definition and the cursor without touching the schedule version, so a
-    // dispatch interleaved with a reschedule would overwrite it with the row it had read first.
+    // Per-taskKey critical section: serializes the GetByTaskKey -> decide -> Persist/Update of one taskKey, so
+    // two concurrent dispatches can never both insert (or one delete under the other). It lives in the
+    // container because a runtime reschedule is the same read-decide-write over the same row and its
+    // UpdateTask carries no schedule version, so only a shared section keeps one from overwriting the other.
     private readonly TaskKeyLockRegistry _fallbackTaskKeyLocks = new();
     private TaskKeyLockRegistry? _taskKeyLocks;
 
@@ -59,7 +57,7 @@ public class Dispatcher(
     private IScheduleEvaluator Evaluator =>
         _evaluator ??= serviceProvider.GetService<IScheduleEvaluator>() ?? ScheduleEvaluator.Default;
 
-    /// <summary>The scheduling clock (P9). Falls back to the real clock outside a configured container.</summary>
+    /// <summary>The scheduling clock. Falls back to the real clock outside a configured container.</summary>
     private TimeProvider Clock => _timeProvider ??= serviceProvider.GetService<TimeProvider>() ?? TimeProvider.System;
 
     /// <summary>
@@ -131,8 +129,7 @@ public class Dispatcher(
 
     /// <summary>
     /// The consecutive provider failures this host is holding per schedule. Read only to FORGET a schedule
-    /// that will not ask again: the entry of one cancelled mid-outage would otherwise outlive the process's
-    /// interest in it, exactly like a published schedule version.
+    /// that will not ask again, whose entry would otherwise outlive the process's interest in it.
     /// </summary>
     private OccurrenceProviderRetryRegistry? ProviderRetries
     {
@@ -189,13 +186,12 @@ public class Dispatcher(
     /// <inheritdoc />
     public async Task Cancel(Guid taskId, CancellationToken cancellationToken = default)
     {
-        // Blacklist FIRST, before persisting Cancelled: a concurrent enqueue (scheduler slot / gate)
-        // racing this Cancel must see the blacklist and be discarded, instead of slipping through the
-        // (still-false) blacklist check and writing SetQueued over the Cancelled status we are about to
-        // persist (CU13).
+        // Blacklist FIRST, before persisting Cancelled: a concurrent enqueue (scheduler slot / gate) racing
+        // this Cancel must see the blacklist and be discarded, instead of slipping through the (still-false)
+        // check and writing SetQueued over the Cancelled status we are about to persist.
         workerBlacklist.Add(taskId);
 
-        // Must not abort the rest of the cleanup if the CTS was already disposed (CU12).
+        // Must not abort the rest of the cleanup if the CTS was already disposed.
         cancellationSourceProvider.CancelTokenForTask(taskId);
 
         // Drop any occurrence still parked in the scheduler so it isn't even dispatched.
@@ -207,11 +203,9 @@ public class Dispatcher(
         GateInvalidation?.Invalidate(taskId);
         ParkingLot?.Remove(taskId);
 
-        // A schedule that will not run again stops being a version this process publishes a lower bound for
-        // (S4). Nothing depends on the entry surviving a cancel, and leaving one behind per cancelled schedule
-        // is the only way the registry could grow without bound. Its provider backoff goes the same way and
-        // for the same reason: a schedule cancelled while its calendar was down never gets the answer that
-        // would have cleared it.
+        // A schedule that will not run again stops being a version this process publishes a lower bound for,
+        // and one entry left behind per cancelled schedule is the only way the registry could grow without
+        // bound. Its provider backoff goes the same way: nothing will ever answer and clear it.
         ScheduleVersions?.Remove(taskId);
         ProviderRetries?.Forget(taskId);
 
@@ -220,10 +214,9 @@ public class Dispatcher(
         if (taskStorage == null)
             return;
 
-        // A schedule that owns occurrences is cancelled together with them, in one transaction (M15): a
-        // materializer racing this can then only ever see an inactive schedule, and no occurrence of a
-        // cancelled series is left waiting in a queue — or waiting to be put back in one by the next startup
-        // recovery. Everything else keeps the historical single status write, byte for byte.
+        // A schedule that owns occurrences is cancelled together with them, in one transaction: no occurrence
+        // of a cancelled series is left waiting in a queue, or waiting to be put back in one by the next
+        // startup recovery. Everything else keeps the historical single status write, byte for byte.
         if (await OwnsPendingOccurrencesAsync(taskId).ConfigureAwait(false) == true)
         {
             await taskStorage.CancelSchedule(taskId, AuditLevel.ErrorsOnly, cancellationToken).ConfigureAwait(false);
@@ -232,19 +225,14 @@ public class Dispatcher(
 
         await taskStorage.SetCancelledByUser(taskId, AuditLevel.ErrorsOnly).ConfigureAwait(false);
 
-        // Asked a SECOND time, and this is the one that closes the race: a materializer that had already
-        // claimed the schedule row when the first read ran had not inserted its occurrence yet, so that read
-        // answered "no occurrences" and the simple write cancelled the schedule alone, leaving a live
-        // occurrence under a cancelled series — the one thing M15 says cannot happen. By the time the write
-        // above is committed that materialization is decided either way, because both of them write the
-        // schedule row and so serialize on it: it committed (its occurrence is visible here) or it lost, and
-        // every one that starts from now on is refused by the status it reads. A cancel with nothing to
-        // cascade pays one indexed read on an administrative path; one that finds something writes the
-        // cascade the race deprived it of.
+        // Asked a SECOND time, and this is the one that closes the race: a materializer that had claimed the
+        // schedule row before the first read had not inserted its occurrence yet, so that read answered "no
+        // occurrences" and left a live occurrence under a cancelled series. By the time the write above is
+        // committed the materialization is decided either way — both write the schedule row, so they
+        // serialize on it — and every one starting from now on is refused by the status it reads.
         //
-        // A read that FAILED cascades too: it is the only lookup left, and "the query threw" is not an answer
-        // that lets a cancel declare the series terminal. The cascade over a schedule with no occurrence is
-        // the parent's own write, which is the one that would have been made anyway.
+        // A read that FAILED cascades too: "the query threw" is not an answer that lets a cancel declare the
+        // series terminal, and a cascade over a schedule with no occurrence is just the parent's own write.
         if (await OwnsPendingOccurrencesAsync(taskId).ConfigureAwait(false) != false)
             await taskStorage.CancelSchedule(taskId, AuditLevel.ErrorsOnly, cancellationToken).ConfigureAwait(false);
     }
@@ -255,17 +243,12 @@ public class Dispatcher(
     /// </summary>
     /// <remarks>
     /// The question is asked of the persisted RELATIONSHIP — the rows that name this one as their schedule —
-    /// and never of the definition. Reading the definition answered "nothing to cascade" for a schedule whose
-    /// JSON no longer parses and for one a task-key re-registration had just turned inline, both of which
-    /// still own every occurrence they had already created; and a row with no occurrence gets the historical
-    /// single write either way, because there is nothing for the cascade to add.
+    /// and never of the definition: a schedule whose JSON no longer parses, or one a task-key re-registration
+    /// turned inline, still owns every occurrence it had already created.
     /// <para>
-    /// One indexed read on an administrative path, skipped entirely for a storage that has no occurrences to
-    /// find. It does NOT take the caller's token and it never propagates: this classification sits in front of
-    /// the status write that has always been the cancel's last act, and it must not become a new way for that
-    /// write not to happen. It reports the failure instead of deciding it — a failed read that answered
-    /// "no occurrences" let a cancel end normally having cancelled the schedule alone, and the occurrence it
-    /// could not see went on to run once the blacklist entry lapsed.
+    /// It does NOT take the caller's token and it never propagates: this classification sits in front of the
+    /// status write that has always been the cancel's last act, and it must not become a new way for that
+    /// write not to happen. It reports a failed lookup instead of deciding it.
     /// </para>
     /// </remarks>
     private async Task<bool?> OwnsPendingOccurrencesAsync(Guid taskId)
@@ -311,21 +294,12 @@ public class Dispatcher(
     /// does not support. Shared with the runtime schedule manager, which accepts a definition the same way.
     /// </summary>
     /// <remarks>
-    /// The key check is also in <see cref="RecurringTask.Validate(OccurrenceProviderRegistry)"/>, which is what
-    /// poisons a persisted row naming a key this build no longer registers; here it is what refuses the
-    /// dispatch while the caller is still holding it. The determinism check lives ONLY here, deliberately: it
-    /// resolves the provider to ask, and doing that inside the validation every recovery runs would turn a
-    /// container hiccup into a poisoned schedule.
-    /// <para>
-    /// Which is why it is a DISPATCH-time gate and nothing else: on the recovery path there is no caller to
-    /// refuse, the row is already written, and neither of the two things this can throw is an
-    /// <see cref="OccurrenceProviderException"/> — so both would escape the transient catch, reach the
-    /// recovery's own failure counter and poison the series after a handful of restarts. That is the outcome
-    /// the ratification of this gate (decisions §3.7) says cannot happen: a row carrying
-    /// <see cref="CatchUpOverflowPolicy.SkipOldest"/> over a provider that no longer declares itself
-    /// deterministic keeps running and bisects as a deterministic grid would, and a container that cannot
-    /// build the provider yet costs a retry, not a series.
-    /// </para>
+    /// The key check is also in <see cref="RecurringTask.Validate(OccurrenceProviderRegistry)"/>, which poisons
+    /// a persisted row naming a key this build no longer registers; here it refuses the dispatch while the
+    /// caller is still holding it. The determinism check is a DISPATCH-time gate and nothing else: it resolves
+    /// the provider to ask it, and neither of the two things it can throw is an
+    /// <see cref="OccurrenceProviderException"/>, so on the recovery path both would escape the transient catch
+    /// and poison the series after a handful of restarts over a container that could not build the provider yet.
     /// </remarks>
     internal static async ValueTask RequireProviderSupportAsync(RecurringTask recurring,
                                                                 OccurrenceProviderRegistry? providers,
@@ -383,9 +357,9 @@ public class Dispatcher(
     }
 
     /// <summary>
-    /// The dispatch entry point as the previous release shipped it, kept BYTE-FOR-BYTE (P6/X6). Row metadata
-    /// travels through the explicit <see cref="ITaskDispatcherInternal"/> implementation below instead of
-    /// being appended here, where a new parameter would have replaced this method's IL signature.
+    /// The dispatch entry point as the previous release shipped it, kept BYTE-FOR-BYTE. Row metadata travels
+    /// through the explicit <see cref="ITaskDispatcherInternal"/> implementation below instead of being
+    /// appended here, where a new parameter would have replaced this method's IL signature.
     /// </summary>
     public Task<Guid> ExecuteDispatch(IEverTask task, DateTimeOffset? executionTime = null,
                                       RecurringTask? recurring = null, int? currentRun = null,
@@ -411,13 +385,11 @@ public class Dispatcher(
     {
         ArgumentNullException.ThrowIfNull(task);
 
-        // T10: every path that accepts a schedule validates it, and this is the one the fluent builder does
-        // not go through — a definition handed to the public dispatch entry point directly. Recovery has
-        // already validated its own through RecoveredTaskFactory, so this only ever re-checks a clean one
-        // there. Without it a corrupt interval, or an OccurrenceMode outside the defined values, is read as
-        // valid all the way down to IsScheduleOnly, which only ever compares against Durable.
-        // The registry is handed over so an unregistered provider key is refused here too, with the key in the
-        // message, instead of at the first grid question.
+        // Every path that accepts a schedule validates it, and this is the one the fluent builder does not go
+        // through — a definition handed to the public dispatch entry point directly. Without it a corrupt
+        // interval, or an OccurrenceMode outside the defined values, is read as valid all the way down to
+        // IsScheduleOnly, which only ever compares against Durable. The registry is handed over so an
+        // unregistered provider key is refused here too, with the key in the message.
         recurring?.Validate(Providers);
 
         // A durable schedule needs the atomic occurrence operations, and there is no half-atomic emulation to
@@ -447,9 +419,8 @@ public class Dispatcher(
 
         // Read in the SAME breath as the cursor above, and never re-read: together with the schedule version
         // carried by the row metadata, this is the compare-and-swap expectation of the exhausted-series
-        // finalization below, and that write must be conditional on the values its decision was computed from.
-        // Reading them back after deciding would fold a Cancel (or a reschedule) that linearized in between
-        // into the expectation, so the CAS would confirm the concurrent state instead of losing to it.
+        // finalization below. Reading it back after deciding would fold a Cancel (or a reschedule) that
+        // linearized in between into the expectation, confirming the concurrent state instead of losing to it.
         QueuedTaskStatus? existingStatus = null;
 
         // The schedule this dispatch is reviving, when it is re-registering one a cancel had ended. Acted on
@@ -468,8 +439,8 @@ public class Dispatcher(
                 // An IMMEDIATE one-shot re-dispatch of a row whose delivery is already in flight (in a
                 // channel or executing) would either lose the new payload (the in-flight delivery already
                 // captured the old one) or, on a terminal Remove, delete the row under the live delivery
-                // (double execution). Reject it and return the existing id (CU6/L31, G17). A delayed or
-                // recurring re-dispatch parks a fresh occurrence in the scheduler, so it is left to proceed.
+                // (double execution). A delayed or recurring re-dispatch parks a fresh occurrence in the
+                // scheduler, so it is left to proceed.
                 if (executionTime == null && recurring == null && DeliveryRegistry?.IsDelivering(existingTask.Id) == true)
                 {
                     logger.DispatchDiscardedDeliveryInFlight(taskKey, existingTask.Id);
@@ -477,7 +448,7 @@ public class Dispatcher(
                 }
 
                 // A recurring row must not be converted to a one-shot by a taskKey re-dispatch that carries
-                // no recurring config — that would silently destroy its schedule and history (G16).
+                // no recurring config — that would silently destroy its schedule and history.
                 if (existingTask.IsRecurring && recurring == null)
                 {
                     logger.DispatchDiscardedRecurringToOneShot(taskKey, existingTask.Id);
@@ -499,9 +470,7 @@ public class Dispatcher(
                     logger.UpdatingRecurringTask(existingTask.Id);
                     existingTaskId = existingTask.Id;
 
-                    // Including Cancelled, which is the documented way to restart a cancelled series ("it has
-                    // to be dispatched again") — and the one status that does not survive the reuse of the
-                    // row. A one-shot is removed and recreated under a new id, so nothing follows it; a
+                    // Including Cancelled, which is the documented way to restart a cancelled series. A
                     // recurring row keeps its id, and with it the cancellation's blacklist entry (about an
                     // hour, dropping every delivery the new registration produces) and the Cancelled status
                     // itself, which UpdateTask never rewrites and no recovery predicate selects.
@@ -514,22 +483,17 @@ public class Dispatcher(
                     // a RunNumber of 1 for the run storage is about to record as the sixth.
                     existingCurrentRunCount = existingTask.CurrentRunCount;
 
-                    // The schedule version belongs to the ROW, and a re-registration under the same taskKey
-                    // updates that row in place: UpdateTask never writes the column, so the version the row
-                    // is at is still the version this dispatch runs. Leaving the metadata at its default
-                    // would tell the handler's context — and every monitoring event of the delivery — that a
+                    // The schedule version belongs to the ROW and UpdateTask never writes that column, so the
+                    // version the row is at is still the version this dispatch runs; left at its default it
+                    // would tell the handler's context, and every monitoring event of the delivery, that a
                     // rescheduled series is back at version 0. It is also the compare-and-swap expectation of
-                    // the finalization below, which is why it is read here, once, with the rest of the row.
+                    // the finalization below, which is why it is read here with the rest of the row.
                     //
                     // The runtime state travels the same way, because UpdateTask DOES write that column: a
                     // plain re-registration hands the row's own value back, so a standing catch-up halt
-                    // survives it (M10 — only an explicit resume or reschedule releases one, and re-declaring
-                    // your schedules at startup is not an operator asking for a replay). A REVIVAL is the
-                    // exception, and the reason the column is written at all: the halt belongs to the series
-                    // the cancel ended, and carrying it into the one being started here parks a schedule that
-                    // materializes nothing — the materializer's standing-halt branch reports the halt and, by
-                    // design, does not re-park, so the registration is consumed on its first fire and every
-                    // restart repeats it.
+                    // survives it — re-declaring your schedules at startup is not a request to replay. A
+                    // REVIVAL clears it instead: the halt belongs to the series the cancel ended, and carrying
+                    // it into the one being started here parks a schedule that materializes nothing.
                     rowMetadata = rowMetadata with
                     {
                         ScheduleVersion = existingTask.ScheduleVersion,
@@ -556,13 +520,9 @@ public class Dispatcher(
                         logger.RemovingTerminatedTask(existingTask.Id);
                         await taskStorage.Remove(existingTask.Id, ct).ConfigureAwait(false);
 
-                        // Removal is the third end of a schedule S4 names, beside a terminal series and a
-                        // cancellation, and this is the only place the library deletes a row. Nothing can
-                        // reach it holding a published version today — a recurring row is refused a one-shot
-                        // re-dispatch above, so the row deleted here has never been a schedule — but a
-                        // published version whose row no longer exists is a lower bound nothing can ever
-                        // clear, and the clause costs a dictionary lookup on a path that already talks to
-                        // storage.
+                        // Removal is the third end of a schedule, beside a terminal series and a cancellation,
+                        // and this is the only place the library deletes a row: a published version whose row
+                        // no longer exists is a lower bound nothing can ever clear.
                         ScheduleVersions?.Remove(existingTask.Id);
                         ProviderRetries?.Forget(existingTask.Id);
                     }
@@ -618,7 +578,7 @@ public class Dispatcher(
             }
             catch (OccurrenceProviderException failure) when (isRecovery && existingTaskId is { } scheduleId)
             {
-                // V4: the calendar this schedule reads could not answer, which is transient by contract — the
+                // The calendar this schedule reads could not answer, which is transient by contract — the
                 // application's own database being briefly down must not end a series. Nothing is written, so
                 // the row keeps its cursor and stays recoverable, and the schedule is parked to ask again
                 // after the backoff. The provider's own exception is caught HERE and never rethrown: the
@@ -628,10 +588,9 @@ public class Dispatcher(
                         rowMetadata, nowUtc)
                     .ConfigureAwait(false);
 
-                // And the caller is told it was DEFERRED rather than dispatched. Answering with the schedule
-                // id reads as a dispatch that worked, which is how a recovery came to clear an L18 counter a
-                // previous restart had really earned: nothing about this row was proved by an outage of its
-                // calendar, so nothing about it may be forgotten either.
+                // And the caller is told it was DEFERRED rather than dispatched: answering with the schedule
+                // id reads as a dispatch that worked, and clears a recovery-failure counter a previous restart
+                // had really earned. An outage of its calendar proves nothing about this row.
                 throw new ScheduleDeferredByProviderException(scheduleId, failure);
             }
 
@@ -645,12 +604,10 @@ public class Dispatcher(
                 // new-task path inside the decision.
                 logger.RecoverySeriesExhausted(existingTaskId);
 
-                // X3: a CANCELLED series is already terminal and is never rewritten to Completed. Naming
-                // Cancelled as the compare-and-swap expectation makes the guard MATCH, so the conditional
-                // write erases the cancellation exactly as the unconditional one would — and the row leaves
-                // the one status a later re-dispatch under this key needs to see to undo the cancel, so the
-                // cancel's blacklist entry would be stranded with nothing left to drop it. It is the same
-                // exclusion recovery's own finalization carries in QueuedTask.IsRecurringSeriesToFinalize.
+                // A CANCELLED series is already terminal and is never rewritten to Completed. Naming Cancelled
+                // as the compare-and-swap expectation makes the guard MATCH, so the conditional write would
+                // erase the cancellation — and with it the one status a later re-dispatch under this key needs
+                // to see. Same exclusion as QueuedTask.IsRecurringSeriesToFinalize.
                 if (existingStatus is QueuedTaskStatus.Cancelled)
                 {
                     logger.ExhaustedSeriesLeftCancelled(existingTaskId);
@@ -684,9 +641,8 @@ public class Dispatcher(
 
         // The run this delivery is about to be: the durable counter (preserved by a taskKey update, carried in
         // by recovery, absent on a brand new task) plus one, because the counter only moves once a run ends.
-        // Stamped on the executor so the handler's context reports it without reading the row again. An
-        // occurrence arrives with its own number already read from the row and keeps it: its counter is the
-        // one-shot's, which says nothing about the run of the series the occurrence is (C1).
+        // An occurrence arrives with its own number already read from the row and keeps it: its counter is the
+        // one-shot's, which says nothing about the run of the series the occurrence is.
         var executor = await handler.Handle(task, executionTime, recurring, serviceProvider, effectiveAuditLevel,
                                        existingTaskId, taskKey, useLazyExecutor,
                                        rowMetadata with
@@ -724,7 +680,7 @@ public class Dispatcher(
             {
                 // A concurrent insert may have won the taskKey unique constraint (cross-process, or any
                 // path that bypassed the in-process keyed lock): re-read the winner and return its id
-                // instead of proceeding with our own duplicate PersistenceId (G14/CU23).
+                // instead of proceeding with our own duplicate PersistenceId.
                 if (existingTaskId == null && !string.IsNullOrWhiteSpace(taskKey))
                 {
                     var winner = await taskStorage.GetByTaskKey(taskKey, ct).ConfigureAwait(false);
@@ -769,10 +725,10 @@ public class Dispatcher(
         {
             scheduler.Schedule(executorToSchedule, nextRun);
 
-            // Published only once the registration is really in, exactly as a reschedule publishes (S4): the
-            // lower bound drops every delivery of the definition the cancel ended that is still sitting in a
-            // queue, and publishing one whose executor never reached the scheduler would drop them with
-            // nothing left to take their place.
+            // Published only once the registration is really in, exactly as a reschedule publishes: the lower
+            // bound drops every delivery of the definition the cancel ended that is still sitting in a queue,
+            // and publishing one whose executor never reached the scheduler would drop them with nothing left
+            // to take their place.
             if (revivedSchedule is { } published)
                 ScheduleVersions?.Publish(published, executorToSchedule.ScheduleVersion);
         }
@@ -805,7 +761,7 @@ public class Dispatcher(
                     // The immediate enqueue of an already-accepted (parked) task failed (full
                     // ThrowException queue, or a cancelled Wait that threw). Its parked occurrence was
                     // just dropped above, so re-schedule it for retry instead of losing it / leaking its
-                    // parking-lot reservation, then propagate the failure (CU15).
+                    // parking-lot reservation, then propagate the failure.
                     scheduler.Schedule(executorToSchedule with { ExecutionTime = Clock.GetUtcNow() });
                     throw;
                 }
@@ -839,39 +795,25 @@ public class Dispatcher(
     /// to be dispatched again").
     /// </summary>
     /// <remarks>
-    /// A recurring re-registration REUSES the row, so both halves of the cancellation follow it and neither is
-    /// undone by anything else on this path. The blacklist entry outlives the cancel by about an hour and
-    /// <see cref="Worker.WorkerQueue"/> drops every delivery it covers, so the new registration was consumed
-    /// and nothing ran; and <c>UpdateTask</c> never writes the status column, so the row stayed
-    /// <c>Cancelled</c> — a status no recovery predicate selects, which loses the series for good at the first
-    /// restart before its first slot. The dispatch IS the decision to run it again, the same argument
-    /// <see cref="TaskScheduleManager.RequeueFailedOccurrence"/> makes for a single occurrence, so it drops the
-    /// entry and puts the row back in <see cref="QueuedTaskStatus.WaitingQueue"/> — where a brand new dispatch
-    /// would have left it, the runtime state the dispatch rewrote just above included. The transition is
-    /// audited like any other, which is what tells an operator the series was restarted rather than never
-    /// cancelled.
+    /// A recurring re-registration REUSES the row, so both halves of the cancellation follow it: the blacklist
+    /// entry outlives the cancel by about an hour and drops every delivery the new registration produces, and
+    /// <c>UpdateTask</c> never writes the status column, so the row stays <c>Cancelled</c> — a status no
+    /// recovery predicate selects. Both are undone here and nowhere else.
     /// <para>
     /// The entry is not simply dropped: it is the only in-process cover the occurrences the cancel already
     /// terminalized have, so it is MOVED onto them first (see
-    /// <see cref="CoverOccurrencesTheCancelEndedAsync"/>). The two meanings it carries end at different
-    /// moments — the schedule is alive again from here, those occurrences never will be.
+    /// <see cref="CoverOccurrencesTheCancelEndedAsync"/>) — the schedule is alive again from here, those
+    /// occurrences never will be.
     /// </para>
     /// <para>
-    /// The un-cancel goes FIRST and it has to answer. A plain <c>SetStatus</c> is best effort on every
-    /// relational provider — it logs its own failed write and returns — so a swallowed failure used to leave
-    /// the row terminally <c>Cancelled</c> with its cover already dropped, behind a dispatch that had returned
-    /// an id and logged a restart. Nothing polls behind it: the parked registration is refused at its first
-    /// fire (<c>TrySetQueuedIfRecoverable</c> declines a <c>Cancelled</c> row), and no recovery predicate
-    /// selects it afterwards. A failure is therefore a log error plus a monitoring event, and it stops the
-    /// dispatch instead of finishing it.
+    /// The un-cancel goes FIRST and it has to answer. Nothing polls behind it — the parked registration is
+    /// refused at its first fire and no recovery predicate selects the row afterwards — so a failure is a log
+    /// error plus a monitoring event, and it stops the dispatch instead of finishing it.
     /// </para>
     /// <para>
-    /// The write also bumps the row's <see cref="QueuedTask.ScheduleVersion"/>, which is what protects the
-    /// series being started here from the deliveries of the one that was cancelled. A recurring
-    /// re-registration REUSES the row, so an in-flight delivery of the old definition carries the very id the
-    /// new registration does and the blacklist cannot tell them apart — only the version can, and every
-    /// defence S4 built reads it: the pre-gate drop of a superseded delivery, the compare-and-swap of the
-    /// advance, and the conditional re-park inside the scheduler's own registry swap.
+    /// The write also bumps the row's <see cref="QueuedTask.ScheduleVersion"/>: an in-flight delivery of the
+    /// old definition carries the very id the new registration does, so the blacklist cannot tell them apart
+    /// and only the version can.
     /// </para>
     /// </remarks>
     /// <returns>The schedule version the row now carries, or null when nothing was revived.</returns>
@@ -951,17 +893,14 @@ public class Dispatcher(
     /// <remarks>
     /// Past the enqueue boundary nothing re-reads the row: <c>SetInProgress</c> is unconditional, and all
     /// three cancellation checks are the blacklist. A delivery sitting in a channel, or waiting seconds at the
-    /// rate-limit gate, would therefore run the OLD series' payload over a terminal <c>Cancelled</c> and
-    /// complete it, the moment the schedule's entry went. Everything BEFORE that boundary is safe without an
-    /// entry — the scheduler's enqueue goes through <c>TrySetQueuedIfRecoverable</c>, which refuses a
-    /// <c>Cancelled</c> row — so the in-flight set is the whole exposure, and it is bounded by what a channel
-    /// can hold.
+    /// rate-limit gate, would therefore run the OLD series' payload over a terminal <c>Cancelled</c> the
+    /// moment the schedule's entry went. Everything BEFORE that boundary is safe without an entry, because the
+    /// scheduler's enqueue goes through <c>TrySetQueuedIfRecoverable</c>.
     /// <para>
     /// The status is what decides, not the delivery: an occurrence the cancel found <c>InProgress</c> is
-    /// allowed to finish (M15), and covering it would suppress the completion of work that has already run its
-    /// side effects. A lookup that FAILED covers them all instead — "the query threw" is not an answer that
-    /// lets an occurrence of a cancelled series run, and the cost of being wrong that way is a re-execution
-    /// the at-least-once contract already covers.
+    /// allowed to finish, and covering it would suppress the completion of work that has already run its side
+    /// effects. A lookup that FAILED covers them all instead — the cost of being wrong that way is a
+    /// re-execution the at-least-once contract already covers.
     /// </para>
     /// </remarks>
     private async Task CoverOccurrencesTheCancelEndedAsync(Guid scheduleId, CancellationToken ct)
@@ -1050,9 +989,9 @@ public class Dispatcher(
             return delay >= TimeSpan.FromMinutes(30);
         }
 
-        // Immediate tasks: lazy by default (MEM-2). An eager handler resolved at dispatch from
-        // the singleton dispatcher's root provider is pinned in the root container's disposables
-        // list until shutdown; the worker resolves and disposes a fresh instance per task anyway.
+        // Immediate tasks: lazy by default. An eager handler resolved at dispatch from the singleton
+        // dispatcher's root provider is pinned in the root container's disposables list until shutdown;
+        // the worker resolves and disposes a fresh instance per task anyway.
         return true;
     }
 
@@ -1070,8 +1009,7 @@ public class Dispatcher(
     /// </summary>
     /// <remarks>
     /// Extracted whole so the ONE thing that can fail transiently here — a grid that comes from an
-    /// <see cref="INextOccurrenceProvider"/>, which is real I/O — has a single boundary its caller can catch
-    /// at (V4). Every branch is the one it always was.
+    /// <see cref="INextOccurrenceProvider"/>, which is real I/O — has a single boundary its caller can catch at.
     /// </remarks>
     private async Task<RecurringRunDecision> DecideRecurringRunAsync(
         RecurringTask recurring, bool isRecovery, DateTimeOffset? existingNextRunUtc, int? existingCurrentRunCount,
@@ -1098,17 +1036,15 @@ public class Dispatcher(
                 return new RecurringRunDecision(existingNextRunUtc, false);
             }
 
-            // L16: on recovery, if the pending occurrence slipped into the past but is still the CURRENT
-            // one (the next occurrence is not due yet), execute IT now instead of skipping it — a short
-            // downtime across a scheduled occurrence must not silently lose it. Calendar-exact: uses the
-            // real next occurrence, not the flat GetMinimumInterval heuristic, which is wrong for
-            // OnDays/Month/Week (too narrow drops a just-due slot; too wide runs a stale one) — U4/U5.
+            // On recovery, a pending occurrence that slipped into the past but is still the CURRENT one (the
+            // next occurrence is not due yet) is executed instead of skipped — a short downtime across a
+            // scheduled occurrence must not silently lose it. Calendar-exact: the real next occurrence, not
+            // the flat GetMinimumInterval heuristic, which is wrong for OnDays/Month/Week (too narrow drops a
+            // just-due slot; too wide runs a stale one).
             //
-            // X3: the successor is the NATURAL one — computed ignoring RunUntil/MaxRuns. The bounded
-            // successor returns null both when the slot is still current AND when the series has simply
-            // ended, and reading that null as "current forever" is what used to execute a months-old
-            // slot at restart. Ignoring the bounds separates the two: "no successor yet" now really means
-            // the grid produced none, which grants no grace at all.
+            // The successor is the NATURAL one, computed ignoring RunUntil/MaxRuns: the bounded successor is
+            // null both when the slot is still current AND when the series has simply ended, and reading that
+            // null as "current forever" executes a months-old slot at restart.
             if (isRecovery &&
                 await IsSlipedOccurrenceStillCurrentAsync(recurring, existingNextRunUtc.Value, nowUtc, identity, ct)
                     .ConfigureAwait(false))
@@ -1118,7 +1054,7 @@ public class Dispatcher(
             }
 
             // NextRunUtc is (well) in the past - skip forward while preserving rhythm. On the
-            // recovery path the initial-run config must NOT be re-applied (L25-firstrun).
+            // recovery path the initial-run config must NOT be re-applied.
             var recovered = await Evaluator.CalculateNextValidRunAsync(
                 recurring,
                 existingNextRunUtc.Value,
@@ -1140,8 +1076,8 @@ public class Dispatcher(
         if (recurring.BackfillFromUtc is { } backfillFrom && !isRecovery)
         {
             // An explicit backfill starts the cursor in the past, on the first occurrence at or after the
-            // instant the caller named (M11). The replay it triggers is still bounded by the misfire
-            // policy's own caps — this only decides where the schedule starts counting from.
+            // instant the caller named. The replay it triggers is still bounded by the misfire policy's own
+            // caps — this only decides where the schedule starts counting from.
             var backfilled = await Evaluator
                                    .FirstOccurrenceOnOrAfterAsync(recurring, backfillFrom.ToUniversalTime(),
                                        identity, ct)
@@ -1171,7 +1107,7 @@ public class Dispatcher(
 
     /// <summary>
     /// Parks a recovered schedule whose occurrence provider could not answer, so it asks again after the
-    /// backoff instead of waiting for the next restart (V4).
+    /// backoff instead of waiting for the next restart.
     /// </summary>
     /// <remarks>
     /// The registration is a SCHEDULE RETRY, not a delivery: when it fires, the worker re-reads the row and
@@ -1268,19 +1204,14 @@ public class Dispatcher(
     /// cleared, no run counted.
     /// </summary>
     /// <remarks>
-    /// X3: CONDITIONAL wherever the storage can be, exactly like the recovery finalization in
-    /// <c>WorkerService</c>. The unconditional write would replace a <c>Cancelled</c> (or a fresh cursor from
-    /// a reschedule) that linearized between the evaluation above and this line with <c>Completed</c>.
-    /// <para>
-    /// Every expectation comes from the row the decision was COMPUTED FROM and is never read back here: a
-    /// fresh read after deciding would see the concurrent write and hand it to the compare-and-swap as the
-    /// expected value, turning the guard into a confirmation of whatever state it finds — the cancellation
-    /// would be silently replaced. Losing the compare-and-swap simply means someone else owns the row now.
-    /// </para>
+    /// CONDITIONAL wherever the storage can be, exactly like the recovery finalization in <c>WorkerService</c>:
+    /// an unconditional write would replace a <c>Cancelled</c> (or a fresh cursor from a reschedule) that
+    /// linearized between the evaluation above and this line. Every expectation comes from the row the decision
+    /// was COMPUTED FROM and is never read back here, or the guard would confirm whatever state it finds
+    /// instead of losing to it.
     /// <para>
     /// A storage without the compare-and-swap keeps the historical unconditional write rather than being
-    /// refused a normal end-of-series, and so does a caller that supplied no expected status (a hand-wired
-    /// re-dispatch outside recovery, which carries no row metadata).
+    /// refused a normal end-of-series, and so does a caller that supplied no expected status.
     /// </para>
     /// </remarks>
     private static async Task FinalizeExhaustedSeriesAsync(ITaskStorage storage, Guid taskId,

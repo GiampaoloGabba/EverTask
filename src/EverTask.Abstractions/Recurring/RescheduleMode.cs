@@ -1,7 +1,7 @@
 namespace EverTask.Abstractions;
 
 /// <summary>
-/// What a runtime reschedule does with the slot the old definition was pointing at (M18).
+/// What a runtime reschedule does with the slot the old definition was pointing at.
 /// </summary>
 public enum RescheduleMode
 {

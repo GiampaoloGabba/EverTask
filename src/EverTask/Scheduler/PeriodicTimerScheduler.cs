@@ -4,22 +4,13 @@ using EverTask.Configuration;
 namespace EverTask.Scheduler;
 
 /// <summary>
-/// High-performance scheduler implementation using SemaphoreSlim for wake-up signaling.
-/// This scheduler reduces lock contention by 90%+ compared to TimerScheduler by eliminating
-/// continuous UpdateTimer() calls and using dynamic delay calculation based on the next task.
+/// Default scheduler: a single priority queue whose loop sleeps on a semaphore until the next due task, or
+/// until a new registration signals it.
 /// </summary>
 /// <remarks>
-/// Performance characteristics:
-/// - Zero CPU when queue empty (sleeps on semaphore)
-/// - Reduced lock contention (no UpdateTimer() on every Schedule())
-/// - Wake-up anticipato when new urgent tasks arrive
-/// - Dynamic delay based on next task execution time
-///
-/// Dispatch characteristics:
-/// - Non-blocking dispatch: a full worker queue never stalls the scheduler loop
-///   (no head-of-line blocking across queues); the task is retried with a backoff.
-/// - Idempotent scheduling per PersistenceId (latest wins): scheduling the same task twice
-///   (e.g. startup recovery + taskKey re-registration) executes it once.
+/// A full worker queue never stalls the loop (the task is retried with a backoff), and scheduling is
+/// idempotent per PersistenceId (latest wins): the same task scheduled twice — startup recovery plus a taskKey
+/// re-registration, for instance — executes once.
 /// </remarks>
 public class PeriodicTimerScheduler : IScheduler, IDisposable
 {
@@ -45,9 +36,9 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
 #endif
 
     /// <summary>
-    /// The pre-P9 constructor, kept as a real overload so an assembly compiled against the previous release
-    /// still binds (P6/X6); the scheduling clock arrives through the overload below, which the container
-    /// picks because it is the longest one it can satisfy.
+    /// Kept as a real overload so an assembly compiled against the previous release still binds; the
+    /// scheduling clock arrives through the overload below, which the container picks because it is the
+    /// longest one it can satisfy.
     /// </summary>
     public PeriodicTimerScheduler(
         IWorkerQueueManager queueManager,
@@ -74,7 +65,6 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
         _shutdownToken = _cts.Token;
         _wakeUp = new SchedulerWakeUp(_timeProvider);
 
-        // Avvia background loop
         _ = ProcessScheduledTasksAsync(_shutdownToken);
     }
 
@@ -114,14 +104,12 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
         }
 
         // Latest-wins registration per PersistenceId: a previously parked entry for the same task is evicted,
-        // so the task executes only once per occurrence. That rule and the S4 refusal both live in
-        // ScheduledRegistrations, which the sharded scheduler shares.
+        // so the task executes only once per occurrence.
         if (!_registrations.Swap(item, refuseSuperseded))
             return false;
 
         _queue.Enqueue(item, scheduledTime);
 
-        // Sveglia il timer se è dormiente (coda era vuota)
         _wakeUp.Signal();
 
         return true;
@@ -159,30 +147,25 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
         {
             try
             {
-                // Calcola delay dinamico basato sul prossimo task
                 var delay = CalculateNextDelay();
 
                 if (delay == Timeout.InfiniteTimeSpan)
                 {
-                    // Coda vuota: dormi fino a quando Schedule() chiama Release()
                     _logger.QueueEmpty();
                     await _wakeUp.WaitAsync(null, cancellationToken).ConfigureAwait(false);
 
-                    // Resetta il flag di wake-up dopo aver consumato il segnale
                     _wakeUp.Consumed();
                 }
                 else
                 {
                     var signaled = await _wakeUp.WaitAsync(delay, cancellationToken).ConfigureAwait(false);
 
-                    // Resetta il flag solo se il semaforo è stato effettivamente segnalato
                     if (signaled)
                     {
                         _wakeUp.Consumed();
                     }
                 }
 
-                // Processa task pronti
                 await ProcessReadyTasksAsync().ConfigureAwait(false);
             }
             catch (OperationCanceledException)
@@ -192,7 +175,7 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
             catch (ObjectDisposedException)
             {
                 // Dispose() cancelled the loop and disposed the wake-up semaphore: a WaitAsync racing
-                // that disposal is expected shutdown, not an error (F12). Treat it like cancellation.
+                // that disposal is expected shutdown, not an error.
                 break;
             }
             catch (Exception ex)
@@ -208,7 +191,6 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
         {
             var delay = nextScheduledTime - _timeProvider.GetUtcNow();
 
-            // Se delay negativo, esegui subito
             if (delay < TimeSpan.Zero)
             {
 #if DEBUG
@@ -217,8 +199,6 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
                 return TimeSpan.Zero;
             }
 
-            // Limita delay massimo (come TimerScheduler originale)
-            // Previene problemi con delay molto lunghi
             if (delay > TimeSpan.FromHours(2))
             {
 #if DEBUG
@@ -233,7 +213,6 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
             return delay;
         }
 
-        // Coda vuota
 #if DEBUG
         LastCalculatedDelay = Timeout.InfiniteTimeSpan;
 #endif
@@ -244,7 +223,6 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
     {
         var now = _timeProvider.GetUtcNow();
 
-        // Dequeue tutti i task pronti
         while (_queue.TryPeek(out var item, out var scheduledTime) && scheduledTime <= now)
         {
             if (!_queue.TryDequeue(out item, out _))
@@ -259,10 +237,9 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
 
             if (result is EnqueueResult.QueueFull or EnqueueResult.DuplicateInProcess)
             {
-                // QueueFull: target queue saturated. DuplicateInProcess: our slot fired while the
-                // previous delivery of the same task was still unwinding (its registration not
-                // yet released). Either way: park the task and retry later WITHOUT blocking the
-                // loop, so tasks targeting other queues keep flowing (no head-of-line blocking).
+                // QueueFull: target queue saturated. DuplicateInProcess: the slot fired while the previous
+                // delivery of the same task was still unwinding. Retry later without stalling the loop, so
+                // tasks targeting other queues keep flowing.
                 _logger.TaskNotEnqueued(item.PersistenceId, result, FullQueueRetryDelay);
                 _queue.Enqueue(item, _timeProvider.GetUtcNow() + FullQueueRetryDelay);
             }

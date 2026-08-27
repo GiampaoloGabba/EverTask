@@ -1,12 +1,11 @@
 namespace EverTask.Scheduler.Occurrences;
 
-// EventId range 1800–1899 (OccurrenceMaterializer). Ranges are allocated per component in the #32 plan;
-// keep every new log line inside this range and never reuse an id.
+// EventId range 1800–1899 (OccurrenceMaterializer). Ranges are allocated per component (issue #32); keep
+// every new log line inside this range and never reuse an id.
 //
 // Unlike WorkerExecutor's, these are ordinary generator-guarded methods called directly: the materializer
 // runs outside a delivery, so it logs through its own category and publishes the monitoring counterpart as a
-// separate, already-rendered message. The one rule that still holds is the reason RegisterEvent exists —
-// never hand a rendered sentence to a logger as if it were a template.
+// separate, already-rendered message. Never hand a rendered sentence to a logger as if it were a template.
 internal static partial class OccurrenceMaterializerLog
 {
     [LoggerMessage(EventId = 1800, Level = LogLevel.Debug,
@@ -20,8 +19,7 @@ internal static partial class OccurrenceMaterializerLog
 
     // The three losses below are three different mistakes with three different fixes — a window too narrow for
     // the outage, a per-episode cap that kept only the newest slots, a skip policy doing what it says — so each
-    // has its own id and its own sentence. One line for all three said "outside the misfire window" over an
-    // overflow that no window had touched.
+    // has its own id and its own sentence.
     [LoggerMessage(EventId = 1802, Level = LogLevel.Warning,
         Message = "Schedule {ParentId} dropped {SkippedCount} due slot(s) (exact count: {IsExact}) from " +
                   "{FromUtc:O}: outside the misfire window")]

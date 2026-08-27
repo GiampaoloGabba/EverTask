@@ -55,7 +55,7 @@ internal static class ScheduleModifiers
 {
     /// <summary>
     /// Applies the selected policy and, when it replays missed work, turns the schedule durable: a replay
-    /// needs one durable row per slot, so the two are one decision (M3).
+    /// needs one durable row per slot, so the two are one decision.
     /// </summary>
     internal static void OnMisfire(RecurringTask task, Action<IMisfirePolicyBuilder> configure)
     {

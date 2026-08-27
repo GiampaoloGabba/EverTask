@@ -1,13 +1,13 @@
 namespace EverTask.Scheduler.Recurring;
 
 /// <summary>
-/// The calendar unit one occurrence of a schedule belongs to (M18): what a cursor has to stay inside when a
+/// The calendar unit one occurrence of a schedule belongs to: what a cursor has to stay inside when a
 /// reschedule rebases it.
 /// </summary>
 /// <remarks>
-/// Explicit rather than inferred at the rebase site, because inferring it is exactly the bug M18 exists to
-/// prevent: reading the old cursor literally on a new definition loses the logical day the moment the zone or
-/// the time of day changes, and reading it "approximately" crosses into the next period.
+/// Stated on the definition rather than inferred at the rebase site: reading the old cursor literally on a new
+/// definition loses the logical day the moment the zone or the time of day changes, and reading it
+/// "approximately" crosses into the next period.
 /// </remarks>
 internal enum SchedulePeriodKind
 {

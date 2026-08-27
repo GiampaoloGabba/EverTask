@@ -78,9 +78,8 @@ public class TaskQueryService(ITaskStorage storage, IRateLimiterIntrospection? r
 
         if (filter.OnlyCatchUp.HasValue)
         {
-            // Only an occurrence can stand for missed work, and which kind it stands for lives in that row's
-            // runtime JSON: the column test short-circuits the parse, so it runs over the occurrence rows
-            // and never over the whole store.
+            // Only an occurrence can stand for missed work, and which kind lives in that row's runtime JSON:
+            // the column test comes first so the parse never runs over the whole store.
             query = filter.OnlyCatchUp.Value
                         ? query.Where(t => t.ParentTaskId != null && StandsForMissedWork(t))
                         : query.Where(t => t.ParentTaskId == null || !StandsForMissedWork(t));
@@ -118,9 +117,8 @@ public class TaskQueryService(ITaskStorage storage, IRateLimiterIntrospection? r
         if (task == null)
             return null;
 
-        // The FIRST page of each trail, not the whole of it: the two blocks answer the same reads as the two
-        // endpoints, and a schedule that has run for a year holds a transition per state per run. The totals
-        // travel with them so a consumer knows there is more and where to ask for it.
+        // The FIRST page of each trail, never the whole of it: a schedule that has run for a year holds a
+        // transition per state per run. The totals travel with it so a consumer knows there is more.
         var statusAudits = await ReadStatusAuditsAsync(id, 0, ITaskQueryService.DefaultAuditPageSize, ct).ConfigureAwait(false);
         var runsAudits   = await ReadRunsAuditsAsync(id, 0, ITaskQueryService.DefaultAuditPageSize, ct).ConfigureAwait(false);
 
@@ -180,18 +178,10 @@ public class TaskQueryService(ITaskStorage storage, IRateLimiterIntrospection? r
         ReadRunsAuditsAsync(id, skip, take, ct);
 
     /// <summary>
-    /// One page of the row's status transitions, newest first, READ from the storage.
+    /// One page of the row's status transitions, newest first, READ from the storage — never off
+    /// <see cref="QueuedTask.StatusAudits"/>, which no storage read populates. Ordering and counting belong to
+    /// the storage too: slicing here would transfer a long-lived schedule's whole trail to show twenty rows.
     /// </summary>
-    /// <remarks>
-    /// Never off <see cref="QueuedTask.StatusAudits"/>: no storage read populates that navigation, so walking
-    /// it here answered the whole history over the in-memory store and an empty list over every relational
-    /// one — for a row whose audit table holds every transition it ever made.
-    /// <para>
-    /// The PAGE is the storage read, ordering and counting included, for the same reason as
-    /// <c>GetOccurrencesAsync</c>: the trail of a long-lived schedule holds one transition per state per run,
-    /// and slicing it here would transfer every one of them to show twenty.
-    /// </para>
-    /// </remarks>
     private async Task<StatusAuditsResponse> ReadStatusAuditsAsync(Guid id, int skip, int take,
                                                                    CancellationToken ct)
     {
@@ -291,9 +281,8 @@ public class TaskQueryService(ITaskStorage storage, IRateLimiterIntrospection? r
         (skip, take) = ClampPage(skip, take);
 
         // The PAGE is the storage read, ordering and counting included: a schedule with a year of retention
-        // behind it holds hundreds of thousands of occurrence rows, and slicing them here would mean
-        // transferring and sorting every one of them to show a hundred. The built-in providers answer it from
-        // the (ParentTaskId, ScheduledExecutionUtc) index the occurrence contract already needs.
+        // behind it holds hundreds of thousands of occurrence rows. The built-in providers answer it from the
+        // (ParentTaskId, ScheduledExecutionUtc) index the occurrence contract already needs.
         var page = await storage.GetOccurrencesPage(scheduleId, nonTerminalOnly, skip, take, ct)
                                  .ConfigureAwait(false);
 
@@ -320,9 +309,8 @@ public class TaskQueryService(ITaskStorage storage, IRateLimiterIntrospection? r
     }
 
     /// <summary>
-    /// What an occurrence reports when the row carries no readable metadata at all. Read returns one for every
-    /// row whose ParentTaskId is set, so this is the answer to a row that reached the endpoint without being
-    /// an occurrence — which the storage read cannot produce.
+    /// What an occurrence reports when the row carries no readable metadata at all — unreachable through the
+    /// storage read, which only returns rows whose ParentTaskId is set.
     /// </summary>
     private static readonly OccurrenceInfoDto UnreadableOccurrence =
         new(null, null, null, null, null, null, null, null);
@@ -368,12 +356,9 @@ public class TaskQueryService(ITaskStorage storage, IRateLimiterIntrospection? r
 
     /// <summary>
     /// The schedule version of a row that belongs to a schedule, and nothing at all for a row that does not.
+    /// The column exists on every row and defaults to 0, so it cannot answer this on its own: the schedule
+    /// fields must be absent together on a one-shot, which is how a consumer tells the two shapes apart.
     /// </summary>
-    /// <remarks>
-    /// The column exists on every row and defaults to 0, but a plain one-shot belongs to no schedule and no
-    /// version of one: reporting 0 there made "does this row carry schedule fields" answer yes for every task
-    /// in the store, which is exactly what a consumer uses those fields to tell apart.
-    /// </remarks>
     private static int? ScheduleVersionOf(QueuedTask row) =>
         row.IsRecurring || row.ParentTaskId != null ? row.ScheduleVersion : null;
 

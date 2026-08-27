@@ -7,31 +7,25 @@ namespace EverTask.Scheduler.Occurrences;
 /// occurrences right now. The whole misfire policy lives here; the materializer only writes what this decides.
 /// </summary>
 /// <remarks>
-/// Every count it takes is BOUNDED. A one-second grid left behind by a three-month downtime owes eight million
-/// slots, and no answer this class gives may cost eight million steps — so the caps are not a courtesy, they
-/// are what keeps a catch-up decision O(1) on a uniform grid and O(cap) on a calendar one.
-/// <para>
-/// The other half of that is WHEN a count is taken. A cap bounds what one episode of catch-up may owe (M10),
-/// not what one run may write, so a replay measures its backlog once and continues that measurement while it
-/// works through it — see <see cref="MeasureBacklogAsync"/> — and a run that may create nothing measures
-/// nothing at all.
-/// </para>
+/// Every count it takes is BOUNDED: a one-second grid left behind by a three-month downtime owes eight million
+/// slots, and the caps are what keep a catch-up decision O(1) on a uniform grid and O(cap) on a calendar one.
+/// A cap bounds what one episode may owe, not what one run may write, so a replay measures its backlog once
+/// and continues that measurement (<see cref="MeasureBacklogAsync"/>), and a run that may create nothing
+/// measures nothing at all.
 /// </remarks>
 /// <param name="evaluator">The grid.</param>
 /// <param name="misfireThreshold">
-/// How old a due slot has to be, at the moment it is materialized, before the occurrence it produces says it
-/// stands for MISSED work (M1). It is the same host-wide <c>SetMisfireThreshold</c> a delivery reports its own
-/// lateness against, applied one step earlier: here it decides what the DECISION records on the row, there
-/// what the delivery observes about itself.
+/// How old a due slot has to be, when it is materialized, before the occurrence it produces says it stands for
+/// missed work. The same host-wide <c>SetMisfireThreshold</c> a delivery reports its own lateness against,
+/// applied one step earlier: here it decides what the decision records on the row.
 /// </param>
 internal sealed class DueSlotEnumerator(IScheduleEvaluator evaluator, TimeSpan misfireThreshold)
 {
     /// <summary>
     /// Bound on the diagnostic counts (how many slots were dropped) for the grids that have to be WALKED. A
-    /// grid that counts by division is never capped — see <see cref="CountDueAsync"/> — and whenever this
-    /// bound does bite, the count travels as a lower bound and says so, so nobody reads 10,001 as a total.
-    /// It is also what a count with no cap of its own falls back to, for the same reason: a number nothing
-    /// bounds is a number nothing can declare exact.
+    /// grid that counts by division is never capped — see <see cref="CountDueAsync"/> — and when this bound
+    /// bites the count travels as a lower bound and says so, so nobody reads 10,001 as a total. A count with
+    /// no cap of its own falls back to it: a number nothing bounds is a number nothing can declare exact.
     /// </summary>
     private const int DiagnosticCountCap = 10_000;
 
@@ -54,10 +48,9 @@ internal sealed class DueSlotEnumerator(IScheduleEvaluator evaluator, TimeSpan m
     /// </summary>
     /// <remarks>
     /// A provider is not required to answer the same way twice, so a reading states a calendar as it was when
-    /// it was read. Continuing it is what makes a replay cost one walk of its backlog instead of one per
-    /// occurrence; re-taking it every so often is what keeps the cap decision from resting for ever on a
-    /// calendar somebody has rewritten underneath. The bound is what the insurance costs, amortized: one walk
-    /// of what is still owed per this many runs.
+    /// it was read. Continuing it makes a replay cost one walk of its backlog instead of one per occurrence;
+    /// re-taking it every so often keeps the cap decision from resting for ever on a calendar somebody has
+    /// rewritten underneath.
     /// </remarks>
     private const int MaxContinuedMeasurements = 500;
 
@@ -66,9 +59,8 @@ internal sealed class DueSlotEnumerator(IScheduleEvaluator evaluator, TimeSpan m
     /// of the same replay continues it instead of repeating it.
     /// </summary>
     /// <remarks>
-    /// One small entry per durable provider-driven schedule that is behind, taken by the run that continues it
-    /// and re-stored by the run that ends with a fresh reading, so a schedule leaves at most one behind. The
-    /// materializer forgets a schedule when it stops materializing it at all (<see cref="Forget"/>).
+    /// At most one entry per durable provider-driven schedule that is behind; the materializer drops it when
+    /// it stops materializing that schedule at all (<see cref="Forget"/>).
     /// </remarks>
     private readonly ConcurrentDictionary<Guid, BacklogReading> _backlogs = new();
 
@@ -115,11 +107,9 @@ internal sealed class DueSlotEnumerator(IScheduleEvaluator evaluator, TimeSpan m
             _ => await PlanSkipAsync(definition, cursorUtc, nowUtc, capacity, identity, ct).ConfigureAwait(false)
         };
 
-        // The run budget applies to whatever the policy chose: materializing the last allowed occurrence ends
-        // the series, and it must end in the same commit that creates it, so the cursor it leaves is null.
-        // The flag says WHY it is null, because the caller may end up writing that occurrence at a slot
-        // further along the grid — a slot the plan named may turn out to have a row already — and a budget
-        // that is spent stays spent wherever the write lands.
+        // Materializing the last allowed occurrence ends the series in the same commit that creates it, so
+        // the cursor it leaves is null. The flag says WHY it is null: the caller may write that occurrence at
+        // a slot further along the grid, and a budget that is spent stays spent wherever the write lands.
         if (remainingRuns != int.MaxValue && plan.Slots.Count >= remainingRuns)
         {
             plan = plan with
@@ -138,9 +128,9 @@ internal sealed class DueSlotEnumerator(IScheduleEvaluator evaluator, TimeSpan m
     /// none after it.
     /// </summary>
     /// <remarks>
-    /// What a run needs when it walks past a slot that already has an occurrence: the policy was decided for
-    /// this episode when the run planned it, nothing a walk does can change that decision, and the only
-    /// question left is where the grid goes next. One step, against the full plan a re-decision would cost.
+    /// What a run needs when it walks past a slot that already has an occurrence: the policy was decided when
+    /// the run planned it, so the only question left is where the grid goes next — one step, against the full
+    /// plan a re-decision would cost.
     /// </remarks>
     public async ValueTask<DateTimeOffset?> NextSlotAfterAsync(RecurringTask definition, DateTimeOffset slot,
                                                                ScheduleIdentity identity = default,
@@ -149,12 +139,12 @@ internal sealed class DueSlotEnumerator(IScheduleEvaluator evaluator, TimeSpan m
 
     /// <summary>
     /// The legacy policy, in durable clothing: run the slot only while it is still the current one, otherwise
-    /// move the cursor past everything that went by (M12).
+    /// move the cursor past everything that went by.
     /// </summary>
     /// <remarks>
-    /// "Still current" is decided on the NATURAL successor, bounds ignored — the same question the recovery
-    /// grace window asks, and for the same reason: the bounded successor is null both while the slot is
-    /// current and once the series has ended, and reading that null as the former runs a months-old slot.
+    /// "Still current" is decided on the NATURAL successor, bounds ignored, exactly as the recovery grace
+    /// window asks it: the bounded successor is null both while the slot is current and once the series has
+    /// ended, and reading that null as the former runs a months-old slot.
     /// </remarks>
     private async Task<DueSlotPlan> PlanSkipAsync(RecurringTask definition, DateTimeOffset cursorUtc,
                                                   DateTimeOffset nowUtc, int capacity, ScheduleIdentity identity,
@@ -190,16 +180,15 @@ internal sealed class DueSlotEnumerator(IScheduleEvaluator evaluator, TimeSpan m
     }
 
     /// <summary>
-    /// Collapses the whole run of due slots into ONE occurrence, at the most recent of them (M12). The age
-    /// window gates that one slot: when even the newest missed slot is too old, nothing fires at all.
+    /// Collapses the whole run of due slots into ONE occurrence, at the most recent of them. The age window
+    /// gates that one slot: when even the newest missed slot is too old, nothing fires at all.
     /// </summary>
     private async Task<DueSlotPlan> PlanFireOnceAsync(RecurringTask definition, MisfireSettings? settings,
                                                       DateTimeOffset cursorUtc, DateTimeOffset nowUtc, int capacity,
                                                       ScheduleIdentity identity, CancellationToken ct)
     {
-        // Nothing may be created and no age window can drop anything either: there is no decision left to
-        // take, so the backlog is neither counted nor probed. Every operational retry of a schedule whose
-        // window is full comes through here.
+        // No decision left to take, so the backlog is neither counted nor probed. Every operational retry of
+        // a schedule whose window is full comes through here.
         if (capacity == 0 && settings?.MaxAge is null)
             return new DueSlotPlan { NextCursorUtc = cursorUtc, StopReason = DueSlotStopReason.WindowFull };
 
@@ -241,7 +230,7 @@ internal sealed class DueSlotEnumerator(IScheduleEvaluator evaluator, TimeSpan m
     /// <summary>
     /// Replays the backlog one occurrence per slot, inside the three limits of <see cref="CatchUpOptions"/>:
     /// the age window drops what is too old, the per-episode cap decides whether the episode runs at all, and
-    /// the concurrency budget decides how much of it runs now (M10).
+    /// the concurrency budget decides how much of it runs now.
     /// </summary>
     private async Task<DueSlotPlan> PlanCatchUpAsync(RecurringTask definition, MisfireSettings settings,
                                                      DateTimeOffset cursorUtc, DateTimeOffset nowUtc, int capacity,
@@ -285,12 +274,10 @@ internal sealed class DueSlotEnumerator(IScheduleEvaluator evaluator, TimeSpan m
             firstEligible = eligibleSlot;
         }
 
-        // Nothing may be created here, and nothing that is still to be measured could change that: the cap
-        // decides whether a REPLAY may start, and a run with no budget starts none — it is the same early
-        // exit fire-once and skip take, one step later, because dropping a slot for its age needs no capacity
-        // while materializing one does. Over a provider grid this is the difference between one comparison
-        // and a walk of the whole backlog, repeated at every operational retry for as long as the occurrence
-        // holding the budget runs.
+        // Nothing may be created and nothing still to be measured could change that. One step later than the
+        // sibling exits, because dropping a slot for its age needs no capacity while materializing one does.
+        // Over a provider grid it is the difference between one comparison and a walk of the whole backlog,
+        // repeated at every operational retry for as long as the occurrence holding the budget runs.
         if (capacity == 0)
         {
             return new DueSlotPlan
@@ -301,9 +288,9 @@ internal sealed class DueSlotEnumerator(IScheduleEvaluator evaluator, TimeSpan m
             };
         }
 
-        // Bounded by construction: the count stops one past the cap, which is exactly what tells "at most the
-        // cap" from "more than the cap" without ever enumerating the backlog. A replay measures it ONCE and
-        // then continues that measurement, instead of re-walking what is left of it per occurrence.
+        // The count stops one past the cap, which is what tells "at most the cap" from "more than the cap"
+        // without enumerating the backlog. Measured ONCE per replay and then continued, instead of re-walking
+        // what is left of it per occurrence.
         var measurement = await MeasureBacklogAsync(definition, firstEligible, nowUtc, maxOccurrences, identity, ct)
                               .ConfigureAwait(false);
 
@@ -315,11 +302,9 @@ internal sealed class DueSlotEnumerator(IScheduleEvaluator evaluator, TimeSpan m
             if (settings.OverflowPolicy == CatchUpOverflowPolicy.Halt)
             {
                 // The breaker is about the SIZE of a replay, so it only fires where a replay of that size can
-                // happen. A series whose run budget cannot even reach the cap will create at most
-                // `remainingRuns` occurrences and then close, whatever the backlog holds — halting it instead
-                // writes a marker that by contract never releases itself, so an operator would have to resume
-                // a schedule for the sole purpose of spending its last run. The cap and the budget are two
-                // bounds on the same thing, and the smaller one is the one that decides.
+                // happen: a series whose run budget cannot reach the cap creates at most `remainingRuns`
+                // occurrences and closes. Halting it instead writes a marker that never releases itself, and
+                // an operator would have to resume the schedule just to spend its last run.
                 if (remainingRuns > maxOccurrences)
                 {
                     return new DueSlotPlan
@@ -335,10 +320,9 @@ internal sealed class DueSlotEnumerator(IScheduleEvaluator evaluator, TimeSpan m
             else
             {
                 // SkipOldest: keep only the most recent cap slots. The start is found by bisecting the INSTANT
-                // axis, each probe a bounded forward count, so a grid that owes millions of slots costs a few
-                // dozen probes instead of an enumeration. Deterministic grids only — every built-in one is.
-                // It runs whatever the run budget is: "the most recent matter" is the policy the caller chose,
-                // and a series down to its last run still owes them the newest slot rather than the oldest.
+                // axis, each probe a bounded forward count, so a grid owing millions of slots costs a few
+                // dozen probes instead of an enumeration. Deterministic grids only. Not short-circuited by
+                // the run budget: a series down to its last run still owes the newest slot, not the oldest.
                 var start = await FindNthSlotFromEndAsync(definition, firstEligible, nowUtc, maxOccurrences,
                                     identity, ct)
                                 .ConfigureAwait(false);
@@ -377,17 +361,14 @@ internal sealed class DueSlotEnumerator(IScheduleEvaluator evaluator, TimeSpan m
                                               .ConfigureAwait(false)
                              : firstEligible;
 
-        // The misfire is stamped on the rows this plan grants, so it is built only when there ARE rows and
-        // only when there is a backlog to describe: a schedule keeping up owes one slot inside the threshold
-        // and reports no misfire, and a plan whose window is full grants nothing at all — paying a bisection
-        // over the whole remaining backlog, at every operational retry, to close a range nobody would read.
+        // Built only when there ARE rows to stamp it on: a plan whose window is full grants nothing, and
+        // closing its range would cost a bisection over the whole backlog at every operational retry.
         OccurrenceMisfire? misfire = null;
 
         if (slots.Count > 0 && IsMissed(firstEligible, nowUtc, eligible.Count))
         {
-            // One slot is its own range, and asking for the newest of one costs a bisection to be told what
-            // the caller already holds. A continued measurement already knows where its backlog ends, so it
-            // does not pay that bisection either.
+            // One slot is its own range: asking for the newest of one costs a bisection to be told what the
+            // caller already holds. A continued measurement already knows where its backlog ends.
             var lastEligible = eligible.Count > 1
                                    ? newest ?? await LastEligibleSlotAsync(definition, firstEligible, nowUtc,
                                            identity, ct)
@@ -417,21 +398,13 @@ internal sealed class DueSlotEnumerator(IScheduleEvaluator evaluator, TimeSpan m
 
     /// <summary>
     /// Whether the backlog starting at <paramref name="oldestSlot"/> is MISSED work rather than a schedule
-    /// keeping up (M1).
+    /// keeping up.
     /// </summary>
     /// <remarks>
-    /// Two ways to be missed, and both have to be here. A slot that came due more than
-    /// <c>MisfireThreshold</c> ago is missed however alone it is — a single hourly slot replayed ten minutes
-    /// after an outage is exactly what a replaying policy exists for, and reporting it as an ordinary
-    /// occurrence left the handler to work that out from the delivery's own lateness. And a run of MORE than
-    /// one slot is missed however young it is: the policy is about to collapse or replay slots that nothing
-    /// ran, and P5 does not allow that to happen unreported just because a per-second grid fell two seconds
-    /// behind. So the threshold widens the definition and never narrows it (decisions §3.5).
-    /// </remarks>
-    /// <remarks>
-    /// Not private: the materializer asks the same question again when a run walks past slots that already
-    /// had a row, because the backlog it restates on the row it does create is a smaller one. Two copies of
-    /// this rule would drift the day the threshold moved.
+    /// Two ways to be missed, and both count: a slot older than <c>MisfireThreshold</c> is missed however
+    /// alone it is, and a run of more than one slot is missed however young it is, since the policy is about
+    /// to collapse or replay slots nothing ran. The threshold only ever widens the definition. Not private —
+    /// the materializer asks it again for the smaller backlog a walked run restates on the row it creates.
     /// </remarks>
     public bool IsMissed(DateTimeOffset oldestSlot, DateTimeOffset nowUtc, int dueCount) =>
         dueCount > 1 || nowUtc - oldestSlot > misfireThreshold;
@@ -445,10 +418,9 @@ internal sealed class DueSlotEnumerator(IScheduleEvaluator evaluator, TimeSpan m
     /// <c>now - age</c>, saturating instead of overflowing.
     /// </summary>
     /// <remarks>
-    /// An age window wider than the calendar is a legal value — <see cref="CatchUpOptions"/> only refuses a
-    /// non-positive one — and it means "never drop a slot for being old". Computed literally it throws, and it
-    /// throws again at every operational retry of that schedule, so the series would never materialize
-    /// anything again.
+    /// An age window wider than the calendar is legal (<see cref="CatchUpOptions"/> only refuses a
+    /// non-positive one) and means "never drop a slot for being old". Computed literally it throws, and it
+    /// would throw again at every operational retry, so the series would never materialize anything again.
     /// </remarks>
     private static DateTimeOffset AgeCutoff(DateTimeOffset nowUtc, TimeSpan age) =>
         age >= nowUtc - DateTimeOffset.MinValue ? DateTimeOffset.MinValue : nowUtc - age;
@@ -458,10 +430,9 @@ internal sealed class DueSlotEnumerator(IScheduleEvaluator evaluator, TimeSpan m
     /// <see cref="OccurrenceMisfire.MissedCount"/> counts.
     /// </summary>
     /// <remarks>
-    /// It is NOT the last slot the plan materializes: the concurrency budget usually truncates that to one,
-    /// and a range of one slot carrying a count of five would be two halves of the same record contradicting
-    /// each other. Found by the same instant-axis bisection the rest of this class uses. The caller must
-    /// already know there is more than one due slot.
+    /// NOT the last slot the plan materializes: the concurrency budget usually truncates that to one, and a
+    /// range of one slot carrying a count of five is a record contradicting itself. The caller must already
+    /// know there is more than one due slot.
     /// </remarks>
     private async ValueTask<DateTimeOffset> LastEligibleSlotAsync(RecurringTask definition,
                                                                   DateTimeOffset firstEligible,
@@ -489,10 +460,9 @@ internal sealed class DueSlotEnumerator(IScheduleEvaluator evaluator, TimeSpan m
     /// </summary>
     /// <remarks>
     /// The cap is lifted for a grid that counts by division: it costs one subtraction there, and capping it
-    /// would turn "a three-month outage lost 7,900,000 runs" into "it lost 10,001" with nothing to say which
-    /// of the two the number is. Where the cap does apply the walk spends it in full — a cap of twenty
-    /// thousand is answered by twenty thousand steps, not by the walk's own smaller bound — the count stops
-    /// one past it, and <see cref="SlotCount.IsExact"/> is what keeps that from being reported as a total.
+    /// would turn "a three-month outage lost 7,900,000 runs" into "it lost 10,001". Where the cap applies the
+    /// walk spends the caller's own in full — a second, smaller bound makes every larger answer read as a
+    /// total — and <see cref="SlotCount.IsExact"/> keeps a truncated count from being reported as one.
     /// </remarks>
     private async ValueTask<SlotCount> CountDueAsync(RecurringTask definition, DateTimeOffset fromSlot,
                                                      DateTimeOffset through, int cap, ScheduleIdentity identity,
@@ -503,10 +473,9 @@ internal sealed class DueSlotEnumerator(IScheduleEvaluator evaluator, TimeSpan m
 
         var countsExactly = definition.CountsMissedInConstantTime();
 
-        // A walked grid is never asked for an UNCAPPED count: int.MaxValue means "no cap", the walk keeps a
-        // bound of its own for that ask, and an answer that stops there is a lower bound wearing the shape of
-        // a total. MaxOccurrences is an int and may well be int.MaxValue — a cap no backlog can exceed, so
-        // the decision is unaffected either way, but the number it reports has to stay honest.
+        // A walked grid is never asked for an UNCAPPED count: int.MaxValue means "no cap", so the walk keeps
+        // a bound of its own and an answer that stops there is a lower bound wearing the shape of a total.
+        // MaxOccurrences is an int and may well BE int.MaxValue.
         var walkCap = WalkCapFor(definition, cap);
 
         var count = await evaluator
@@ -535,22 +504,17 @@ internal sealed class DueSlotEnumerator(IScheduleEvaluator evaluator, TimeSpan m
     /// How many slots the backlog of a catch-up holds, and where it ENDS.
     /// </summary>
     /// <remarks>
-    /// The cap bounds what one EPISODE of catch-up may owe (M10), and "is the backlog bigger than the cap?"
-    /// costs one question per slot on a grid made of round trips: counting a chain has no cheaper answer. Asked
-    /// again on every run, that made a replay quadratic in its own backlog — 360 owed slots cost 360 questions
-    /// to materialize the first occurrence, 359 for the second, and so on, all of it before a single row was
-    /// written. So a run keeps what it measured, and the next run of the same replay CONTINUES it: it asks only
-    /// about the stretch that came due since, which is what a schedule keeping up owes anyway. The numbers are
-    /// the ones a full walk would have produced — the cap decision, the count stamped on the row and its
-    /// exactness alike — because the count of a chain is the sum of its parts.
+    /// The cap bounds what one EPISODE may owe, and "is the backlog bigger than the cap?" costs one question
+    /// per slot on a grid made of round trips. Asked again on every run that makes a replay quadratic in its
+    /// own backlog, so a run keeps what it measured and the next run CONTINUES it, asking only about the
+    /// stretch that came due since — the numbers are the ones a full walk would have produced, since the
+    /// count of a chain is the sum of its parts.
     /// <para>
-    /// Only where a step is a round trip. A built-in grid either counts by division or walks its own arithmetic
-    /// in memory, and neither is worth remembering — those keep the plain count they always took, answer for
-    /// answer. A reading is continued only when this run picks up exactly where the last one left the cursor,
-    /// on the same grid, no earlier than it was taken; a rewound cursor, a reschedule, another host winning
-    /// the write, a restart or a served-slot walk all fall back to the full count. And it is carried for at
-    /// most <see cref="MaxContinuedMeasurements"/> runs, because a provider is not required to answer the same
-    /// way twice.
+    /// Only where a step is a round trip: a built-in grid counts by division or walks in memory. A reading is
+    /// continued only when this run picks up exactly where the last one left the cursor, on the same grid, no
+    /// earlier than it was taken — a rewound cursor, a reschedule, another host winning the write, a restart
+    /// or a served-slot walk all fall back to the full count — and for at most
+    /// <see cref="MaxContinuedMeasurements"/> runs, since a provider may answer differently twice.
     /// </para>
     /// </remarks>
     private async ValueTask<BacklogMeasurement> MeasureBacklogAsync(RecurringTask definition,
@@ -562,21 +526,17 @@ internal sealed class DueSlotEnumerator(IScheduleEvaluator evaluator, TimeSpan m
         {
             var walkCap = WalkCapFor(definition, cap);
 
-            // Enough room to tell "at most the cap" from "more than the cap" and not one step further: what
-            // the previous run already counted plus what the walk finds is the same total, under the same
-            // bound, as counting the whole stretch again.
+            // Enough room to tell "at most the cap" from "more than the cap" and not one step further.
             var room  = Math.Max(0, walkCap - reading.Remaining) + 1;
             var since = await WalkForwardAsync(definition, reading.NewestSlotUtc, nowUtc, room, identity, ct)
                             .ConfigureAwait(false);
 
             var total = reading.Remaining + since.Count;
 
-            // Continuing holds together only while the grid still puts its slots where the reading left them.
-            // A backlog that no longer owes even the slot the cursor names, or whose newest slot has moved
-            // BEHIND that cursor, is a calendar rewritten under the reading — and then what the previous walk
-            // paid for is worth nothing, so the backlog is measured again from scratch. A plain count anchors
-            // on the cursor and so is never empty; this has to answer the same way or a plan would grant
-            // nothing and re-park on the slot it just refused to see.
+            // A backlog that no longer owes the slot the cursor names, or whose newest slot moved BEHIND that
+            // cursor, is a calendar rewritten under the reading: measure again from scratch. A plain count
+            // anchors on the cursor and is never empty, and this must answer the same way or a plan would
+            // grant nothing and re-park on the slot it just refused to see.
             if (total > 0 && since.NewestUtc >= firstEligible)
             {
                 return new BacklogMeasurement(new SlotCount(Math.Min(total, walkCap + 1), total <= walkCap),
@@ -586,9 +546,8 @@ internal sealed class DueSlotEnumerator(IScheduleEvaluator evaluator, TimeSpan m
 
         var counted = await CountDueAsync(definition, firstEligible, nowUtc, cap, identity, ct).ConfigureAwait(false);
 
-        // A single due slot IS the newest one, which is the one thing a full count can hand over for free.
-        // Anything else is left to whoever needs it: closing the misfire range costs a bisection, and a plan
-        // with no range to close must not pay for one.
+        // A single due slot IS the newest one, the one thing a full count hands over for free. Anything else
+        // costs a bisection, and a plan with no range to close must not pay for one.
         return new BacklogMeasurement(counted, counted.Count == 1 ? firstEligible : null, 0);
     }
 
@@ -622,9 +581,8 @@ internal sealed class DueSlotEnumerator(IScheduleEvaluator evaluator, TimeSpan m
     /// Keeps what this run measured for the next one, when there is anything left to continue.
     /// </summary>
     /// <remarks>
-    /// Nothing is kept unless the count is a TOTAL: arithmetic on a lower bound produces a number that says it
-    /// is exact and is not. Nor unless the plan knows where the backlog ends and where the cursor is going —
-    /// a series that ends here has no next run to hand anything to.
+    /// Nothing is kept unless the count is a TOTAL: arithmetic on a lower bound produces a number that claims
+    /// to be exact and is not. Nor unless the plan knows where the backlog ends and where the cursor goes.
     /// </remarks>
     private void RememberBacklog(RecurringTask definition, ScheduleIdentity identity, DateTimeOffset? resumeAtUtc,
                                  DateTimeOffset nowUtc, DateTimeOffset? newestSlotUtc, int remaining, bool isExact,
@@ -651,9 +609,9 @@ internal sealed class DueSlotEnumerator(IScheduleEvaluator evaluator, TimeSpan m
     /// one grid step at a time up to <paramref name="limit"/> of them, with the newest one reached.
     /// </summary>
     /// <remarks>
-    /// The same walk, step for step and stopping rule for stopping rule, that a bounded count over a provider
-    /// grid makes — this one keeps the slot it stopped on, which is what lets the next measurement start where
-    /// this one ended instead of at the beginning of the backlog.
+    /// The same walk a bounded count over a provider grid makes, step for step and stopping rule for stopping
+    /// rule; this one keeps the slot it stopped on, so the next measurement starts there instead of at the
+    /// beginning of the backlog.
     /// </remarks>
     private async ValueTask<(int Count, DateTimeOffset NewestUtc, bool Bounded)> WalkForwardAsync(
         RecurringTask definition, DateTimeOffset from, DateTimeOffset through, int limit, ScheduleIdentity identity,
@@ -701,27 +659,21 @@ internal sealed class DueSlotEnumerator(IScheduleEvaluator evaluator, TimeSpan m
     /// <paramref name="firstSlot"/> and <paramref name="nowUtc"/>.
     /// </summary>
     /// <remarks>
-    /// The count of slots strictly after an instant only ever decreases as that instant moves forward, and it
-    /// steps down by exactly one at each slot — so the boundary where it equals <paramref name="n"/> is the
-    /// slot we want, and a plain binary search finds it. Each probe is a forward count bounded at
-    /// <paramref name="n"/>, which is what makes the whole thing affordable on a grid whose backlog nobody can
-    /// afford to enumerate. The caller must already know there are MORE than <paramref name="n"/> due slots.
+    /// The count of slots strictly after an instant decreases by exactly one at each slot as that instant
+    /// moves forward, so the boundary where it equals <paramref name="n"/> is the slot wanted and a binary
+    /// search finds it. Each probe is a forward count bounded at <paramref name="n"/>. The caller must
+    /// already know there are MORE than <paramref name="n"/> due slots.
     /// <para>
-    /// It stops at the FIRST probe that counts exactly <paramref name="n"/>, which is the answer and not an
-    /// approximation of it: an instant with exactly <paramref name="n"/> slots after it has the one we want
-    /// as its successor, whether or not the interval has been narrowed to a single tick. Running the search
-    /// to its tick-level end instead spent the whole budget every time — sixty probes where the count-equals-n
-    /// window is reached in a number of steps proportional to the number of slots in the range — and on a
-    /// provider grid every one of those probes is a pair of round trips.
+    /// It stops at the FIRST probe counting exactly <paramref name="n"/>, which is the answer and not an
+    /// approximation: an instant with exactly that many slots after it has the wanted one as its successor,
+    /// narrowed to a single tick or not. Running to the tick-level end spends the whole probe budget every
+    /// time, and on a provider grid each probe is a pair of round trips.
     /// </para>
     /// <para>
-    /// That bounds the number of probes, not their COST, and on a grid whose every step is a round trip the
-    /// two multiply: each probe counts up to <paramref name="n"/><c> + 1</c> slots, so a cap of a few thousand
-    /// used to be a few thousand queries PER PROBE. The probes walk the same stretch of chain over and over,
-    /// so the walk is memoized below and no instant is ever asked about twice — which makes the whole search
-    /// cost at most one question per slot it looks at, never more than walking the backlog once. It is sound
-    /// for exactly the grids this policy accepts: a provider that would answer differently the second time is
-    /// one <c>SkipOldest</c> refuses at dispatch (M10/V1).
+    /// The probe count and the per-probe cost would otherwise multiply on a grid made of round trips, so the
+    /// chain the probes re-walk is memoized below and no instant is asked about twice — the whole search then
+    /// costs at most one question per slot it looks at. Sound for exactly the grids this policy accepts: a
+    /// provider that would answer differently the second time is one <c>SkipOldest</c> refuses at dispatch.
     /// </para>
     /// </remarks>
     private async Task<DateTimeOffset?> FindNthSlotFromEndAsync(RecurringTask definition, DateTimeOffset firstSlot,
@@ -731,9 +683,8 @@ internal sealed class DueSlotEnumerator(IScheduleEvaluator evaluator, TimeSpan m
         var lo = firstSlot.UtcTicks;
         var hi = nowUtc.UtcTicks;
 
-        // Only where a step costs a round trip. A built-in grid either counts by division — one subtraction,
-        // nothing to remember — or walks its own arithmetic in memory, and both keep the primitive they have
-        // always used.
+        // Only where a step costs a round trip: a built-in grid counts by division or walks in memory, and
+        // neither is worth remembering.
         var chain = definition.Provider is null ? null : new Dictionary<DateTimeOffset, DateTimeOffset?>();
 
         for (var i = 0; i < MaxBisectionSteps && hi - lo > 1; i++)
@@ -771,9 +722,8 @@ internal sealed class DueSlotEnumerator(IScheduleEvaluator evaluator, TimeSpan m
                        : await CountRememberingTheChainAsync(slot).ConfigureAwait(false);
         }
 
-        // The bounded forward count CountMissedAsync makes over a provider grid, step for step — same
-        // ceiling, same stopping rules — with the answers kept, so the stretch every later probe walks again
-        // is already paid for.
+        // The bounded forward count CountMissedAsync makes over a provider grid, step for step, with the
+        // answers kept so the stretch every later probe re-walks is already paid for.
         async ValueTask<int> CountRememberingTheChainAsync(DateTimeOffset from)
         {
             var walked = await BoundedOccurrenceWalker

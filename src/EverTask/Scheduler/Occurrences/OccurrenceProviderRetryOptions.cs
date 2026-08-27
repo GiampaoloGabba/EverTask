@@ -2,7 +2,7 @@ namespace EverTask.Scheduler.Occurrences;
 
 /// <summary>
 /// How long a schedule waits before asking its <see cref="INextOccurrenceProvider"/> again, after the provider
-/// could not answer (V4).
+/// could not answer.
 /// </summary>
 /// <remarks>
 /// A provider failure is transient by contract — the application's own database being briefly unavailable must

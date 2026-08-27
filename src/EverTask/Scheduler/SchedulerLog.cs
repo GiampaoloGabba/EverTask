@@ -1,7 +1,8 @@
 namespace EverTask.Scheduler;
 
 // EventId range 1400–1499 (PeriodicTimerScheduler / ShardedScheduler, including its nested Shard).
-// Ranges are allocated per component in the #32 plan; a reflection test asserts solution-wide uniqueness.
+// Ranges are allocated per component (issue #32); keep every new log line inside this range and never reuse
+// an id.
 internal static partial class SchedulerLog
 {
     // --- PeriodicTimerScheduler ---------------------------------------------------------------

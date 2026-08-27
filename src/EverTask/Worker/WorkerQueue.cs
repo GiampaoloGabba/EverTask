@@ -10,16 +10,13 @@ public class WorkerQueue : IWorkerQueue
     private readonly IWorkerBlacklist _workerBlacklist;
     private readonly ITaskStorage? _taskStorage;
 
-    // The scheduling clock (P9): the conditional recovery transition must judge RunUntil against the SAME
-    // instant as the recovery filter that selected the row, never the storage's own reading of the clock.
+    // The conditional recovery transition must judge RunUntil against the SAME instant as the recovery
+    // filter that selected the row, never the storage's own reading of the clock.
     private readonly TimeProvider _timeProvider;
 
-    // Per-process delivery registry: an id is registered from the channel write until its
-    // delivery terminally ends (WorkerExecutor.DoWork outer finally). A second write of the
-    // same id is rejected here, which makes in-process double delivery impossible by
-    // construction (startup recovery racing a live dispatch, scheduler slot fires, taskKey
-    // re-dispatch). Shared across all queues of the host; hand-constructed queues (tests)
-    // fall back to a private instance.
+    // An id is registered from the channel write until its delivery terminally ends
+    // (WorkerExecutor.DoWork outer finally); a second write of the same id is rejected here. Shared
+    // across all queues of the host — a task rerouted to another queue is the same task.
     private readonly TaskDeliveryRegistry _deliveryRegistry;
 
     /// <summary>
@@ -39,9 +36,9 @@ public class WorkerQueue : IWorkerQueue
     public int Capacity => Configuration.ChannelOptions.Capacity;
 
     /// <summary>
-    /// Optional parking-lot accounting hook (set by WorkerQueueManager): a successful channel
-    /// write un-parks the task — the consumer-independent decrement that keeps the L2
-    /// backpressure from wedging. No-op for tasks that were never parked.
+    /// Parking-lot accounting hook: a successful channel write un-parks the task, the
+    /// consumer-independent decrement that keeps the rate-limit backpressure from wedging. No-op for
+    /// tasks that were never parked.
     /// </summary>
     internal RateLimitParkingLot? ParkingLot { get; set; }
 
@@ -58,8 +55,8 @@ public class WorkerQueue : IWorkerQueue
 
     /// <summary>
     /// <see cref="WorkerQueue(QueueConfiguration,ILogger,IWorkerBlacklist,ITaskStorage,TaskDeliveryRegistry)"/>
-    /// on an explicit scheduling clock (P9). The pre-P9 arity above is kept as a real overload so an assembly
-    /// compiled against the previous release still binds (P6/X6).
+    /// on an explicit scheduling clock. The shorter arity above is kept as a real overload so an assembly
+    /// compiled against the previous release still binds.
     /// </summary>
     public WorkerQueue(
         QueueConfiguration configuration,
@@ -77,10 +74,8 @@ public class WorkerQueue : IWorkerQueue
         _timeProvider = timeProvider ?? TimeProvider.System;
 
         Name = configuration.Name;
-        // The itemDropped callback fires for items silently dropped by the Drop* full modes (never
-        // invoked under FullMode.Wait): it releases the delivery registration (or the dropped id would
-        // stay registered forever, blocking later re-deliveries) AND reverts the victim's storage row
-        // to WaitingQueue so it stays recoverable instead of being silently lost (CU5/L12).
+        // The itemDropped callback fires only under the Drop* full modes: without it a dropped id stays
+        // registered for ever and its row stays Queued, so the task is neither delivered nor recovered.
         _queue = Channel.CreateBounded<TaskHandlerExecutor>(
             configuration.ChannelOptions,
             OnItemDropped);
@@ -90,14 +85,13 @@ public class WorkerQueue : IWorkerQueue
     {
         _deliveryRegistry.End(dropped.PersistenceId);
 
-        // The evicted copy will never be delivered, so this is the last hand that holds its EAGER handler
-        // scope (L27). Fire-and-forget for the same reason as the revert below: the drop callback is
-        // synchronous, and the eviction decision is already made either way.
+        // The evicted copy is never delivered, so this is the last hand holding its eager handler scope.
+        // Fire-and-forget like the revert below: the drop callback is synchronous and the eviction has
+        // already happened either way.
         _ = DroppedDelivery.ReleaseAsync(dropped, _logger).AsTask();
 
-        // A Drop* full mode evicted a persisted task whose storage row is still Queued (it looks
-        // enqueued forever and never runs in this process). Revert it to WaitingQueue so startup
-        // recovery rescues it. Best-effort fire-and-forget — the channel drop callback is synchronous.
+        // The evicted row is still Queued — it would look enqueued for ever and never run. Revert it to
+        // WaitingQueue so startup recovery rescues it.
         if (_taskStorage != null)
             _ = RevertDroppedToWaitingQueueAsync(dropped);
     }
@@ -145,23 +139,15 @@ public class WorkerQueue : IWorkerQueue
         => QueueCore(task, enforceRecoverable: false, cancellationToken);
 
     /// <summary>
-    /// Blocking enqueue used by the startup recovery: the SetQueued transition is CONDITIONAL on
-    /// the row still being in a recoverable status, so a task whose live copy terminally finished
-    /// after the recovery's page read is never resurrected.
+    /// Blocking enqueue used by the startup recovery: the SetQueued transition is CONDITIONAL on the row
+    /// still being recoverable, so a task whose live copy terminally finished is never resurrected.
     /// </summary>
     internal ValueTask QueueForRecovery(TaskHandlerExecutor task, CancellationToken cancellationToken = default)
         => QueueCore(task, enforceRecoverable: true, cancellationToken);
 
-    /// <summary>
-    /// Whether this delivery has been cancelled — by its own id, or by the DURABLE SCHEDULE it is an
-    /// occurrence of.
-    /// </summary>
-    /// <remarks>
-    /// Cancelling a schedule cancels its pending occurrences in storage, but an occurrence already parked in
-    /// the scheduler carries no blacklist entry of its own: without the second check its enqueue would write
-    /// Queued over the Cancelled the cancel had just persisted, and it would run. The schedule's entry covers
-    /// every occurrence it produced, so it is never consumed here.
-    /// </remarks>
+    // Also asks the durable SCHEDULE: an occurrence already parked in the scheduler when the cancel landed
+    // carries no blacklist entry of its own. The schedule's entry covers every occurrence it produced, so
+    // it is never consumed here.
     private bool IsCancelled(TaskHandlerExecutor task) =>
         _workerBlacklist.IsBlacklisted(task.PersistenceId)
         || (task.ParentTaskId is { } scheduleId && _workerBlacklist.IsBlacklisted(scheduleId));
@@ -249,10 +235,8 @@ public class WorkerQueue : IWorkerQueue
 
     /// <summary>
     /// Non-blocking enqueue used by the schedulers (a due slot fires): the SetQueued transition is
-    /// CONDITIONAL on the row still being recoverable, so a stale slot for a row that terminally
-    /// finished after its registration is never resurrected (the scheduler-boundary analogue of the
-    /// startup-recovery defense). Returns <see cref="EnqueueResult.Discarded"/> when the row is no
-    /// longer recoverable (nothing is written anywhere).
+    /// CONDITIONAL on the row still being recoverable, so a stale slot never resurrects a row that
+    /// terminally finished. Returns <see cref="EnqueueResult.Discarded"/> when it is not, writing nothing.
     /// </summary>
     internal ValueTask<EnqueueResult> TryQueueForRecovery(TaskHandlerExecutor task, CancellationToken cancellationToken = default)
         => TryQueueCore(task, enforceRecoverable: true, cancellationToken);
@@ -280,36 +264,28 @@ public class WorkerQueue : IWorkerQueue
             return EnqueueResult.QueueFull;
         }
 
-        // A delivery of this id is already in flight in this process: NOT a success lie — the
-        // caller decides (schedulers retry shortly like QueueFull, because their slot may have
-        // fired while the previous delivery of the same task was still unwinding; live dispatch
-        // treats it as idempotent success).
+        // Already in flight in this process. The caller decides what that means: a scheduler retries
+        // shortly (its slot may have fired while the previous delivery was still unwinding), a live
+        // dispatch treats it as idempotent success.
         if (!_deliveryRegistry.TryBegin(task.PersistenceId, task.ParentTaskId))
         {
             _logger.DuplicateDeliveryNotEnqueued(task.PersistenceId, Name);
             return EnqueueResult.DuplicateInProcess;
         }
 
-        // Mark as Queued BEFORE writing: once the task is in the channel a consumer can execute it
-        // immediately, and a late SetQueued would overwrite InProgress/Completed (causing a duplicate
-        // re-execution at the next startup recovery).
-        //
-        // EXCEPT for a schedule retry (V4). That delivery runs no handler: it re-reads the row and re-runs
-        // the decision an occurrence provider could not answer, and V4's promise is that a schedule waiting
-        // on its calendar has NOTHING written for it — the row keeps the status and the cursor an outage
-        // found it in, which is the whole reason a crash during one costs only the wait. A Queued transition
-        // plus a StatusAudit row per retry, for ever, is a state write; and the recoverable check it comes
-        // with is not lost, only moved to where the retry can act on it — RetryScheduleDecisionAsync re-reads
-        // the row and abandons a schedule that was cancelled, removed or finished under the wait.
+        // Mark as Queued BEFORE writing: once in the channel a consumer can execute immediately, and a late
+        // SetQueued would overwrite InProgress/Completed and have startup recovery re-execute the task.
+        // A schedule retry is exempt because it must write NOTHING — it runs no handler, only re-runs a
+        // decision the occurrence provider could not answer, over a row that keeps the status and cursor the
+        // outage found it in. The recoverable check moves to RetryScheduleDecisionAsync.
         if (_taskStorage != null && !task.IsScheduleRetry)
         {
             try
             {
                 if (enforceRecoverable)
                 {
-                    // Scheduler slot fired: only transition if the row is still recoverable. Refused =
-                    // the row terminally finished since the slot was registered — release the
-                    // registration and skip (nothing was written anywhere).
+                    // Refused = the row terminally finished since the slot was registered: release the
+                    // registration and skip, nothing was written anywhere.
                     if (!await _taskStorage.TrySetQueuedIfRecoverable(_timeProvider.GetUtcNow(), task.PersistenceId, task.AuditLevel, cancellationToken).ConfigureAwait(false))
                     {
                         _deliveryRegistry.End(task.PersistenceId);
@@ -338,11 +314,9 @@ public class WorkerQueue : IWorkerQueue
             return EnqueueResult.Enqueued;
         }
 
-        // The queue filled up between the capacity check and the write: revert to WaitingQueue so the
-        // task stays visible to startup recovery instead of looking enqueued forever. The revert is
-        // CONDITIONAL (compare-and-set: only if the row is still Queued) and the delivery registration
-        // is released ONLY AFTER it — so a successor delivery in this window is rejected as a duplicate
-        // instead of racing the revert and being clobbered back to WaitingQueue (CU1/L21).
+        // The queue filled up between the capacity check and the write: revert to WaitingQueue so the task
+        // stays visible to startup recovery. The registration is released only AFTER the revert, or a
+        // successor delivery races it and is clobbered back to WaitingQueue.
         _logger.QueueFull(Name, task.PersistenceId);
 
         if (_taskStorage != null)
@@ -361,12 +335,9 @@ public class WorkerQueue : IWorkerQueue
         return EnqueueResult.QueueFull;
     }
 
-    /// <summary>
-    /// Compare-and-set revert: downgrades the row to WaitingQueue ONLY if it is still Queued (the
-    /// status this enqueue wrote). A successor delivery that already advanced it to InProgress/
-    /// Completed must not be clobbered back to a recoverable status — that lost update would
-    /// re-execute it at the next startup recovery (CU1/L21).
-    /// </summary>
+    // Downgrades the row ONLY if it is still Queued: a successor delivery that already advanced it to
+    // InProgress/Completed must not be clobbered back to a recoverable status, which would re-execute it
+    // at the next startup recovery.
     private async Task RevertToWaitingQueueIfStillQueued(TaskHandlerExecutor task, CancellationToken cancellationToken)
     {
         var current = (await _taskStorage!.Get(t => t.Id == task.PersistenceId, cancellationToken).ConfigureAwait(false))
@@ -381,9 +352,8 @@ public class WorkerQueue : IWorkerQueue
               .ConfigureAwait(false);
     }
 
-    // NOTE: dequeue does NOT release the delivery registration. The registration survives the
-    // dequeue->execution window on purpose (it is what makes a concurrent recovery re-delivery
-    // impossible) and is released as the LAST act of WorkerExecutor.DoWork.
+    // Dequeue does NOT release the delivery registration: it survives the dequeue-to-execution window on
+    // purpose, and is released as the LAST act of WorkerExecutor.DoWork.
     public async Task<TaskHandlerExecutor> Dequeue(CancellationToken cancellationToken)
     {
         return await _queue.Reader.ReadAsync(cancellationToken).ConfigureAwait(false);

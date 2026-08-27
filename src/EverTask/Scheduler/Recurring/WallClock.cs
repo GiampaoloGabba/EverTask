@@ -9,14 +9,14 @@ internal enum WallMappingKind
     Exact = 0,
 
     /// <summary>
-    /// The wall time is repeated by a DST fall-back and the FIRST pass was taken (T7) — the one with the
-    /// larger offset, which is the earlier of the two instants.
+    /// The wall time is repeated by a DST fall-back and the FIRST pass was taken — the one with the larger
+    /// offset, which is the earlier of the two instants.
     /// </summary>
     Ambiguous = 1,
 
     /// <summary>
-    /// The wall time does not exist (a DST gap) and the slot was moved to the first local tick that does
-    /// (T6). Several nominal slots inside one gap therefore land on the same instant.
+    /// The wall time does not exist (a DST gap) and the slot was moved to the first local tick that does.
+    /// Several nominal slots inside one gap therefore land on the same instant.
     /// </summary>
     Shifted = 2
 }
@@ -26,17 +26,15 @@ internal enum WallMappingKind
 /// </summary>
 /// <param name="Utc">The instant, in UTC.</param>
 /// <param name="Consumed">
-/// True when the instant is at or before the one the walk started from. The caller must NOT return it: it is
-/// either a slot a DST gap collapsed onto an instant already served, or the second reading of a repeated hour.
-/// The walk continues from the NOMINAL wall slot, never from this instant (T7) — advancing from a shifted
-/// instant would skip the slots the gap swallowed.
+/// True when the instant is at or before the one the walk started from: a slot a DST gap collapsed onto an
+/// instant already served, or the second reading of a repeated hour. The caller must NOT return it, and must
+/// continue from the NOMINAL wall slot — advancing from a shifted instant would skip the swallowed slots.
 /// </param>
 /// <param name="Kind">Which of the three cases produced <paramref name="Utc"/>.</param>
 /// <param name="CollapsedCount">
-/// How many further nominal slots this instant stands for — the "compressed slots" counter of T6.
-/// <see cref="WallClock.ToUtc"/> is handed one slot at a time and always answers 0; the grid walk that folds
-/// the consumed ones into a single occurrence (<c>RecurringTask.NextGridOccurrenceInZone</c>) reports its own
-/// tally here, and that is what reaches the log.
+/// How many further nominal slots this instant stands for. <see cref="WallClock.ToUtc"/> is handed one slot at
+/// a time and always answers 0; the grid walk that folds the consumed ones into a single occurrence
+/// (<c>RecurringTask.NextGridOccurrenceInZone</c>) reports its own tally here.
 /// </param>
 internal readonly record struct WallMapping(
     DateTimeOffset Utc,
@@ -67,8 +65,8 @@ internal static class WallClock
         TimeZoneInfo.ConvertTime(utc, zone);
 
     /// <summary>
-    /// The instant a nominal wall-clock slot stands for in <paramref name="zone"/>, with the DST rules of T6
-    /// and T7 applied.
+    /// The instant a nominal wall-clock slot stands for in <paramref name="zone"/>, with the DST gap and
+    /// fall-back rules applied.
     /// </summary>
     /// <param name="wallNominal">
     /// The slot as the schedule's calendar produced it — a local date and time, with no offset attached.

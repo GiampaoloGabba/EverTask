@@ -4,20 +4,14 @@ namespace EverTask.Scheduler.Occurrences;
 
 /// <summary>
 /// What <c>AddOccurrenceProvider&lt;T&gt;(key)</c> registered, and the one place a provider is resolved and
-/// called (V2).
+/// called.
 /// </summary>
 /// <remarks>
 /// A schedule row names a KEY, so this is the indirection that turns it back into an implementation. The
-/// resolution happens in a FRESH SCOPE per call, which is what lets a provider depend on scoped services — a
-/// DbContext holding the holiday table is the ordinary case — without any of them outliving the question they
-/// were built to answer.
-/// <para>
-/// The scope is disposed ASYNCHRONOUSLY, like every other scope this library builds around user code. A
-/// scoped dependency that implements only <see cref="IAsyncDisposable"/> — the shape a DbContext or a
-/// repository often has — makes the synchronous disposal throw, and that throw happens after the provider
-/// has answered perfectly well: it would be classified as a transient provider failure, so the schedule
-/// would re-park and ask again for ever while every log line blamed a provider that never failed.
-/// </para>
+/// resolution happens in a FRESH SCOPE per call, so a provider may depend on scoped services without any of
+/// them outliving the question they were built to answer. The scope is disposed ASYNCHRONOUSLY: a scoped
+/// dependency implementing only <see cref="IAsyncDisposable"/> throws on synchronous disposal, and that throw
+/// would be classified as a transient provider failure of a provider that answered perfectly well.
 /// </remarks>
 internal sealed class OccurrenceProviderRegistry(
     EverTaskServiceConfiguration options,

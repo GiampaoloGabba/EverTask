@@ -11,12 +11,10 @@ namespace EverTask.Monitor.Api.Infrastructure;
 /// controller routed under <c>{ApiBasePath}/management</c>.
 /// </summary>
 /// <remarks>
-/// It is an MVC filter, and not middleware, because both things it depends on happen AFTER the middleware
-/// has run. <c>UsePathBase</c> rewrites the request path, so a host that uses one made every path test in
-/// <c>JwtAuthenticationMiddleware</c> miss and an anonymous request reached the action; and the host's
-/// <c>UseAuthentication</c> is what populates <c>HttpContext.User</c>, which the authorization hook is
-/// documented to read. Inside routing both have already happened, and nothing can reach the action without
-/// passing here first.
+/// An MVC filter and not middleware, because both things it depends on happen AFTER the middleware has run:
+/// <c>UsePathBase</c> rewrites the request path, which every path test in <c>JwtAuthenticationMiddleware</c>
+/// then misses (#42), and the host's <c>UseAuthentication</c> is what populates <c>HttpContext.User</c>, which
+/// the authorization hook is documented to read.
 /// </remarks>
 internal sealed class ManagementAuthorizationFilter(EverTaskApiOptions options, IJwtTokenService jwtTokenService)
     : IAsyncAuthorizationFilter
@@ -104,10 +102,9 @@ internal sealed class ManagementAuthorizationFilter(EverTaskApiOptions options, 
         (scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ? 443 : 80);
 
     /// <summary>
-    /// The bearer token of the request, header only. <c>?access_token=</c> is deliberately not read here:
-    /// it exists for the SignalR handshake, which cannot set headers, and a write surface that accepted a
-    /// credential from the query string would put it in every access log — and make a cross-site link enough
-    /// to carry one.
+    /// The bearer token of the request, header only. <c>?access_token=</c> is deliberately not read here: it
+    /// exists for the SignalR handshake, and a write surface accepting a credential from the query string
+    /// would put it in every access log and make a cross-site link enough to carry one.
     /// </summary>
     private static string? BearerTokenOf(HttpContext context)
     {

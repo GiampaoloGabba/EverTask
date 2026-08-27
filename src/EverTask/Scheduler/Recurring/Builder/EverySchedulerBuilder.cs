@@ -6,7 +6,7 @@ public class EverySchedulerBuilder : IEverySchedulerBuilder
     private readonly int _interval;
     private readonly TimeProvider? _timeProvider;
 
-    /// <summary>The pre-P9 constructor, kept for binary compatibility (P6/X6).</summary>
+    /// <summary>The historical constructor, kept so an assembly compiled against an earlier release binds.</summary>
     public EverySchedulerBuilder(RecurringTask task, int interval) : this(task, interval, null) { }
 
     public EverySchedulerBuilder(RecurringTask task, int interval, TimeProvider? timeProvider)

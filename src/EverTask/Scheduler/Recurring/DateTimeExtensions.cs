@@ -38,9 +38,8 @@ public static class DateTimeOffsetExtensions
         if (nextTimeIndex == -1)
         {
             // No matching onTime on the target day. Advance another day ONLY when we are still on the
-            // ORIGINAL day (same-day, no later slot). When nextDay is already a strictly-later day every
-            // onTime on it is valid, so use the earliest — bumping again would drop a whole day, which is
-            // what made a DayInterval whose onTimes were all before the reference time return day+2 (L26).
+            // ORIGINAL day (same-day, no later slot): when nextDay is already a strictly-later day every
+            // onTime on it is valid, so the earliest is used — bumping again would drop a whole day.
             if (addDays && !isDifferentDay)
                 nextDay = nextDay.AddDays(1);
             nextTimeIndex = 0;
@@ -56,7 +55,7 @@ public static class DateTimeOffsetExtensions
     /// <paramref name="onDays"/> at a time in <paramref name="onTimes"/> (sorted ascending). Fires on
     /// EVERY listed day of the current week, advancing by <paramref name="weekStride"/> weeks only once
     /// the current week's remaining slots are exhausted — so e.g. OnDays(Mon, Wed, Fri) fires three
-    /// times a week, not once (CU7).
+    /// times a week, not once.
     /// </summary>
     public static DateTimeOffset NextDayOfWeekSlot(this DateTimeOffset current, DayOfWeek[] onDays,
                                                    TimeOnly[] onTimes, int weekStride)
@@ -214,11 +213,8 @@ public static class DateTimeOffsetExtensions
     /// <paramref name="day"/> already had.
     /// </summary>
     /// <remarks>
-    /// The whole <see cref="TimeOnly"/>, sub-second included. <c>AtTime</c>/<c>AtTimes</c> store what the
-    /// caller passed verbatim (T12), so the grid has to be able to land on it; the
-    /// <see cref="Adjust(DateTimeOffset,int?,int?,int?,int?)"/> call this replaced silently rounded every slot
-    /// down to the second. Nothing the builder could express before carried a sub-second component, so for
-    /// every schedule written until now the two are the same instant.
+    /// The whole <see cref="TimeOnly"/>, sub-second included: <c>AtTime</c>/<c>AtTimes</c> store what the
+    /// caller passed verbatim, so the grid has to be able to land on it.
     /// </remarks>
     internal static DateTimeOffset WithTimeOfDay(this DateTimeOffset day, TimeOnly time) =>
         new DateTimeOffset(day.Year, day.Month, day.Day, 0, 0, 0, day.Offset).Add(time.ToTimeSpan());

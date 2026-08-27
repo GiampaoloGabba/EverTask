@@ -54,16 +54,12 @@ public static class EndpointRouteBuilderExtensions
         var options = endpoints.ServiceProvider.GetRequiredService<EverTaskApiOptions>();
 
         // Everything that is NOT a controller goes into this group, whose only job is to carry the access
-        // guard: the hub exposes no convention builder of its own, and a group is what lets one convention
-        // reach it, the dashboard files and a companion package's endpoints alike. The prefix is empty, so
-        // no route changes; controllers stay outside because MVC applies MonitoringAccessFilter to them
-        // whoever maps them.
+        // guard: the hub exposes no convention builder of its own, so a group is the only way one convention
+        // reaches it, the dashboard files and a companion package's endpoints. Empty prefix: no route changes.
         var guarded = endpoints.MapGroup("").Guard(endpoints.ServiceProvider);
 
-        // Map SignalR hub
-        // Note: authentication is enforced by the guard above (and by JwtAuthenticationMiddleware as an
-        // outer shield), never by an [Authorize] attribute: the handshake carries its JWT in the query
-        // string, which no authentication scheme registered by the host would look at.
+        // The hub's authentication comes from the guard above, never from an [Authorize] attribute: the
+        // handshake carries its JWT in the query string, which no host-registered scheme would look at.
         if (configureHub != null)
         {
             guarded.MapEverTaskMonitorHub(options.SignalRHubPath, configureHub);

@@ -6,7 +6,7 @@ namespace EverTask.Abstractions;
 /// </summary>
 /// <remarks>
 /// A record with init-only members rather than positional parameters: a later member can then be added
-/// without changing the constructor an already-compiled provider binds to (P6/X4).
+/// without changing the constructor an already-compiled provider binds to.
 /// </remarks>
 public sealed record NextOccurrenceRequest
 {

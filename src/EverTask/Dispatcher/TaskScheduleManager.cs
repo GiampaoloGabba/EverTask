@@ -7,9 +7,9 @@ using EverTask.Scheduler.Recurring.Builder;
 namespace EverTask.Dispatcher;
 
 /// <summary>
-/// The one place a schedule already registered is changed (S1–S5): it re-reads the row, decides the new
-/// definition and cursor, writes them under a compare-and-swap on the schedule version, and hands the row back
-/// to whatever owns its parking.
+/// The one place a schedule already registered is changed: it re-reads the row, decides the new definition and
+/// cursor, writes them under a compare-and-swap on the schedule version, and hands the row back to whatever
+/// owns its parking.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -100,10 +100,10 @@ internal sealed class TaskScheduleManager(
             return false;
 
         // The schedule itself has the last word. CancelSchedule cancels the pending occurrences in the same
-        // transaction as the schedule row (M15), so by STATUS alone each of them looks exactly like an
-        // occurrence waiting to be retried — and putting one back would run the handler of a series an
-        // operator has ended. The blacklist is no answer either: its entries lapse after about an hour and
-        // never existed in a process that did not issue the cancel, so the parent row is what has to be asked.
+        // transaction as the schedule row, so by STATUS alone each of them looks exactly like an occurrence
+        // waiting to be retried, and putting one back would run the handler of a series an operator has ended.
+        // The blacklist is no answer either: its entries lapse after about an hour and never existed in a
+        // process that did not issue the cancel.
         await RequireLiveSchedule(store, parentId, occurrenceId, ct).ConfigureAwait(false);
 
         var previousStatus = row.Status;
@@ -121,20 +121,15 @@ internal sealed class TaskScheduleManager(
 
         // The parent is asked AGAIN, now that the requeue is committed, and this is the reading that decides.
         // The check above and the write are two round trips, so a Cancel of the SCHEDULE can linearize between
-        // them — and a Failed occurrence is not in the pending set that cancel cascades to, so nothing else
-        // would have caught it: the series ends terminal with one Queued child under it. One of the two
-        // orderings always sees the other, because the cancel asks for occurrences after persisting the
-        // status: either it sees this row and cascades to it, or its status was already written when this
-        // read happens.
+        // them — and a Failed occurrence is not in the pending set that cancel cascades to. One of the two
+        // orderings always sees the other, because the cancel asks for occurrences after persisting the status.
         if (!await StillLiveAfterRequeueAsync(store, parentId, occurrenceId, auditLevel, ct).ConfigureAwait(false))
             return false;
 
-        // The occurrence's OWN cancellation is undone here, and nowhere else. Cancel(occurrenceId) leaves a
-        // blacklist entry that lives about an hour and is consumed by nothing on this path: WorkerQueue drops
-        // the enqueue the scheduler makes below, the registration is consumed all the same, and the row sits
-        // non-terminal with no queue entry, no parking and no delivery until a restart — while this call
-        // reported success. Requeuing IS the decision to run it again. A schedule's entry is untouched: it
-        // covers the siblings, and a cancelled schedule was already refused above.
+        // The occurrence's OWN cancellation is undone here, and nowhere else: its blacklist entry lives about
+        // an hour and nothing on this path consumes it, so the row would sit non-terminal with no queue entry,
+        // no parking and no delivery until a restart, while this call reported success. The schedule's entry
+        // is untouched — it covers the siblings, and a cancelled schedule was already refused above.
         workerBlacklist?.Remove(occurrenceId);
 
         logger.OccurrenceRequeued(occurrenceId, parentId, previousStatus);
@@ -406,11 +401,10 @@ internal sealed class TaskScheduleManager(
 
         if (mode == RescheduleMode.RebaseFromCursor)
         {
-            // The run budget is the one bound the rebase cannot see. It reaches the grid through
-            // FirstOccurrenceOnOrAfter, which applies RunUntil but never MaxRuns — that gate belongs to
-            // CalculateNextRun alone — so a definition whose budget is already spent would still answer with a
-            // cursor, get parked, and run one occurrence past the budget where RecalculateFromNow refuses the
-            // very same definition (M14). Same gate, same expression, same answer: no cursor.
+            // The run budget is the one bound the rebase cannot see: it reaches the grid through
+            // FirstOccurrenceOnOrAfter, which applies RunUntil but never MaxRuns, so a definition whose budget
+            // is already spent would still answer with a cursor and run one occurrence past it — where
+            // RecalculateFromNow refuses the very same definition.
             if ((row.CurrentRunCount ?? 0) >= definition.MaxRuns)
                 return null;
 
@@ -434,7 +428,7 @@ internal sealed class TaskScheduleManager(
     }
 
     /// <summary>
-    /// How many slots the old definition still owed that moving the cursor to a future one throws away (M18).
+    /// How many slots the old definition still owed that moving the cursor to a future one throws away.
     /// </summary>
     /// <remarks>
     /// Only a DURABLE schedule can owe any: an inline one has a single pending occurrence, which the skip
@@ -465,7 +459,7 @@ internal sealed class TaskScheduleManager(
 
     /// <summary>
     /// Hands the schedule back to whatever owns its parking, then publishes the new version as the lower bound
-    /// stale deliveries are measured against (S4).
+    /// stale deliveries are measured against.
     /// </summary>
     /// <remarks>
     /// The order is the contract. The registration is replaced LATEST-WINS — never unscheduled first, which
@@ -497,9 +491,9 @@ internal sealed class TaskScheduleManager(
             return;
         }
 
-        // The change is COMMITTED from here on, so the event S5 owes for it is published whatever happens to
-        // the parking: a subscriber told only that a re-park failed would have no record of the version, the
-        // cursors, the mode or the backlog the row now carries.
+        // The change is COMMITTED from here on, so the event is published whatever happens to the parking: a
+        // subscriber told only that a re-park failed would have no record of the version, the cursors, the
+        // mode or the backlog the row now carries.
         var rescheduled = Describe(result, backlog);
         var severity    = backlog.Count > 0 ? SeverityLevel.Warning : SeverityLevel.Information;
 
@@ -544,12 +538,11 @@ internal sealed class TaskScheduleManager(
     /// a lower bound for.
     /// </summary>
     /// <remarks>
-    /// A durable series ends inside the materializer, which drops its registry entry there (S4) — and this call
-    /// is one of the entry points that can reach that end synchronously: a resume whose replanned backlog spends
+    /// A durable series ends inside the materializer, which drops its registry entry there — and this call is
+    /// one of the entry points that can reach that end synchronously: a resume whose replanned backlog spends
     /// the last run the budget allows closes the series in the same commit that creates the occurrence.
-    /// Publishing afterwards put the entry straight back, for a schedule that will never run again, which is the
-    /// one way the registry grows for the life of the process. Asked only when the materializer really ran, and
-    /// only on this administrative path.
+    /// Publishing afterwards would put the entry straight back for a schedule that will never run again, which
+    /// is the one way the registry grows for the life of the process.
     /// </remarks>
     private static async ValueTask<bool> SeriesEndedWhileParkingAsync(ITaskStorage store, Guid taskId,
                                                                       bool materialized, CancellationToken ct)
@@ -616,8 +609,8 @@ internal sealed class TaskScheduleManager(
     }
 
     /// <summary>
-    /// Drops a durable catch-up halt from the row's runtime state. Any schedule change releases it (M10) —
-    /// the halt exists to stop a replay nobody asked for, and asking is exactly what these calls are.
+    /// Drops a durable catch-up halt from the row's runtime state. Any schedule change releases it: the halt
+    /// exists to stop a replay nobody asked for, and asking is exactly what these calls are.
     /// </summary>
     /// <remarks>
     /// The marker is the only thing the schedule half of that column carries, so clearing it clears the column.

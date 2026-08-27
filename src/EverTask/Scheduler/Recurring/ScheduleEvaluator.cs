@@ -8,9 +8,7 @@ namespace EverTask.Scheduler.Recurring;
 /// </summary>
 /// <remarks>
 /// For a schedule with no provider every method returns an already-completed <see cref="ValueTask{TResult}"/>,
-/// so routing a call site through the seam costs one virtual call and no allocation. The provider branch is
-/// the only asynchronous one, and it exists here so that nothing above this line — misfire policies, durable
-/// occurrences, skip-forward, the schedule manager — has to know which kind of grid it is working with.
+/// so routing a call site through the seam costs one virtual call and no allocation.
 /// </remarks>
 internal sealed class ScheduleEvaluator(ProviderScheduleGrid? providerGrid = null) : IScheduleEvaluator
 {
@@ -60,11 +58,8 @@ internal sealed class ScheduleEvaluator(ProviderScheduleGrid? providerGrid = nul
             : Provider(definition).FirstOccurrenceOnOrAfterAsync(definition, instant, identity, ct);
 
     /// <summary>
-    /// Composed from <see cref="NextAfterAsync"/>, one step at a time, so the due set is by construction the
-    /// same grid every other answer here comes from — the built-in one or the provider's, without a second
-    /// implementation of the walk for either. A materialized list rather than a stream:
-    /// <paramref name="cap"/> already bounds it, and keeping the shape of the other members costs no state
-    /// machine.
+    /// Composed from <see cref="NextAfterAsync"/> one step at a time, so the due set comes by construction
+    /// from the same grid as every other answer here, with no second implementation of the walk.
     /// </summary>
     public async ValueTask<IReadOnlyList<DateTimeOffset>> EnumerateDueSlotsAsync(
         RecurringTask definition, DateTimeOffset cursor, DateTimeOffset nowUtc, int cap,
@@ -92,10 +87,8 @@ internal sealed class ScheduleEvaluator(ProviderScheduleGrid? providerGrid = nul
     /// The provider grid, or the reason there is none.
     /// </summary>
     /// <remarks>
-    /// Only <see cref="Default"/> — the fallback for components built outside the container — can be without
-    /// one, and a provider-driven definition cannot be dispatched through such a component anyway: the
-    /// dispatcher refuses an unregistered key long before this. The message says which half is missing rather
-    /// than letting a null reference say it.
+    /// Only <see cref="Default"/> can be without one, and a provider-driven definition cannot be dispatched
+    /// through such a component anyway: the dispatcher refuses an unregistered key long before this.
     /// </remarks>
     private ProviderScheduleGrid Provider(RecurringTask definition) =>
         providerGrid

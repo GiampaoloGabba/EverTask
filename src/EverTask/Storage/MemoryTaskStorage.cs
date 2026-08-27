@@ -39,7 +39,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
     {
         // Instants compare the same here whatever their offset, but the contract is the relational one:
         // a row that round-trips at +02:00 here and at +00:00 on a real provider is a test that passes in
-        // memory and fails on SQLite (F1).
+        // memory and fails on SQLite.
         task.NormalizeTimestampsToUtc();
 
         logger.TaskPersisted(task.Type);
@@ -48,7 +48,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         {
             // Mirror the relational unique index on TaskKey: reject a duplicate so two rows can never
             // share a key — each would execute, since the delivery registry dedups only by PersistenceId,
-            // which are distinct (G13). Whitespace keys are treated as "no key" to match the dispatcher's
+            // which are distinct. Whitespace keys are treated as "no key" to match the dispatcher's
             // dedup semantics (IsNullOrWhiteSpace).
             if (!string.IsNullOrWhiteSpace(task.TaskKey) &&
                 _pendingTasks.Any(t => t.TaskKey == task.TaskKey))
@@ -111,7 +111,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         {
             var now = nowUtc;
 
-            // X3: the union of the two recovery categories — rows with work left to EXECUTE, and recurring
+            // The union of the two recovery categories — rows with work left to EXECUTE, and recurring
             // series that only need FINALIZING. Canonical predicates on QueuedTask, shared with every provider.
             var pending = _pendingTasks
                 .Where(t => t.IsRecoverableForExecution(now) || t.IsRecurringSeriesToFinalize());
@@ -163,7 +163,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
             task!.Status = QueuedTaskStatus.Queued;
 
             // Audit the recovery Queued transition like the relational providers (and like Memory's own
-            // live SetQueued), so the audit trail does not diverge by backend (L43).
+            // live SetQueued), so the audit trail does not diverge by backend.
             if (AuditPolicy.ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Queued, null))
             {
                 task.StatusAudits.Add(new StatusAudit
@@ -344,7 +344,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
             var now = DateTimeOffset.UtcNow;
 
             // Status -> Completed (+ status audit) AND NextRunUtc cleared together under the store lock.
-            // NO run-counter advance and NO runs audit: the skipped occurrence never executed (Option B).
+            // NO run-counter advance and NO runs audit: the skipped occurrence never executed.
             // Clearing NextRunUtc is what keeps the terminal row out of IsRecoverable (a Completed recurring
             // row with NextRunUtc != null is resurrected by recovery).
             if (AuditPolicy.ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Completed, null))
@@ -509,7 +509,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
             _pendingTasks.Add(occurrence);
 
             parent.NextRunUtc = newCursorUtc;
-            // A materialization IS the run of a durable series (M14): the child may later fail or be
+            // A materialization IS the run of a durable series: the child may later fail or be
             // cancelled, and the budget is still spent — the schedule did produce that occurrence.
             parent.CurrentRunCount = parent.CurrentRunCount >= int.MaxValue ? int.MaxValue : (parent.CurrentRunCount ?? 0) + 1;
 
@@ -586,7 +586,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
                 TransitionLocked(parent, QueuedTaskStatus.Cancelled, auditLevel);
 
             // Occurrences already executing are left alone: they own a live delivery and end on their own.
-            // ServiceStopped is cancelled with the rest (R7): recovery would otherwise put it back in a queue
+            // ServiceStopped is cancelled with the rest: recovery would otherwise put it back in a queue
             // at the next restart and run an occurrence of a cancelled schedule.
             foreach (var child in _pendingTasks.Where(t => t.ParentTaskId == parentId
                                                            && t.Status is QueuedTaskStatus.WaitingQueue
@@ -851,7 +851,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
                                                AuditLevel auditLevel)
     {
         // Respect audit level. ExecutedAt is stamped at the current time, like the relational
-        // providers — not the task's older LastExecutionUtc (L28).
+        // providers — not the task's older LastExecutionUtc.
         if (AuditPolicy.ShouldCreateRunsAudit(auditLevel, task.Status, task.Exception))
         {
             task.RunsAudits.Add(new RunsAudit
@@ -867,7 +867,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         task.ExecutionTimeMs = executionTimeMs;
         task.NextRunUtc      = nextRun;
 
-        // Advance by exactly one real execution (Option B): skipped occurrences never count.
+        // Advance by exactly one real execution: skipped occurrences never count.
         // Saturating at int.MaxValue (see EfCoreTaskStorage.UpdateCurrentRun for the rationale).
         task.CurrentRunCount = task.CurrentRunCount >= int.MaxValue ? int.MaxValue : (task.CurrentRunCount ?? 0) + 1;
     }
@@ -875,7 +875,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
     /// <summary>
     /// Completed transition (+ status audit, LastExecutionUtc) AND the run-counter / next-run advance
     /// (+ runs audit) applied together, under the caller's lock, so a crash cannot leave the row Completed
-    /// but not advanced (CU14/L29). Shared by the plain and the compare-and-swap overload — see
+    /// but not advanced. Shared by the plain and the compare-and-swap overload — see
     /// <see cref="UpdateCurrentRunLocked"/> for why the CAS cannot check the version outside this lock.
     /// </summary>
     private static void CompleteRecurringRunLocked(QueuedTask task, double executionTimeMs, DateTimeOffset? nextRun,
@@ -911,7 +911,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         task.LastExecutionUtc = now;
         task.ExecutionTimeMs  = executionTimeMs;
         task.NextRunUtc       = nextRun;
-        task.CurrentRunCount  = task.CurrentRunCount >= int.MaxValue ? int.MaxValue : (task.CurrentRunCount ?? 0) + 1; // one real execution (Option B); saturating
+        task.CurrentRunCount  = task.CurrentRunCount >= int.MaxValue ? int.MaxValue : (task.CurrentRunCount ?? 0) + 1; // one real execution; saturating
     }
 
     /// <summary>Terminal Completed transition of a schedule row with its cursor cleared. Caller holds the lock.</summary>

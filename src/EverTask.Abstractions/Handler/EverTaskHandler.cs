@@ -129,9 +129,9 @@ public abstract class EverTaskHandler<TTask> : IEverTaskHandler<TTask> where TTa
 
     public async ValueTask DisposeAsync()
     {
-        // Idempotent (CU17/L32): an eager handler can be disposed by the worker after execution AND
-        // again by the root container at host shutdown, and a reused recurring eager instance is
-        // disposed once per occurrence. DisposeAsyncCore must run at most once across all of them.
+        // Idempotent: an eager handler can be disposed by the worker after execution AND again by the root
+        // container at host shutdown, and a reused recurring eager instance is disposed once per occurrence.
+        // DisposeAsyncCore must run at most once across all of them.
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
 

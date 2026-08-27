@@ -67,7 +67,7 @@ internal sealed class CancellationSourceProvider : ICancellationSourceProvider
         {
             // The worker disposed the CTS between the lookup and Cancel (the task already finished):
             // there is nothing to cancel, but the caller's cleanup (blacklist / unschedule / invalidate
-            // / remove) must still proceed — the exception must NOT propagate (CU12).
+            // / remove) must still proceed — the exception must NOT propagate.
         }
 
         Delete(id);

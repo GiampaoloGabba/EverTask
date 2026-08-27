@@ -35,16 +35,9 @@ public static class RecurringTaskExtensions
     /// </param>
     /// <returns>A NextRunResult containing the next valid run time and the count of skipped occurrences</returns>
     /// <remarks>
-    /// Realignment is calendar-aware via the single <see cref="RecurringTask.NextOccurrenceStrictlyAfter"/>
-    /// primitive: O(1) for cron (Cronos) and for uniform arithmetic grids (every N seconds/minutes/…), and a
-    /// bounded calendar walk for non-uniform schedules (OnDays, OnHours, Month, multi-OnTimes, combinations),
-    /// which are coarse by nature. It never uses the approximate flat <see cref="RecurringTask.GetMinimumInterval()"/>,
-    /// which diverges on uneven schedules (F8).
-    /// <para>
-    /// The parameter list is frozen at the shape the previous release shipped (P6/X6): the scheduling clock
-    /// travels through the overload below, because appending an optional parameter here would have replaced
-    /// this method's IL signature and broken every already-compiled caller.
-    /// </para>
+    /// The parameter list is frozen at the shape the previous release shipped: the scheduling clock travels
+    /// through the overload below, because appending an optional parameter here would have replaced this
+    /// method's IL signature and broken every already-compiled caller.
     /// </remarks>
     public static NextRunResult CalculateNextValidRun(
         this RecurringTask recurringTask,
@@ -58,7 +51,7 @@ public static class RecurringTaskExtensions
 
     /// <summary>
     /// <see cref="CalculateNextValidRun(RecurringTask,DateTimeOffset,int,DateTimeOffset?,bool,bool)"/>
-    /// evaluated against the scheduling clock (P9).
+    /// evaluated against the scheduling clock.
     /// </summary>
     /// <param name="recurringTask">The recurring task configuration</param>
     /// <param name="scheduledTime">The scheduled time to calculate from (usually the last scheduled execution time)</param>
@@ -82,37 +75,30 @@ public static class RecurringTaskExtensions
     {
         ArgumentNullException.ThrowIfNull(recurringTask);
 
-        // isRecovery: on the recovery path the first run's time was already decided at dispatch, so the
-        // initial-run configuration (InitialDelay/RunNow/SpecificRunTime) must not be re-applied while
-        // skipping forward (L25-firstrun).
         var nextRun = recurringTask.CalculateNextRun(scheduledTime, currentRun, isRecovery, nowUtc,
             out var collapsedSlots);
         var now = referenceTime ?? nowUtc ?? DateTimeOffset.UtcNow;
 
-        // If nextRun is not significantly in the past, return as-is
         if (!nextRun.HasValue || nextRun.Value >= now.AddSeconds(-ToleranceSeconds))
         {
             return new NextRunResult(nextRun, 0) { CollapsedSlotCount = collapsedSlots };
         }
 
-        // nextRun is significantly in the past — realign past the downtime. ONE primitive for every schedule
-        // kind (cron, uniform interval, calendar): the next run is the first real occurrence strictly after
-        // `now` (calendar-aware, never flat-interval arithmetic that diverges on uneven schedules — F8). The
-        // skip count is LOGGING ONLY (Option B: it never consumes MaxRuns) and is suppressed on the
-        // rate-limit skip-ahead path (computeSkippedCount=false), where `now` is the limiter's far-future
-        // slot and a "missed" count up to it is meaningless noise (O).
+        // Realign past the downtime through the one primitive for every schedule kind: calendar-aware, never
+        // flat-interval arithmetic, which diverges on uneven schedules. The skip count is LOGGING ONLY (it
+        // never consumes MaxRuns) and is suppressed on the rate-limit skip-ahead path, where `now` is the
+        // limiter's far-future slot and a "missed" count up to it is meaningless noise.
         var next = recurringTask.NextOccurrenceStrictlyAfter(nextRun.Value, now);
 
-        // Skip-count anchor (logging-only): on RECOVERY `scheduledTime` IS the stored slipped occurrence
-        // (itself missed during the downtime), so count from it to include it; otherwise it is the
-        // just-executed occurrence (not missed), so count from the next occurrence (U12).
+        // Skip-count anchor: on RECOVERY `scheduledTime` IS the stored slipped occurrence, itself missed
+        // during the downtime, so count from it to include it; otherwise it is the just-executed occurrence,
+        // which was not missed.
         var countAnchor = isRecovery ? scheduledTime : nextRun.Value;
         var skipped     = computeSkippedCount ? recurringTask.CountMissedOccurrences(countAnchor, now) : 0;
 
-        // The realignment answers through NextOccurrenceStrictlyAfter, which reports no collapse of its own:
-        // what travels on is the count of the occurrence the schedule had actually reached. The count is the
-        // uncapped one, so a downtime longer than the walk's own bound answers "at least this many" and says
-        // so rather than reaching a log line dressed as a total.
+        // The realignment reports no collapse of its own, so what travels on is the count of the occurrence
+        // the schedule had actually reached. The count is the uncapped one, so a downtime longer than the
+        // walk's own bound answers "at least this many" and says so rather than passing for a total.
         return new NextRunResult(next, skipped)
         {
             CollapsedSlotCount  = collapsedSlots,

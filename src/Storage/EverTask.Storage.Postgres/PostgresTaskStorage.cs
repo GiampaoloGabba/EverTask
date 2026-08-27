@@ -8,23 +8,17 @@ using NpgsqlTypes;
 namespace EverTask.Storage.Postgres;
 
 /// <summary>
-/// PostgreSQL-specific task storage.
+/// PostgreSQL-specific task storage. Npgsql maps <see cref="System.DateTimeOffset"/> to <c>timestamptz</c>
+/// and translates every ordering/comparison the base relies on server-side, so (unlike SQLite) nothing needs
+/// a client-side override.
 /// <para>
-/// PHASE 1: inherits <see cref="EfCoreTaskStorage"/> for everything else. Npgsql maps
-/// <see cref="System.DateTimeOffset"/> to <c>timestamptz</c> and translates every ordering/comparison the
-/// base relies on server-side, so (unlike SQLite) NO client-side override is needed for RetrievePending,
-/// TrySetQueuedIfRecoverable, the Cleanup* methods, or the date-filtered statistics.
-/// </para>
-/// <para>
-/// PHASE 2 (perf): overrides the three hot writes — <c>SetStatus</c>, <c>UpdateCurrentRun</c> and
-/// <c>CompleteRecurringRun</c> — with single-statement, single-roundtrip data-modifying CTEs (Postgres'
-/// analog of SQL Server's stored procedures). A data-modifying CTE is ONE statement, hence atomic by
-/// construction: the audit insert and the row update commit together or not at all, matching the base
-/// transactional contract. No stored object and no migration are needed (the SQL lives here in versioned C#).
+/// The hot writes — <c>SetStatus</c>, <c>UpdateCurrentRun</c> and <c>CompleteRecurringRun</c> — are
+/// single-statement data-modifying CTEs, atomic by construction: the audit insert and the row update commit
+/// together or not at all. No stored object and no migration are needed.
 /// </para>
 /// </summary>
-// NOTE: not a primary constructor. The base captures contextFactory/logger too, so a primary
-// constructor whose parameters are used in the body would capture them twice (CS9107).
+// The primary-ctor parameters are deliberately re-declared as private fields: the base captures them too,
+// and using a parameter directly from a method body would capture the same value twice (CS9107).
 public class PostgresTaskStorage(
     ITaskStoreDbContextFactory contextFactory,
     IEverTaskLogger<PostgresTaskStorage> logger,
@@ -99,9 +93,9 @@ public class PostgresTaskStorage(
     /// Advances the run counter via a single data-modifying CTE. The RunsAudit decision for ErrorsOnly
     /// depends on the ROW's Status/Exception (NOT a constant), so it is evaluated SERVER-SIDE in the CTE —
     /// it cannot be a single C# boolean. The UPDATE never mutates Status/Exception, so its <c>RETURNING</c>
-    /// yields the pre-update values the audit must record (faithful to usp_UpdateCurrentRun). The run counter
-    /// SATURATES at int.MaxValue (a CASE guard) instead of overflowing, matching the base and the other
-    /// providers; failures still propagate (Residual D) so the scheduler never advances on unpersisted state.
+    /// yields the pre-update values the audit must record. The run counter SATURATES at int.MaxValue instead
+    /// of overflowing, matching the base and the other providers; failures propagate so the scheduler never
+    /// advances on unpersisted state.
     /// </summary>
     public override async Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
                                                 AuditLevel auditLevel)
@@ -138,8 +132,8 @@ public class PostgresTaskStorage(
         }
         catch (Exception e)
         {
-            // Residual D: propagate (do NOT swallow) — a failed counter persist must not advance the schedule
-            // on unpersisted state; the recoverable row is re-run instead.
+            // Propagate (do NOT swallow) — a failed counter persist must not advance the schedule on
+            // unpersisted state; the recoverable row is re-run instead.
             logger.CurrentRunUpdateFailed(e, taskId);
             throw;
         }
@@ -151,7 +145,7 @@ public class PostgresTaskStorage(
     /// occurrence at recovery. The audited Status/Exception are the CONSTANTS <c>Completed</c>/<c>NULL</c>, so
     /// the audit gates depend ONLY on the AuditLevel and are computed in C# (no pre-update read needed):
     /// StatusAudit at Full only, RunsAudit at Full+Minimal — matching usp_CompleteRecurringRun and the EF base.
-    /// Propagates on failure (Residual D), same as
+    /// Propagates on failure, same as
     /// <see cref="UpdateCurrentRun(Guid, double, DateTimeOffset?, AuditLevel, int)"/>.
     /// </summary>
     public override async Task CompleteRecurringRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
@@ -201,7 +195,7 @@ public class PostgresTaskStorage(
         }
         catch (Exception e)
         {
-            // Residual D: propagate — a failed completion must not advance the schedule on unpersisted state.
+            // Propagate — a failed completion must not advance the schedule on unpersisted state.
             logger.RecurringRunCompletionFailed(e, taskId);
             throw;
         }
@@ -326,14 +320,11 @@ public class PostgresTaskStorage(
     /// row is LOCKED first, then cancelled together with its children.
     /// </summary>
     /// <remarks>
-    /// The lock cannot be folded into the cancelling statement. Under READ COMMITTED a statement runs on one
-    /// snapshot, taken before it starts waiting on a row lock, so an occurrence the materializer inserts and
-    /// commits while this statement is blocked on the schedule row is simply not in that snapshot: the
-    /// schedule would end up <c>Cancelled</c> with a brand-new child still <c>WaitingQueue</c>, free to
-    /// execute after the series was cancelled. Taking the materializer's own <c>FOR UPDATE</c> on the
-    /// schedule row in a statement of its own makes the next statement see a snapshot that contains the
-    /// child. A materializer arriving after this transaction commits re-reads the row and gets
-    /// <see cref="OccurrenceMaterializationOutcome.ParentInactive"/>.
+    /// The lock cannot be folded into the cancelling statement: under READ COMMITTED a statement runs on a
+    /// snapshot taken BEFORE it waits on a row lock, so an occurrence a materializer commits while the cancel
+    /// is blocked is invisible to it, and the schedule would end up <c>Cancelled</c> with a fresh
+    /// <c>WaitingQueue</c> child free to run. Taking the materializer's own <c>FOR UPDATE</c> in a statement
+    /// of its own gives the next statement a snapshot that contains the child.
     /// </remarks>
     public override async Task CancelSchedule(Guid parentId, AuditLevel auditLevel, CancellationToken ct = default)
     {
@@ -424,7 +415,7 @@ public class PostgresTaskStorage(
         }
         catch (Exception e)
         {
-            // Residual D: propagate, exactly like the unversioned overload.
+            // Propagate, exactly like the unversioned overload.
             logger.CurrentRunUpdateFailed(e, taskId);
             throw;
         }

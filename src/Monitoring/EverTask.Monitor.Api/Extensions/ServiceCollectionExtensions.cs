@@ -283,8 +283,7 @@ public static class ServiceCollectionExtensions
     private static void ConfigureOpenApi(OpenApiOptions openApiOptions, EverTaskApiOptions options)
     {
         // Strictly this document's group: ungrouped host endpoints stay in the host's documents. The
-        // management routes are left out while they are disabled: every one of them answers 404 then, and a
-        // document that lists a route the API refuses to have is a document that lies to its reader.
+        // management routes are left out while disabled, because every one of them answers 404 then.
         openApiOptions.ShouldInclude = description =>
             description.GroupName == options.OpenApiDocumentName
             && (options.EnableManagementEndpoints

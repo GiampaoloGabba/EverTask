@@ -2,7 +2,7 @@ namespace EverTask.Scheduler.Recurring.Builder;
 
 public class MinuteSchedulerBuilder(RecurringTask task, TimeProvider? timeProvider) : IMinuteSchedulerBuilder
 {
-    /// <summary>The pre-P9 constructor, kept for binary compatibility (P6/X6).</summary>
+    /// <summary>The historical constructor, kept so an assembly compiled against an earlier release binds.</summary>
     public MinuteSchedulerBuilder(RecurringTask task) : this(task, null) { }
 
     public IBuildableSchedulerBuilder AtSecond(int second)

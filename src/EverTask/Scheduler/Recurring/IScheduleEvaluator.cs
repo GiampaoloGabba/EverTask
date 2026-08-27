@@ -6,16 +6,15 @@ namespace EverTask.Scheduler.Recurring;
 /// </summary>
 /// <remarks>
 /// For a built-in schedule the implementation is a synchronous wrapper over the pure primitives on
-/// <see cref="RecurringTask"/> — every method completes without ever yielding. The asynchronous shape is what
-/// a schedule whose occurrences come from an <see cref="INextOccurrenceProvider"/> needs: that grid is real
-/// I/O, and it answers here so that every caller — misfire policies, durable occurrences, skip-forward, the
-/// schedule manager — works with a provider without knowing one exists.
+/// <see cref="RecurringTask"/>. The asynchronous shape is what a schedule whose occurrences come from an
+/// <see cref="INextOccurrenceProvider"/> needs — that grid is real I/O — so that every caller works with a
+/// provider without knowing one exists.
 /// </remarks>
 internal interface IScheduleEvaluator
 {
     /// <summary>
     /// Next run for <paramref name="definition"/>, realigned past a downtime when the computed occurrence is
-    /// already well in the past. Mirrors <see cref="RecurringTaskExtensions.CalculateNextValidRun"/>.
+    /// already well in the past. Mirrors <c>RecurringTaskExtensions.CalculateNextValidRun</c>.
     /// </summary>
     ValueTask<NextRunResult> CalculateNextValidRunAsync(
         RecurringTask definition, DateTimeOffset scheduledTime, int currentRun, DateTimeOffset nowUtc,
@@ -49,7 +48,7 @@ internal interface IScheduleEvaluator
 
     /// <summary>
     /// The first occurrence at or ON <paramref name="instant"/> — the one question the grid answers
-    /// inclusively, and the cursor a backfilled durable schedule starts from (M11).
+    /// inclusively, and the cursor a backfilled durable schedule starts from.
     /// </summary>
     ValueTask<DateTimeOffset?> FirstOccurrenceOnOrAfterAsync(
         RecurringTask definition, DateTimeOffset instant, ScheduleIdentity identity = default,
@@ -61,10 +60,9 @@ internal interface IScheduleEvaluator
     /// <paramref name="nowUtc"/>, stopping at <c>RunUntil</c>.
     /// </summary>
     /// <param name="cap">
-    /// Hard upper bound on the number of slots returned — never unbounded. A one-second grid left behind by a
-    /// three-month downtime has millions of due slots, and the answer has to stay bounded whether the caller
-    /// remembers to bound it or not. Ask for one more than the number needed to tell "exactly n" from "at
-    /// least n".
+    /// Hard upper bound on the number of slots returned — never unbounded, since a one-second grid left behind
+    /// by a long downtime has millions of due slots. Ask for one more than the number needed to tell
+    /// "exactly n" from "at least n".
     /// </param>
     /// <remarks>
     /// The run budget (<c>MaxRuns</c>) and the misfire policy are NOT applied here: this reports what the grid

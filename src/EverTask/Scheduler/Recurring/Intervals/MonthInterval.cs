@@ -34,7 +34,7 @@ public class MonthInterval : IInterval
         set => _onTimes = value is null ? [new TimeOnly(0, 0)] : value.OrderBy(t => t).ToArray();
     }
     // Settable (like OnDays) so System.Text.Json repopulates it on deserialization — a get-only property is
-    // silently dropped on round-trip, losing the month constraint (F11).
+    // silently dropped on round-trip, losing the month constraint.
     public int[]      OnMonths { get; set; } = [];
 
     public void Validate()
@@ -48,7 +48,7 @@ public class MonthInterval : IInterval
                 nameof(MonthInterval));
 
         // Out-of-range month/day selectors deserialize but throw downstream at NextValidMonth/NextValidDay —
-        // validate them here so recovery poisons the row cleanly (B2/gap #2).
+        // validate them here so recovery poisons the row cleanly.
         foreach (var month in OnMonths)
             if (month < 1 || month > 12)
                 throw new ArgumentException($"Invalid Month Interval, '{month}' is not a valid month (1-12).",

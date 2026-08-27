@@ -49,7 +49,7 @@ public interface ITaskStorage
     /// An implementation MUST store the row's timestamps at offset zero
     /// (<see cref="QueuedTask.NormalizeTimestampsToUtc"/>): a store that compares them as text, as SQLite
     /// does, otherwise reads the same instant written at a different offset as a different value, and every
-    /// cursor compare-and-swap against that row loses (F1).
+    /// cursor compare-and-swap against that row loses.
     /// </remarks>
     /// <param name="executor">The queued task to be persisted.</param>
     /// <param name="ct">Optional cancellation token.</param>
@@ -196,10 +196,10 @@ public interface ITaskStorage
 
     /// <summary>
     /// Marks a recurring occurrence <see cref="QueuedTaskStatus.Completed"/> AND advances the run
-    /// counter / next run in a SINGLE atomic operation. The two used to be separate writes
-    /// (<see cref="SetCompleted"/> then <see cref="UpdateCurrentRun(Guid,double,DateTimeOffset?,AuditLevel)"/>),
-    /// so a crash between them left the row Completed but not advanced — recovery then re-dispatched the
-    /// already-finished occurrence and a MaxRuns-bounded series ran one extra time (CU14/L29).
+    /// counter / next run in a SINGLE atomic operation. As two separate writes
+    /// (<see cref="SetCompleted"/> then <see cref="UpdateCurrentRun(Guid,double,DateTimeOffset?,AuditLevel)"/>)
+    /// a crash between them leaves the row Completed but not advanced, and recovery re-dispatches the
+    /// already-finished occurrence: a MaxRuns-bounded series runs one extra time.
     /// </summary>
     /// <remarks>
     /// Default interface member: the non-atomic two-write fallback, for custom storages that have not
@@ -221,7 +221,7 @@ public interface ITaskStorage
     /// Finalizes a recurring series that ENDED on a skipped occurrence (its next slot fell past
     /// <see cref="QueuedTask.RunUntil"/>): sets <see cref="QueuedTaskStatus.Completed"/> AND clears
     /// <see cref="QueuedTask.NextRunUtc"/> in ONE atomic write, WITHOUT advancing the run counter and
-    /// WITHOUT writing a runs-audit row (the skipped occurrence never executed — Option B).
+    /// WITHOUT writing a runs-audit row (the skipped occurrence never executed).
     /// </summary>
     /// <remarks>
     /// A Completed recurring row left with a non-null <see cref="QueuedTask.NextRunUtc"/> stays
@@ -253,7 +253,7 @@ public interface ITaskStorage
     /// <summary>
     /// Poisons a RECURRING task TERMINALLY during startup recovery: sets <see cref="QueuedTaskStatus.Failed"/>
     /// AND clears <see cref="QueuedTask.NextRunUtc"/> in ONE atomic write, so the row stops satisfying
-    /// <see cref="QueuedTask.IsRecoverable"/> and is never resurrected by recovery (P0-1).
+    /// <see cref="QueuedTask.IsRecoverable"/> and is never resurrected by recovery.
     /// </summary>
     /// <remarks>
     /// A plain <see cref="SetStatus"/>(Failed) leaves <see cref="QueuedTask.NextRunUtc"/> set, and a recurring
@@ -299,7 +299,7 @@ public interface ITaskStorage
 
     /// <summary>
     /// Increments and returns the persistent count of failed startup-recovery re-dispatch attempts for
-    /// a task (L18). The caller poisons the task (marks it <see cref="QueuedTaskStatus.Failed"/>) once the
+    /// a task. The caller poisons the task (marks it <see cref="QueuedTaskStatus.Failed"/>) once the
     /// returned count reaches its configured limit, so a persistently failing re-dispatch is not retried
     /// at every restart forever (and the failure is no longer masked by a success summary log).
     /// </summary>
@@ -312,7 +312,7 @@ public interface ITaskStorage
 
     /// <summary>
     /// Clears the recovery-failure counter after a successful re-dispatch, so transient failures do not
-    /// accumulate across restarts toward the poison limit (L18). Default interface member: no-op.
+    /// accumulate across restarts toward the poison limit. Default interface member: no-op.
     /// </summary>
     Task ClearRecoveryFailure(Guid taskId, CancellationToken ct = default) => Task.CompletedTask;
 
@@ -333,8 +333,8 @@ public interface ITaskStorage
     /// <para>
     /// <see cref="QueuedTask.RuntimeInfo"/> is one of the columns it writes. The caller re-registering a
     /// schedule reads the row first and hands the runtime state back verbatim, so an ordinary re-registration
-    /// leaves a durable catch-up halt exactly where it was (M10: nothing but an explicit resume or reschedule
-    /// releases one). What the caller does NOT hand back is the halt of a series a cancel had ended and this
+    /// leaves a durable catch-up halt exactly where it was — nothing but an explicit resume or reschedule
+    /// releases one. What the caller does NOT hand back is the halt of a series a cancel had ended and this
     /// dispatch is bringing back: an implementation that skips the column revives that series still halted,
     /// so it materializes nothing until someone resumes it by hand.
     /// </para>
@@ -453,13 +453,13 @@ public interface ITaskStorage
     /// <remarks>
     /// The set it cancels is the exact complement of the set startup recovery puts back in a queue —
     /// <c>WaitingQueue</c>, <c>Queued</c>, <c>Pending</c> and <c>ServiceStopped</c>. Leaving any of them out
-    /// means an occurrence of a cancelled schedule comes back at the next restart and runs (R7).
+    /// means an occurrence of a cancelled schedule comes back at the next restart and runs.
     /// <para>
     /// Audits only the rows it really changed. A schedule a concurrent <c>Remove</c> already deleted is a
     /// silent no-op — never an error, and never a status audit for a task that no longer exists.
     /// </para>
     /// <para>
-    /// CONTRACT for an implementation whose backend admits CONCURRENT WRITERS (R6b): the audited set must come
+    /// CONTRACT for an implementation whose backend admits CONCURRENT WRITERS: the audited set must come
     /// from the cancelling statement itself — SQL Server's <c>OUTPUT</c>, PostgreSQL's <c>RETURNING</c>, or the
     /// equivalent — never from a second read. Under READ COMMITTED a re-read can attribute to this call an
     /// occurrence another writer cancelled, so the audit trail would claim a transition this transaction never
@@ -511,7 +511,7 @@ public interface ITaskStorage
     /// answer for it — a cancel writes the status and leaves both untouched — so a reschedule that read the
     /// row before the cancellation committed would match on both and write a live definition over a series an
     /// operator has ended, then report success to its caller. Every other status is a legitimate target,
-    /// <see cref="QueuedTaskStatus.InProgress"/> included (S3): a schedule that happens to be running is
+    /// <see cref="QueuedTaskStatus.InProgress"/> included: a schedule that happens to be running is
     /// rescheduled, never refused.
     /// </remarks>
     /// <param name="expectedCursorUtc">
@@ -553,8 +553,8 @@ public interface ITaskStorage
     /// The default is the non-atomic two-write fallback a storage without the compare-and-swap can offer: the
     /// status write, then a read that confirms the row really left <c>Cancelled</c>. It does NOT move the
     /// version, so a storage that advertises <see cref="SupportsScheduleVersioning"/> must override it —
-    /// capability and implementation are inseparable (X2), and a revival that answered success without
-    /// bumping would hand the new registration a version the row does not carry.
+    /// capability and implementation are inseparable, and a revival that answered success without bumping
+    /// would hand the new registration a version the row does not carry.
     /// </para>
     /// </remarks>
     /// <returns>True when the row was revived.</returns>

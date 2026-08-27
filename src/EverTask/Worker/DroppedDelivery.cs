@@ -1,23 +1,11 @@
 namespace EverTask.Worker;
 
 /// <summary>
-/// Releases the EverTask-OWNED scope an EAGER executor carries (L27) when the enqueue boundary drops the
-/// delivery before the worker ever sees it.
+/// Releases the EverTask-owned scope an eager executor carries when the enqueue boundary drops a delivery the
+/// worker never sees. Only a drop that is TERMINAL for this instance may release: <see cref="EnqueueResult.QueueFull"/>,
+/// <see cref="EnqueueResult.DuplicateInProcess"/> and every exception path hand the SAME instance back to a
+/// caller that re-parks and retries it.
 /// </summary>
-/// <remarks>
-/// <see cref="WorkerExecutor"/>'s own claim covers a delivery it CONSUMED, on every exit. What it cannot
-/// cover is one that never becomes a delivery at all: an enqueue refused as a duplicate (startup recovery
-/// racing a live dispatch — the very race <see cref="TaskDeliveryRegistry"/> exists to stop), a task
-/// cancelled before it was written, a row that terminally finished since it was read, and a Drop* eviction.
-/// Each of those drops an executor still holding a handler and every scoped dependency built with it — in a
-/// real application a DbContext and its pooled connection — with nobody left to dispose them.
-/// <para>
-/// Only a drop that is TERMINAL for this instance releases. <see cref="EnqueueResult.QueueFull"/> and
-/// <see cref="EnqueueResult.DuplicateInProcess"/> hand the executor BACK to a caller that re-parks and
-/// retries the very same instance (both schedulers do), so releasing there would run a later delivery on a
-/// disposed handler; the same goes for every exception path, which the schedulers treat as a full queue.
-/// </para>
-/// </remarks>
 internal static class DroppedDelivery
 {
     public static async ValueTask ReleaseAsync(TaskHandlerExecutor task, ILogger logger)

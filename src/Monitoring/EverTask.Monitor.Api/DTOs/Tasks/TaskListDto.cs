@@ -41,7 +41,7 @@ public record TaskListDto(
 )
 {
     // Schedule and occurrence context lives in INIT properties, never as appended positional parameters:
-    // appending would change the primary constructor and Deconstruct signatures of a public record (X4).
+    // appending would change the primary constructor and Deconstruct signatures of a public record.
 
     /// <summary>The durable schedule this task is an occurrence of, or null for anything else.</summary>
     public Guid? ParentTaskId { get; init; }
@@ -77,8 +77,7 @@ public record TaskListDto(
     /// </summary>
     /// <remarks>
     /// The term lateness is measured against: <c>lastExecutionUtc</c> is written on terminal transitions and
-    /// therefore reports when a run ENDED, so a punctual delivery with a slow handler would read as late by
-    /// its whole execution time.
+    /// therefore reports when a run ENDED, not when it began.
     /// </remarks>
     public DateTimeOffset? StartedAtUtc { get; init; }
 

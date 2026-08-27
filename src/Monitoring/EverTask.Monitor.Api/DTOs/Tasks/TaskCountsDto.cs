@@ -15,7 +15,7 @@ public record TaskCountsDto(
 )
 {
     // An init property rather than a fifth positional parameter: the constructor and Deconstruct signatures of
-    // a public record stay what they were (X4).
+    // a public record stay what they were.
 
     /// <summary>
     /// Count of materialized occurrences — the rows a durable schedule created, which are also counted in

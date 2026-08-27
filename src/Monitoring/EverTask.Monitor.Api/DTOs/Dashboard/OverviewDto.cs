@@ -30,7 +30,7 @@ public record OverviewDto(
 )
 {
     // An init property rather than an appended positional parameter: the constructor and Deconstruct
-    // signatures of a public record stay what they were (X4).
+    // signatures of a public record stay what they were.
 
     /// <summary>
     /// The occurrences of every durable schedule, by state, and how far behind the oldest pending one is.

@@ -11,8 +11,7 @@ namespace EverTask.Abstractions;
 /// <para>
 /// <see cref="Durable"/> turns the schedule row into a definition plus a cursor: each due slot becomes its own
 /// one-shot child row (a real <c>QueuedTask</c> with its own status, retries and audit). Only the durable mode
-/// can carry misfire policies that replay missed slots. Selecting it and the behaviour behind it arrive with
-/// the durable-occurrences builder; this enum is the persisted discriminator the recovery path already needs.
+/// can carry misfire policies that replay missed slots.
 /// </para>
 /// </remarks>
 public enum OccurrenceMode

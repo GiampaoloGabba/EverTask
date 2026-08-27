@@ -9,9 +9,8 @@ namespace EverTask.Monitor.Api.Infrastructure;
 /// </summary>
 /// <remarks>
 /// The same protections live in <c>JwtAuthenticationMiddleware</c>, but that runs before a host's
-/// <c>UsePathBase</c> has taken the base out of <c>Request.Path</c>, so under one it matched nothing and
-/// every read endpoint answered anonymously. Here the path is the one routing resolved, so the protection
-/// follows the surface wherever the application is hosted.
+/// <c>UsePathBase</c> has taken the base out of <c>Request.Path</c>, so under one it matches nothing (#46).
+/// Here the path is the one routing resolved, so the protection follows the surface (#42).
 /// </remarks>
 internal sealed class MonitoringAccessFilter(MonitoringAccessPolicy policy) : IAsyncAuthorizationFilter
 {

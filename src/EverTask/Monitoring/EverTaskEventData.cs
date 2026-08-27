@@ -13,7 +13,7 @@ public record EverTaskEventData(
 {
     // Schedule/occurrence context lives in INIT properties, never as appended positional parameters:
     // appending would change the primary constructor and Deconstruct signatures of a record consumers
-    // already build and deconstruct (X4). Subscribers compiled before these existed keep working.
+    // already build and deconstruct.
 
     /// <summary>The recurring schedule this event's task is an occurrence of, when it is one.</summary>
     public Guid? ParentTaskId { get; init; }
@@ -39,11 +39,7 @@ public record EverTaskEventData(
     /// task JSON through its own caches and passes them in; everything else goes through the overload above,
     /// which computes them plainly.
     /// </summary>
-    /// <remarks>
-    /// Both entry points must produce the same event, occurrence context included — a second copy of the
-    /// mapping is a copy that drifts, and the one production actually publishes would be the one no test
-    /// covers.
-    /// </remarks>
+    /// <remarks>Both entry points must produce the same event, occurrence context included.</remarks>
     internal static EverTaskEventData FromExecutor(TaskHandlerExecutor executor, string severity, string taskType,
                                                    string handlerType, string taskParameters, string message,
                                                    Exception? exception,
@@ -60,10 +56,8 @@ public record EverTaskEventData(
         {
             ParentTaskId    = executor.ParentTaskId,
             ScheduledAtUtc  = executor.NominalSlotOfDelivery,
-            // A delivery belongs to a schedule either as the schedule row itself or as one of its
-            // occurrences — and an occurrence never carries the definition: ApplyOccurrenceContract strips it
-            // and leaves the parent id behind. Deriving the version from the definition alone therefore
-            // dropped it on exactly the rows that report a schedule's real executions.
+            // An occurrence belongs to a schedule but carries no definition (ApplyOccurrenceContract strips it
+            // and leaves the parent id), so the definition alone cannot decide whether a version exists.
             ScheduleVersion = executor.RecurringTask != null || executor.ParentTaskId != null
                                   ? executor.ScheduleVersion
                                   : null

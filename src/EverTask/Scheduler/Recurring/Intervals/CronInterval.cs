@@ -51,8 +51,8 @@ public class CronInterval : IInterval
 
     /// <summary>
     /// Validates that the cron expression parses (correct field count + Cronos-parseable). A persisted cron
-    /// string that is corrupt/empty-but-set deserializes fine but throws at the next-run calculation — calling
-    /// this right after a recovery deserialize routes the throw to the terminal poison path (B2/gap #1).
+    /// string that is corrupt deserializes fine but throws at the next-run calculation, so calling this right
+    /// after a recovery deserialize routes the throw to the terminal poison path.
     /// </summary>
     public void Validate()
     {
@@ -65,7 +65,7 @@ public class CronInterval : IInterval
     /// </summary>
     /// <remarks>
     /// Kept as its own zero-zone method rather than an optional parameter on the overload below: the original
-    /// IL signature is what an assembly compiled against the previous release calls (P6/X6).
+    /// IL signature is what an assembly compiled against the previous release calls.
     /// </remarks>
     public DateTimeOffset? GetNextOccurrence(DateTimeOffset current) =>
         GetNextOccurrence(current, TimeZoneInfo.Utc);
@@ -76,9 +76,8 @@ public class CronInterval : IInterval
     /// </summary>
     /// <remarks>
     /// Cronos owns the DST rules here: a skipped local time fires at the transition, a repeated one fires on
-    /// its first pass, and an interval expression (<c>*/n</c>) keeps stepping through both. That is why T9
-    /// makes it the oracle the fluent API's own zone math is measured against, rather than a second
-    /// implementation to keep in agreement.
+    /// its first pass, and an interval expression (<c>*/n</c>) keeps stepping through both. It is the oracle
+    /// the fluent API's own zone math is measured against, never a second implementation of those rules.
     /// </remarks>
     public DateTimeOffset? GetNextOccurrence(DateTimeOffset current, TimeZoneInfo zone)
     {

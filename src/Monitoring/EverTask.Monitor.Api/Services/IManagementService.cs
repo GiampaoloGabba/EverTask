@@ -6,9 +6,8 @@ namespace EverTask.Monitor.Api.Services;
 /// The three operations an operator actually wants from the dashboard, over <c>ITaskScheduleManager</c>.
 /// </summary>
 /// <remarks>
-/// Nothing here decides WHO may call it: authorization belongs to the pipeline
-/// (<c>JwtAuthenticationMiddleware</c>, the operate role and the host's own hook), so a caller that reaches
-/// this service has already been allowed to operate.
+/// Nothing here decides WHO may call it: authorization is <c>ManagementAuthorizationFilter</c>, so a caller
+/// that reaches this service has already been allowed to operate.
 /// </remarks>
 public interface IManagementService
 {

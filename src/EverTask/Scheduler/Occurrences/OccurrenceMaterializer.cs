@@ -4,22 +4,14 @@ using System.Globalization;
 namespace EverTask.Scheduler.Occurrences;
 
 /// <summary>
-/// The ONE place a durable schedule turns due slots into occurrence rows (M7). Everything that can move a
-/// durable schedule forward calls this and nothing else: the schedule's own slot firing, the end of each
-/// occurrence, startup recovery's second wave, and the operational re-park that guarantees progress when a
-/// kick is lost.
+/// The one place a durable schedule turns due slots into occurrence rows: the schedule's own slot firing, the
+/// end of each occurrence, startup recovery's second wave and the operational re-park all come through here.
 /// </summary>
 /// <remarks>
-/// <para>
-/// It is IDEMPOTENT by construction. Every run re-reads the schedule row and decides from what it finds, and
-/// every write is a compare-and-swap on the cursor and the version it decided against — so two runs racing
-/// each other end with one winner and one re-read, never with two occurrences of the same slot. The
-/// per-schedule gate below is an optimization on top of that, not the correctness argument.
-/// </para>
-/// <para>
-/// It never throws at its callers. One of them is the <c>finally</c> of a delivery that has already finished:
-/// a materialization failure there must not turn a completed occurrence into a failed one.
-/// </para>
+/// Idempotent by construction: every run re-reads the schedule row and every write is a compare-and-swap on
+/// the cursor and version it decided against, so two racing runs end with one winner and one re-read. The
+/// per-schedule gate is an optimization on top of that, not the correctness argument. It never throws at its
+/// callers — one of them is the <c>finally</c> of a delivery that has already finished.
 /// </remarks>
 internal sealed class OccurrenceMaterializer
 {
@@ -48,32 +40,23 @@ internal sealed class OccurrenceMaterializer
     private static readonly TimeSpan HaltReportInterval = TimeSpan.FromMinutes(5);
 
     /// <summary>
-    /// How many slots that already had an occurrence ONE run walks past before handing the rest to the
+    /// How many slots that already had an occurrence one run walks past before handing the rest to the
     /// operational retry.
     /// </summary>
     /// <remarks>
-    /// Each of them costs two round trips — the materialization that comes back
-    /// <see cref="OccurrenceMaterializationOutcome.AlreadyExists"/> and the cursor advance past it — plus one
-    /// step of the grid, and the run holds a permit of the global materialization budget throughout, so a
-    /// cursor rewound over a very long history must not turn one run into an unbounded scan. One grid step per
-    /// slot is what makes this bound the whole cost of the walk: re-planning at each of them instead would
-    /// hide a count and a bisection over the remaining backlog behind every one of these units. What the bound
-    /// buys is the stride: a truncated run resumes at its retry from where it stopped, never from where it
-    /// started.
+    /// The run holds a permit of the global materialization budget throughout, so a cursor rewound over a very
+    /// long history must not turn one run into an unbounded scan. A truncated run resumes at its retry from
+    /// where it stopped, never from where it started.
     /// </remarks>
     private const int MaxServedSlotsPerRun = 500;
 
     /// <summary>
-    /// How many PROCESS STARTS may fail to rebuild an occurrence before the failure stops being read as
-    /// transient and the row is ended (F6).
+    /// How many process starts may fail to rebuild an occurrence before the failure stops being read as
+    /// transient and the row is ended.
     /// </summary>
     /// <remarks>
-    /// The twin of <c>WorkerService.MaxRecoveryDispatchAttempts</c>, and deliberately the same default, the
-    /// same durable counter and the same CADENCE: both bound the number of times one row is allowed to fail to
-    /// become a delivery before the verdict on it is final, and both spend one attempt per start of the
-    /// process. Settable for the tests that have to reach the ceiling, exactly like its recovery counterpart;
-    /// it is not a public option, because the number is the same answer to the same question and a host that
-    /// wants to move it has nothing to weigh it against.
+    /// The twin of <c>WorkerService.MaxRecoveryDispatchAttempts</c>: same default, same durable counter, one
+    /// attempt spent per process start. Settable for the tests that have to reach the ceiling.
     /// </remarks>
     internal int MaxOccurrenceRebuildAttempts { get; set; } = 5;
 
@@ -82,9 +65,8 @@ internal sealed class OccurrenceMaterializer
     /// <c>BacklogRetryInterval</c> does not spend a second attempt on the same outage.
     /// </summary>
     /// <remarks>
-    /// Bounded by the occurrences that failed to rebuild while this process lived, and every entry leaves it
-    /// the moment the row heals or ends. Deliberately NOT durable: what has to survive a restart is the
-    /// counter on the row, and what must not is the memory of an outage this process is still inside.
+    /// Deliberately not durable: what has to survive a restart is the counter on the row, not the memory of an
+    /// outage this process is still inside. Entries leave the moment the row heals or ends.
     /// </remarks>
     private readonly ConcurrentDictionary<Guid, byte> _rebuildFailuresCounted = new();
 
@@ -113,10 +95,9 @@ internal sealed class OccurrenceMaterializer
     /// serial catch-up does not wait for the operational retry between two slots.
     /// </summary>
     /// <remarks>
-    /// Never throws and never observes an exception: its caller is the <c>finally</c> of a delivery that is
-    /// already over. What it must NOT do is let a failure end the schedule's progress — a kick can be holding
-    /// the gate for a schedule delivery that is counting on it to re-park the row — and that is
-    /// <see cref="RunAsync"/>'s job, one level in, where the failure still knows which schedule it belongs to.
+    /// Never throws: its caller is the <c>finally</c> of a delivery that is already over. Re-parking the row
+    /// after a failure is <see cref="RunAsync"/>'s job, one level in, where the failure still knows which
+    /// schedule it belongs to — a kick can be holding the gate for a delivery counting on that re-park.
     /// </remarks>
     public async ValueTask KickAsync(Guid parentId, CancellationToken ct = default)
     {
@@ -126,9 +107,8 @@ internal sealed class OccurrenceMaterializer
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            // The host is stopping. The kick is the FAST path back to the materializer, never the only one:
-            // nothing is written by a run that could not finish, and the operational retry and startup
-            // recovery both bring the schedule back. Reporting it as a materialization failure would make
+            // The host is stopping: nothing is written by a run that could not finish, and the operational
+            // retry and startup recovery both bring the schedule back. Reporting it as a failure would make
             // every occurrence that ends during a shutdown say the schedule broke.
             _logger.MaterializationSkipped(parentId, "the host is stopping");
         }
@@ -144,7 +124,7 @@ internal sealed class OccurrenceMaterializer
     /// <param name="parentId">The schedule row.</param>
     /// <param name="parentExecutor">
     /// The executor the schedule's own slot fired with, when there is one. Absent on every other entry point,
-    /// and then rebuilt from the row — which is also what makes the row, not the caller, the source of truth.
+    /// and then rebuilt from the row.
     /// </param>
     /// <param name="ct">Cancellation token.</param>
     public async Task RunAsync(Guid parentId, TaskHandlerExecutor? parentExecutor, CancellationToken ct = default)
@@ -153,16 +133,15 @@ internal sealed class OccurrenceMaterializer
 
         while (true)
         {
-            // The executor travels with the work, and it is published BEFORE the flag the holder reads: a
-            // caller that finds the gate taken returns without parking the schedule row, because the holder
-            // has taken that over — and the holder's own failure path needs an executor it does not have to
-            // rebuild from the row, since what usually just failed IS the row's storage. ToLazy first: an
-            // eager executor carries the delivery's own scope, and that delivery disposes it.
+            // Published BEFORE the flag the holder reads: a caller that finds the gate taken returns without
+            // parking the row, so the holder's failure path needs an executor it does not have to rebuild
+            // from storage — which is what usually just failed. ToLazy first: an eager executor carries the
+            // delivery's own scope, and that delivery disposes it.
             if (parentExecutor is { } delivered)
                 Volatile.Write(ref gate.Delivered, delivered.ToLazy());
 
             // Announce the work BEFORE trying the gate: whoever holds it re-reads this flag before releasing,
-            // so a run that arrives mid-flight is never simply lost — it is absorbed into the one in progress.
+            // so a run that arrives mid-flight is absorbed into the one in progress rather than lost.
             Volatile.Write(ref gate.Pending, 1);
 
             if (!gate.Lock.Wait(0, ct))
@@ -187,20 +166,16 @@ internal sealed class OccurrenceMaterializer
                     }
                     catch (OccurrenceProviderException failure)
                     {
-                        // The schedule's calendar could not answer, which is transient by contract (V4).
-                        // Nothing was written — a plan that cannot be computed writes nothing — so the row
-                        // keeps its cursor and comes back after the provider's own backoff instead of the
-                        // ordinary operational retry.
+                        // The schedule's calendar could not answer, which is transient by contract. Nothing
+                        // was written, so the row keeps its cursor and comes back after the provider's own
+                        // backoff instead of the ordinary operational retry.
                         await DeferForProviderAsync(parentId, executor, failure, ct).ConfigureAwait(false);
                     }
                     catch (Exception ex)
                     {
-                        // Whoever holds the gate has ALSO taken over the re-park of every run it absorbed:
-                        // a schedule's own delivery that found the gate taken returned without parking the
-                        // row, because the holder was going to. Letting a failure end this run quietly is
-                        // what left such a schedule parked nowhere — not in the scheduler, not in a
-                        // delivery — until the process was restarted. The operational retry is armed here,
-                        // whichever entry point happens to be holding the gate.
+                        // Whoever holds the gate has also taken over the re-park of every run it absorbed, so
+                        // the operational retry is armed here whichever entry point is holding it. Ending
+                        // this run quietly leaves such a schedule parked nowhere until a restart.
                         _logger.MaterializationFailed(ex, parentId);
                         await ReParkAfterFailureAsync(parentId, executor, _options.BacklogRetryInterval, ct)
                             .ConfigureAwait(false);
@@ -250,13 +225,11 @@ internal sealed class OccurrenceMaterializer
 
         if (recovered.Recurring is { IsDurable: false } inline)
         {
-            // Not a durable schedule any more: a task key re-registration or a reschedule wrote an INLINE
-            // definition over the row. Re-parking the durable executor this run was handed is never the
-            // answer — the scheduler is keyed by id and the last write wins, so it would replace whatever
-            // owns the row now with a registration that materializes nothing. Normally that owner has parked
-            // the row itself and this run has nothing to do; the exception is the one case that brings an old
-            // durable delivery here at all — a re-park that FAILED — where assuming it had been parked left
-            // the series in no scheduler, no queue and no delivery until a restart.
+            // Not a durable schedule any more: a task key re-registration or a reschedule wrote an inline
+            // definition over the row. Never re-park the durable executor here — the scheduler is keyed by id
+            // and last write wins, so it would replace the current owner with a registration that
+            // materializes nothing. But a re-park that FAILED is exactly what brings an old durable delivery
+            // here, so assuming the row is already parked leaves the series parked nowhere.
             await ParkInlineRowAsync(scope.ServiceProvider, recovered, row, inline).ConfigureAwait(false);
             return;
         }
@@ -269,11 +242,10 @@ internal sealed class OccurrenceMaterializer
 
         var auditLevel = recovered.AuditLevel;
 
-        // THE snapshot this whole run decides against, taken once. Every compare-and-swap below carries these
-        // values and never a fresh read of the row: an expectation read after the decision absorbs whatever a
-        // concurrent writer did in between, and the write that was supposed to lose wins instead — the same
-        // shape as R1 in phase 1. It matters most on a storage that hands back LIVE entities (the in-memory
-        // one does), where "the row" and "the row a cancel just changed" are the same object.
+        // The snapshot this whole run decides against, taken once: every compare-and-swap below carries these
+        // values and never a fresh read of the row, or an expectation read after the decision absorbs
+        // whatever a concurrent writer did in between and the write that should lose wins. It matters most on
+        // a storage handing back LIVE entities (the in-memory one does).
         var snapshot = new ScheduleSnapshot(row.Id, row.ScheduleVersion, row.NextRunUtc.Value, row.Status,
             row.CurrentRunCount ?? 0, row.QueueName);
 
@@ -287,13 +259,9 @@ internal sealed class OccurrenceMaterializer
 
         if (ScheduleRuntimeInfo.TryParse(row.RuntimeInfo)?.Halted is { } standingHalt)
         {
-            // Reported, and NOT re-parked. The operational retry exists so a schedule that could not advance
-            // gets another chance without waiting for a restart; a halt has nothing to try again — by
-            // contract it never releases itself, not by aging and not by restarting, and only an explicit
-            // resume or reschedule clears the marker, both of which park the row themselves. Re-parking it
-            // anyway would put the row back through the worker queue every minute forever, and each of those
-            // deliveries is a Queued transition plus a status-audit row written for a schedule that by
-            // definition produces nothing.
+            // Reported, and NOT re-parked. A halt never releases itself: only an explicit resume or
+            // reschedule clears the marker, and both park the row themselves. Re-parking it anyway sends the
+            // row through the worker queue every minute for ever, each pass writing a status audit row.
             ReportHalt(executor, parentId, standingHalt, now);
             return;
         }
@@ -302,10 +270,9 @@ internal sealed class OccurrenceMaterializer
                              ct)
                          .ConfigureAwait(false);
 
-        // ONE plan per run. The slots it grants may end up being written further along the grid than it named
-        // them — a slot that already has a row is walked past inside the pass below — but nothing about the
-        // decision changes while that happens, which is why re-deciding it per walked slot bought nothing and
-        // cost a full count and a full bisection over the remaining backlog apiece.
+        // ONE plan per run: the slots it grants may be written further along the grid than it named them, but
+        // nothing about the decision changes while the pass walks past already-served slots. Re-deciding per
+        // walked slot costs a full count and a full bisection over the remaining backlog apiece.
         var identity = new ScheduleIdentity(parentId, row.TaskKey, snapshot.CurrentRunCount + 1);
 
         var plan = await _enumerator
@@ -340,10 +307,9 @@ internal sealed class OccurrenceMaterializer
             _logger.DurableSeriesCompleted(parentId);
 
             // A durable series ends HERE and nowhere else — the cursor is nulled in the same commit that
-            // writes the terminal status, so it never passes through QueueNextOccourrence, which is where an
-            // inline series drops its published lower bound (S4). Without this the entry of every durable
-            // schedule an operator had rescheduled outlived the series for the life of the process. The
-            // provider backoff of a schedule that will not ask again goes with it, for the same reason.
+            // writes the terminal status, so it never passes through QueueNextOccourrence, where an inline
+            // series drops its published lower bound. Otherwise the registry entry of every finished durable
+            // schedule outlives the series for the life of the process; the provider backoff goes with it.
             _scheduleVersions.Remove(parentId);
             ProviderRetries?.Forget(parentId);
 
@@ -359,11 +325,9 @@ internal sealed class OccurrenceMaterializer
         if (truncated)
             _logger.ServedSlotWalkTruncated(parentId, pass.ServedSlots);
 
-        // A lost compare-and-swap wrote nothing: the row says something this run did not expect, and the
-        // right answer is to look again rather than to act on the stale reading. Re-parked at the retry
-        // interval instead of at the cursor, because that cursor is exactly the value that turned out to be
-        // wrong — and never simply dropped, or a race nobody else resolves would stall the schedule until a
-        // restart.
+        // A lost compare-and-swap wrote nothing, so re-park at the retry interval rather than at the cursor:
+        // that cursor is exactly the value that turned out to be wrong. Never simply dropped, or a race
+        // nobody else resolves stalls the schedule until a restart.
         RePark(executor, parentId,
             !pass.WonEveryWrite || truncated || plan.StopReason == DueSlotStopReason.WindowFull
                 ? now + _options.BacklogRetryInterval
@@ -375,16 +339,11 @@ internal sealed class OccurrenceMaterializer
     /// run is what took it out of it.
     /// </summary>
     /// <remarks>
-    /// The VERDICT on such a row — a payload that no longer deserializes, a definition that no longer
-    /// validates because the zone id it names has left the tz database — belongs to startup recovery: it owns
-    /// the bounded retry that lets a payload heal across a redeploy and the terminal poison at the end of it,
-    /// and a second copy of either here would spend the same budget twice. What belongs to this run is where
-    /// the row is PARKED. The schedule's own delivery is the only entry point that consumed the registration
-    /// that made it — a kick and a recovery re-dispatch both leave the row parked where it was — so that is
-    /// the one that has to hand it back, at the operational retry like any other run that could not advance.
-    /// Returning quietly left such a schedule in no scheduler, no queue and no delivery, with a Debug line for
-    /// it, and only a restart brought the series back. An executor is never rebuilt from the row here: that is
-    /// exactly what just failed, and one built without the durable definition would run the handler.
+    /// The verdict on such a row belongs to startup recovery, which owns the bounded retry and the terminal
+    /// poison; a second copy here would spend the same budget twice. Only the schedule's own delivery
+    /// consumed a registration, so only that entry point has to hand the row back — returning quietly leaves
+    /// the series parked nowhere until a restart. The executor is never rebuilt from the row: that is exactly
+    /// what just failed, and one built without the durable definition would run the handler.
     /// </remarks>
     private void ParkUnusableRow(Guid parentId, TaskHandlerExecutor? parentExecutor, RecoveredTask recovered,
                                  DateTimeOffset now)
@@ -419,14 +378,12 @@ internal sealed class OccurrenceMaterializer
     /// executor from the row when nothing holds it.
     /// </summary>
     /// <remarks>
-    /// Whoever wrote the inline definition owns the parking and normally did it, so the usual answer here is
-    /// "nothing to do" and it costs one registry lookup. The case this exists for is the only one that lets an
-    /// old durable delivery reach a rewritten row: a re-park that FAILED, which publishes no version and hands
-    /// the row to nobody. The executor is rebuilt FROM THE ROW and never taken from this run — the delivered
-    /// one carries the durable definition, and parking it would put a registration that materializes nothing
-    /// over a series that now runs a handler. Without evidence (a scheduler that cannot report its
-    /// registrations) the row is parked anyway: a duplicate registration of the same instant is replaced
-    /// latest-wins, while a missing one stops the series until a restart.
+    /// Whoever wrote the inline definition owns the parking and normally did it; this exists for the one case
+    /// that lets an old durable delivery reach a rewritten row, a re-park that FAILED and handed the row to
+    /// nobody. The executor is rebuilt FROM THE ROW: the delivered one carries the durable definition, and
+    /// parking it would put a registration that materializes nothing over a series that now runs a handler.
+    /// Without evidence (a scheduler that cannot report its registrations) the row is parked anyway — a
+    /// duplicate registration is replaced latest-wins, a missing one stops the series until a restart.
     /// </remarks>
     private async Task ParkInlineRowAsync(IServiceProvider provider, RecoveredTask recovered, QueuedTask row,
                                           RecurringTask inline)
@@ -473,14 +430,10 @@ internal sealed class OccurrenceMaterializer
     /// was really created to the scheduler.
     /// </summary>
     /// <remarks>
-    /// A slot that comes back <see cref="OccurrenceMaterializationOutcome.AlreadyExists"/> is walked past HERE,
-    /// on the grid, and the occurrence the plan granted is written at the slot behind it. Nothing about the
-    /// decision changes while a run walks: <c>now</c> is fixed, a slot newer than an eligible one is inside the
-    /// age window a fortiori, a backlog that only shrinks cannot exceed a cap the bigger one already passed,
-    /// and a slot that already had a row spends neither a run nor a unit of the concurrency budget. Handing the
-    /// walk back to the caller for a fresh plan per slot asked all of that again — a bounded count and a
-    /// bisection over the WHOLE remaining backlog each time, quadratic in the length of the stretch — to get
-    /// the same answers back.
+    /// A slot that comes back <see cref="OccurrenceMaterializationOutcome.AlreadyExists"/> is walked past
+    /// here, on the grid, and the occurrence the plan granted is written at the slot behind it. Nothing about
+    /// the decision changes while a run walks, and handing the walk back for a fresh plan per slot is
+    /// quadratic in the length of the stretch.
     /// </remarks>
     /// <returns>
     /// Where the cursor ended up, what the pass produced, whether the series finished, and whether every write
@@ -513,13 +466,10 @@ internal sealed class OccurrenceMaterializer
 
             var slot = planned ? plan.Slots[i] : cursor;
 
-            // The cursor this write leaves behind. While the plan still has slots of its own, the next one.
-            // Then: this write spends the LAST run the budget allows, so the series ends in the same commit
-            // that creates it (M6/M14) — and it ends wherever the walk put that occurrence, because MaxRuns
-            // counts materializations and not slots, so a slot that turned out to be already served moved the
-            // write along the grid without spending anything. Otherwise the grid decides what follows the slot
-            // actually being written: the plan's own answer for the slot it named, a fresh step for one the
-            // walk reached, and a fresh step too when the plan's answer was a run budget that is NOT spent yet.
+            // The cursor this write leaves behind. When it spends the last run the budget allows, the series
+            // ends in the same commit that creates the occurrence, wherever the walk put it: MaxRuns counts
+            // materializations and not slots, so an already-served slot moved the write along the grid
+            // without spending anything.
             DateTimeOffset? newCursor;
 
             if (planned && i + 1 < grants)
@@ -542,21 +492,17 @@ internal sealed class OccurrenceMaterializer
                                 .MaterializeOccurrence(parentId, version, cursor, childRow, newCursor, auditLevel, ct)
                                 .ConfigureAwait(false);
 
-            // The slot already has a row while the cursor still points at it: a row written from outside the
-            // materializer, or an episode replayed after the cursor was rewound (a durable schedule
-            // re-registered with a backfill over slots it had already served). Re-reading answers the same
-            // thing forever — the cursor is what is stale, and nothing else moves it — so the cursor is
-            // carried past the slot that is already served and the run goes on to the next one.
+            // The slot already has a row while the cursor still points at it (a rewound cursor replaying an
+            // episode, or a row written from outside). Re-reading answers the same thing for ever — the
+            // cursor is what is stale and nothing else moves it — so carry it past the slot and walk on.
             if (outcome == OccurrenceMaterializationOutcome.AlreadyExists)
             {
                 served++;
                 ReportSlotAlreadyServed(executorForEvents, parentId, slot);
 
-                // A null cursor here would say the series ends with this slot, and it does not: a slot that
-                // already had a row creates nothing and spends no run, so the run the plan set aside is still
-                // owed and gets created at the slot behind this one — which is where the budget is spent and
-                // where the series then ends, in that commit. Only a grid with nothing left after this slot
-                // ends it here.
+                // A null cursor here would end the series at this slot, and it does not: an already-served
+                // slot spends no run, so the run the plan set aside is still owed at the slot behind it. Only
+                // a grid with nothing left after this slot ends it here.
                 var next = newCursor
                            ?? await _enumerator.NextSlotAfterAsync(definition, slot, identity, ct)
                                                .ConfigureAwait(false);
@@ -637,13 +583,10 @@ internal sealed class OccurrenceMaterializer
     /// <paramref name="served"/> slots that already had a row.
     /// </summary>
     /// <remarks>
-    /// The range and the count are two halves of ONE statement — the count is how many grid slots the range
-    /// holds — so a run that walked past slots the backlog no longer owes has to say so on both: the range
-    /// starts at the slot being created and the count drops by exactly the number walked, since those slots
-    /// were consecutive from the range's old start. Its newest end does not move: walking never touches it.
-    /// Whether what is left is still MISSED work is the enumerator's own rule (M1), asked again here rather
-    /// than duplicated — a backlog worn down to one slot inside the misfire threshold is a schedule that has
-    /// caught up, and one still older than the threshold is not.
+    /// The range and the count are two halves of one statement, so both move: the range starts at the slot
+    /// being created and the count drops by the number walked, those slots having been consecutive from the
+    /// old start. The newest end never moves. Whether what is left is still missed work is the enumerator's
+    /// rule, asked again here rather than duplicated.
     /// </remarks>
     private OccurrenceMisfire? MisfireAfterWalking(DueSlotPlan plan, DateTimeOffset slot, DateTimeOffset now,
                                                    int served)
@@ -683,8 +626,7 @@ internal sealed class OccurrenceMaterializer
         if (written)
         {
             // First report of THIS halt: force it past the rate limit, so the event that matters is never the
-            // one that gets suppressed. No re-park either — see the standing-halt branch above: a halted
-            // schedule waits for a person, not for a timer.
+            // one that gets suppressed. No re-park — a halted schedule waits for a person, not for a timer.
             _haltReported.TryRemove(snapshot.Id, out _);
             ReportHalt(executor, snapshot.Id, halt, now);
             return;
@@ -701,10 +643,9 @@ internal sealed class OccurrenceMaterializer
     /// somewhere whatever the failure was.
     /// </summary>
     /// <remarks>
-    /// The delivered executor is preferred over rebuilding one from the row: what usually just failed IS the
-    /// storage, and re-reading it to recover from a read failure would fail the same way. <c>ToLazy</c> drops
-    /// the EverTask-owned scope of the delivery that is ending, exactly as the ordinary re-park does. Never
-    /// throws — this is already the failure path, and its caller is holding the per-schedule gate.
+    /// The delivered executor is preferred over rebuilding one from the row: what usually just failed is the
+    /// storage. <c>ToLazy</c> drops the EverTask-owned scope of the delivery that is ending. Never throws —
+    /// this is already the failure path, and its caller is holding the per-schedule gate.
     /// </remarks>
     private async Task<ProviderRetryParkOutcome> ReParkAfterFailureAsync(
         Guid parentId, TaskHandlerExecutor? parentExecutor, TimeSpan delay, CancellationToken ct)
@@ -765,13 +706,12 @@ internal sealed class OccurrenceMaterializer
 
     /// <summary>
     /// Hands a schedule whose occurrence provider could not answer back to the scheduler, after the backoff
-    /// that failure has earned (V4).
+    /// that failure has earned.
     /// </summary>
     /// <remarks>
     /// The ordinary operational retry would do the same thing on the wrong clock: the provider's backoff grows
-    /// with its consecutive failures, so a source that is down for an hour is asked a handful of times instead
-    /// of sixty. Nothing is written either way — a plan that could not be computed materialized nothing — so
-    /// the row keeps its cursor and a crash costs only the wait.
+    /// with its consecutive failures, so a source down for an hour is asked a handful of times instead of
+    /// sixty. Nothing is written either way, so the row keeps its cursor.
     /// </remarks>
     private async Task DeferForProviderAsync(Guid parentId, TaskHandlerExecutor? parentExecutor,
                                              OccurrenceProviderException failure, CancellationToken ct)
@@ -781,11 +721,9 @@ internal sealed class OccurrenceMaterializer
         var outcome = await ReParkAfterFailureAsync(parentId, parentExecutor, failure.RetryAfter, ct)
                           .ConfigureAwait(false);
 
-        // Said only once the registration is really in, log line and event alike: before that point "parked to
-        // ask again" is a promise the very next line can break. A re-park that FAILED has already reported
-        // itself, as an error and not as this warning; a re-park the scheduler REFUSED hands back no executor
-        // and is silent here for the same reason — this run parked nothing, and whether the row is waiting on
-        // anything at all is now somebody else's business.
+        // Said only once the registration is really in, log line and event alike: before that point "parked
+        // to ask again" is a promise the very next line can break. A failed re-park has already reported
+        // itself as an error; a refused one parked nothing and belongs to whoever owns the row now.
         if (outcome.Failure != null || outcome.Executor is not { } executor)
             return;
 
@@ -804,25 +742,16 @@ internal sealed class OccurrenceMaterializer
 
     /// <summary>
     /// Counts the occurrences of a schedule that are still alive and rescues the ones that are alive only on
-    /// paper (M7/M9).
+    /// paper.
     /// </summary>
     /// <remarks>
-    /// An occurrence is really alive while a delivery holds it or the scheduler has it parked. One that is
-    /// neither — a status write swallowed by a crash, a scheduling lost to a shutdown — would otherwise sit
-    /// non-terminal forever and permanently consume a slot of the concurrency budget, which for the default
-    /// budget of one means the schedule never moves again. It is put back in the scheduler under a
-    /// compare-and-swap on the status it was found in, and it counts as active either way: a stale occurrence
-    /// frees capacity only by reaching a terminal state, never by being noticed.
-    /// <para>
-    /// Without a scheduler that can answer "is this parked", there is no evidence to tell the two apart — the
-    /// default answer is a constant "yes" — so nothing is reconciled and every non-terminal occurrence counts.
-    /// Conservative in the only direction that is safe: it delays the schedule instead of running an
-    /// occurrence twice.
-    /// </para>
-    /// <para>
-    /// An occurrence whose row cannot produce a runnable task is the one exception, and it is terminalized
-    /// rather than requeued — see <see cref="FailUnusableOccurrenceAsync"/>.
-    /// </para>
+    /// An occurrence is really alive while a delivery holds it or the scheduler has it parked; one that is
+    /// neither would sit non-terminal for ever and permanently consume a slot of the concurrency budget. It is
+    /// requeued under a compare-and-swap on the status it was found in, and it counts as active either way:
+    /// capacity is freed by reaching a terminal state, never by being noticed. Without a scheduler that can
+    /// answer "is this parked" nothing is reconciled and every non-terminal occurrence counts — that delays
+    /// the schedule instead of running an occurrence twice. A row that cannot produce a runnable task is the
+    /// exception and is terminalized instead, see <see cref="FailUnusableOccurrenceAsync"/>.
     /// </remarks>
     private async Task<int> ReconcileOccurrencesAsync(IServiceProvider provider, ITaskStorage storage,
                                                       TaskHandlerExecutor executorForEvents, Guid parentId,
@@ -850,10 +779,9 @@ internal sealed class OccurrenceMaterializer
 
             var expected = child.Status;
 
-            // Rebuilt BEFORE the requeue, not after it. A row that cannot produce an executor cannot be
-            // rescued by a compare-and-swap back to Queued, and doing it in the other order wrote that
-            // transition and its status-audit row on every single run — for ever, since the row was then
-            // dropped by the next line and left exactly as it was found.
+            // Rebuilt BEFORE the requeue: a row that cannot produce an executor is not rescued by a
+            // compare-and-swap back to Queued, and the other order writes that transition and its status
+            // audit row on every run for ever, since the row is then left exactly as it was found.
             var rebuild = await BuildOccurrenceFromRowAsync(provider, child).ConfigureAwait(false);
 
             if (rebuild.Executor is null)
@@ -861,29 +789,20 @@ internal sealed class OccurrenceMaterializer
                 int? exhaustedAfter = null;
 
                 // Registered but not activatable right now — a scoped dependency that timed out, a
-                // connection that was not there — is NOT a verdict on the row: it is the same transient
-                // failure the retry policy exists for, and ending the occurrence on it would drop work no
-                // handler ever saw. It keeps its slot of the budget and its non-terminal status, and the
-                // operational retry looks again.
+                // connection that was not there — is NOT a verdict on the row: ending the occurrence on it
+                // drops work no handler ever saw. It keeps its slot of the budget and its non-terminal
+                // status, and the operational retry looks again.
                 if (!rebuild.Permanent)
                 {
-                    // But not for ever (F6). A constructor that throws EVERY time is a misconfiguration, not
-                    // an outage, and "look again next run" then holds the series for the life of the process
-                    // — under the default budget of one, a schedule that materializes nothing ever again
-                    // while every run leaves the same warning that no write ever closes. The bound is the
-                    // row's own L18 counter, the one the recovery poisons a re-dispatch with: the same
-                    // question (how many times may this row fail to become a delivery?) answered the same
-                    // way, on a column that already exists per row. A storage that does not persist it
-                    // answers 0 for ever and keeps exactly the unbounded behaviour it had before.
+                    // But not for ever: a constructor that throws every time is a misconfiguration, and
+                    // "look again next run" then holds the series for the life of the process. The bound is
+                    // the row's own recovery-failure counter, answering the same question as the recovery's
+                    // poison; a storage that does not persist it answers 0 and stays unbounded as before.
                     //
-                    // ONE attempt per PROCESS START, which is the cadence the counter is borrowed from: the
-                    // recovery spends its five over five restarts, while a schedule holding a stale
-                    // occurrence re-plans every BacklogRetryInterval — a minute by default — so counting per
-                    // run burned the whole ceiling in five minutes and made a database failover of a quarter
-                    // of an hour indistinguishable from the misconfiguration this bound exists to catch. It
-                    // is also what the contract says out loud ("if something is registered, the occurrence
-                    // keeps its place and the next run tries again"): a run inside the same outage looks
-                    // again for free, and only the next restart adds a failure to the row.
+                    // ONE attempt per PROCESS START, the cadence the counter is borrowed from: a stale
+                    // occurrence is re-planned every BacklogRetryInterval, so counting per run burns the
+                    // ceiling in five minutes and makes a database failover indistinguishable from the
+                    // misconfiguration this bound exists to catch.
                     var counted  = _rebuildFailuresCounted.TryAdd(child.Id, 0);
                     var attempts = counted
                                        ? await storage.IncrementRecoveryFailure(child.Id, ct).ConfigureAwait(false)
@@ -899,10 +818,9 @@ internal sealed class OccurrenceMaterializer
                     exhaustedAfter = attempts;
                 }
 
-                // Only a CONFIRMED terminal state frees capacity. SetStatus is best-effort on every
-                // relational provider — it logs its own failure and returns — so counting the slot as free on
-                // the strength of having called it would let the run create a successor while the old row is
-                // still alive, over a budget that says one.
+                // Only a CONFIRMED terminal state frees capacity: SetStatus is best effort on every
+                // relational provider, so counting the slot free on the strength of having called it lets
+                // the run create a successor while the old row is still alive.
                 if (await FailUnusableOccurrenceAsync(storage, executorForEvents, child, parentId, rebuild.Failure!,
                             exhaustedAfter, auditLevel, ct)
                         .ConfigureAwait(false))
@@ -910,9 +828,8 @@ internal sealed class OccurrenceMaterializer
                     active--;
                 }
 
-                // The row is terminal, and RequeueTerminal is the way back: it clears the durable counter, so
-                // the in-process mark has to go with it or a requeued occurrence would meet the ceiling again
-                // on its first failure without ever having spent an attempt of its own.
+                // RequeueTerminal is the way back and it clears the durable counter, so the in-process mark
+                // goes with it or a requeued occurrence meets the ceiling again on its first failure.
                 _rebuildFailuresCounted.TryRemove(child.Id, out _);
 
                 continue;
@@ -920,10 +837,9 @@ internal sealed class OccurrenceMaterializer
 
             var executor = rebuild.Executor;
 
-            // The same L18 hygiene a successful re-dispatch does: a rebuild that healed leaves no failures
-            // behind for a later transient one to inherit and tip over the ceiling with. Conditional on the
-            // WRITE, so the ordinary reconciliation of a healthy row still costs no round trip; the
-            // in-process mark is dropped either way, because it is what makes the next outage a new one.
+            // A rebuild that healed leaves no failures behind for a later transient one to inherit and tip
+            // over the ceiling with. Conditional on the WRITE, so reconciling a healthy row still costs no
+            // round trip; the in-process mark is dropped either way, since it makes the next outage a new one.
             _rebuildFailuresCounted.TryRemove(child.Id, out _);
 
             if ((child.RecoveryDispatchFailureCount ?? 0) > 0)
@@ -948,32 +864,21 @@ internal sealed class OccurrenceMaterializer
     /// something nothing can deliver.
     /// </summary>
     /// <param name="exhaustedAfter">
-    /// The number of consecutive PROCESS STARTS that failed to rebuild the row, when THAT is what ended it
-    /// (F6), and null when the verdict was final on the first look. The two are the same write and two
-    /// different sentences: one names a build nothing can fix, the other a handler that is there and never
-    /// builds.
+    /// The number of consecutive process starts that failed to rebuild the row, when that is what ended it,
+    /// and null when the verdict was final on the first look. Same write, two different sentences: one names
+    /// a build nothing can fix, the other a handler that is there and never builds.
     /// </param>
     /// <remarks>
-    /// The verdict cannot change while the process lives: the type is gone, its persisted payload does not
-    /// deserialize against this build, or nothing here registers a handler for it, and re-reading the same
-    /// row answers the same thing every minute. A rebuild that keeps failing with a handler registered gets
-    /// here too, but only after <see cref="MaxOccurrenceRebuildAttempts"/> process starts have said the same
-    /// thing — an outage that ends inside one of them never reaches this at all. Left
-    /// non-terminal it would go on consuming a slot of the schedule's concurrency budget, which at the default
-    /// budget of one is a series that never materializes another occurrence. <c>Failed</c> is the state M13
-    /// gives an occurrence that cannot run — the series moves on, the row keeps the reason it carries, and
-    /// <see cref="ITaskStorage.RequeueTerminal"/> is the way back once a deploy makes the row readable again.
-    /// <para>
-    /// The write is unconditional, like every other poison in the codebase. This path is reached only for an
-    /// occurrence no delivery holds and no scheduler carries, and one no build of this process could run
-    /// anyway, so the only status a concurrent writer could put under it is another terminal one.
-    /// </para>
+    /// The verdict cannot change while the process lives, and left non-terminal the row goes on consuming a
+    /// slot of the schedule's concurrency budget. <c>Failed</c> lets the series move on with the reason kept
+    /// on the row; <see cref="ITaskStorage.RequeueTerminal"/> is the way back once a deploy makes it readable
+    /// again. The write is unconditional: nothing holds this row, so the only status a concurrent writer
+    /// could put under it is another terminal one.
     /// </remarks>
     /// <returns>
-    /// Whether the row really is terminal now. <see cref="ITaskStorage.SetStatus"/> is best-effort — every
-    /// relational provider logs a failed transition and returns normally — so the caller cannot read "the call
-    /// returned" as "the slot is free": a swallowed write would let the schedule create a successor while the
-    /// old occurrence is still alive under a budget of one.
+    /// Whether the row really is terminal now. <see cref="ITaskStorage.SetStatus"/> is best effort, so "the
+    /// call returned" is not "the slot is free" — a swallowed write would let the schedule create a successor
+    /// while the old occurrence is still alive.
     /// </returns>
     private async Task<bool> FailUnusableOccurrenceAsync(ITaskStorage storage, TaskHandlerExecutor executorForEvents,
                                                          QueuedTask child, Guid parentId, Exception reason,
@@ -983,9 +888,8 @@ internal sealed class OccurrenceMaterializer
         await storage.SetStatus(child.Id, QueuedTaskStatus.Failed, reason, auditLevel, null, ct)
                      .ConfigureAwait(false);
 
-        // Read back BEFORE saying anything: both the log line and the event state what happened to the row,
-        // and "was marked Failed" is exactly what a swallowed write did NOT do. Reported that way, an
-        // operator reads a slot as freed while the schedule is still held behind the occurrence.
+        // Read back BEFORE saying anything: "was marked Failed" is exactly what a swallowed write did not do,
+        // and reported that way an operator reads a slot as freed while the schedule is still held.
         var written = (await storage.Get(t => t.Id == child.Id, ct).ConfigureAwait(false)).FirstOrDefault();
         var ended   = written is null || !QueuedTask.IsNonTerminalStatus(written.Status);
 
@@ -1018,8 +922,8 @@ internal sealed class OccurrenceMaterializer
 
     /// <summary>Builds the executor of a brand-new occurrence, before its row exists.</summary>
     /// <param name="timeZoneId">
-    /// The zone of the schedule, copied onto the occurrence: a child carries no definition, so this is the only
-    /// way the zone and the local slot reach its handler (C1/T13).
+    /// The zone of the schedule, copied onto the occurrence: a child carries no definition, so this is the
+    /// only way the zone and the local slot reach its handler.
     /// </param>
     private static async Task<TaskHandlerExecutor> BuildOccurrenceAsync(IServiceProvider provider, IEverTask payload,
                                                                         ScheduleSnapshot parent, DateTimeOffset slot,
@@ -1040,7 +944,7 @@ internal sealed class OccurrenceMaterializer
 
         // The queue is COPIED from the schedule row, not re-derived: an occurrence is dispatched with no
         // recurring definition, and the fallback for one of those is the default queue — so a durable series
-        // routed to its own queue would quietly leave it, one occurrence at a time (M4).
+        // routed to its own queue would quietly leave it, one occurrence at a time.
         var metadata = new DispatchRowMetadata(parent.Id, runtimeInfo, parent.ScheduleVersion, parent.QueueName,
             null, runNumber, slot);
 
@@ -1055,20 +959,12 @@ internal sealed class OccurrenceMaterializer
     /// <summary>Rebuilds the executor of an occurrence that already has a row (the reconciliation path).</summary>
     /// <returns>The executor, or the reason this row did not produce one and whether that reason is final.</returns>
     /// <remarks>
-    /// A row is unusable for TWO reasons, and the second one used to escape as an exception: the payload may
-    /// not rebuild, and the rebuilt payload may have no handler to run it — a type still loadable after a
-    /// re-registration pointed its schedule at a different task, whose <c>IEverTaskHandler&lt;T&gt;</c> nobody
-    /// registers any more. Resolution happens inside <c>Handle</c>, so that one threw out of the whole
-    /// reconciliation: the schedule re-parked, the occurrence stayed non-terminal, and under the default
-    /// budget of one it held the series behind something no build of this process can deliver. Both are the
-    /// same verdict — see <see cref="FailUnusableOccurrenceAsync"/> — and the way back from it is the same.
-    /// <para>
-    /// What is NOT that verdict is a handler that exists and merely failed to be built this time: a scoped
-    /// dependency whose factory threw, a connection that was not there. The exception looks identical from
-    /// here, so the container is asked the question that tells them apart — is anything registered for this
-    /// task at all? — and only a "no" is final. Ending an occurrence on a transient activation failure would
-    /// drop work no handler ever saw, without a single one of the retries its policy promises.
-    /// </para>
+    /// A row is unusable for two reasons: the payload may not rebuild, and the rebuilt payload may have no
+    /// handler left to run it. Handler resolution happens inside <c>Handle</c>, so the second one arrives as
+    /// an exception; both are the same verdict, see <see cref="FailUnusableOccurrenceAsync"/>. What is NOT
+    /// that verdict is a handler that exists and merely failed to be built this time, which looks identical
+    /// from here — so the container is asked whether anything is registered for the task at all, and only a
+    /// "no" is final. Ending an occurrence on a transient activation failure drops work no handler ever saw.
     /// </remarks>
     private static async Task<OccurrenceRebuild> BuildOccurrenceFromRowAsync(IServiceProvider provider,
                                                                             QueuedTask child)
@@ -1077,9 +973,8 @@ internal sealed class OccurrenceMaterializer
 
         if (recovered.Task is null)
         {
-            // The two verdicts the factory keeps apart, kept apart here too: a type that is gone can never
-            // run, a payload that did not deserialize did not run in THIS build. Neither answer changes for
-            // this process, which is what makes the row's ending a decision and not a retry.
+            // Neither answer changes while this process lives, which is what makes the row's ending a
+            // decision and not a retry.
             return new OccurrenceRebuild(null, recovered.PayloadError
                                                ?? new InvalidOperationException(recovered.TypeWasLoadable
                                                    ? "The occurrence's persisted payload did not produce a runnable task"
@@ -1107,9 +1002,8 @@ internal sealed class OccurrenceMaterializer
     /// that can never heal while the process lives.
     /// </summary>
     /// <remarks>
-    /// Asked only after a rebuild has already failed, so the cost is paid on the rare path. An activation that
-    /// throws again here is evidence of the opposite kind: something IS registered, and what failed is the
-    /// building of it.
+    /// Asked only after a rebuild has already failed, so the cost is paid on the rare path. An activation
+    /// that throws again here is evidence of the opposite: something is registered, and building it failed.
     /// </remarks>
     private static bool NoHandlerRegisteredFor(IServiceProvider provider, Type taskType)
     {
@@ -1137,12 +1031,9 @@ internal sealed class OccurrenceMaterializer
     /// </summary>
     /// <remarks>
     /// The retry is what makes progress independent of the kick: recovery runs once at startup, so a schedule
-    /// whose window is full and whose kick was lost would otherwise wait for the next restart.
-    /// </remarks>
-    /// <remarks>
-    /// Conditional, because the executor a run was HANDED belongs to the delivery that produced it and a
-    /// reschedule may have committed a newer definition and parked it in the meantime: replacing that
-    /// registration latest-wins would hand the row back to a definition nobody owns any more.
+    /// whose window is full and whose kick was lost would otherwise wait for the next restart. Conditional,
+    /// because a reschedule may have committed a newer definition and parked it in the meantime, and
+    /// replacing that registration latest-wins hands the row back to a definition nobody owns any more.
     /// </remarks>
     /// <returns>
     /// False when the scheduler refused the registration — a newer definition owns the row's parking, or the
@@ -1247,9 +1138,9 @@ internal sealed class OccurrenceMaterializer
     /// counted under a cap).
     /// </summary>
     /// <remarks>
-    /// The CAUSE is half the report. An age window that is too narrow for the outage and a per-episode cap
-    /// that kept only the newest slots are different mistakes with different fixes, and reporting the second
-    /// one under the first one's sentence sent an operator to widen a window that had dropped nothing.
+    /// The cause is half the report: an age window too narrow for the outage and a per-episode cap that kept
+    /// only the newest slots are different mistakes with different fixes, and merging them sends an operator
+    /// to widen a window that dropped nothing.
     /// </remarks>
     private void ReportLoss(TaskHandlerExecutor executor, Guid parentId, SlotLoss loss)
     {
@@ -1291,13 +1182,10 @@ internal sealed class OccurrenceMaterializer
     /// Opens or closes the catch-up EPISODE a schedule is in, which is what the two boundary events report.
     /// </summary>
     /// <remarks>
-    /// A catch-up spans as many runs as the concurrency budget takes to drain the backlog, and each of those
-    /// runs reports only the rows it wrote: without a boundary a consumer cannot tell one replay from the
-    /// ordinary occurrences around it, and cannot tell when it is over. The episode is decided from the PLAN —
-    /// a plan that stamps its rows as catch-up work is a replay in progress, one that does not is a schedule
-    /// keeping up — so it opens before the rows exist and closes on the first run that owes nothing more. It
-    /// is per-process state: a restart in the middle of a replay opens a new episode, which is what the
-    /// materializer itself does with the backlog.
+    /// A catch-up spans as many runs as the budget takes to drain the backlog and each run reports only the
+    /// rows it wrote, so without a boundary a consumer cannot tell a replay from the ordinary occurrences
+    /// around it. Decided from the PLAN, so it opens before the rows exist. Per-process state: a restart mid
+    /// replay opens a new episode, which is what the materializer itself does with the backlog.
     /// </remarks>
     private void TrackCatchUpEpisode(TaskHandlerExecutor executor, Guid parentId, DueSlotPlan plan,
                                      DateTimeOffset now)
@@ -1324,11 +1212,9 @@ internal sealed class OccurrenceMaterializer
             return;
         }
 
-        // Nothing left to replay: this run planned ordinary work, so whatever the episode was owed has been
-        // materialized (or dropped, which is reported on its own). Only a plan that ran out of WORK says
-        // that — one that ran out of concurrency budget plans nothing at all while the replay is at its
-        // busiest, and reading that as the end would close and reopen the episode between every two
-        // occurrences of a serial catch-up.
+        // Only a plan that ran out of WORK ends the episode: one that ran out of concurrency budget plans
+        // nothing at all while the replay is at its busiest, and reading that as the end closes and reopens
+        // the episode between every two occurrences of a serial catch-up.
         if (plan.StopReason == DueSlotStopReason.Exhausted)
             ReportCatchUpCompleted(executor, parentId, now);
     }
@@ -1387,18 +1273,12 @@ internal sealed class OccurrenceMaterializer
 
     /// <summary>The schedule row as ONE run read it: what every decision and every write of that run is about.</summary>
     /// <remarks>
-    /// Taken once, at the top of the run, and never refreshed. Each compare-and-swap below carries these values
-    /// rather than a fresh read of the entity: an expectation read at write time absorbs whatever a concurrent
-    /// writer did in between, so the write that should have lost wins instead. That is not hypothetical on a
-    /// storage that hands back LIVE entities — the in-memory one does — where "the row" and "the row a cancel
-    /// just changed" are the same object. <see cref="QueueName"/> is here for the same reason and not as an
-    /// expectation: it is copied onto every occurrence, and re-reading it mid-run would route half of one run's
-    /// occurrences to a queue the other half never saw.
-    /// </remarks>
-    /// <remarks>
-    /// <see cref="CursorUtc"/> is the one field a run replaces, and only with a value one of its OWN
-    /// compare-and-swaps wrote: a pass that walked past a slot already served hands the next pass the cursor
-    /// it put there, which is still a value this run is entitled to expect.
+    /// Taken once and never refreshed, because an expectation read at write time absorbs whatever a concurrent
+    /// writer did in between and the write that should have lost wins instead — a storage handing back LIVE
+    /// entities (the in-memory one) makes that concrete. <see cref="QueueName"/> is here for the same reason
+    /// and not as an expectation: re-reading it mid-run would route half of one run's occurrences to a queue
+    /// the other half never saw. <see cref="CursorUtc"/> is the one field a run replaces, and only with a
+    /// value one of its own compare-and-swaps wrote.
     /// </remarks>
     private readonly record struct ScheduleSnapshot(
         Guid Id,
@@ -1453,8 +1333,8 @@ internal sealed class OccurrenceMaterializer
 
         /// <summary>
         /// The executor of the last schedule delivery this gate absorbed, already lazy. The holder takes it
-        /// over together with the work — it is what re-parks the row when the run fails and the storage the
-        /// row would be rebuilt from is the thing that failed.
+        /// over with the work: it is what re-parks the row when the run fails and what failed is the storage
+        /// the row would be rebuilt from.
         /// </summary>
         public TaskHandlerExecutor? Delivered;
     }

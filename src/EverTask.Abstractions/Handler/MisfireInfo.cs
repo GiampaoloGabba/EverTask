@@ -46,9 +46,8 @@ public sealed record MisfireInfo
     public int MissedCount { get; init; }
 
     /// <summary>
-    /// Whether <see cref="MissedCount"/> is the real total or only a lower bound. Counting a calendar grid
-    /// means walking it, and a long outage is not walked to the end just to report a number — when that
-    /// happens the count says "at least this many" instead of pretending to be exact.
+    /// Whether <see cref="MissedCount"/> is the real total or only a lower bound: counting a calendar grid
+    /// means walking it, and a long outage is not walked to the end just to report a number.
     /// </summary>
     public bool MissedCountIsExact { get; init; } = true;
 

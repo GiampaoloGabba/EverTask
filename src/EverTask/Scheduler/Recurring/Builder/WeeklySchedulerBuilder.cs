@@ -2,7 +2,7 @@ namespace EverTask.Scheduler.Recurring.Builder;
 
 public class WeeklySchedulerBuilder(RecurringTask task, TimeProvider? timeProvider) : IWeeklySchedulerBuilder
 {
-    /// <summary>The pre-P9 constructor, kept for binary compatibility (P6/X6).</summary>
+    /// <summary>The historical constructor, kept so an assembly compiled against an earlier release binds.</summary>
     public WeeklySchedulerBuilder(RecurringTask task) : this(task, null) { }
 
     public IDailyTimeSchedulerBuilder OnDay(DayOfWeek day)

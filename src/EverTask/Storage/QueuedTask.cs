@@ -23,7 +23,7 @@ public class QueuedTask
     public int?            AuditLevel            { get; set; }
 
     /// <summary>
-    /// Number of consecutive failed startup-recovery re-dispatch attempts (L18). Incremented each time
+    /// Number of consecutive failed startup-recovery re-dispatch attempts. Incremented each time
     /// recovery fails to re-dispatch this task; once it reaches the configured limit the task is
     /// poisoned (marked <see cref="QueuedTaskStatus.Failed"/>) so a persistent failure stops being
     /// retried at every restart. Reset after a successful re-dispatch. Not part of the recoverable
@@ -96,7 +96,7 @@ public class QueuedTask
     /// </remarks>
     public bool IsRecoverableForExecution(DateTimeOffset now) =>
         // < MaxRuns (not <=): a series at CurrentRunCount == MaxRuns is exhausted and terminal, matching
-        // CalculateNextRun's `currentRun >= MaxRuns` (CU11/L27). null CurrentRunCount counts as 0 (L34).
+        // CalculateNextRun's `currentRun >= MaxRuns`. null CurrentRunCount counts as 0.
         (MaxRuns == null || (CurrentRunCount ?? 0) < MaxRuns)
         && (Status is QueuedTaskStatus.WaitingQueue or QueuedTaskStatus.Queued
                 or QueuedTaskStatus.Pending or QueuedTaskStatus.ServiceStopped
@@ -122,12 +122,11 @@ public class QueuedTask
     /// carries a cursor, so it must be FINALIZED (Completed, cursor cleared) instead of executed.
     /// </summary>
     /// <remarks>
-    /// Its pending slot falls at or past <see cref="RunUntil"/>, or the run budget is spent. Such a row
-    /// used to satisfy no predicate at all once <c>RunUntil</c> elapsed, so it stayed <c>Queued</c>
-    /// forever — a zombie no restart could clear. <see cref="QueuedTaskStatus.Cancelled"/> is excluded:
-    /// a cancelled series is already terminal and must never be rewritten to Completed. The other
-    /// terminal shapes (a Completed series with a null cursor, a poisoned Failed one) are excluded by
-    /// the <c>NextRunUtc != null</c> term.
+    /// Its pending slot falls at or past <see cref="RunUntil"/>, or the run budget is spent. Without this
+    /// category such a row satisfies no predicate at all and stays <c>Queued</c> for ever, and no restart
+    /// clears it. <see cref="QueuedTaskStatus.Cancelled"/> is excluded: a cancelled series is already
+    /// terminal and must never be rewritten to Completed. The other terminal shapes (a Completed series
+    /// with a null cursor, a poisoned Failed one) are excluded by the <c>NextRunUtc != null</c> term.
     /// </remarks>
     public bool IsRecurringSeriesToFinalize() =>
         IsRecurring
@@ -142,7 +141,7 @@ public class QueuedTask
     /// schedule row may carry cleared.
     /// </summary>
     /// <remarks>
-    /// An occurrence is a one-shot by contract (M4): its identity is the slot it already carries, and the
+    /// An occurrence is a one-shot by contract: its identity is the slot it already carries, and the
     /// definition, the cursor, the bounds and the task key stay on the schedule row. The optimized providers
     /// spell this shape out in the INSERT column list of their procedure or writable CTE; the stores that
     /// insert the caller's entity as it stands apply it here, so <c>MaterializeOccurrence</c> persists the
@@ -180,16 +179,13 @@ public class QueuedTask
     /// never depends on the offset the caller happened to be carrying.
     /// </summary>
     /// <remarks>
-    /// Applied by every storage at the public write entry points, <c>Persist</c> and <c>UpdateTask</c> (F1).
+    /// Applied by every storage at the public write entry points, <c>Persist</c> and <c>UpdateTask</c>.
     /// SQLite keeps a <see cref="DateTimeOffset"/> as ISO-8601 TEXT with the offset written inside it, so
     /// equality and ordering there are REPRESENTATIONAL: <c>10:00+02:00</c> and <c>08:00+00:00</c> are one
-    /// instant and two different strings. Each cursor compare-and-swap
-    /// (<c>MaterializeOccurrence</c>, <c>TrySetRecurringSeriesCompleted</c>, <c>TryHaltSchedule</c>) already
-    /// normalizes its own operands, so the stored value was the one side of the comparison still free to
-    /// disagree — a row written with a non-zero offset lost every one of them, for ever. The dispatch pipeline
-    /// hands UTC over on every path, which is why only a direct call on <see cref="ITaskStorage"/> could
-    /// produce such a row. On the providers that compare instants this changes nothing but the offset a
-    /// round-trip reports.
+    /// instant and two different strings. Every cursor compare-and-swap normalizes its own operands, so the
+    /// stored value is the one side of the comparison still free to disagree, and a row written with a
+    /// non-zero offset loses all of them for ever. On the providers that compare instants this changes
+    /// nothing but the offset a round-trip reports.
     /// </remarks>
     public void NormalizeTimestampsToUtc()
     {

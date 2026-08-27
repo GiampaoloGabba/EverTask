@@ -10,12 +10,10 @@ namespace EverTask.Monitor.Api.Middleware;
 /// JWT — is decided by <see cref="MonitoringAccessPolicy"/> INSIDE routing.
 /// </summary>
 /// <remarks>
-/// This middleware is registered by a startup filter, so it runs before everything the host adds, and the
-/// two things an access decision depends on are both host business: <c>UsePathBase</c> moves the base out of
-/// <c>Request.Path</c> (#46) and <c>UseForwardedHeaders</c> rewrites <c>Connection.RemoteIpAddress</c> (#47).
-/// Deciding here would mean judging a path the surface does not have and an address the proxy owns — the
-/// second would refuse every request of a correctly configured proxied host. So the decision belongs where
-/// both have already happened: <see cref="MonitoringAccessFilter"/> for the controllers,
+/// A startup filter registers this before everything the host adds, and both inputs of an access decision are
+/// host business: <c>UsePathBase</c> moves the base out of <c>Request.Path</c> (#46) and
+/// <c>UseForwardedHeaders</c> rewrites <c>Connection.RemoteIpAddress</c> (#47). The decision therefore belongs
+/// where both have already happened — <see cref="MonitoringAccessFilter"/> for the controllers,
 /// <see cref="MonitoringEndpointGuard"/> for the hub and the dashboard files.
 /// </remarks>
 public class JwtAuthenticationMiddleware(RequestDelegate next)

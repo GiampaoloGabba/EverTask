@@ -26,9 +26,8 @@ public interface IEverTaskWorkerExecutor
     /// which has a schedule row and a decision but no execution.
     /// </summary>
     /// <remarks>
-    /// It does NOT log: the caller has already logged through its own <c>[LoggerMessage]</c> template, in its
-    /// own category. That split is deliberate — the one thing that must never happen is a rendered sentence
-    /// reaching a logger as if it were a template (#32), and a publish-only entry point cannot do it.
+    /// It does NOT log: the caller has already logged through its own <c>[LoggerMessage]</c> template, so a
+    /// rendered sentence can never reach a logger as if it were a template (#32).
     /// </remarks>
     internal void PublishExternalEvent(TaskHandlerExecutor executor, SeverityLevel severity, string message,
                                        Exception? exception = null) { }
@@ -47,8 +46,8 @@ public class WorkerExecutor(
     TimeProvider? timeProvider) : IEverTaskWorkerExecutor
 {
     /// <summary>
-    /// The pre-P9 constructor, kept as a real overload so an assembly compiled against the previous release
-    /// still binds (P6/X6). The container picks the longer one, which is the only one that carries the clock.
+    /// The clock-less constructor, kept as a real overload so an assembly compiled against the previous
+    /// release still binds. The container picks the longer one, the only one that carries the clock.
     /// </summary>
     public WorkerExecutor(
         IWorkerBlacklist workerBlacklist,
@@ -63,8 +62,8 @@ public class WorkerExecutor(
         : this(workerBlacklist, options, serviceScopeFactory, scheduler, cancellationSourceProvider, logger,
             loggerFactory, rateLimitGate, deliveryRegistry, null) { }
 
-    // The scheduling clock (P9): every next-occurrence decision below reads it, so a test clock drives the
-    // whole series. Retry delays deliberately stay on the real clock (IRetryPolicy owns its own waits).
+    // Every next-occurrence decision below reads it, so a test clock drives the whole series. Retry delays
+    // deliberately stay on the real clock (IRetryPolicy owns its own waits).
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
 
     // Resolved once, lazily: the evaluator is a singleton, and the worker only reaches the container
@@ -154,11 +153,9 @@ public class WorkerExecutor(
     // handler → queue → global is resolved per execution, NOT baked into the cache.
     private static readonly ConcurrentDictionary<Type, HandlerOptionsCache> HandlerOptionsInternalCache = new();
 
-    // F23: the lifecycle MethodInfo (OnStarted/OnCompleted/OnError) are cached per handler type just
-    // like OnRetry, so lazy-mode executions no longer pay a GetMethod lookup per task on the hot path.
-    // The two injectors are compiled delegates rather than MethodInfo: both members are explicitly
-    // implemented on IEverTaskHandler<T>, so every execution used to pay an interface scan plus a
-    // reflective Invoke to hand the handler its log capture.
+    // The lifecycle MethodInfo are cached per handler type so a lazy-mode execution pays no GetMethod lookup
+    // on the hot path. The two injectors are compiled delegates instead: both members are explicitly
+    // implemented on IEverTaskHandler<T>, which otherwise costs an interface scan plus a reflective Invoke.
     private record HandlerOptionsCache(
         IRetryPolicy? RetryPolicy,
         TimeSpan? Timeout,
@@ -169,10 +166,8 @@ public class WorkerExecutor(
         Action<object, ITaskLogCapture>? SetLogCapture,
         Action<object, ITaskExecutionContext>? SetExecutionContext);
 
-    // Test seam (F23): counts per-type reflection resolutions. The factory runs once per handler type
-    // (GetOrAdd), so a single resolution across many lazy executions of the same type proves the cache
-    // hits. Keyed per type so the deterministic gate is immune to other handler types resolved
-    // concurrently elsewhere in the process. Not part of any production code path.
+    // Test seam: counts per-type reflection resolutions. Keyed per type so an assertion is immune to other
+    // handler types resolved concurrently elsewhere in the process. Not on any production code path.
     internal static readonly ConcurrentDictionary<Type, int> LifecycleResolutionsByType = new();
 
     internal static int GetLifecycleResolutionCount(Type handlerType) =>
@@ -183,7 +178,6 @@ public class WorkerExecutor(
         var type = handlerInstance.GetType();
         LifecycleResolutionsByType.AddOrUpdate(type, 1, static (_, count) => count + 1);
 
-        // Resolve every per-type MethodInfo once and cache it together.
         var onRetryMethod = type.GetMethod(
             nameof(IEverTaskHandler<IEverTask>.OnRetry),
             BindingFlags.Public | BindingFlags.Instance);
@@ -202,7 +196,6 @@ public class WorkerExecutor(
         var setExecutionContext = BuildInjector<ITaskExecutionContext>(
             handlerInterface, nameof(IEverTaskHandler<IEverTask>.SetExecutionContext));
 
-        // Cast only once per handler type (first time): cache the RAW overrides
         return handlerInstance is IEverTaskHandlerOptions handlerOpts
                    ? new HandlerOptionsCache(handlerOpts.RetryPolicy, handlerOpts.Timeout,
                        onRetryMethod, onStartedMethod, onCompletedMethod, onErrorMethod,
@@ -212,11 +205,8 @@ public class WorkerExecutor(
                        setLogCapture, setExecutionContext);
     }
 
-    /// <summary>
-    /// Compiles <c>(handler, value) =&gt; ((IEverTaskHandler&lt;T&gt;)handler).Method(value)</c> once per handler
-    /// type. The call goes through the interface, so an explicit implementation and the interface's own default
-    /// body are both reached — which a lookup on the concrete type would miss.
-    /// </summary>
+    // The call goes through the INTERFACE, so an explicit implementation and the interface's own default body
+    // are both reached — a lookup on the concrete type misses them.
     private static Action<object, TValue>? BuildInjector<TValue>(Type? handlerInterface, string methodName)
     {
         var method = handlerInterface?.GetMethod(methodName, [typeof(TValue)]);
@@ -252,24 +242,15 @@ public class WorkerExecutor(
     // recovery racing a live dispatch): the second delivery is skipped while the first runs.
     private readonly ConcurrentDictionary<Guid, byte> _inFlightTasks = new();
 
-    // In-memory run counter for recurring series when NO storage is registered: storage is the normal
-    // source of CurrentRunCount, but without it a recurring series must still advance and honor
-    // MaxRuns/RunUntil instead of dying after one run (F18). Entries are dropped when the series ends.
+    // In-memory run counter for recurring series when NO storage is registered: without one a series would
+    // die after a single run instead of honouring MaxRuns/RunUntil. Dropped when the series ends.
     private readonly ConcurrentDictionary<Guid, int> _inMemoryRunCounts = new();
 
 
-    /// <summary>
-    /// One delivery's claim on the EAGER handler EverTask resolved for it (L27): the executor carries an
-    /// EverTask-OWNED scope holding that handler and every scoped dependency built with it, and this
-    /// delivery is its last owner — whatever the delivery continues into (a re-park, a deferral, the next
-    /// occurrence) is a <c>ToLazy()</c> copy, which drops the scope.
-    /// </summary>
-    /// <remarks>
-    /// Release happens exactly ONCE, whichever exit the delivery takes: the ordered call sites (before the
-    /// next occurrence is scheduled) keep their position, and <c>DoWork</c>'s finally covers every other
-    /// exit as a no-op for them. Not thread-safe, and it does not need to be: the call sites are the
-    /// sequential steps of one delivery.
-    /// </remarks>
+    // One delivery's claim on the EAGER handler EverTask resolved for it. This delivery is the scope's last
+    // owner: whatever it continues into (a re-park, a deferral, the next occurrence) is a ToLazy() copy.
+    // Release happens exactly ONCE — the ordered call sites keep their position and DoWork's finally covers
+    // every other exit. Not thread-safe, and does not need to be: one delivery's sequential steps.
     private sealed class EagerHandlerOwnership(WorkerExecutor executor, TaskHandlerExecutor task)
     {
         private bool _released;
@@ -282,10 +263,9 @@ public class WorkerExecutor(
 
             _released = true;
 
-            // Disposing only the handler instance would strand the scope, its scoped dependencies and
-            // whatever they hold (a DbContext and its pooled connection). An executor built without a
-            // scope — never by this library, only by a caller constructing the public record itself —
-            // still gets its handler disposed.
+            // Disposing only the handler instance would strand the scope and its scoped dependencies (a
+            // DbContext and its pooled connection). An executor built without a scope — never by this
+            // library — still gets its handler disposed.
             if (task.HandlerScope != null)
                 await executor.ExecuteDisposeHandlerScope(task.HandlerScope).ConfigureAwait(false);
             else
@@ -303,39 +283,25 @@ public class WorkerExecutor(
         }
         finally
         {
-            // Everything this finally does before the End is fallible — releasing a scope runs user
-            // DisposeAsync code, and reaching the materializer resolves a service — so it all sits inside its
-            // own try. The End below is not one of the things that may be skipped: a delivery whose id stays
-            // registered can never be delivered again, and for an occurrence under the default budget of one
-            // that stalls its whole schedule until a restart.
+            // Everything before the End is fallible — releasing a scope runs user DisposeAsync code, reaching
+            // the materializer resolves a service — so it sits inside its own try. The End itself may never
+            // be skipped: an id that stays registered can never be delivered again.
             try
             {
-                // DoWorkCore clears the ambient context in its own finally; this covers the path where the
-                // whole delivery completed synchronously (nothing ever suspended, so the value is still on
-                // this flow) and a post-execution step threw before that line. Writing the value it already
-                // has costs nothing.
+                // Covers the path where the whole delivery completed synchronously — nothing ever suspended,
+                // so the value is still on this flow — and a post-execution step threw before DoWorkCore's
+                // own clearing line.
                 AmbientTaskExecutionContextAccessor.Set(null);
 
-                // THE single release of this delivery's eager handler, on the same principle as the End
-                // below: it covers every exit path of DoWorkGuarded with no per-path enumeration — the two
-                // blacklist drops, the rate-limit deferral, the in-flight re-park, the duplicate-delivery
-                // skip and a gate wait cancelled by shutdown all end the delivery without ever reaching
-                // DoWorkCore or the terminal rejection, which are the only two ordered release sites.
+                // THE single release of this delivery's eager handler: it covers every exit of DoWorkGuarded
+                // that never reaches DoWorkCore or the terminal rejection, with no per-path enumeration.
                 await eagerHandler.ReleaseAsync().ConfigureAwait(false);
 
-                // An occurrence that has ended kicks its schedule: the fast path back to the materializer, so
-                // a serial catch-up moves to the next slot as soon as this one is over instead of waiting for
-                // the operational retry. KickAsync is non-throwing by contract, but REACHING it is not —
-                // resolving the materializer builds a scope and a service — which is why the try is around
-                // the whole statement and not inside the kick.
-                //
-                // With THIS delivery's token, for the same reason the advance takes it: the kick re-plans the
-                // schedule, and since phase 6 that grid may be an INextOccurrenceProvider doing real I/O.
-                // Without it a calendar that never answers holds the consumer slot, this delivery's registry
-                // entry — so the occurrence stays "in delivery" and its schedule's budget of one is spent for
-                // ever — and the host's shutdown, none of which the kick is allowed to cost: nothing is
-                // written by a plan that could not be computed, and the operational retry and startup
-                // recovery both bring the schedule back.
+                // An occurrence that has ended kicks its schedule, so a serial catch-up moves to the next slot
+                // at once instead of waiting for the operational retry. KickAsync is non-throwing, but
+                // REACHING it is not, hence the try around the whole statement.
+                // It takes THIS delivery's token: the kick re-plans over a grid that may do real I/O, and a
+                // calendar that never answers would hold the consumer, the registry entry and the shutdown.
                 if (task.ParentTaskId is { } scheduleId && Materializer is { } materializer)
                     await materializer.KickAsync(scheduleId, serviceToken).ConfigureAwait(false);
             }
@@ -345,12 +311,9 @@ public class WorkerExecutor(
             }
             finally
             {
-                // THE single End of this delivery (see TaskDeliveryRegistry's end discipline): the
-                // LAST act of every consumed delivery, covering every exit path of DoWorkGuarded
-                // (terminal completion, rate-limit deferral/rejection, retry re-park, blacklist
-                // drop) with no per-path enumeration. Because nothing runs after this, a successor
-                // delivery of the same id can only register after it — no delivery can ever release
-                // a successor's registration.
+                // THE single End of this delivery, and its LAST act: because nothing runs after it, a
+                // successor delivery of the same id can only register afterwards, so no delivery can ever
+                // release a successor's registration.
                 deliveryRegistry?.End(task.PersistenceId);
             }
         }
@@ -359,30 +322,28 @@ public class WorkerExecutor(
     private async ValueTask DoWorkGuarded(TaskHandlerExecutor task, CancellationToken serviceToken,
                                           EagerHandlerOwnership eagerHandler)
     {
-        // Blacklist check hoisted BEFORE the rate-limit gate: a cancelled task must be discarded
-        // without burning rate-limit tokens (and without entering the execution path)
+        // BEFORE the rate-limit gate: a cancelled task must be discarded without burning tokens.
         if (IsTaskBlacklisted(task))
             return;
 
-        // A delivery of a definition a reschedule has already replaced (S4). Right after the blacklist check
-        // and before anything else touches it: the scheduler drops a registration the moment it is replaced,
-        // but a delivery already handed to a worker queue is past its reach, and running it would execute the
-        // schedule the caller has just changed.
+        // A delivery of a definition a reschedule has already replaced. The scheduler drops a registration
+        // the moment it is replaced, but a delivery already handed to a worker queue is past its reach, and
+        // running it would execute the schedule the caller has just changed.
         if (IsSupersededSchedule(task))
             return;
 
         // A delivery that exists only to ask the grid again: an occurrence provider could not answer, so
-        // nothing was decided and nothing was written (V4). It re-reads the ROW and re-runs the decision it
-        // could not make; running the handler here would execute a slot nobody has chosen yet.
+        // nothing was decided and nothing written. Running the handler here would execute a slot nobody has
+        // chosen yet.
         if (task.IsScheduleRetry)
         {
             await RetryScheduleDecisionAsync(task, serviceToken).ConfigureAwait(false);
             return;
         }
 
-        // A DURABLE schedule row runs no handler at all: its slot firing means "materialize what is due".
-        // Before the gate, deliberately — the rate limit belongs to the OCCURRENCES, per key, and letting a
-        // schedule row consume the handler's budget would throttle the very series it is producing (M8).
+        // A DURABLE schedule row runs no handler: its slot firing means "materialize what is due". Before the
+        // gate deliberately — the rate limit belongs to the OCCURRENCES, and letting the schedule row consume
+        // the budget would throttle the very series it is producing.
         if (task.IsScheduleOnly)
         {
             await MaterializeScheduleAsync(task, serviceToken).ConfigureAwait(false);
@@ -391,20 +352,18 @@ public class WorkerExecutor(
 
         if (rateLimitGate != null && task.RateLimitPolicy != null)
         {
-            // A redelivery racing the still-unwinding original execution (e.g. a retry deferral
-            // whose slot fired while the first delivery is still disposing) must NOT touch the
-            // gate: redeeming the reservation and then hitting the in-flight guard would drop
-            // the only live copy until restart. The gate re-parks it untouched instead.
+            // A redelivery racing the still-unwinding original execution must NOT touch the gate: redeeming
+            // the reservation and then hitting the in-flight guard would drop the only live copy until the
+            // next restart. The gate re-parks it untouched instead.
             if (_inFlightTasks.ContainsKey(task.PersistenceId))
             {
                 rateLimitGate.ReparkInFlightRedelivery(task);
                 return;
             }
 
-            // L2 parking-lot backpressure: gated consumers of a queue whose parked tasks hit
-            // the cap pause (bounded) so no further tasks can park. Scoped to tasks WITH a
-            // policy: tasks without one can never park, pausing them would only collapse
-            // whole-queue throughput while the lot sits at cap. Cheap fast path under cap.
+            // Parking-lot backpressure: consumers pause (bounded) once a queue's parked tasks hit the cap.
+            // Scoped to tasks WITH a policy — one without can never park, so pausing it would only collapse
+            // whole-queue throughput while the lot sits at cap.
             await rateLimitGate.WaitForParkingCapacityAsync(task, serviceToken).ConfigureAwait(false);
 
             var gateResult = await rateLimitGate.TryPassAsync(task, serviceToken).ConfigureAwait(false);
@@ -414,22 +373,17 @@ public class WorkerExecutor(
 
             if (gateResult.Outcome == RateLimitGateOutcome.Deferred)
             {
-                // HARD RULE: the Deferred path NEVER enters DoWorkCore — its finally would
-                // run QueueNextOccourrence (run-count corruption + lost occurrence). The gate
-                // already re-parked the task in the scheduler; nothing was written to storage
-                // and the status stays Queued (covered by startup recovery).
-                // A Cancel racing this deferral is handled WITHOUT consuming the blacklist:
-                // either the gate's set-then-check dropped the registration (epoch moved), or
-                // the parked occurrence is discarded by the entry blacklist check at redelivery.
+                // The Deferred path NEVER enters DoWorkCore: its finally would run QueueNextOccourrence and
+                // corrupt the run count. The gate already re-parked the task, nothing was written and the
+                // status stays Queued. A Cancel racing this deferral does not consume the blacklist — the
+                // gate's epoch bump drops the registration, or the redelivery's own check discards it.
                 RegisterDeferralEvent(task, gateResult);
                 return;
             }
 
-            // Gate waits (parking-lot pause + in-slot waits) can take seconds: a Cancel that
-            // landed during them only reached the blacklist (the per-task token does not exist
-            // yet) — honor it BEFORE applying the outcome. On Proceed the consumed budget
-            // lapses; on Rejected this prevents clobbering the user's persisted Cancelled
-            // status with Failed and firing a spurious OnError.
+            // Gate waits can take seconds, and a Cancel landing during them only reaches the blacklist (the
+            // per-task token does not exist yet), so it is honoured BEFORE the outcome is applied: on
+            // Rejected that keeps Failed and a spurious OnError off a row the user cancelled.
             if (IsTaskBlacklisted(task))
                 return;
 
@@ -468,22 +422,11 @@ public class WorkerExecutor(
         }
     }
 
-    /// <summary>
-    /// Asks a schedule's grid again, after an <see cref="INextOccurrenceProvider"/> could not answer (V4).
-    /// </summary>
-    /// <remarks>
-    /// It re-dispatches the ROW through the recovery path, which is the one that knows how to choose between
-    /// the grace window and a skip-forward — and choosing between them is exactly what the provider left
-    /// unanswered. Nothing is written here: a provider still down re-parks the schedule again, with the longer
-    /// backoff its consecutive failures have earned, and a crash in between costs only the wait, since the row
-    /// still carries the cursor it had.
-    /// <para>
-    /// With NO storage there is no row to re-read, and a series still runs (F18: the run counter is in
-    /// memory). Everything the interrupted decision needs is then on the delivery itself — the slot it was
-    /// about, the definition, the run number — so the retry re-runs that advance instead of the recovery
-    /// decision. Abandoning it there is what left a storage-less provider series stopped for good.
-    /// </para>
-    /// </remarks>
+    // Asks a schedule's grid again after an INextOccurrenceProvider could not answer. It re-dispatches the
+    // ROW through the recovery path, the one that knows how to choose between the grace window and a
+    // skip-forward — the very choice the provider left unanswered — and writes nothing itself.
+    // With NO storage there is no row to re-read, so the retry re-runs the interrupted advance from the
+    // delivery, which is then the only place the slot it was about exists.
     private async ValueTask RetryScheduleDecisionAsync(TaskHandlerExecutor task, CancellationToken serviceToken)
     {
         try
@@ -558,17 +501,10 @@ public class WorkerExecutor(
         }
     }
 
-    /// <summary>
-    /// The whole delivery of a durable schedule row: hand it to the materializer, which decides which slots
-    /// are owed and re-parks the row where its own decision says.
-    /// </summary>
-    /// <remarks>
-    /// The failure path is the point of the wrapper. This delivery IS the schedule — the scheduler consumed
-    /// the row's registration to make it — so an exception escaping here leaves the row parked nowhere, and
-    /// nothing but a restart would bring it back. The materializer arms the same retry itself for a run that
-    /// failed inside its per-schedule gate, including the runs it absorbed from a caller that found the gate
-    /// taken; this is the backstop for anything that fails before or around it.
-    /// </remarks>
+    // The whole delivery of a durable schedule row: hand it to the materializer, which decides which slots
+    // are owed and re-parks the row itself. The failure path is the point of the wrapper — this delivery IS
+    // the schedule (the scheduler consumed the row's registration to make it), so an exception escaping here
+    // would leave the row parked nowhere until a restart.
     private async ValueTask MaterializeScheduleAsync(TaskHandlerExecutor task, CancellationToken serviceToken)
     {
         if (Materializer is not { } materializer)
@@ -607,18 +543,14 @@ public class WorkerExecutor(
 #pragma warning restore CA2007
         var taskStorage = scope.ServiceProvider.GetService<ITaskStorage>();
 
-        // Create log capture instance (always logs to ILogger, optionally persists)
-        // Will be injected with proper handler type after handler resolution
         TaskLogCapture? logCapture = null;
 
-        // Resolve handler (lazy or eager mode)
-        object? handler = null!; // Will be assigned in both if and else branches
+        object? handler = null!;
 
         // The identity of this delivery, published to the handler and to the ambient accessor once the
         // handler is resolved. Null until then: a delivery that cannot even resolve its handler never runs.
         TaskExecutionContext? executionContext = null;
 
-        // Track execution time (initialized to 0, updated if task completes successfully)
         var executionTime = 0.0;
 
         // Set when a RETRY attempt was deferred by the rate limiter: the gate re-parked the
@@ -627,14 +559,12 @@ public class WorkerExecutor(
         var rateLimitDeferred = false;
 
         // Set when a RECURRING occurrence completed successfully: the finally then writes the Completed
-        // status AND the run-counter / next-run advance atomically (CU14/L29) instead of just advancing.
+        // status and the run-counter / next-run advance atomically instead of just advancing.
         var recurringRunCompleted = false;
 
-        // Set (to the limiter's next available slot) when a RECURRING occurrence was SKIPPED without
-        // executing (rate-limit horizon rejection): the finally then advances the schedule but does NOT
-        // count it toward MaxRuns — only real executions consume the budget (a failed run still counts; a
-        // skipped one does not). Presence of the slot IS the "was skipped" signal, and the skip-forward
-        // jumps to it instead of grinding occurrence by occurrence (skip-ahead).
+        // The limiter's next available slot, set when a RECURRING occurrence was SKIPPED without executing.
+        // The finally then advances the schedule without counting it toward MaxRuns — only real executions
+        // consume the budget — and skips ahead to this slot instead of grinding occurrence by occurrence.
         DateTimeOffset? skippedOccurrenceSlot = null;
 
         try
@@ -643,10 +573,8 @@ public class WorkerExecutor(
 
             // NOTE: the blacklist check happens in DoWork, before the rate-limit gate
 
-            // Resolve handler instance
             if (task.IsLazy)
             {
-                // Lazy mode: resolve fresh handler from DI
                 try
                 {
                     handler = task.GetOrResolveHandler(scope.ServiceProvider);
@@ -673,16 +601,14 @@ public class WorkerExecutor(
                         ).ConfigureAwait(false);
                     }
 
-                    return; // Cannot proceed without handler
+                    return;
                 }
             }
             else
             {
-                // Eager mode: use existing handler instance
                 handler = task.Handler!; // Non-null assertion safe (validated at dispatch)
             }
 
-            // Create log capture with proper handler type for ILogger<THandler>
             var handlerType = handler.GetType();
             logCapture = CreateLogCapture(handlerType, task.PersistenceId, scope.ServiceProvider);
 
@@ -694,17 +620,11 @@ public class WorkerExecutor(
 
             executionContext = PublishExecutionContext(task, handler, injectors);
 
-            // A cancel that landed while this delivery was waiting at the rate-limit gate or resolving its
-            // handler has ALREADY written Cancelled on this occurrence's row (M15 cancels the pending
-            // occurrences together with their schedule, in one transaction). SetInProgress below is
-            // unconditional, so without asking again here it would write straight over that terminal status
-            // and the occurrence would run and complete. That window is everything the two earlier checks
-            // cannot cover — they both sit before the gate, whose in-slot wait lasts seconds by design — and
-            // this is the last question before the transition.
-            // BOTH halves are asked, exactly as at the queue boundary: an occurrence is covered by its
-            // schedule's entry, and by one of its own when a cancel addressed it directly or when the revival
-            // of its schedule moved the cover onto it. Only the entry that covers THIS delivery alone is
-            // consumed; the schedule's keeps covering the siblings behind it.
+            // The last question before the unconditional SetInProgress below, which would otherwise write
+            // straight over a Cancelled a cancel persisted while this delivery sat at the gate or resolved
+            // its handler — a window the two earlier checks cannot cover, since both sit before the gate.
+            // BOTH halves are asked, as at the queue boundary, and only the entry covering THIS delivery
+            // alone is consumed: the schedule's keeps covering the siblings behind it.
             if (IsOccurrenceCancelled(task, out var cancelledSchedule))
             {
                 if (cancelledSchedule is { } scheduleId)
@@ -733,10 +653,9 @@ public class WorkerExecutor(
 
             if (execution.Deferred)
             {
-                // A retry attempt ran out of budget beyond MaxInSlotWait: the gate re-parked the
-                // task at its reserved slot (attempt count restarts on redelivery — documented).
-                // Storage keeps the InProgress status, which is recoverable, until the slot-fire
-                // re-enqueue sets Queued.
+                // A retry attempt ran out of budget beyond MaxInSlotWait and the gate re-parked the task at
+                // its reserved slot. Storage keeps the InProgress status, which is recoverable, until the
+                // slot-fire re-enqueue sets Queued.
                 rateLimitDeferred = true;
                 RegisterDeferralEvent(task, execution.RetryDeferral!.Value);
                 return;
@@ -746,10 +665,9 @@ public class WorkerExecutor(
             {
                 if (task.RecurringTask != null)
                 {
-                    // Same semantics as the pre-execution rejection (HandleRateLimitRejectionAsync):
-                    // the occurrence is SKIPPED with a warning — no Failed status, no OnError —
-                    // and the series advances via the finally's QueueNextOccourrence. The status
-                    // returns to Queued like any other parked occurrence (it was InProgress).
+                    // Same semantics as the pre-execution rejection: the occurrence is SKIPPED with a warning
+                    // — no Failed status, no OnError — the series advances in the finally, and the status
+                    // returns to Queued like any other parked occurrence.
                     RegisterRateLimitSkippedOccurrence(task, rejection);
 
                     if (taskStorage != null)
@@ -767,10 +685,9 @@ public class WorkerExecutor(
                 throw CreateRejectionException(task, rejection);
             }
 
-            // A Cancel that landed AFTER the pre-gate blacklist check but BEFORE the per-task token was
-            // created left no token to cancel, so the handler ran to completion on a fresh token. Re-check
-            // the blacklist before writing the outcome so Completed never clobbers the user's persisted
-            // Cancelled status (CU9/L46). The persisted Cancelled status is the durable terminal state.
+            // A Cancel landing after the pre-gate check but before the per-task token existed had no token to
+            // cancel, so the handler ran to completion on a fresh one. Asked again before the outcome is
+            // written, so Completed never clobbers the user's persisted Cancelled status.
             if (workerBlacklist.IsBlacklisted(task.PersistenceId))
             {
                 workerBlacklist.Remove(task.PersistenceId);
@@ -781,9 +698,9 @@ public class WorkerExecutor(
                 return;
             }
 
-            // A recurring occurrence is marked Completed TOGETHER with its run-counter / next-run advance
-            // by the finally's atomic CompleteRecurringRun (CU14/L29); a separate SetCompleted here would
-            // re-open the crash window. Non-recurring tasks have no advance, so they complete here.
+            // A recurring occurrence is marked Completed TOGETHER with its run-counter / next-run advance by
+            // the finally's atomic CompleteRecurringRun; a separate SetCompleted here would re-open the crash
+            // window. Non-recurring tasks have no advance, so they complete here.
             if (taskStorage != null && task.RecurringTask == null)
                 await taskStorage.SetCompleted(task.PersistenceId, executionTime, task.AuditLevel)
                                  .ConfigureAwait(false);
@@ -792,7 +709,6 @@ public class WorkerExecutor(
 
             await ExecuteCallback(GetCompletedCallback(task, handler), task, "Completed").ConfigureAwait(false);
 
-            // Get logs for completion event (if capture is enabled)
             var capturedLogs = logCapture.GetPersistedLogs();
             RegisterEvent(LogLevel.Debug, SeverityLevel.Information, task, null, capturedLogs,
                 (TaskId: task.PersistenceId, ElapsedMs: executionTime),
@@ -802,7 +718,6 @@ public class WorkerExecutor(
         }
         catch (Exception ex)
         {
-            // Get logs for error event (if capture is enabled)
             var capturedLogs = logCapture?.GetPersistedLogs();
             await HandleExceptionAsync(ex, task, handler, capturedLogs, taskStorage, serviceToken)
                 .ConfigureAwait(false);
@@ -814,17 +729,13 @@ public class WorkerExecutor(
             // Lazy-mode handlers are disposed by the worker's per-task scope instead.
             await eagerHandler.ReleaseAsync().ConfigureAwait(false);
 
-            // Save persisted logs (AFTER handler disposal, BEFORE recurring scheduling)
-            // Log save errors must NOT fail task execution.
-            // Skipped on a rate-limit retry deferral: a deferral writes nothing to storage.
-            // Log capture is per-delivery, so this attempt's captured logs are dropped from
-            // persistence (they were still forwarded to ILogger) — the price of the no-write
-            // invariant.
+            // AFTER handler disposal, BEFORE recurring scheduling. Skipped on a rate-limit retry deferral,
+            // which writes nothing to storage: this attempt's captured logs are dropped from persistence
+            // (they were still forwarded to ILogger), the price of that no-write invariant.
             if (logCapture != null && !rateLimitDeferred)
             {
                 try
                 {
-                    // Only save if persistence is enabled and logs were persisted
                     if (options.PersistentLogger.Enabled && taskStorage != null)
                     {
                         var persistedLogs = logCapture.GetPersistedLogs();
@@ -860,15 +771,8 @@ public class WorkerExecutor(
         }
     }
 
-    /// <summary>
-    /// Builds this delivery's execution context, hands it to the handler through the injector compiled once
-    /// per handler type, and publishes it on the ambient accessor.
-    /// </summary>
-    /// <remarks>
-    /// The ambient copy is what everything that is NOT the handler reads: an eager handler's own dependencies
-    /// were built in the dispatcher's scope, long before this delivery existed, so handing them a scoped
-    /// context would hand them nothing.
-    /// </remarks>
+    // The ambient copy is what everything that is NOT the handler reads: an eager handler's dependencies were
+    // built in the dispatcher's scope, long before this delivery existed, so a scoped context reaches nothing.
     private TaskExecutionContext PublishExecutionContext(TaskHandlerExecutor task, object handler,
                                                          HandlerOptionsCache injectors)
     {
@@ -902,9 +806,8 @@ public class WorkerExecutor(
     }
 
     /// <summary>
-    /// Publishes the mandatory tracked-keys fail-open monitoring event (L4): without it, a
-    /// limiter silently executing unthrottled tasks under key-cardinality pressure would be
-    /// invisible.
+    /// Publishes the tracked-keys fail-open monitoring event: without it a limiter executing unthrottled
+    /// tasks under key-cardinality pressure would be invisible.
     /// </summary>
     private void RegisterFailOpenEvent(TaskHandlerExecutor task, RateLimitGateResult gateResult)
     {
@@ -915,15 +818,9 @@ public class WorkerExecutor(
                 $"Rate limiter tracked-keys cap reached: new keys fail OPEN and execute unthrottled. Task {a.TaskId} (policy={a.TaskType}) totalFailOpenCount={a.TotalFailOpenCount}"));
     }
 
-    /// <summary>
-    /// Warns that the rate limiter skipped one occurrence of a recurring series (the series stays
-    /// alive and the schedule advances).
-    /// </summary>
-    /// <remarks>
-    /// The typed rejection exception is built INSIDE the L30 gate: on this path it is neither thrown
-    /// nor persisted, it only enriches the log and the monitoring event — so an unconsumed warning
-    /// allocates neither the exception nor its reason string.
-    /// </remarks>
+    // Warns that the rate limiter skipped one occurrence: the series stays alive and the schedule advances.
+    // The typed exception is built INSIDE the enabled-check gate — on this path it is neither thrown nor
+    // persisted — so an unconsumed warning allocates neither it nor its reason string.
     private void RegisterRateLimitSkippedOccurrence(TaskHandlerExecutor task, RateLimitGateResult rejection)
     {
         if (!TryEnterEvent(LogLevel.Warning, out var logEnabled, out var publish))
@@ -960,19 +857,10 @@ public class WorkerExecutor(
         return new RateLimitRejectedException(task.RateLimitKey!, gateResult.SlotUtc, task.RateLimitPolicy!, reason);
     }
 
-    /// <summary>
-    /// Applies a terminal rate-limit rejection: one-shot tasks are persisted as Failed — the
-    /// only mandatory storage write of the design, otherwise the task would stay Queued and be
-    /// re-rejected at every restart — with the typed <see cref="RateLimitRejectedException"/>
-    /// delivered to the handler's OnError. Recurring tasks skip the occurrence through the
-    /// normal next-occurrence path WITHOUT consuming the MaxRuns budget: the occurrence did not
-    /// execute, so it only advances the schedule (like a downtime skip) — MaxRuns counts real
-    /// executions only. The series stays alive and no callback is invoked.
-    /// </summary>
-    /// <remarks>
-    /// Both outcomes end the delivery here, without ever entering <c>DoWorkCore</c>, so this method also
-    /// owns the ordered release that method's finally would otherwise have done.
-    /// </remarks>
+    // A one-shot is persisted Failed — the only storage write a rejection may do, or the task stays Queued
+    // and is re-rejected at every restart — with the typed exception delivered to OnError. A recurring task
+    // only skips the occurrence, without consuming the MaxRuns budget, since nothing executed.
+    // Both outcomes end the delivery without entering DoWorkCore, so this method owns the ordered release too.
     private async ValueTask HandleRateLimitRejectionAsync(TaskHandlerExecutor task, RateLimitGateResult gateResult,
                                                           EagerHandlerOwnership eagerHandler,
                                                           CancellationToken serviceToken)
@@ -1011,10 +899,9 @@ public class WorkerExecutor(
                     null, serviceToken).ConfigureAwait(false);
             }
 
-            // Resolve the handler once (rare terminal event, cost acceptable) to deliver OnError.
-            // The callback instance is NOT an executing instance: rejection happens pre-execution.
-            // For an eager executor this hands back the carried instance, released with its scope below;
-            // a lazy one resolves into this method's own scope and is released with it.
+            // Resolved once to deliver OnError; not an executing instance, since a rejection happens
+            // pre-execution. An eager executor hands back its carried instance, released with its scope
+            // below; a lazy one resolves into this method's own scope.
             object? handler = null;
             try
             {
@@ -1029,13 +916,11 @@ public class WorkerExecutor(
             {
                 try
                 {
-                    // This path never enters DoWorkCore, so nothing else would give the handler the two
-                    // per-delivery injections every callback is documented to have. Without them an OnError
-                    // that compensates through Context throws (the getter refuses an uninjected context) and
-                    // one that reports through Logger hits a null — and ExecuteCallback swallows both into a
-                    // generic "callback override failed" event while the user's error handling silently never
-                    // runs. The capture still forwards to ILogger; it is NOT persisted, because the only
-                    // storage write a rejection cycle is allowed is the Failed status above.
+                    // This path never enters DoWorkCore, so nothing else gives the handler the two
+                    // per-delivery injections every callback is documented to have: without them an OnError
+                    // using Context or Logger throws, and ExecuteCallback swallows it while the user's error
+                    // handling never runs. The capture is not persisted — the Failed status above is the only
+                    // write a rejection may do.
                     var injectors = GetHandlerOptions(handler);
                     injectors.SetLogCapture?.Invoke(handler,
                         CreateLogCapture(handler.GetType(), task.PersistenceId, scope.ServiceProvider));
@@ -1058,10 +943,8 @@ public class WorkerExecutor(
         }
         finally
         {
-            // The release of the one-shot branch, and the backstop of the recurring one, which already
-            // released above (once per delivery: this is then a no-op). Same reason as DoWorkCore's: the
-            // executor is dead once the rejection is applied — whatever the delivery continues into is a
-            // ToLazy() copy, which drops the scope.
+            // The release of the one-shot branch, and the backstop of the recurring one that already released
+            // above (a no-op then). The executor is dead once the rejection is applied.
             await eagerHandler.ReleaseAsync().ConfigureAwait(false);
         }
     }
@@ -1086,22 +969,18 @@ public class WorkerExecutor(
         {
             RegisterCancellationSignaled(task);
 
-            // Consumed only when the entry covers THIS delivery alone. A durable schedule's own entry is
-            // also the only thing covering the occurrences it already produced — they carry none of their
-            // own — so a schedule row dropped from the queue must leave it standing, or the very next
-            // occurrence out of the channel finds nothing blacklisted and runs after its series was
-            // cancelled. It lapses on the blacklist's own TTL like any entry nobody consumes.
+            // Consumed only when the entry covers THIS delivery alone. A durable schedule's entry is also the
+            // only thing covering the occurrences it produced, so dropping the schedule row must leave it
+            // standing; it lapses on the blacklist's own TTL like any entry nobody consumes.
             if (!task.IsScheduleOnly)
                 workerBlacklist.Remove(task.PersistenceId);
 
             return true;
         }
 
-        // Cancelling a durable schedule cancels its pending occurrences in storage, but the ones ALREADY
-        // parked in the scheduler, or already sitting in a channel, carry no blacklist entry of their own —
-        // and the enqueue on their way in would write Queued over the Cancelled the cancel had just
-        // persisted. The schedule's entry covers them: an occurrence of a cancelled schedule is cancelled.
-        // The entry is NOT consumed here, because it has to keep covering the siblings behind this one.
+        // An occurrence already parked in the scheduler, or already in a channel, carries no blacklist entry
+        // of its own; the schedule's covers it. NOT consumed here — it has to keep covering the siblings
+        // behind this one.
         if (!IsScheduleCancelled(task, out var scheduleId))
             return false;
 
@@ -1123,13 +1002,8 @@ public class WorkerExecutor(
             static a => string.Create(CultureInfo.InvariantCulture,
                 $"Occurrence {a.OccurrenceId} belongs to cancelled schedule {a.ScheduleId} and will not be executed"));
 
-    /// <summary>
-    /// Whether this delivery is an occurrence whose durable SCHEDULE has been cancelled.
-    /// </summary>
-    /// <remarks>
-    /// The entry is never consumed: one cancel covers every occurrence the schedule produced, and the first
-    /// of them to ask must not answer for the rest.
-    /// </remarks>
+    // The entry is never consumed: one cancel covers every occurrence the schedule produced, and the first of
+    // them to ask must not answer for the rest.
     private bool IsScheduleCancelled(TaskHandlerExecutor task, out Guid scheduleId)
     {
         scheduleId = task.ParentTaskId ?? Guid.Empty;
@@ -1137,15 +1011,9 @@ public class WorkerExecutor(
         return task.ParentTaskId.HasValue && workerBlacklist.IsBlacklisted(scheduleId);
     }
 
-    /// <summary>
-    /// Whether this delivery is an occurrence that has been cancelled — by its schedule (
-    /// <paramref name="cancelledSchedule"/> names it) or by an entry of its own (null).
-    /// </summary>
-    /// <remarks>
-    /// An occurrence gets one of its own from a <c>Cancel</c> addressed at it directly, and from the revival
-    /// of its schedule, which moves the cover off the schedule and onto the occurrences the cancel had already
-    /// terminalized. Only THAT entry is consumed here: it covers this delivery and nothing else.
-    /// </remarks>
+    // Whether this occurrence was cancelled by its schedule (cancelledSchedule names it) or by an entry of
+    // its own (null) — a Cancel addressed at it directly, or the revival of its schedule moving the cover
+    // onto it. Only THAT entry is consumed here: it covers this delivery and nothing else.
     private bool IsOccurrenceCancelled(TaskHandlerExecutor task, out Guid? cancelledSchedule)
     {
         cancelledSchedule = null;
@@ -1166,28 +1034,11 @@ public class WorkerExecutor(
         return true;
     }
 
-    /// <summary>
-    /// Whether this delivery carries an INLINE schedule definition a reschedule has already replaced (S4).
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// The contract is that a reschedule is immediate for occurrences that have not fired yet: the scheduler's
-    /// registration is replaced latest-wins, so nothing parked survives. What the scheduler cannot reach is a
-    /// delivery already written to a worker queue, and this is the only thing standing between it and a run of
-    /// the definition the caller has just changed.
-    /// </para>
-    /// <para>
-    /// The ABSENCE of an entry is not a version of zero: it is the absence of a lower bound, and nothing is
-    /// dropped on it. That is what keeps an executor recovered at startup — a fresh process publishes nothing —
-    /// from being read as stale and thrown away, which would silently stop every rescheduled series across a
-    /// restart.
-    /// </para>
-    /// <para>
-    /// DURABLE schedules are deliberately not dropped. Their delivery runs no handler at all: it means
-    /// "materialize what is due", and the materializer re-reads the row, so an old version costs nothing —
-    /// while dropping it would consume the registration that produced it and leave the row parked nowhere.
-    /// </para>
-    /// </remarks>
+    // Whether this delivery carries an INLINE definition a reschedule has already replaced: the one thing the
+    // scheduler's latest-wins registration cannot reach is a delivery already written to a worker queue.
+    // The ABSENCE of an entry is not a version of zero but of a lower bound, and nothing is dropped on it —
+    // a fresh process publishes nothing, so a recovered executor would read as stale. A DURABLE schedule is
+    // never dropped either: dropping it consumes the registration that produced it.
     private bool IsSupersededSchedule(TaskHandlerExecutor task)
     {
         if (!IsSupersededScheduleDelivery(task, out var published))
@@ -1202,10 +1053,8 @@ public class WorkerExecutor(
         return true;
     }
 
-    /// <summary>
-    /// The bare question <see cref="IsSupersededSchedule"/> answers, without reporting it: asked again by the
-    /// paths that reach it while the delivery is already RUNNING, where the answer means something else.
-    /// </summary>
+    // The bare question IsSupersededSchedule answers, without reporting it: asked again by the paths that
+    // reach it while the delivery is already RUNNING, where the answer means something else.
     private bool IsSupersededScheduleDelivery(TaskHandlerExecutor task, out int published)
     {
         published = 0;
@@ -1224,7 +1073,6 @@ public class WorkerExecutor(
 
         var taskToken = cancellationSourceProvider.CreateToken(task.PersistenceId, serviceToken);
 
-        // Performance optimization: Cache handler options to avoid repeated casts / reflection (F23)
         var handlerOptions = GetHandlerOptions(handler);
 
         // Resolution chain: handler override → queue default → global default. The queue is
@@ -1234,7 +1082,7 @@ public class WorkerExecutor(
         var retryPolicy = handlerOptions.RetryPolicy ?? queueConfig?.DefaultRetryPolicy ?? options.DefaultRetryPolicy;
         var timeout     = handlerOptions.Timeout ?? queueConfig?.DefaultTimeout ?? options.DefaultTimeout;
 
-        // WS4 retry throttling: closure state shared with the retry action below
+        // Closure state shared with the retry action below.
         var                  attempt       = 0;
         RateLimitGateResult? retryDeferral = null;
 
@@ -1246,12 +1094,10 @@ public class WorkerExecutor(
         }
         finally
         {
-            // OnRetry announces the attempt that is ABOUT to start (C1), and that retry can still never
-            // start — a cancel inside the callback, one that lands during the retry delay, or the throttle
-            // gate turning the attempt back before the handler. `attempt` only moves once an attempt has
-            // been admitted INTO the handler, so it IS the last attempt that really ran: roll the
-            // announcement back to it, or OnError would report an attempt that never ran. On every path
-            // where the retry did start the two already agree, and the write is a no-op.
+            // OnRetry announces the attempt ABOUT to start, and that retry can still never start (a cancel,
+            // or the throttle gate turning it back). `attempt` only moves once an attempt is admitted INTO
+            // the handler, so rolling the announcement back to it keeps OnError from reporting an attempt
+            // that never ran; where the retry did start the two already agree.
             if (attempt > 0)
                 executionContext?.SetAttempt(attempt);
         }
@@ -1261,18 +1107,15 @@ public class WorkerExecutor(
 
         async Task DoExecute()
         {
-            // Get or create handler callback
             Func<IEverTask, CancellationToken, Task> handlerCallback;
             if (task.HandlerCallback != null)
             {
-                // Eager mode: use existing callback
                 handlerCallback = task.HandlerCallback;
             }
             else
             {
-                // Lazy mode: create callback from handler already resolved in DoWork
-                // Use CreateHandlerCallback to avoid duplicate DI resolution (which would create
-                // a second handler instance that gets disposed separately by the async scope)
+                // Built from the handler already resolved in DoWork: resolving again would create a second
+                // instance, disposed separately by the async scope.
                 var (_, callback) = task.CreateHandlerCallback(handler);
                 handlerCallback   = callback;
             }
@@ -1282,20 +1125,15 @@ public class WorkerExecutor(
             await retryPolicy.Execute(
                 action: async retryToken =>
                 {
-                    // The attempt this action stands for, 1-based. It is NOT committed to `attempt` yet:
-                    // the throttle gate below can turn it back without ever reaching the handler, and the
-                    // rollback in the finally above reads `attempt` as "the last attempt that really ran"
-                    // (C1). Publishing here instead would leave OnError reporting an attempt whose only
-                    // trace is a rejected gate pass.
+                    // The attempt this action stands for, 1-based, NOT committed to `attempt` yet: the
+                    // throttle gate below can turn it back without ever reaching the handler, and OnError
+                    // would then report an attempt whose only trace is a rejected gate pass.
                     var startingAttempt = attempt + 1;
 
-                    // Retry throttling (BEFORE the timeout branch: the budget wait must never
-                    // erode the per-attempt timeout). The FIRST attempt skips re-acquisition —
-                    // the gate pass that admitted this delivery holds its budget. Retries of a
-                    // ThrottleRetries policy re-acquire; a near slot is awaited in-slot by the
-                    // gate, a far slot re-parks the task (Design A path) instead of surfacing a
-                    // retryable exception, which would consume the shared retry budget and mark
-                    // never-executed tasks Failed.
+                    // BEFORE the timeout branch: the budget wait must never erode the per-attempt timeout.
+                    // The FIRST attempt skips re-acquisition, since the gate pass that admitted this delivery
+                    // holds its budget. A far slot re-parks the task rather than surfacing a retryable
+                    // exception, which would consume the shared retry budget and mark it Failed unexecuted.
                     if (startingAttempt > 1
                         && task.RateLimitPolicy is { ThrottleRetries: true }
                         && rateLimitGate != null)
@@ -1303,9 +1141,8 @@ public class WorkerExecutor(
                         var gateResult = await rateLimitGate.TryPassAsync(task, retryToken).ConfigureAwait(false);
                         if (gateResult.Outcome != RateLimitGateOutcome.Proceed)
                         {
-                            // Deferred: stop the retry loop without failing — the task was
-                            // re-parked and the attempt sequence restarts on redelivery.
-                            // Rejected (horizon/Discard): captured and turned into the typed
+                            // Deferred: stop the retry loop without failing — the task was re-parked and the
+                            // attempt sequence restarts on redelivery. Rejected: turned into the typed
                             // terminal exception by DoWorkCore.
                             retryDeferral = gateResult;
                             return;
@@ -1339,7 +1176,6 @@ public class WorkerExecutor(
                     // (retry 1 starts attempt 2). The action above republishes the same value.
                     executionContext?.SetAttempt(attemptNumber + 1);
 
-                    // Invoke handler's OnRetry method using cached MethodInfo
                     await InvokeOnRetryCallback(task, handler, handlerOptions.OnRetryMethod, attemptNumber, exception,
                             delay)
                         .ConfigureAwait(false);
@@ -1409,8 +1245,8 @@ public class WorkerExecutor(
         }
     }
 
-    // Disposes the EverTask-owned scope an eager handler was resolved into (L27), releasing the handler
-    // instance(s) without pinning them in the root container. Disposal must never fail task execution.
+    // Disposes the EverTask-owned scope an eager handler was resolved into, releasing the handler instances
+    // without pinning them in the root container. Disposal must never fail task execution.
     private async Task ExecuteDisposeHandlerScope(IAsyncDisposable handlerScope)
     {
         try
@@ -1428,11 +1264,9 @@ public class WorkerExecutor(
     /// </summary>
     private static Func<Guid, ValueTask>? GetStartedCallback(TaskHandlerExecutor task, object handler)
     {
-        // If executor has callback (eager mode), use it
         if (task.HandlerStartedCallback != null)
             return task.HandlerStartedCallback;
 
-        // Lazy mode: read the MethodInfo from the per-type cache (resolved once, F23)
         var onStartedMethod = GetHandlerOptions(handler).OnStartedMethod;
 
         return onStartedMethod != null
@@ -1445,11 +1279,9 @@ public class WorkerExecutor(
     /// </summary>
     private static Func<Guid, ValueTask>? GetCompletedCallback(TaskHandlerExecutor task, object handler)
     {
-        // If executor has callback (eager mode), use it
         if (task.HandlerCompletedCallback != null)
             return task.HandlerCompletedCallback;
 
-        // Lazy mode: read the MethodInfo from the per-type cache (resolved once, F23)
         var onCompletedMethod = GetHandlerOptions(handler).OnCompletedMethod;
 
         return onCompletedMethod != null
@@ -1462,11 +1294,9 @@ public class WorkerExecutor(
     /// </summary>
     private static Func<Guid, Exception?, string, ValueTask>? GetErrorCallback(TaskHandlerExecutor task, object handler)
     {
-        // If executor has callback (eager mode), use it
         if (task.HandlerErrorCallback != null)
             return task.HandlerErrorCallback;
 
-        // Lazy mode: read the MethodInfo from the per-type cache (resolved once, F23)
         var onErrorMethod = GetHandlerOptions(handler).OnErrorMethod;
 
         return onErrorMethod != null
@@ -1515,7 +1345,6 @@ public class WorkerExecutor(
     {
         try
         {
-            // Use cached MethodInfo instead of reflection lookup
             if (cachedOnRetryMethod != null)
             {
                 var result = cachedOnRetryMethod.Invoke(handler, [task.PersistenceId, attemptNumber, exception, delay]);
@@ -1525,7 +1354,6 @@ public class WorkerExecutor(
                 }
             }
 
-            // Publish retry event for monitoring
             RegisterRetryEvent(task, attemptNumber, exception, delay);
         }
         catch (Exception ex)
@@ -1570,13 +1398,10 @@ public class WorkerExecutor(
                                             ITaskStorage? taskStorage,
                                             CancellationToken serviceToken)
     {
-        // A run of a definition that was replaced WHILE it executed does not own the row any more, and both
-        // writes below are unconditional terminal ones: Failed and Cancelled are statuses no recovery
-        // predicate selects, so either of them lands on the series that is now live and kills it for good.
-        // The advance in the finally is already compare-and-swapped and re-aims itself; this is the half that
-        // could not, and it is reached by every ending that is not a completion — including the cancellation
-        // of the very run a cancel-then-redispatch restarted the series from.
-        // What is REPORTED does not change: the run really ended this way, and its callback and event say so.
+        // A run of a definition replaced WHILE it executed does not own the row any more, and Failed and
+        // Cancelled are statuses no recovery predicate selects: either would land on the series that is now
+        // live and kill it for good. Only the storage write is skipped — what is REPORTED does not change,
+        // since the run really did end this way.
         var outcomeStore = taskStorage;
 
         if (IsSupersededScheduleDelivery(task, out var supersededBy))
@@ -1587,13 +1412,10 @@ public class WorkerExecutor(
 
         if (ex is OperationCanceledException oce)
         {
-            // A user cancel (blacklisted id) must classify as terminal Cancelled even when the service
-            // token is ALSO cancelled (shutdown racing the user cancel): otherwise it would be
-            // ServiceStopped (recoverable) and re-execute at the next restart (F17).
-            // An OCCURRENCE never carries an entry of its own — cancelling a durable schedule blacklists the
-            // SCHEDULE — so the same question has to be asked of its parent, or the one occurrence a cancel
-            // deliberately lets finish (M15) is persisted ServiceStopped and requeued by the next startup
-            // recovery: an execution of a series the user cancelled.
+            // A user cancel must classify as terminal Cancelled even when the service token is ALSO cancelled
+            // (a shutdown racing the cancel), or it is ServiceStopped, recoverable, and re-executes at the
+            // next restart. An OCCURRENCE carries no entry of its own — a cancel blacklists the SCHEDULE — so
+            // the parent is asked too, or the occurrence a cancel deliberately lets finish is requeued.
             var userCancelled      = workerBlacklist.IsBlacklisted(task.PersistenceId)
                                      || IsScheduleCancelled(task, out _);
             var cancelledByService = serviceToken.IsCancellationRequested && !userCancelled;
@@ -1624,16 +1446,13 @@ public class WorkerExecutor(
         }
         else
         {
-            // Logica per le altre eccezioni
             if (outcomeStore != null)
                 await PersistEndingAsync(outcomeStore, task, QueuedTaskStatus.Failed, ex, serviceToken)
                     .ConfigureAwait(false);
 
-            // G11: the retry policy throws AggregateException("All retry attempts failed", ...) when
-            // retries are exhausted. The PERSISTED status and the error log keep that aggregate (full
-            // attempt history), but OnError must receive the REAL handler exception so type-based
-            // handling (dead-letter, compensation) keyed on the exception type works — consistent with
-            // the non-retryable path that delivers the raw exception.
+            // Exhausted retries arrive as an AggregateException. The persisted status and the error log keep
+            // it (full attempt history), but OnError must receive the REAL handler exception so type-based
+            // handling works, exactly as on the non-retryable path.
             await ExecuteCallback(GetErrorCallback(task, handler), task, UnwrapForCallback(ex),
                 $"Error occurred executing the task with id {task.PersistenceId}").ConfigureAwait(false);
 
@@ -1644,19 +1463,10 @@ public class WorkerExecutor(
         }
     }
 
-    /// <summary>
-    /// Persists the terminal outcome of a delivery that ENDED, without taking the row from whoever owns it now.
-    /// </summary>
-    /// <remarks>
-    /// The registry above cannot answer this on its own: <c>Cancel</c> REMOVES the entry and the revival
-    /// publishes the new generation only after the re-park, so a run unwinding across a cancel-then-redispatch
-    /// restart finds no lower bound at all and its <c>Cancelled</c> landed on the row the revival had just
-    /// taken to a new version — ending the restarted series behind a dispatch that answered with an id. The
-    /// plain cancel is the other half and no version can speak for it: it moves neither the version nor the
-    /// cursor, so a late <c>Failed</c> erased it and left a recurring row recoverable, which brings the
-    /// cancelled series back at the next restart. Both are the storage's compare-and-swap to refuse, exactly
-    /// as the advance beside this one is; a storage without it keeps the historical unconditional writes.
-    /// </remarks>
+    // Persists the terminal outcome of a delivery that ENDED, without taking the row from whoever owns it now.
+    // The version registry cannot answer this alone: it is EMPTY for the whole cancel-to-publish span, and a
+    // plain cancel moves neither version nor cursor, so the write is the storage's compare-and-swap to
+    // refuse. A storage without versioning keeps the unconditional writes.
     private async Task PersistEndingAsync(ITaskStorage store, TaskHandlerExecutor task, QueuedTaskStatus status,
                                           Exception? exception, CancellationToken ct)
     {
@@ -1688,22 +1498,17 @@ public class WorkerExecutor(
             logger.EndingOutcomeNotPersisted(task.PersistenceId, status, task.ScheduleVersion);
     }
 
-    // Unwraps a retry-policy AggregateException to the underlying handler failure for the OnError
-    // callback (G11), so OnError sees the real exception instead of the wrapper. The aggregate itself is
-    // still used for the persisted status and the error log. The last inner is the final attempt's
-    // failure — the analogue of the raw exception delivered on the non-retryable path.
+    // Unwraps a retry-policy AggregateException so OnError sees the real handler failure, the aggregate
+    // staying on the persisted status and the error log. The LAST inner is the final attempt's failure.
     private static Exception UnwrapForCallback(Exception ex) =>
         ex is AggregateException { InnerExceptions.Count: > 0 } aggregate
             ? aggregate.InnerExceptions[^1]
             : ex;
 
-    /// <param name="ct">
-    /// The service token of the delivery this advance closes. It reaches the GRID, which since phase 6 may be
-    /// an <see cref="INextOccurrenceProvider"/> doing real I/O: without it a provider that never returns holds
-    /// a worker consumer, its delivery's registry entry and the host's shutdown for ever. The storage writes
-    /// below deliberately do NOT take it — a shutdown must not cost the advance of a run that already
-    /// happened.
-    /// </param>
+    // `ct` reaches the GRID, which may be an INextOccurrenceProvider doing real I/O: without it a provider
+    // that never returns holds a worker consumer, this delivery's registry entry and the host's shutdown for
+    // ever. The storage writes below deliberately do NOT take it — a shutdown must not cost the advance of a
+    // run that already happened.
     private async Task QueueNextOccourrence(TaskHandlerExecutor task, double executionTimeMs,
                                             ITaskStorage? taskStorage, CancellationToken ct,
                                             bool markCompleted = false, bool countsAsRun = true,
@@ -1711,10 +1516,9 @@ public class WorkerExecutor(
     {
         if (task.RecurringTask == null) return;
 
-        // A user-cancelled recurring series must STOP: do not advance the run counter nor schedule the
-        // next occurrence. The blacklist check works without storage too; the persisted Cancelled status
-        // makes this DURABLE beyond the in-memory blacklist's ~1h TTL (a series with an interval > the
-        // TTL would otherwise resurrect) (L23/CU10).
+        // A user-cancelled series must STOP: no run-counter advance, no next occurrence. The blacklist works
+        // without storage too, and the persisted Cancelled status below outlives its TTL — a series with an
+        // interval longer than the TTL would otherwise resurrect.
         if (workerBlacklist.IsBlacklisted(task.PersistenceId))
         {
             _inMemoryRunCounts.TryRemove(task.PersistenceId, out _);
@@ -1735,54 +1539,32 @@ public class WorkerExecutor(
             }
         }
 
-        // Run counter source: the row already read from storage when present (no second round-trip),
-        // otherwise an in-memory counter so the series keeps running and still honors MaxRuns/RunUntil
-        // without persistence (F18).
+        // The row already read from storage when present, otherwise an in-memory counter so the series keeps
+        // running and still honours MaxRuns/RunUntil without persistence.
         var currentRun = taskStorage != null
                              ? current?.CurrentRunCount ?? 0
                              : _inMemoryRunCounts.GetValueOrDefault(task.PersistenceId);
 
-        // The cursor and the status THIS call decides against, taken with the run counter and never read back
-        // at write time. The in-memory store hands back LIVE entities, so a property read at the end of the
-        // call reports whatever a concurrent writer did in between and hands it to a compare-and-swap as its
-        // own expectation — the guard would then confirm the very state it exists to refuse.
+        // The cursor and status THIS call decides against, taken with the run counter and never read back at
+        // write time: the in-memory store hands back LIVE entities, so a later read would give a
+        // compare-and-swap the very state a concurrent writer just made — the guard confirming what it exists
+        // to refuse.
         var rowCursor = current?.NextRunUtc;
         var rowStatus = current?.Status ?? QueuedTaskStatus.Queued;
 
-        // Fix for schedule drift: Use the scheduled execution time as base for next calculation,
-        // not the current time. This ensures recurring tasks maintain their intended schedule
-        // even when execution is delayed due to system load or downtime.
-        // See: docs/recurring-task-schedule-drift-fix.md
-        //
-        // task.ExecutionTime is the scheduled execution time for THIS run:
-        // - For first dispatch: the original scheduled time from the builder
-        // - For tasks loaded from storage (after restart): NextRunUtc from the database
-        //   (set in WorkerService.cs when loading pending tasks)
+        // The base is the SCHEDULED time of this run, not the current time, so a series delayed by load or
+        // downtime keeps its intended grid instead of drifting. See
+        // docs/recurring-task-schedule-drift-fix.md.
         var nowUtc        = _timeProvider.GetUtcNow();
         var scheduledTime = task.ExecutionTime ?? nowUtc;
 
-        // Compute the next occurrence. A real execution (countsAsRun) advances the run number to
-        // currentRun + 1 so the MaxRuns gate stops the series once MaxRuns real executions have happened.
-        // A SKIPPED occurrence (rate-limit horizon rejection — countsAsRun == false) did not execute, so
-        // it keeps the run number at currentRun: the MaxRuns gate counts only real executions, and the
-        // skip never shortens the series (even the would-be MaxRuns-th occurrence is rescheduled for a
-        // real run). isRecovery: true on the skip path only suppresses re-applying the first-run config
-        // (InitialDelay/RunNow) when currentRun == 0 — the occurrence's time was already decided.
-        //
-        // skipAheadTo (the rate limiter's next available slot, only set on a horizon rejection): the
-        // skip-forward jumps straight to the first occurrence at/after that slot — i.e. when the series
-        // can actually run again — instead of grinding occurrence-by-occurrence and re-rejecting each one.
-        // For a cadence far faster than the limiter's refill rate this collapses thousands of doomed
-        // re-evaluations into one, while a correctly-configured series (near slot) barely moves. Passed as
-        // the "now" reference of the skip-forward; null falls back to the actual now (next occurrence).
-        // A real execution advances the run number to currentRun + 1 (so the MaxRuns gate stops the
-        // series after MaxRuns real runs); a skip keeps it at currentRun and suppresses the first-run
-        // config (isRecovery) — the occurrence's time was already decided — while jumping the "now"
-        // reference to skipAheadTo.
-        // I: defend against a misbehaving custom IRateLimitGate that returns a default/past SlotUtc — never
-        // anchor the skip-ahead reference in the past (a MinValue/past `now` would make every occurrence look
-        // "in the future" and defeat the skip). Floor to the real now by dropping it (the built-in gate's
-        // PastSlotFloor already guarantees a future slot; this only hardens the public extension point).
+        // A real execution advances the run number so MaxRuns stops the series after MaxRuns real runs; a
+        // SKIPPED occurrence keeps it, and passes isRecovery to suppress the first-run config, since its time
+        // was already decided. skipAheadTo, the limiter's next available slot, becomes the "now" reference of
+        // the skip-forward: it jumps to when the series can actually run again instead of grinding
+        // occurrence by occurrence and re-rejecting each one.
+        // A past slot is DROPPED, since a custom IRateLimitGate may return one: anchoring the reference in
+        // the past makes every occurrence look future and defeats the skip entirely.
         if (skipAheadTo.HasValue && skipAheadTo.Value <= nowUtc)
             skipAheadTo = null;
 
@@ -1808,11 +1590,10 @@ public class WorkerExecutor(
         }
         catch (OccurrenceProviderException failure)
         {
-            // The schedule's calendar could not answer, which is transient by contract (V4). Nothing is
-            // written — not even the run that just happened, whose completion needs the cursor this call was
-            // computing — so the row keeps the state a crash between a side effect and its storage write
-            // leaves, and the at-least-once contract covers the replay. What must not happen is the series
-            // stopping: it is parked to ask again after the backoff.
+            // The schedule's calendar could not answer, which is transient by contract. Nothing is written —
+            // not even the run that just happened, whose completion needs the cursor this call was computing
+            // — so the row is left as a crash between a side effect and its write leaves it, and
+            // at-least-once covers the replay. The series is parked to ask again after the backoff.
             await DeferScheduleForProviderAsync(task, failure, nowUtc).ConfigureAwait(false);
             return;
         }
@@ -1822,28 +1603,21 @@ public class WorkerExecutor(
         if (result.SkippedCount > 0)
             logger.MissedOccurrencesSkipped(task.PersistenceId, result.SkippedCount, result.SkippedCountIsExact);
 
-        // T6: the slots a daylight-saving transition folded into this one occurrence. They cost one run, not
-        // one each, so the only place their number ever shows up is here.
+        // The slots a daylight-saving transition folded into this one occurrence. They cost one run, not one
+        // each, so the only place their number ever shows up is here.
         if (result.CollapsedSlotCount > 0)
             logger.DstSlotsCollapsed(task.PersistenceId, result.CollapsedSlotCount + 1, result.NextRun);
 
-        // Advance the run counter by exactly ONE real execution. Occurrences skipped during a downtime
-        // realign the schedule and are logged above, but they do NOT consume the MaxRuns budget: the
-        // counter tracks real executions only (CurrentRunCount == RunsAudit rows), so MaxRuns means
-        // "run this many times" (Option B accounting). Persistence is gated on storage; without storage
-        // only the in-memory counter advances.
-        //
-        // A rate-limit-rejected occurrence (countsAsRun == false) did NOT execute: it advances the
-        // schedule only and writes nothing to the run counter (mirroring the deferral's no-storage-write
-        // invariant — the status was already set Queued by the caller). A failed run still counts.
+        // Exactly ONE real execution. Occurrences skipped during a downtime realign the schedule but do NOT
+        // consume the MaxRuns budget, so MaxRuns means "run this many times"; a failed run still counts. A
+        // rate-limit-rejected occurrence never executed, so it advances the schedule and writes nothing.
         if (countsAsRun)
         {
             if (taskStorage != null)
             {
                 // A schedule someone can reschedule at runtime advances under a compare-and-swap on its
-                // version (S1/S3), so a run that finishes after a reschedule cannot write its stale next run
-                // over the new definition. A schedule nobody can address keeps the historical unconditional
-                // write, byte for byte.
+                // version, so a run finishing after a reschedule cannot write its stale next run over the new
+                // definition. A schedule nobody can address keeps the unconditional write, byte for byte.
                 if (IsVersionedSchedule(task, current, taskStorage))
                 {
                     var advance = await AdvanceVersionedRunAsync(task, executionTimeMs, result.NextRun,
@@ -1853,15 +1627,14 @@ public class WorkerExecutor(
                     if (!advance.OwnsNextOccurrence)
                     {
                         // The row belongs to a definition this delivery knows nothing about, so scheduling
-                        // from here would put the old grid back. Its owner is SUPPOSED to have parked it —
-                        // and a re-park that failed is the one case that brings this delivery here at all, so
-                        // the schedule is parked from the row instead of being left in no scheduler at all.
+                        // from here would put the old grid back. A re-park that FAILED is the one case that
+                        // brings this delivery here, so the schedule is parked from the row instead.
                         await ReparkFromRowAsync(advance.Rebased, runNumber + 1, ct).ConfigureAwait(false);
                         return;
                     }
                 }
                 // On a successful run the Completed status is written in the SAME atomic operation as the
-                // advance (CU14/L29); otherwise (failure) the status was already set and we only advance.
+                // advance; on a failure the status was already set and only the advance is left.
                 else if (markCompleted)
                 {
                     await taskStorage.CompleteRecurringRun(task.PersistenceId, executionTimeMs, result.NextRun,
@@ -1883,24 +1656,17 @@ public class WorkerExecutor(
 
         if (result.NextRun.HasValue)
         {
-            // Update ExecutionTime for the next run so that subsequent calculations
-            // use the correct scheduled time (not the original time from first dispatch).
-            // Always continue LAZY: an eager first occurrence carries a single-use EverTask-owned
-            // handler scope (disposed in the finally above), so reusing the same eager executor would
-            // re-run on a disposed handler/scope. ToLazy() drops the carried instance and scope, so each
-            // subsequent occurrence resolves a fresh handler in the worker's per-task scope (L27).
-            // RunNumber travels with the occurrence so the handler can read it without a storage round-trip:
-            // runNumber is the run this delivery WAS (currentRun + 1 for a real run, currentRun for a skipped
-            // one, which consumed nothing), so the next occurrence is always one past it.
+            // Always continue LAZY: an eager first occurrence carries a single-use handler scope, already
+            // disposed in the finally above, so reusing that executor would run on a disposed handler.
+            // RunNumber travels with the occurrence so the handler reads it without a storage round trip, and
+            // is one past the run this delivery WAS.
             var updatedTask = task.ToLazy() with { ExecutionTime = result.NextRun, RunNumber = runNumber + 1 };
 
-            // CONDITIONAL, and on every path that reaches here. The compare-and-swap above owns the storage
-            // write, not this registration: a reschedule can commit, park its own executor and publish its
-            // version in the gap between them, and replacing it latest-wins would put the grid this delivery
-            // knew back in the scheduler — where the published version then drops it as superseded, leaving
-            // the series in no scheduler, no queue and no delivery until a restart. The rate-limit skip
-            // (countsAsRun == false) never even reaches the compare-and-swap — it writes nothing — so this is
-            // the ONLY thing standing between a superseded skip and that same end state.
+            // CONDITIONAL on every path: a reschedule can commit, park its own executor and publish its
+            // version in the gap after the compare-and-swap above, and replacing that registration
+            // latest-wins would put this delivery's grid back — where the published version drops it as
+            // superseded, leaving the series in no scheduler, no queue and no delivery until a restart. The
+            // rate-limit skip writes nothing at all, so here this is the only guard it has.
             if (!scheduler.TrySchedule(updatedTask, result.NextRun))
                 logger.NextOccurrenceRefusedBySuccessor(task.PersistenceId, task.ScheduleVersion);
         }
@@ -1909,14 +1675,10 @@ public class WorkerExecutor(
             // Series ended (MaxRuns/RunUntil reached): drop the in-memory counter, if any.
             _inMemoryRunCounts.TryRemove(task.PersistenceId, out _);
 
-            // A series that ends on the SKIP path (its next limiter slot is past RunUntil) wrote nothing
-            // above, so without this it would linger in a non-terminal Queued status forever. Persist a
-            // terminal Completed AND clear NextRunUtc — mirroring how the counted paths end via
-            // CompleteRecurringRun/UpdateCurrentRun with a null next run. A plain SetCompleted would leave
-            // NextRunUtc populated, and a Completed recurring row with NextRunUtc != null is revived by
-            // QueuedTask.IsRecoverable while RunUntil >= now — recovery would resurrect the finished
-            // series. It does both atomically WITHOUT counting the skip (Option B).
-            // Only the series-END writes here; a skip that continues still writes nothing (no-storage-write skip).
+            // A series ending on the SKIP path wrote nothing above and would linger in a non-terminal Queued
+            // status for ever. Completed and a cleared NextRunUtc go in ONE write, without counting the skip:
+            // a Completed recurring row that keeps its cursor is revived by recovery while RunUntil >= now.
+            // Only the series END writes here; a skip that continues still writes nothing.
             if (!countsAsRun && taskStorage != null &&
                 !await FinalizeSkippedSeriesAsync(task, executionTimeMs, currentRun, rowCursor, rowStatus,
                      taskStorage, current, ct).ConfigureAwait(false))
@@ -1927,32 +1689,20 @@ public class WorkerExecutor(
             }
 
             // A schedule that will not run again is no longer a version this process publishes a lower bound
-            // for (S4): the entry is dropped here and on cancellation, which are the two ways a series ends.
-            // Its provider backoff, if it had one, has the same lifetime.
+            // for: the entry is dropped here and on cancellation, the two ways a series ends. Its provider
+            // backoff has the same lifetime.
             ScheduleVersions?.Remove(task.PersistenceId);
             ProviderRetries?.Forget(task.PersistenceId);
         }
     }
 
-    /// <summary>
-    /// Parks a schedule whose occurrence provider could not answer, so the advance is retried after the
-    /// backoff instead of waiting for a restart (V4).
-    /// </summary>
-    /// <remarks>
-    /// The registration is a SCHEDULE RETRY, not the next occurrence: which slot comes next is precisely what
-    /// the provider did not say, and parking an ordinary delivery would run the handler on a slot nobody
-    /// chose. Conditional like every other re-park — a reschedule that has already parked a newer definition
-    /// owns the row now — and the event is published beside the log line, because there is no poller behind
-    /// this and a schedule waiting on its calendar has to be visible.
-    /// <para>
-    /// Two details. The retry CARRIES the slot this delivery was about (<c>ScheduleRetryFromUtc</c>) while its
-    /// <c>ExecutionTime</c> becomes the instant it fires at: the decision it comes back to make is "what
-    /// follows the slot that just ran", and on a host with no storage that slot exists nowhere but on the
-    /// delivery. And the event saying the schedule "is parked to ask again" is published only once the
-    /// registration is really in — announcing it first left a subscriber with a promise the very next line
-    /// could break, and no event at all for the break (V4(2)).
-    /// </para>
-    /// </remarks>
+    // Parks a schedule whose occurrence provider could not answer, so the advance is retried after the
+    // backoff instead of waiting for a restart. The registration is a SCHEDULE RETRY, not the next
+    // occurrence: which slot comes next is precisely what the provider did not say, and parking an ordinary
+    // delivery would run the handler on a slot nobody chose. The retry CARRIES the slot this delivery was
+    // about, which on a host with no storage exists nowhere else. An error event goes beside the log line
+    // because nothing polls behind this, and "parked to ask again" is published only once the registration
+    // is really in.
     private async Task DeferScheduleForProviderAsync(TaskHandlerExecutor task, OccurrenceProviderException failure,
                                                      DateTimeOffset nowUtc)
     {
@@ -1989,25 +1739,13 @@ public class WorkerExecutor(
               .ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Ends a series on the rate-limit SKIP path — the one advance that writes nothing above and therefore
-    /// carries no compare-and-swap of its own.
-    /// </summary>
-    /// <returns>
-    /// True when the series is this delivery's to end. False when the row now carries a definition this
-    /// delivery never saw, in which case the schedule is parked from that row instead.
-    /// </returns>
-    /// <remarks>
-    /// A skip is computed entirely from the definition the DELIVERY carries, so a reschedule that extends the
-    /// bound while this delivery waits at the rate-limit gate — seconds, by design — leaves it computing a
-    /// null next run from a definition that no longer exists. Writing that unconditionally set
-    /// <c>Completed</c> and a null cursor over the row an operator had just extended: it then satisfies
-    /// neither recovery predicate, so not even a restart brings the series back, and the audit says it ended
-    /// normally. Every other finalization in the tree — recovery, the dispatcher's exhausted-series branch,
-    /// the materializer — is compare-and-swapped on the version, cursor and status the decision was computed
-    /// from, and this is the same guard, with the delivery's OWN version as the expectation: the row's would
-    /// confirm the reschedule instead of losing to it.
-    /// </remarks>
+    // Ends a series on the rate-limit SKIP path, the one advance that writes nothing above and so carries no
+    // compare-and-swap of its own. Returns false when the row now carries a definition this delivery never
+    // saw, the schedule being parked from that row instead.
+    // A skip is computed from the DELIVERY's definition, so a reschedule extending the bound while it waits
+    // at the gate leaves it holding a null next run from a definition that no longer exists — written
+    // unconditionally, that answers neither recovery predicate. The expectation is the delivery's OWN
+    // version; the row's would confirm the reschedule instead of losing to it.
     private async Task<bool> FinalizeSkippedSeriesAsync(TaskHandlerExecutor task, double executionTimeMs,
                                                         int currentRun, DateTimeOffset? expectedCursorUtc,
                                                         QueuedTaskStatus expectedStatus, ITaskStorage taskStorage,
@@ -2027,9 +1765,8 @@ public class WorkerExecutor(
 
         logger.SkippedSeriesFinalizationSuperseded(task.PersistenceId, task.ScheduleVersion);
 
-        // Whoever owns the row now is SUPPOSED to have parked it, and a re-park that failed is the one case
-        // that brings a superseded delivery here at all (S4) — so the row is parked from itself rather than
-        // left in no scheduler, exactly as a re-aimed advance does.
+        // A re-park that FAILED is the one case that brings a superseded delivery here at all, so the row is
+        // parked from itself rather than left in no scheduler, exactly as a re-aimed advance does.
         var rebased = (await taskStorage.Get(t => t.Id == task.PersistenceId).ConfigureAwait(false))
             .FirstOrDefault();
 
@@ -2037,28 +1774,18 @@ public class WorkerExecutor(
         return false;
     }
 
-    /// <summary>
-    /// How many times an advance re-aims at a row that was rescheduled under it before giving up ON THE GUARD.
-    /// Two reschedules landing inside one advance is already the pathological case; the bound is here so a
-    /// third party rewriting the row in a loop cannot spin this one. What it never gives up on is the run
-    /// itself, which is recorded unconditionally once the attempts are spent.
-    /// </summary>
+    // How many times an advance re-aims at a row rescheduled under it before giving up ON THE GUARD — never
+    // on the run itself, which is recorded unconditionally once the attempts are spent. The bound exists so a
+    // third party rewriting the row in a loop cannot spin this one.
     private const int MaxScheduleAdvanceAttempts = 3;
 
-    /// <summary>
-    /// Whether this schedule's advances go through the compare-and-swap overloads (S1).
-    /// </summary>
-    /// <remarks>
-    /// A schedule <see cref="ITaskScheduleManager"/> can ADDRESS is compare-and-swapped from its very first
-    /// advance, and the address is the taskKey: every entry point of that interface takes one, so a recurring
-    /// row without a key can never be rescheduled and keeps the unconditional writes it always used, byte for
-    /// byte. Deciding instead on "has it been rescheduled yet" cannot be done without a race — the row was read
-    /// before the run was even evaluated, the delivery's version is older still, and the registry is published
-    /// only after the re-park — so the FIRST reschedule of a schedule could linearize between that reading and
-    /// this write and be silently overwritten by it, which is precisely the race S1 says must never be handled
-    /// without a compare-and-swap. The version fields stay in the test for the schedules a key cannot answer
-    /// for: a row whose key was cleared, and a delivery rebuilt from a row that already carries a version.
-    /// </remarks>
+    // Whether this schedule's advances go through the compare-and-swap overloads. A schedule
+    // ITaskScheduleManager can ADDRESS is guarded from its FIRST advance, the address being the taskKey; a
+    // recurring row without one can never be rescheduled and keeps the unconditional writes byte for byte.
+    // Deciding on "has it been rescheduled yet" cannot be done without a race, since the row was read before
+    // the run was evaluated and the registry is published only after the re-park. The version fields stay in
+    // the test for what a key cannot answer for: a row whose key was cleared, and a delivery rebuilt from a
+    // row that already carries a version.
     private bool IsVersionedSchedule(TaskHandlerExecutor task, QueuedTask? row, ITaskStorage taskStorage) =>
         taskStorage.SupportsScheduleVersioning
         && (task.ScheduleVersion > 0 || row?.ScheduleVersion > 0
@@ -2071,22 +1798,12 @@ public class WorkerExecutor(
     /// </summary>
     private readonly record struct ScheduleAdvance(bool OwnsNextOccurrence, QueuedTask? Rebased);
 
-    /// <summary>
-    /// Advances a versioned schedule's run counter and cursor, re-aiming the write if a reschedule linearized
-    /// while this run was executing.
-    /// </summary>
-    /// <returns>
-    /// <see cref="ScheduleAdvance.OwnsNextOccurrence"/> when the advance applied against the version this
-    /// delivery ran, so the caller schedules the next occurrence itself. Otherwise the row now belongs to a
-    /// definition this delivery knows nothing about, and it travels back in
-    /// <see cref="ScheduleAdvance.Rebased"/> so the caller can park the schedule from it.
-    /// </returns>
-    /// <remarks>
-    /// The run HAPPENED, so it is recorded whatever the version says — dropping the write on a mismatch would
-    /// lose a completion and let recovery re-run the occurrence. What must not survive is this run's idea of
-    /// what comes NEXT: the next run it computed belongs to the definition that was just replaced. That holds
-    /// at the END of the loop too: once the re-aims are spent the guard is dropped, not the write.
-    /// </remarks>
+    // Advances a versioned schedule's run counter and cursor, re-aiming the write if a reschedule linearized
+    // while this run was executing. OwnsNextOccurrence says the advance applied against the version this
+    // delivery ran; otherwise the row travels back so the caller parks the schedule from it.
+    // The run HAPPENED, so it is recorded whatever the version says — dropping the write would lose a
+    // completion and let recovery re-run the occurrence. What must not survive is this run's idea of what
+    // comes NEXT. Past the last re-aim the GUARD is given up, never the write.
     private async Task<ScheduleAdvance> AdvanceVersionedRunAsync(TaskHandlerExecutor task, double executionTimeMs,
                                                                  DateTimeOffset? nextRun, bool markCompleted,
                                                                  ITaskStorage taskStorage)
@@ -2127,14 +1844,10 @@ public class WorkerExecutor(
             nextRun         = row.NextRunUtc;
         }
 
-        // The bound is reached only when somebody rewrote the row under EVERY re-aim, and giving up on the
-        // guard is not the same thing as giving up on the run. The run happened: dropping its write leaves the
-        // row in the InProgress this delivery set, the execution unaudited, the run counter — and with it
-        // MaxRuns — one short for ever, and the series parked nowhere until a restart. So the last attempt
-        // writes unconditionally, and it writes the cursor the last read carried: that value is the current
-        // owner's own, so it advances nothing and the only thing a writer landing inside this final round trip
-        // loses is one generation of the cursor, which the next advance of the definition that owns the row
-        // overwrites. A lost run is permanent; a cursor one generation behind heals itself.
+        // Past the last re-aim the GUARD is given up, never the write: dropping it would leave the row
+        // InProgress, the run unaudited, MaxRuns permanently short and the series parked nowhere. The cursor
+        // written is the last read's, which belongs to the current owner and so advances nothing — a lost run
+        // is permanent, a cursor one generation behind heals itself.
         logger.ScheduleAdvanceLost(task.PersistenceId, MaxScheduleAdvanceAttempts);
 
         if (markCompleted)
@@ -2153,33 +1866,12 @@ public class WorkerExecutor(
         return new ScheduleAdvance(false, rebased);
     }
 
-    /// <summary>
-    /// Parks a schedule from its ROW — that row's definition, cursor and version, never this delivery's — after
-    /// an advance applied against a definition this delivery never saw.
-    /// </summary>
-    /// <remarks>
-    /// Whoever rewrote the row is supposed to have parked it, and normally has: this is then a second
-    /// registration for the same instant, replaced latest-wins at the cost of one executor rebuild on a path an
-    /// ordinary series never takes. It exists for the case where that parking is exactly what FAILED, which is
-    /// also the only thing that lets a delivery of the replaced definition reach a rewritten row in the first
-    /// place (S4): a re-park that threw publishes no version, so the old occurrence fires once more and lands
-    /// here. Returning empty-handed there left the series in no scheduler, no queue and no delivery until a
-    /// restart. A row that has turned DURABLE is handed to the materializer instead, because that is what owns
-    /// the parking of a durable schedule and it re-reads the row anyway.
-    /// </remarks>
-    /// <param name="nextRunNumber">
-    /// The run the parked occurrence will BE. Taken from this delivery's own accounting — the run it just was,
-    /// plus one, exactly like the ordinary path — and never from the row's counter, whose snapshot was read
-    /// before this advance incremented it on some providers and after it on the ones that hand back live
-    /// entities.
-    /// </param>
-    /// <param name="ct">
-    /// The service token of the delivery this park closes. A durable row is parked by the MATERIALIZER, which
-    /// re-plans the schedule and may therefore ask an <see cref="INextOccurrenceProvider"/> doing real I/O:
-    /// without the token a calendar that never answers holds this consumer, this delivery's registry entry and
-    /// the host's shutdown for ever. Nothing is written by a plan that could not be computed, so a park the
-    /// shutdown cancels costs only the wait — startup recovery parks the row again.
-    /// </param>
+    // Parks a schedule from its ROW — that row's definition, cursor and version, never this delivery's. The
+    // one thing that lets a delivery of a replaced definition reach a rewritten row is a re-park that FAILED,
+    // and returning empty-handed left the series in no scheduler until a restart. A row that turned DURABLE
+    // goes to the materializer, which owns the parking of a durable schedule.
+    // `nextRunNumber` comes from this delivery's accounting, never from the row's counter, whose snapshot is
+    // read before this advance on some providers and after it on those handing back live entities.
     private async Task ReparkFromRowAsync(QueuedTask? row, int nextRunNumber, CancellationToken ct)
     {
         // Nothing to park: the advance never reached a row it could read, or the series has ended.
@@ -2232,11 +1924,9 @@ public class WorkerExecutor(
     private const string SeverityWarning     = nameof(SeverityLevel.Warning);
     private const string SeverityError       = nameof(SeverityLevel.Error);
 
-    /// <summary>
-    /// L30, the single gate: nothing consumes an event when its log level is filtered out AND no
-    /// monitoring subscriber is attached. The caller then produces nothing at all — no rendered
-    /// sentence, no exception, no boxing.
-    /// </summary>
+    // The single gate: nothing consumes an event when its log level is filtered out AND no monitoring
+    // subscriber is attached, so the caller then produces nothing at all — no rendered sentence, no
+    // exception, no boxing.
     private bool TryEnterEvent(LogLevel logLevel, out bool logEnabled, out bool publish)
     {
         logEnabled = logger.IsEnabled(logLevel);
@@ -2244,19 +1934,12 @@ public class WorkerExecutor(
         return logEnabled || publish;
     }
 
-    /// <summary>
-    /// Logs one event and publishes its monitoring counterpart.
-    /// </summary>
-    /// <remarks>
-    /// The ILogger receives a compile-time template with named properties (<paramref name="log"/> calls a
-    /// generated <c>[LoggerMessage]</c> method); <paramref name="render"/> produces the flat sentence
-    /// that <c>EverTaskEventData.Message</c> needs, and runs ONLY when a subscriber is attached.
-    /// <paramref name="args"/> is a value tuple and both delegates are <c>static</c>, so a call site
-    /// allocates nothing and boxes nothing. <paramref name="logLevel"/> is decoupled from
-    /// <paramref name="severity"/>: per-task chatter can log at Debug while the dashboard still gets an
-    /// Information event.
-    /// internal (not private): the deterministic L30/F24 gate tests drive this seam directly.
-    /// </remarks>
+    // Logs one event and publishes its monitoring counterpart. The ILogger gets a compile-time template
+    // through a generated [LoggerMessage] method, while `render` produces the flat sentence
+    // EverTaskEventData.Message needs and runs ONLY when a subscriber is attached; `args` is a value tuple
+    // and both delegates static, so a call site allocates and boxes nothing. `logLevel` is decoupled from
+    // `severity` on purpose: per-task chatter logs at Debug while the dashboard still gets Information.
+    // internal, not private, because the gate tests drive this seam directly.
     internal void RegisterEvent<TArgs>(LogLevel logLevel, SeverityLevel severity, TaskHandlerExecutor executor,
                                        Exception? exception, IReadOnlyList<TaskExecutionLog>? executionLogs,
                                        TArgs args, Action<ILogger, TArgs, Exception?> log,
@@ -2295,9 +1978,8 @@ public class WorkerExecutor(
         }
     }
 
-    // F24: cap concurrent in-flight monitoring callbacks. A slow/blocked subscriber (e.g. SignalR)
-    // under high throughput × events × subscribers would otherwise spawn an unbounded number of
-    // fire-and-forget Task.Run continuations and saturate the thread pool.
+    // Caps concurrent in-flight monitoring callbacks: a slow or blocked subscriber under high throughput
+    // would otherwise spawn unbounded fire-and-forget continuations and saturate the thread pool.
     internal static readonly int MonitoringMaxConcurrency = Math.Max(4, Environment.ProcessorCount * 2);
 
     private readonly SemaphoreSlim _monitoringConcurrency = new(MonitoringMaxConcurrency, MonitoringMaxConcurrency);
@@ -2372,9 +2054,8 @@ public class WorkerExecutor(
                                                     string message, Exception? exception,
                                                     IReadOnlyList<TaskExecutionLog>? executionLogs = null)
     {
-        // Cache task JSON (weak reference - GC'd when task is collected). EverTaskJson uses private, isolated
-        // System.Text.Json options (L33) so a hostile global JSON configuration cannot alter the monitoring
-        // payload either.
+        // Weak reference, GC'd with the task. EverTaskJson uses private, isolated System.Text.Json options, so
+        // a host's global JSON configuration cannot alter the monitoring payload either.
         var taskJson = TaskJsonCache.GetValue(executor.Task, EverTaskJson.Serialize);
 
         // Cache type strings (permanent cache - types never unload)
@@ -2407,13 +2088,9 @@ public class WorkerExecutor(
     /// </summary>
     private TaskLogCapture CreateLogCapture(Type handlerType, Guid taskId, IServiceProvider serviceProvider)
     {
-        // Create ILogger<THandler> for the specific handler type
         var handlerLogger = loggerFactory.CreateLogger(handlerType);
-
-        // Resolve GUID generator (database-specific)
         var guidGenerator = serviceProvider.GetRequiredService<IGuidGenerator>();
 
-        // Create proxy that always logs to ILogger and optionally persists
         return new TaskLogCapture(
             handlerLogger,
             taskId,

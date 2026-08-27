@@ -2,7 +2,7 @@ namespace EverTask.Scheduler.Recurring.Builder;
 
 public class IntervalSchedulerBuilder(RecurringTask task, TimeProvider? timeProvider) : IIntervalSchedulerBuilder
 {
-    /// <summary>The pre-P9 constructor, kept for binary compatibility (P6/X6).</summary>
+    /// <summary>The constructor the previous release shipped, kept for binary compatibility.</summary>
     public IntervalSchedulerBuilder(RecurringTask task) : this(task, null) { }
 
     public IBuildableSchedulerBuilder UseCron(string cronExpression)

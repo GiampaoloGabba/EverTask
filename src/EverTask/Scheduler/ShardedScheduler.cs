@@ -8,32 +8,13 @@ namespace EverTask.Scheduler;
 /// Recommended for workloads exceeding 10k Schedule() calls/sec or 100k+ scheduled tasks.
 /// </summary>
 /// <remarks>
-/// This scheduler divides the workload across multiple independent shards (each with its own timer and priority queue)
-/// to reduce lock contention and improve throughput. Each shard operates independently, providing:
-/// - Reduced lock contention (divided by shard count)
-/// - Better spike handling (independent processing)
-/// - Complete failure isolation (issues in one shard don't affect others)
-///
-/// Trade-offs:
-/// - Additional memory overhead (~300 bytes per shard)
-/// - Additional background threads (1 per shard)
-/// - Slightly more complex debugging (multiple timers)
-///
-/// Recommended shard count: 4-16 for most workloads
-/// Auto-scaling default: Environment.ProcessorCount
-///
-/// Dispatch characteristics (same as <see cref="PeriodicTimerScheduler"/>):
-/// - Non-blocking dispatch: a full worker queue never stalls a shard loop
-///   (no head-of-line blocking across queues); the task is retried with a backoff.
-/// - Idempotent scheduling per PersistenceId (latest wins): the same task scheduled twice
-///   executes once. Sharding is hash-based on PersistenceId, so duplicate registrations
-///   always land on the same shard.
+/// Each shard owns a timer and a priority queue, and costs one background loop plus a few hundred bytes.
+/// Dispatch behaves as in <see cref="PeriodicTimerScheduler"/>: a full worker queue never stalls a shard loop
+/// (the task is retried with a backoff), and scheduling is idempotent per PersistenceId (latest wins) —
+/// sharding is hash-based on that id, so duplicate registrations always land on the same shard.
 /// </remarks>
 public class ShardedScheduler : IScheduler, IDisposable
 {
-    /// <summary>
-    /// Represents a single scheduler shard with its own timer and priority queue.
-    /// </summary>
     private sealed class Shard : IDisposable
     {
         private readonly ConcurrentPriorityQueue<TaskHandlerExecutor, DateTimeOffset> _queue;
@@ -68,13 +49,10 @@ public class ShardedScheduler : IScheduler, IDisposable
             // Captured before any dispatch: accessing _cts.Token after Dispose would throw
             _shutdownToken = _cts.Token;
 
-            // Avvia background loop per questo shard
             _ = ProcessScheduledTasksAsync(_shutdownToken);
         }
 
-        /// <summary>
-        /// Schedules a task for execution in this shard.
-        /// </summary>
+        /// <summary>Schedules a task for execution in this shard.</summary>
         /// <param name="refuseSuperseded">
         /// True to leave a registration carrying a newer schedule version in place and answer false, instead
         /// of replacing it latest-wins.
@@ -92,22 +70,18 @@ public class ShardedScheduler : IScheduler, IDisposable
             _logger.ShardSchedulingTask(_shardId, item.PersistenceId, scheduledTime);
 
             // Latest-wins registration per PersistenceId: a previously parked entry for the same task is
-            // evicted (single execution per occurrence). That rule and the S4 refusal live in
-            // ScheduledRegistrations, shared with PeriodicTimerScheduler.
+            // evicted, so an occurrence executes once.
             if (!_registrations.Swap(item, refuseSuperseded))
                 return false;
 
             _queue.Enqueue(item, scheduledTime);
 
-            // Sveglia il timer se è dormiente.
             _wakeUp.Signal();
 
             return true;
         }
 
-        /// <summary>
-        /// Invalidates a parked registration in this shard, if present.
-        /// </summary>
+        /// <summary>Invalidates a parked registration in this shard, if present.</summary>
         public bool TryUnschedule(Guid persistenceId)
         {
             if (!_registrations.Remove(persistenceId))
@@ -135,12 +109,9 @@ public class ShardedScheduler : IScheduler, IDisposable
         /// </summary>
         public bool IsScheduled(Guid persistenceId) => _registrations.Contains(persistenceId);
 
-        /// <summary>Test seam (CU19): number of entries currently in this shard's priority queue.</summary>
+        /// <summary>Test seam: number of entries currently in this shard's priority queue.</summary>
         internal int QueueCount => _queue.Count;
 
-        /// <summary>
-        /// Background loop that processes scheduled tasks for this shard.
-        /// </summary>
         private async Task ProcessScheduledTasksAsync(CancellationToken ct)
         {
             while (!ct.IsCancellationRequested)
@@ -173,7 +144,7 @@ public class ShardedScheduler : IScheduler, IDisposable
                 catch (ObjectDisposedException)
                 {
                     // Dispose() cancelled the loop and disposed the wake-up semaphore: a WaitAsync racing
-                    // that disposal is expected shutdown, not an error (F12). Treat it like cancellation.
+                    // that disposal is expected shutdown, not an error.
                     break;
                 }
                 catch (Exception ex)
@@ -183,9 +154,6 @@ public class ShardedScheduler : IScheduler, IDisposable
             }
         }
 
-        /// <summary>
-        /// Calculates the delay until the next task needs to be processed.
-        /// </summary>
         private TimeSpan CalculateNextDelay()
         {
             if (_queue.TryPeek(out _, out var nextScheduledTime))
@@ -195,7 +163,6 @@ public class ShardedScheduler : IScheduler, IDisposable
                 if (delay < TimeSpan.Zero)
                     return TimeSpan.Zero;
 
-                // Limita delay massimo (come PeriodicTimerScheduler)
                 if (delay > TimeSpan.FromHours(2))
                     return TimeSpan.FromHours(1.5);
 
@@ -205,9 +172,6 @@ public class ShardedScheduler : IScheduler, IDisposable
             return Timeout.InfiniteTimeSpan;
         }
 
-        /// <summary>
-        /// Processes all tasks that are ready for execution (scheduled time has passed).
-        /// </summary>
         private async Task ProcessReadyTasks()
         {
             var now = _timeProvider.GetUtcNow();
@@ -239,9 +203,6 @@ public class ShardedScheduler : IScheduler, IDisposable
             }
         }
 
-        /// <summary>
-        /// Dispatches a task to the worker queue for execution.
-        /// </summary>
         private async Task<EnqueueResult> DispatchToWorkerQueue(TaskHandlerExecutor item)
         {
             try
@@ -283,7 +244,7 @@ public class ShardedScheduler : IScheduler, IDisposable
             }
             catch (ObjectDisposedException)
             {
-                // Already disposed, ignore
+                // Already disposed
             }
 
             _cts.Dispose();
@@ -309,8 +270,8 @@ public class ShardedScheduler : IScheduler, IDisposable
     /// <param name="taskStorage">Optional task storage for persisting task states.</param>
     /// <param name="shardCount">Number of independent shards. 0 = auto-scale to ProcessorCount (minimum 4).</param>
     /// <remarks>
-    /// The pre-P9 arity, kept as a real overload so an assembly compiled against the previous release still
-    /// binds (P6/X6); the scheduling clock arrives through the overload below.
+    /// Kept as a real overload so an assembly compiled against the previous release still binds; the
+    /// scheduling clock arrives through the overload below.
     /// </remarks>
     public ShardedScheduler(
         IWorkerQueueManager queueManager,
@@ -326,7 +287,7 @@ public class ShardedScheduler : IScheduler, IDisposable
     /// <param name="logger">Logger instance.</param>
     /// <param name="taskStorage">Optional task storage for persisting task states.</param>
     /// <param name="shardCount">Number of independent shards. 0 = auto-scale to ProcessorCount (minimum 4).</param>
-    /// <param name="timeProvider">The scheduling clock (P9). Null falls back to the real clock.</param>
+    /// <param name="timeProvider">The scheduling clock. Null falls back to the real clock.</param>
     public ShardedScheduler(
         IWorkerQueueManager queueManager,
         IEverTaskLogger<ShardedScheduler> logger,
@@ -387,20 +348,17 @@ public class ShardedScheduler : IScheduler, IDisposable
     /// <inheritdoc />
     public bool SupportsScheduleInspection => true;
 
-    /// <summary>Test seam (CU19): entries in the priority queue of the shard owning this task id.</summary>
+    /// <summary>Test seam: entries in the priority queue of the shard owning this task id.</summary>
     internal int GetQueueCount(Guid persistenceId) => GetShard(persistenceId).QueueCount;
 
     private Shard GetShard(Guid persistenceId)
     {
-        // Hash-based sharding per distribuzione uniforme
-        // Use unsigned hash to prevent negative modulo when GetHashCode() returns int.MinValue
+        // Unsigned hash: a signed modulo goes negative when GetHashCode() returns int.MinValue
         var shardIndex = (int)((uint)persistenceId.GetHashCode() % (uint)_shardCount);
         return _shards[shardIndex];
     }
 
-    /// <summary>
-    /// Disposes all shards and releases resources.
-    /// </summary>
+    /// <summary>Disposes all shards and releases resources.</summary>
     public void Dispose()
     {
         foreach (var shard in _shards)

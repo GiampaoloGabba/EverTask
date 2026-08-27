@@ -32,7 +32,7 @@ public class DayInterval : IInterval
         set => _onTimes = value is null ? [new TimeOnly(0, 0)] : value.OrderBy(t => t).ToArray();
     }
     // public set (coherent with MonthInterval.OnDays/OnMonths): an internal setter is silently dropped by
-    // STJ on read, losing the OnDays schedule constraint on recovery (F1/B2).
+    // STJ on read, losing the OnDays schedule constraint on recovery.
     public DayOfWeek[] OnDays   { get; set; } = [];
 
     public void Validate()
@@ -59,7 +59,7 @@ public class DayInterval : IInterval
         Validate();
 
         // OnDays (top-level OnDays(...) builds DayInterval(0, days)): fire on EVERY listed day of week,
-        // every week (CU7) — not once on the first matching day.
+        // every week — not once on the first matching day.
         if (OnDays.Length != 0)
             return current.NextDayOfWeekSlot(OnDays, OnTimes, weekStride: 1);
 

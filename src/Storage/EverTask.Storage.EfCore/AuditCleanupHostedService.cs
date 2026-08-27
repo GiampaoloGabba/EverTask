@@ -12,10 +12,8 @@ namespace EverTask.Storage.EfCore;
 /// <see cref="AuditCleanupOptions"/> (the only source the service reads).
 /// </summary>
 /// <remarks>
-/// This service only interprets the policy and orchestrates the cleanup. The actual deletes live on
-/// the storage (<see cref="EfCoreTaskStorage"/>, optimized server-side for transactional providers;
-/// SqliteTaskStorage overrides them client-side), so the cleanup is never constrained by one provider's
-/// query-translation limits.
+/// This service only interprets the policy: the deletes themselves live on the storage, so the cleanup is
+/// never constrained by one provider's query-translation limits.
 /// </remarks>
 public sealed class AuditCleanupHostedService : BackgroundService
 {
@@ -67,7 +65,6 @@ public sealed class AuditCleanupHostedService : BackgroundService
     {
         _logger.ServiceStarted(EffectiveCleanupInterval);
 
-        // Wait for a small delay before first cleanup to allow app to fully start
         try
         {
             await Task.Delay(EffectiveInitialDelay, stoppingToken).ConfigureAwait(false);
@@ -88,14 +85,12 @@ public sealed class AuditCleanupHostedService : BackgroundService
                 _logger.CleanupCycleFailed(ex);
             }
 
-            // Wait for next cleanup cycle
             try
             {
                 await Task.Delay(EffectiveCleanupInterval, stoppingToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
-                // Service is stopping
                 break;
             }
         }
@@ -106,7 +101,7 @@ public sealed class AuditCleanupHostedService : BackgroundService
     private async Task PerformCleanup(CancellationToken ct)
     {
         if (_retentionPolicy == null || _storage == null)
-            return; // Nothing to do
+            return;
 
         _logger.CleanupCycleStarting();
 
@@ -129,7 +124,7 @@ public sealed class AuditCleanupHostedService : BackgroundService
         EfCoreTaskStorage storage, AuditRetentionPolicy policy, DateTimeOffset now, CancellationToken ct)
     {
         // A 0 or negative retention knob is treated as DISABLED (no-op), never as a `now`/future cutoff
-        // that would mass-delete on every cycle. Each pass runs only when its knob is > 0 (Cluster B).
+        // that would mass-delete on every cycle. Each pass runs only when its knob is > 0.
         var statusDeleted = 0;
         if (policy.StatusAuditRetentionDays is > 0)
         {
@@ -150,24 +145,16 @@ public sealed class AuditCleanupHostedService : BackgroundService
         if (policy.MaxExecutionLogsPerTask is > 0)
             logsDeleted += await storage.CleanupExecutionLogsByCount(policy.MaxExecutionLogsPerTask.Value, ct).ConfigureAwait(false);
 
-        // P0 (Cluster A): when a log retention is actually ACTIVE, the log passes above have already run, so
-        // any log still present is one the policy chose to keep — and deleting the task it belongs to would
-        // cascade-delete it. Both row-deleting passes below honour the same guard. "Active" means > 0 (a
-        // 0/negative knob is disabled and must not silently freeze every purge).
+        // When a log retention is ACTIVE the log passes above have already run, so any log still present is
+        // one the policy chose to keep — and deleting the task it belongs to would cascade-delete it. Active
+        // means > 0: a 0/negative knob is disabled and must not silently freeze every purge.
         var logRetentionActive = policy.ExecutionLogRetentionDays is > 0 || policy.MaxExecutionLogsPerTask is > 0;
 
-        // The same rule for the audit trail: the audit passes above have already run, so an audit row still
-        // present is one a configured window chose to keep — and deleting the occurrence it belongs to would
-        // cascade-delete it. The occurrence window is typically far shorter than the error window (7 days
-        // against 90), so without this guard the failure history of every occurrence of every durable
-        // schedule went 82 days before the window that was meant to hold it, and the cleanup line reported
-        // an occurrence count and nothing else.
-        //
-        // ONE flag PER TRAIL, unlike the log guard above: the two log knobs prune the same rows, so either of
-        // them means "the log pass ran", while these two knobs prune different tables and each pass is
-        // conditional on its own. A single OR turned the guard on for a trail nothing was going to prune —
-        // configure RunsAuditRetentionDays alone and every occurrence kept the StatusAudit row its own
-        // materialization wrote, so OccurrenceRetentionDays deleted nothing, for ever, on every provider.
+        // The same rule for the audit trails, which cascade on delete too. ONE flag PER TRAIL, unlike the log
+        // guard above: the two log knobs prune the same rows, while these two prune different tables and each
+        // pass is conditional on its own knob. A single OR would switch the guard on for a trail nothing is
+        // going to prune, and since every occurrence owns the StatusAudit row its materialization wrote, the
+        // occurrence purge would then delete nothing at all.
         var preserveStatusAudits = policy.StatusAuditRetentionDays is > 0;
         var preserveRunsAudits   = policy.RunsAuditRetentionDays is > 0;
 
@@ -186,9 +173,8 @@ public sealed class AuditCleanupHostedService : BackgroundService
         {
             // Only purge a completed task once it is older than the LONGEST configured retention window —
             // by then every audit category that could exist for it has been pruned. A 0/negative window is
-            // disabled, so it does not contribute a cutoff; with no active window there is no cutoff at all
-            // and nothing is deleted (G5: an AuditLevel.None completed task with no audits must not be
-            // hard-deleted immediately).
+            // disabled and contributes no cutoff; with no active window nothing is deleted, so a task run
+            // under AuditLevel.None (no audits at all) is not hard-deleted the moment it completes.
             var maxRetentionDays = new[]
                 {
                     policy.StatusAuditRetentionDays,
