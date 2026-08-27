@@ -82,7 +82,8 @@ backlog.
   again if it still overflows — and `Reschedule` clears it whatever mode it uses. Cancelling the series and
   dispatching it again under its key clears it too: that dispatch starts a new series, and the halt belonged
   to the one the cancel ended. Simply re-registering the schedule under its task key does not, because
-  re-declaring your schedules on every startup is not a request to replay anything. A halted schedule is also not put back in the scheduler: while it waits it
+  re-declaring your schedules on every startup is not a request to replay anything. A halted schedule is
+  also not put back in the scheduler: while it waits it
   writes nothing and takes no worker delivery. A restart reports the halt once more and then leaves it alone.
   To replay a backlog the cap had refused, widen the caps with `Reschedule(..., RescheduleMode.RebaseFromCursor)`:
   a plain cadence carries its cursor over unchanged, so the backlog is still there when the new caps allow it.

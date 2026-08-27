@@ -19,7 +19,7 @@ Default Credentials: admin / admin
 
 ## What You Can Do
 
-The dashboard helps you answer critical questions about your background tasks:
+The dashboard helps you answer the questions you actually have about your background tasks:
 
 - **"What's happening right now?"** - See tasks in progress, recent completions, and failures in real-time
 - **"Why did this task fail?"** - Drill into execution logs with full stack traces and structured logging
@@ -52,19 +52,19 @@ Click any task to see everything about its lifecycle. The modal view has three t
 
 **Status History** shows every state transition (Queued → InProgress → Completed/Failed) with timestamps. Perfect for understanding "when did this task actually start?" or "how long was it queued?"
 
-**Execution History** is especially valuable for recurring tasks. See all execution attempts, their durations, and outcomes. Quickly spot if a recurring task that usually takes 2 seconds suddenly took 30 seconds on the last run.
+**Execution History** matters most for recurring tasks. See all execution attempts, their durations, and outcomes. Quickly spot if a recurring task that usually takes 2 seconds suddenly took 30 seconds on the last run.
 
 **Occurrences** appears on a durable schedule row only. It lists the rows that schedule materialized, newest slot first, with the run number each of them is, the misfire it stands for, and how late it started. A hundred at a time, with Previous and Next. The storage hands over one page: a schedule with a year of retention behind it holds far more rows than a tab can show. Each line opens that occurrence's own detail page — it is a task row, so it has its own audits and logs.
 
 A schedule row also carries what its definition says: the occurrence mode, the misfire policy, the time zone its calendar is read on, and the schedule version, which changes every time the schedule is [rescheduled at runtime](recurring-tasks/managing-tasks.md). An occurrence carries the other half — the schedule it belongs to, its nominal slot, and the range of missed slots it was created out of.
 
-**Execution Logs** is your debugging powerhouse. If you enabled persistent logging, you'll see a terminal-style viewer with color-coded log levels (Info in blue, Warnings in yellow, Errors in red). Stack traces get syntax highlighting, and you can export logs to JSON/CSV for deeper analysis.
+**Execution Logs** is where you actually debug. If you enabled persistent logging, you'll see a terminal-style viewer with color-coded log levels (Info in blue, Warnings in yellow, Errors in red). Stack traces get syntax highlighting, and you can export logs to JSON/CSV for deeper analysis.
 
 ### Queue Metrics
 
 Each queue gets its own card showing task distribution (how many queued, running, completed, failed). Success rate percentages with color indicators help you spot troubled queues instantly. Click a queue card to filter the task list to that queue's tasks.
 
-Multi-queue systems shine here: you can see at a glance if your "critical" queue is healthy while your "background" queue has some failures that need investigation.
+This is where multi-queue setups pay off: you can see at a glance if your "critical" queue is healthy while your "background" queue has some failures that need investigation.
 
 ### Analytics & Trends
 
@@ -74,7 +74,7 @@ Execution time analysis is where you find performance bottlenecks. A sortable ta
 
 ## Real-Time Updates
 
-The dashboard uses SignalR for intelligent real-time updates. Instead of polling every few seconds (which wastes bandwidth and hammers your API), the dashboard only refreshes when something actually changes.
+The dashboard uses SignalR for real-time updates. Instead of polling every few seconds (which wastes bandwidth and hammers your API), the dashboard only refreshes when something actually changes.
 
 **How It Works:**
 
@@ -96,7 +96,7 @@ When a task completes, fails, or changes status, EverTask broadcasts a SignalR e
 
 The header shows your SignalR connection status with color-coded indicators (green = connected, yellow = connecting, red = disconnected). If SignalR drops, the dashboard automatically falls back to polling every 30 seconds. You can force a refresh anytime with the refresh button.
 
-This architecture reduces network traffic dramatically while keeping the UI feeling instant. No more stale data, no more excessive polling.
+That keeps network traffic down without leaving the UI on stale data between polls.
 
 ## Screenshots
 

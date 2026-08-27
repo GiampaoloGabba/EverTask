@@ -7,13 +7,13 @@ has_children: true
 
 # Scalability
 
-EverTask is designed to scale from modest workloads to extreme high-load scenarios. This section covers features that help you achieve horizontal and vertical scalability for your background task processing.
+EverTask scales from modest workloads to high-load ones. This section covers the features that help you scale background task processing horizontally and vertically.
 
 ## Overview
 
-When your application needs to handle increasing workload volumes, EverTask provides specialized features to maintain performance and reliability:
+When your application's workload grows, these features help:
 
-- **[Multi-Queue Support](multi-queue.md)** - Isolate workloads and optimize resource allocation with multiple independent execution queues
+- **[Multi-Queue Support](multi-queue.md)** - Isolate workloads across multiple independent execution queues
 - **[Sharded Scheduler](sharded-scheduler.md)** - Reduce scheduler lock contention under a high rate of `Schedule()` calls (a scheduling-side concern, distinct from task-execution throughput)
 - **[Keyed Rate Limiting](rate-limiting.md)** - Throttle task execution per tenant/account/resource against external API limits, without blocking workers or other keys
 

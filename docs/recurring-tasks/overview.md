@@ -7,7 +7,7 @@ nav_order: 1
 
 # Recurring Tasks Overview
 
-Schedule recurring tasks with a type-safe fluent API or cron, from an hourly job to a cron schedule.
+Schedule recurring tasks with a type-safe fluent API or a cron expression.
 
 ## Key Features
 
@@ -85,4 +85,4 @@ Start with the [Fluent Scheduling API](fluent-api.md) to learn the type-safe way
 
 ---
 
-> **Note**: Recurring tasks persist across application restarts. Your schedules survive even if your app crashes or redeploys!
+> **Note**: Recurring schedules are persisted, so they survive a restart, a crash and a redeploy.

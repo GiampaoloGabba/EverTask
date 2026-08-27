@@ -14,8 +14,8 @@ Storage providers persist tasks and their state. With persistent storage, tasks 
 | Provider | Use Case | Pros | Cons |
 |----------|----------|------|------|
 | **In-Memory** | Development, Testing | Fast, no setup | Data lost on restart |
-| **SQL Server** | Production, Enterprise | Scalable, ACID, stored procedures | Requires SQL Server |
-| **PostgreSQL** | Production, Open-source | Relational, scalable, server-side queries, writable-CTE optimizations | Requires PostgreSQL |
+| **SQL Server** | Production, Enterprise | Scalable, ACID, rich querying | Requires SQL Server |
+| **PostgreSQL** | Production, Open-source | Relational, scalable, server-side queries | Requires PostgreSQL |
 | **MySQL/MariaDB** | Production, Open-source | Relational, scalable, server-side recovery & cleanup | Requires MySQL 8.0+ / MariaDB 10.11+ (net9.0/net10.0 only) |
 | **SQLite** | Small-scale production, Single-server | Simple, file-based, no server | Limited concurrent writes |
 
@@ -40,7 +40,6 @@ Storage for production environments.
 - Production-ready
 - Highly scalable
 - ACID transactions
-- Stored procedures for performance
 - Rich querying capabilities
 - Requires SQL Server instance
 - Additional infrastructure cost
@@ -56,7 +55,6 @@ Relational, open-source storage for production, comparable to the SQL Server pro
 - High write concurrency on [one active EverTask host per store](../scalability.md#horizontal-scaling-multiple-instances)
 - ACID transactions
 - Server-side querying for all recovery and cleanup operations
-- Writable-CTE optimizations for hot writes (single-statement, atomic)
 - Requires a PostgreSQL instance
 
 **Learn more:** [PostgreSQL Storage](postgres-storage.md)
@@ -81,7 +79,7 @@ Lightweight, file-based storage that works well for single-server deployments.
 
 - Simple setup - single file
 - No server required
-- Perfect for small-scale production
+- Suitable for small-scale production
 - Easy backups (copy file)
 - Lower infrastructure cost
 - Limited concurrent writes

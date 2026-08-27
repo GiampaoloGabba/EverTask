@@ -7,7 +7,7 @@ nav_order: 2
 
 # Task Dispatching
 
-EverTask provides several ways to dispatch tasks for immediate, delayed, or scheduled execution. This guide covers all dispatching patterns.
+Tasks can be dispatched for immediate, delayed, or scheduled execution. This guide covers all the dispatching patterns.
 
 ## Table of Contents
 

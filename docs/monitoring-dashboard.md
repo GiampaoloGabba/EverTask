@@ -30,8 +30,8 @@ A monitoring dashboard with a REST API and an embedded React UI for real-time ta
 The EverTask Monitoring API provides:
 
 - **REST API** for querying tasks, viewing statistics, and analyzing performance
-- **Embedded React Dashboard** with modern UI for visual monitoring
-- **Real-Time Updates** via SignalR integration with intelligent throttling
+- **Embedded React Dashboard** for visual monitoring
+- **Real-Time Updates** via SignalR integration with throttling
 - **Task History** with detailed execution logs and status changes
 - **Analytics** including success rate trends, execution times, and task distribution
 - **Queue Metrics** for multi-queue monitoring
@@ -80,7 +80,7 @@ The package automatically includes:
 
 ## Quick Start
 
-Add monitoring to your application with just a few lines of code:
+Add monitoring to your application:
 
 ```csharp
 using EverTask;
@@ -428,7 +428,7 @@ builder.Services.AddEverTask(opt =>
 
 ### SignalR Hub Path
 
-The SignalR hub path is fixed to `/evertask-monitoring/hub` and cannot be customized. This ensures consistent integration between the API and the embedded dashboard UI.
+The SignalR hub path is fixed to `/evertask-monitoring/hub` and cannot be customized, so the API and the embedded dashboard UI always agree on it.
 
 ### Standalone API Registration
 
@@ -520,7 +520,7 @@ application; if you relied on those prefixed routes, they are now back at their 
 
 ## Real-Time Monitoring
 
-The dashboard integrates seamlessly with EverTask's SignalR monitoring.
+The dashboard integrates with EverTask's SignalR monitoring.
 
 ### Automatic Configuration
 
@@ -887,7 +887,7 @@ console.log('Success rate:', overview.data.successRate);
 
 ## Documentation Resources
 
-The monitoring documentation is organized into specialized guides:
+The monitoring documentation is split into three guides:
 
 ### 📊 [API Reference](monitoring-api-reference.md)
 

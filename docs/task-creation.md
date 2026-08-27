@@ -7,7 +7,7 @@ nav_order: 1
 
 # Task Creation
 
-This guide covers everything you need to know about creating and configuring tasks and handlers in EverTask.
+This guide covers creating and configuring tasks and handlers in EverTask.
 
 ## Table of Contents
 
@@ -20,7 +20,7 @@ This guide covers everything you need to know about creating and configuring tas
 
 ## Creating Task Requests
 
-Task requests are straightforward data objects that implement `IEverTask`. Think of them as the instructions for what work needs to be done, bundled with all the necessary parameters.
+Task requests are plain data objects that implement `IEverTask`. Think of them as the instructions for what work needs to be done, bundled with the parameters that work needs.
 
 ### Basic Request
 
@@ -54,7 +54,7 @@ public record GenerateReportTask(
 - ❌ Include non-serializable types
 - ❌ Store sensitive data in plain text (consider encryption for sensitive fields)
 
-> **Why these guidelines?** Since EverTask serializes tasks to JSON for persistence, simple and flat structures will serialize reliably and deserialize correctly even after application restarts.
+> **Why these guidelines?** EverTask serializes tasks to JSON for persistence, and simple, flat structures are the ones that still deserialize correctly after an application restart.
 
 ## Creating Task Handlers
 
@@ -199,7 +199,7 @@ services.AddEverTask(opt => opt
 
 ## Lifecycle Hooks
 
-EverTask gives you optional hooks to observe and react to task events throughout their lifecycle.
+EverTask gives you optional hooks to observe and react to task events as they happen.
 
 ### OnStarted
 

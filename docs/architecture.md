@@ -6,7 +6,7 @@ nav_order: 10
 
 # Architecture & Internals
 
-This document explains how EverTask works internally, its architecture, performance characteristics, and design decisions.
+This document explains how EverTask works internally: its architecture, performance characteristics, and design decisions.
 
 ## Table of Contents
 
@@ -22,7 +22,7 @@ This document explains how EverTask works internally, its architecture, performa
 
 ## Overview
 
-EverTask is a high-performance background task execution library built for persistence and reliability. The architecture is built around several key principles:
+EverTask is a background task execution library built for persistence and reliability. The architecture rests on a few principles:
 
 - **Event-driven scheduling** instead of polling
 - **Aggressive caching** to minimize allocations
@@ -223,7 +223,7 @@ events.
 
 ## Efficient Task Processing
 
-EverTask avoids polling entirely, using an event-driven approach for maximum efficiency.
+EverTask avoids polling entirely, using an event-driven approach instead.
 
 ### BoundedQueue Architecture
 
@@ -365,7 +365,7 @@ await foreach (var task in channel.Reader.ReadAllAsync())
 }
 ```
 
-Event-driven design reduces CPU usage dramatically and improves responsiveness.
+Event-driven design cuts CPU usage and improves responsiveness.
 
 ### 3. Minimal Allocations
 
@@ -377,7 +377,7 @@ Event-driven design reduces CPU usage dramatically and improves responsiveness.
 - Object pooling for frequently created types
 ```
 
-Less allocation means less GC pressure and better throughput overall.
+Less allocation means less GC pressure and better throughput.
 
 ### 4. Fail-Safe Defaults
 

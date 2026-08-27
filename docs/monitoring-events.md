@@ -9,7 +9,7 @@ nav_order: 1
 
 > **Looking for the complete monitoring solution?** Check out the [Monitoring Dashboard](monitoring-dashboard.md) for a ready-to-use web dashboard with REST API, embedded React UI, and real-time monitoring. This page covers custom event-based monitoring and DIY integrations.
 
-EverTask gives you visibility into your background tasks through a flexible event system that tracks execution, failures, and performance. This page covers the event-based monitoring system and custom integrations. For a complete monitoring solution with web dashboard, see the [Monitoring Dashboard](monitoring-dashboard.md) guide.
+EverTask gives you visibility into your background tasks through an event system that tracks execution, failures, and performance. This page covers the event-based monitoring system and custom integrations. For a complete monitoring solution with web dashboard, see the [Monitoring Dashboard](monitoring-dashboard.md) guide.
 
 ## Table of Contents
 
@@ -297,7 +297,7 @@ private Task OnTaskEventAsync(EverTaskEventData eventData)
 
 If you're building an ASP.NET Core application, you can watch tasks execute in real-time using the SignalR integration. This is especially useful for admin dashboards or debugging during development.
 
-> **Note:** The [Monitoring Dashboard](monitoring-dashboard.md) automatically includes SignalR integration with a modern React UI. Use the approach below only if you're building a custom monitoring interface.
+> **Note:** The [Monitoring Dashboard](monitoring-dashboard.md) automatically includes SignalR integration with a React UI. Use the approach below only if you're building a custom monitoring interface.
 
 ### Installation
 
@@ -844,7 +844,7 @@ For a complete monitoring solution with web UI and REST API, see the [Monitoring
 
 The monitoring dashboard provides:
 - REST API for task querying and analytics
-- Embedded React dashboard with modern UI
+- Embedded React dashboard
 - Real-time updates via SignalR
 - Task filtering, sorting, and detailed views
 - Statistics and performance analytics
@@ -878,8 +878,6 @@ We're planning to add:
 - **Sentry Crons** - Automatic cron monitoring for recurring tasks
 - **OpenTelemetry** - Distributed tracing and metrics
 - **Health Checks** - Built-in health check endpoints
-
-Stay tuned for updates!
 
 ## Next Steps
 

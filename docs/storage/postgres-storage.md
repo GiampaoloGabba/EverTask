@@ -71,30 +71,6 @@ The schema contains:
 - **RunsAudit**: Recurring run execution history
 - **__EFMigrationsHistory**: EF Core migrations table (also in the custom schema)
 
-### Durable-Occurrence Columns
-
-A recurring schedule can materialize each due slot as its own child row, so `QueuedTasks` carries three
-extra columns:
-
-| Column | Type | Purpose |
-|--------|------|---------|
-| `ParentTaskId` | nullable id | The schedule an occurrence belongs to; null on every ordinary row |
-| `RuntimeInfo` | nullable text | Opaque JSON: occurrence metadata on a child, schedule runtime state on a schedule row |
-| `ScheduleVersion` | int, default 0 | Bumped by a runtime reschedule; advances compare-and-swap against it |
-
-They come with three constraints that make "one row per slot" a database guarantee rather than an
-application convention: a **restrict** self-referencing foreign key `ParentTaskId → Id` (never cascade —
-deleting a schedule deletes its occurrences explicitly, in the same transaction), a unique index
-`UX_QueuedTasks_Occurrence` on `(ParentTaskId, ScheduledExecutionUtc)`, and the check constraint
-`CK_QueuedTasks_OccurrenceSlot` (an occurrence always names its slot).
-
-No index filter is needed here: PostgreSQL treats NULLs as distinct in a unique index, so the ordinary
-rows never collide with each other.
-
-The operations that run once per occurrence are single writable CTEs in `PostgresTaskStorage`, exactly like
-the three hot writes: one statement, hence atomic by construction. No stored object and no extra
-migration beyond the columns above.
-
 ## Schema-Aware Migrations
 
 The schema is **runtime-configurable**, with full parity with the SQL Server provider. EverTask injects the configured schema into the migration at runtime, so the same migration applies cleanly to any schema you select via `SchemaName`. The migrations history table is created inside the same schema (not in `public`).
@@ -129,21 +105,15 @@ dotnet ef migrations script --project YourProject --context TaskStoreDbContext -
 
 ## Performance Optimizations
 
-PostgreSQL is a fully relational provider like SQL Server (not like SQLite). Npgsql maps `DateTimeOffset` to `timestamptz` and translates every ordering, keyset, and cleanup comparison **server-side**, so the provider inherits the optimized EF Core base with **no client-side overrides**. There is no in-memory keyset filtering during recovery: the `uuid` keyset and the bounded cleanup delete run as server-side `uuid >` / `LIMIT`.
+PostgreSQL is a fully relational provider like SQL Server (not like SQLite). Npgsql maps `DateTimeOffset` to `timestamptz` and translates every ordering, keyset, and cleanup comparison **server-side**, so the provider inherits the optimized EF Core base with **no client-side overrides**. Recovery and cleanup run entirely on the server, with no in-memory filtering.
 
-### Recovery Index
+### Run Counter
 
-A dedicated partial covering index (`IX_QueuedTasks_Recovery`) supports recovery on startup. It is keyed on `(CreatedAtUtc, Id)` to serve the keyset ordering, includes the runtime-predicate columns, and has a static partial `WHERE` clause that prunes the bulk of terminal rows (completed and failed non-recurring tasks).
-
-### Writable-CTE Optimizations
-
-The hot writes (`SetStatus`, `UpdateCurrentRun`, `CompleteRecurringRun`) override the base with single-statement, data-modifying CTEs: PostgreSQL's analog of the SQL Server stored procedures. Because each is a single statement, the audit insert and the row update commit together atomically. The audit decisions match the configured `AuditPolicy`. There is no stored database object and no extra migration: the SQL lives in versioned C#.
-
-The run counter is an `integer` and **saturates at `int.MaxValue`** (a `CASE` guard) instead of overflowing: an unbounded recurring series that reaches that many runs keeps going with the counter frozen at its max. See [Recurring Tasks](../recurring-tasks.md) for the tradeoff.
+The run counter **saturates at `int.MaxValue`** instead of overflowing: an unbounded recurring series that reaches that many runs keeps going with the counter frozen at its max. See [Recurring Tasks](../recurring-tasks.md) for the tradeoff.
 
 ### GUID Generation
 
-EverTask generates time-ordered GUIDs using the `UUIDNext` PostgreSQL (v7) family. PostgreSQL sorts `uuid` values byte-wise, so sequentially generated identifiers stay in temporal order: inserts remain sequential and the recovery index / keyset stay efficient.
+EverTask generates time-ordered GUIDs using the `UUIDNext` PostgreSQL (v7) family. PostgreSQL sorts `uuid` values byte-wise, so sequentially generated identifiers stay in temporal order and inserts remain sequential.
 
 ## Connection String Configuration
 
@@ -166,7 +136,6 @@ EverTask generates time-ordered GUIDs using the `UUIDNext` PostgreSQL (v7) famil
 - High write concurrency on one active EverTask host per store
 - ACID transactions
 - Server-side querying for all recovery and cleanup operations
-- Writable-CTE optimizations for hot writes (single-statement, atomic)
 - Requires a PostgreSQL instance
 
 ## Best Practices

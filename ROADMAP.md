@@ -1,257 +1,72 @@
 # EverTask Roadmap
 
-This document outlines planned features and improvements for EverTask.
-
----
-
-## Version 3.2.0+
-
-### Web Dashboard and Management API
-**Status:** Phase 1 Complete (v3.2), Phase 2 Planned | **Priority:** High
-
-Modern web dashboard and REST API for monitoring and managing EverTask instances.
-
-**Phase 1 - Monitoring (✅ Completed in v3.2):**
-- ✅ Real-time task queue visualization with SignalR
-- ✅ Task execution history and statistics
-- ✅ Status monitoring (queued, running, completed, failed)
-- ✅ Performance metrics and charts
-- ✅ Advanced search and filtering capabilities
-- ✅ Task execution logs viewer (terminal-style with color-coded severity)
-- ✅ JWT authentication and authorization
-- ✅ REST API with OpenAPI/Swagger documentation
-- ✅ Embedded React SPA with modern UI
-- ✅ Multi-queue support and analytics
-
-**Phase 2 - Management (Planned for future releases):**
-- Task lifecycle management (stop, restart, cancel tasks)
-- Runtime parameter modification for queued/scheduled tasks
-- Queue management (pause/resume queues)
-- Recurring task schedule editor
-- Bulk operations (cancel multiple tasks, retry failed tasks)
+Planned work, in no particular order. Priorities shift with real-world feedback: if one of these matters to
+you, [open an issue](https://github.com/GiampaoloGabba/EverTask/issues) describing your use case.
 
-**Technical Stack:**
-- ASP.NET Core Web API with OpenAPI/Swagger ✅
-- React SPA with TypeScript ✅
-- SignalR for real-time updates ✅
-- EverTask.Monitor.Api package ✅
+## Planned
 
----
+### Task management from the dashboard
 
-### Enhanced Examples and Showcase
-**Status:** Planned | **Priority:** Medium | **Effort:** 15-20 hours
+The dashboard and REST API are read-only today. Planned: stop, cancel and requeue tasks from the UI, bulk
+operations on failed tasks, pause/resume queues, and editing a recurring schedule in place. The runtime
+[`ITaskScheduleManager`](https://GiampaoloGabba.github.io/EverTask/recurring-tasks/managing-tasks.html)
+shipped in 4.0 is the seam this builds on.
 
-Comprehensive example projects demonstrating all EverTask capabilities in real-world scenarios.
+### Distributed clustering
 
-**Features:**
-- Complete sample applications (not just code snippets)
-- Real-world use cases (e-commerce order processing, email campaigns, data pipelines)
-- Showcase of all features:
-  - Immediate, delayed, and recurring tasks
-  - Retry policies with exception filtering
-  - Custom retry policies and timeout strategies
-  - Multi-queue configuration
-  - Task execution log capture
-  - Monitoring with SignalR
-  - Storage provider comparison (Memory, SQLite, SQL Server)
-- Performance benchmarking examples
-- Best practices demonstrations
-- Docker Compose setup for quick start
-- Detailed README per example with architecture diagrams
+Multiple active hosts with leader election and automatic failover. EverTask 4.0 contracts a single active
+host (a standby that is not started is fine): materialization is already idempotent across hosts, but
+execution is not claimed, so clustering means pluggable queue and distributed-lock providers on top of the
+existing single-instance mode, which stays supported.
 
-**Example Projects:**
-- `EverTask.Example.ECommerce` - Order processing pipeline
-- `EverTask.Example.EmailCampaign` - Bulk email sender with rate limiting
-- `EverTask.Example.DataPipeline` - ETL workflow with error handling
-- `EverTask.Example.Monitoring` - Dashboard integration showcase
+### Distributed rate limiting
 
----
+A Redis-based (GCRA) keyed limiter sharing budgets across instances. The in-process keyed limiter shipped in
+3.7.0, and the `IKeyedRateLimiter` DI seam — with its contract invariants documented — is already in place.
 
-### Batch Dispatch Support
-**Status:** Planned | **Priority:** High | **Effort:** 10-12 hours
+### Advanced throttling
 
-First-class batching support to dispatch and track multiple tasks as a single unit.
+Global rate limits (max N tasks/sec across all queues), per-handler concurrency caps, and adaptive
+throttling based on CPU/memory pressure.
 
-**Features:**
-- `IBatchDispatcher` abstraction + runtime implementation
-- Optional batch persistence (in-memory or SQL)
-- Aggregated batch status (completed, running, failed, cancelled)
-- Batch monitoring events
-- Developer APIs and samples
+### Workflow orchestration
 
-**Details:** See `.claude/tasks/batch-dispatch.md`
+Sequential, parallel, conditional and saga/compensation flows with a fluent API, built on the existing
+continuation primitives, with step-level persistence and monitoring integration.
 
----
+### Batch dispatch
 
-### Distributed Clustering with Leader Election
-**Status:** Planned | **Priority:** High | **Effort:** 40-50 hours
+Dispatch and track a set of tasks as one unit: aggregated batch status (completed, running, failed,
+cancelled), batch monitoring events, optional batch persistence.
 
-Transform EverTask into a fully distributed system supporting horizontal scaling with multiple server instances.
+### Additional monitoring targets
 
-**Features:**
-- Execution clustering with external queues
-- Scheduler high availability with automatic leader election and failover
-- Pluggable queue providers for message delivery and distribution
-- Pluggable distributed lock providers
-- Backward compatible (single-instance mode still supported)
+Sentry Crons, Application Insights, OpenTelemetry metrics and traces export.
 
-**Details:** See `.claude/tasks/distributed-clustering-leader-election.md`
+### More storage options
 
----
+Redis and Cosmos DB providers. (PostgreSQL shipped in 3.x, MySQL/MariaDB in 4.0.)
 
-### Advanced Throttling System
-**Status:** Partially completed | **Priority:** Medium
+### Richer samples
 
-Per-key rate limiting shipped in v3.7.0 (see Completed Features). Remaining ideas:
+Complete sample applications rather than code snippets: an order-processing pipeline, a bulk mailer under
+rate limiting, an ETL workflow, each with a Docker Compose setup.
 
-**Features:**
-- Global rate limiting (e.g., max 1000 tasks/sec)
-- Concurrency limits per handler (e.g., max 5 concurrent instances)
-- Adaptive throttling based on CPU/memory pressure
-- Distributed (Redis GCRA) keyed limiter — the `IKeyedRateLimiter` DI seam and its contract invariants are already in place
+## Shipped
 
----
+The [changelog](CHANGELOG.md) has the full history; the milestones:
 
-### Workflow Orchestration System
-**Status:** Planned | **Priority:** Medium | **Effort:** 50-70 hours
-
-Enable complex workflow and saga orchestration with fluent API on top of EverTask primitives.
-
-**Features:**
-- Sequential, parallel, conditional, and saga/compensation workflows
-- Full workflow persistence with step-level tracking
-- Shared context and pipeline data passing between steps
-- Static workflow definitions with compile-time safety
-- SQL Server stored procedures for optimized performance
-- SignalR monitoring integration
-
-**Details:** See `.claude/tasks/workflow-orchestration.md`
-
----
-
-## Future Versions
-
-### Version 4.0.0 (Ideas)
-
-### 📊nhanced Observability
-Metrics export (Prometheus, OpenTelemetry), alerting.
-
-### Distributed Rate Limiting
-Coordinate rate limits across multiple servers using Redis.
-
-### Priority-Based Scheduling
-High-priority tasks bypass rate limits and execute first.
-
----
-
-## Completed Features
-
-### ✅ Keyed Rate Limiting (per tenant/account/resource)
-**Completed:** v3.7.0 (2026-06-12)
-
-Opt-in, per-key rate limiting for task execution against external API limits: a frequency constraint per logical key, orthogonal to queue parallelism — no head-of-line blocking across keys, no worker held while waiting for budget.
-
-**Delivered:**
-- Handler-declared `RateLimitPolicy` (permits/period, burst, retries, horizon, overflow behavior) + `IRateLimitedTask`/`GetRateLimitKey` for the key
-- Consumer-side gate + in-memory GCRA limiter with PersistenceId-keyed reservations (idempotent redemption across redeliveries)
-- Deferrals re-park into the in-memory scheduler with NO storage write (status stays `Queued`, covered by startup recovery)
-- Retry throttling (budget wait never erodes the per-attempt timeout), recurring rhythm preservation, RunUntil clamp
-- Layered defense: parked-task cap with native channel backpressure, reservation horizon with typed `RateLimitRejectedException` to `OnError`, key-cardinality fail-open with mandatory event, `Discard` mode, `StartEmpty` post-restart burst cap
-- Observability: aggregated deferral events, `ThrottledTasks` dashboard counters, `GET /api/rate-limits`, per-task `throttledUntil` overlay
-- **Distributed seam ready**: `IKeyedRateLimiter` (TryAddSingleton) with documented contract invariants for a future Redis-based implementation
-
-**Details:** See `.claude/tasks/keyed-rate-limiting-implementation.md` (supersedes `advanced-throttling-rate-limiting.md`)
-
----
-
-### ✅ Task Execution Log Capture with Proxy Pattern
-**Completed:** v3.0.0 (2025-10-23) | **Effort:** 30 hours
-
-Implemented a comprehensive log capture system with proxy pattern architecture that always forwards logs to ILogger while optionally persisting to database.
-
-**Delivered:**
-- Proxy pattern: Logger ALWAYS forwards to ILogger infrastructure (console, file, Serilog, Application Insights)
-- Optional database persistence via `.WithPersistentLogger()` fluent API (auto-enables on call)
-- `TaskExecutionLog` entity with cascade delete and sequence numbers
-- Thread-safe in-memory log collection with lock-based synchronization
-- Configurable filtering: `.SetMinimumLevel()`, `.SetMaxLogsPerTask()`
-- ILogger<THandler> injection for proper log categorization per handler type
-- Storage methods: `SaveExecutionLogsAsync()`, `GetExecutionLogsAsync()` with pagination
-- Logs persist even when tasks fail (captured in finally block)
-- Zero overhead when persistence disabled (conditional allocation)
-- Comprehensive test coverage: 13 proxy pattern unit tests + 5 storage tests + integration tests
-- Full documentation in advanced-features.md, configuration-reference.md, and cheatsheet
-
-**Related commits:** [squash merge from feature/logger]
-
----
-
-### ✅ Lazy Handler Resolution for Memory Optimization
-**Completed:** v3.1.0 (2025-10-22) | **Effort:** 14 hours
-
-Optimized memory footprint for scheduled and recurring tasks by implementing lazy handler resolution.
-
-**Delivered:**
-- Handler instances disposed after dispatch validation (fail-fast preserved)
-- Fresh handler instances created at execution time (70-90% memory reduction)
-- Configurable via `LazyResolutionMode` enum (Eager/Lazy/Auto)
-- Auto mode: lazy for tasks delayed >1 hour or recurring tasks
-- Backward compatible (eager mode still available)
-- Comprehensive test suite with 5 lazy mode integration tests
-- Fixed handler disposal lifecycle bug in `WorkerExecutor`
-
-**Related commits:** 2fc0e54, bec8e1f, e0f8294, 913921b
-
----
-
-### ✅ Schedule Drift Fix for Recurring Tasks
-**Completed:** v3.1.0 (2025-10-22) | **Effort:** 8 hours
-
-Fixed schedule drift in recurring tasks by implementing consistent next-run calculation logic.
-
-**Delivered:**
-- `CalculateNextValidRun()` method skips past occurrences correctly
-- Both `Dispatcher` and `WorkerExecutor` use consistent logic
-- Prevents drift accumulation during system downtime
-- Preserves `ExecutionTime` across rescheduling cycles
-- 15+ integration tests verifying consistency
-
-**Related commits:** d644166
-
----
-
-### ✅ Zero-Flakiness Test Infrastructure
-**Completed:** v3.1.0 (2025-10-22) | **Effort:** 12 hours
-
-Eliminated all test flakiness through comprehensive infrastructure refactoring.
-
-**Delivered:**
-- `IsolatedIntegrationTestBase` pattern with per-test `IHost` instances
-- Intelligent polling with `TaskWaitHelper` (replaces fixed delays)
-- Thread-safe `TestTaskStateManager` for execution tracking
-- N-consumer pattern for better channel throughput
-- 445 tests pass consistently on .NET 6/7/8/9
-- 4-12x faster test execution through safe parallelism
-- 50% reduction in test timeouts without reliability loss
-
-**Related commits:** 07fafaf, 48e0fd7, e7aa388
-
----
-
-### ✅ Retry Policy Enhancements: OnRetry Callback and Exception Filters
-**Completed:** v3.1.0 (2025-10-22) | **Effort:** 12 hours
-
-Enhanced retry policy system with visibility into retry attempts and selective exception filtering.
-
-**Delivered:**
-- `OnRetry(Guid taskId, int attemptNumber, Exception exception, TimeSpan delay)` lifecycle callback
-- Exception filtering via `IRetryPolicy.ShouldRetry(Exception exception)` interface method
-- LinearRetryPolicy fluent API: `Handle<T>()`, `DoNotHandle<T>()`, `HandleWhen(predicate)`
-- Predefined exception sets: `HandleTransientDatabaseErrors()`, `HandleAllTransientErrors()`
-- Fail-fast for non-retryable exceptions (OperationCanceledException, TimeoutException)
-- Performance optimization: OnRetry MethodInfo cached per handler type
-- Seamless integration with lazy handler resolution
-- Backward compatible (new features opt-in with sensible defaults)
-- 16 unit tests + 6 integration tests verifying all filtering scenarios
-
-**Related commits:** [squash merge from feature/retry-policy-enhancements]
+- **4.0.0** — durable occurrences: one persisted row per due slot. Misfire policies (`Skip`, `FireOnce`,
+  `CatchUp` under mandatory caps) decide what a downtime does to the slots it missed, and every dropped
+  slot is reported. Time-zone-aware schedules with daylight-saving semantics (`InTimeZone`).
+  Execution context in handlers (`Context.ScheduledAtUtc`, `Context.Misfire`). Runtime schedule management
+  (`ITaskScheduleManager`: reschedule, re-evaluate, resume, cancel, requeue a failed occurrence). Custom
+  occurrence providers (`INextOccurrenceProvider`) for calendars the library cannot know. MySQL/MariaDB
+  storage provider.
+- **3.7.0** — keyed rate limiting: per-tenant/per-resource GCRA budgets at dequeue, no head-of-line
+  blocking across keys, no worker held while waiting.
+- **3.2.0** — monitoring dashboard: embedded React UI, REST API with OpenAPI, JWT authentication, SignalR
+  real-time updates, execution logs viewer, multi-queue analytics.
+- **3.0–3.1** — execution log capture with optional database persistence and retention, lazy handler
+  resolution, schedule-drift fix for recurring tasks, retry policies with exception filtering and the
+  `OnRetry` callback.

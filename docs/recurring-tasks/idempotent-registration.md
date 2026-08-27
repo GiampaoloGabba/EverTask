@@ -7,7 +7,7 @@ nav_order: 7
 
 # Idempotent Task Registration
 
-Task keys prevent duplicate recurring tasks from being created. When you register a task with the same key twice, EverTask handles it intelligently instead of blindly creating a duplicate.
+Task keys prevent duplicate recurring tasks from being created. When you register a task with the same key twice, EverTask goes back to the existing task instead of blindly creating a duplicate.
 
 ## Basic Usage
 

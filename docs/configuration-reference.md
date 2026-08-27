@@ -685,7 +685,7 @@ When enabled, EverTask automatically chooses the best resolution strategy:
 - **Delayed tasks with delay < 30 minutes**: Eager mode
 
 **Benefits:**
-- **Memory Optimization**: Handlers are disposed after dispatch, reducing memory footprint for long-running scheduled tasks
+- **Memory Optimization**: Handlers are disposed after dispatch, so long-running scheduled tasks hold less memory
 - **Fresh Dependencies**: Handlers get fresh scoped services at execution time (important for DbContext, etc.)
 - **Automatic Tuning**: Adaptive algorithm balances memory and performance
 
@@ -702,7 +702,7 @@ Only disable lazy resolution if:
 - **CPU**: Negligible overhead (handler instantiation is fast with DI)
 
 **Notes:**
-- Handler dependencies are resolved at execution time, ensuring fresh scoped services
+- Handler dependencies are resolved at execution time, so the scoped services they get are fresh
 - At dispatch time, a short-lived metadata instance is resolved (and disposed with its scope) to extract handler options
 
 ### SetRateLimiterOptions
@@ -866,7 +866,7 @@ Per-queue retry/timeout resolution chain (v3.7+): **handler override → queue d
 
 ## Rate Limiting Configuration
 
-Keyed rate limiting (v3.7+) constrains how often tasks of a type execute **per key** (tenant, account, external resource). Behavior, semantics, and edge cases are documented in [Keyed Rate Limiting](rate-limiting.md); this section covers the configuration surface.
+Keyed rate limiting (v3.7+) constrains how often tasks of a type execute **per key** (tenant, account, external resource). Behavior and edge cases are documented in [Keyed Rate Limiting](rate-limiting.md); this section covers the configuration surface.
 
 Configuration lives in three places:
 
@@ -2262,7 +2262,7 @@ public class ScheduleAdmin(ITaskScheduleManager schedules)
 - the period holds no slot of the new definition, or fewer slots than the cursor had already passed, so there is no position to land on. A rebase never crosses into the next period: doing so would skip a period of work or replay one;
 - the new definition's bounds are already past. `RunUntil` and `MaxRuns` are what an operator changes to wind a series down, and the period arithmetic applies neither: a plain cadence keeps its cursor verbatim and the day-carrying cadences place their slot by hand, so neither ever asks the grid, which is the only thing that applies `RunUntil`. Both bounds are checked here instead. A definition one mode would refuse is refused by the other too, rather than running one occurrence past the end just set.
 
-A plain cadence has no calendar structure to preserve, so its cursor is carried over unchanged — which is how a halted catch-up keeps its backlog while its caps are widened. A week or month cadence that names no day inside its period — `EveryWeek()` and `EveryMonth()` without `OnDay`/`OnDays`/`OnFirst` — carries that day on the cursor rather than in the definition, so the day it was already on is what the rebase keeps, and only the time of day and the zone move.
+A plain cadence has no calendar structure to preserve, so its cursor is carried over unchanged, which is how a halted catch-up keeps its backlog while its caps are widened. A week or month cadence that names no day inside its period — `EveryWeek()` and `EveryMonth()` without `OnDay`/`OnDays`/`OnFirst` — carries that day on the cursor rather than in the definition, so the day it was already on is what the rebase keeps, and only the time of day and the zone move.
 
 ### Linearization
 

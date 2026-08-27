@@ -161,7 +161,7 @@ The two capabilities are independent, and so is what
 `Reschedule`, `ReevaluateSchedule` and `ResumeSchedule` rewrite a schedule row and need
 `SupportsScheduleVersioning`: without a real compare-and-swap a reschedule could report success while a run
 finishing at the same moment overwrote it, so a store that returns `false` is refused rather than emulated.
-`RequeueFailedOccurrence` addresses a child row and needs `SupportsDurableOccurrences` instead — a store with
+`RequeueFailedOccurrence` addresses a child row and needs `SupportsDurableOccurrences` instead: a store with
 versioning but no occurrences has nothing to requeue. `CancelSchedule` needs neither: it writes a
 cancellation. So a store that implements neither capability keeps working for everything else, including
 ending a schedule on purpose. Its schedules just cannot be changed while they run.
@@ -195,7 +195,7 @@ The child row has one shape, whatever the backend, and `QueuedTask.ApplyOccurren
 scheduleVersion)` is that shape. It writes a fresh one-shot: `WaitingQueue`, run count 0, at the version it
 was materialized against, with the definition, the cursor, the bounds and the task key cleared. What the
 caller supplies survives untouched: id, creation time, slot, type, payload, handler, queue, audit level,
-runtime info. The in-box providers that build the `INSERT` by hand write those columns and nothing else; a
+runtime info. A store that builds the insert by hand writes those columns and nothing else; a
 store that persists the entity it was handed calls the method first. Skip it and the same
 `MaterializeOccurrence(...)` call stores a different row on your backend than on every other one.
 
@@ -215,9 +215,8 @@ not an error, and it leaves no audit row for a task that is gone.
 **If your backend admits concurrent writers, derive the audited set from the cancelling statement itself** —
 `OUTPUT`, `RETURNING`, or whatever your engine offers — never from a second read. Under READ COMMITTED a
 re-read can attribute to this call an occurrence another writer cancelled, so the audit trail would claim a
-transition your transaction never made. The three optimized in-box providers take it from the statement; the
-EF Core base re-reads inside the transaction, which is exact only while writers are serialized, as they are
-on SQLite.
+transition your transaction never made. A re-read inside the transaction is exact only while writers are
+serialized.
 
 The five read helpers (`GetOccurrences`, `GetOccurrencesPage`, `GetLastRunStarts`, `GetStatusAuditsPage`,
 `GetRunsAuditsPage`) carry no atomicity contract, so their defaults are a correct query over `Get`. Override them for an indexed
@@ -225,23 +224,22 @@ one. `GetOccurrencesPage` is the one worth the effort: it answers the dashboard'
 default reads the whole series to return one page of it — which on a schedule with a long retention behind it
 is hundreds of thousands of rows for a hundred. Order by slot descending, count and slice in the store, and
 return both the page and the total that matches the request. All five in-box stores do. Find out how your
-engine will order by the slot before you promise that: EF Core will not translate an `ORDER BY` over a
-`DateTimeOffset` on SQLite, so the in-box SQLite provider writes that one query as SQL instead of sorting the
-series in memory.
+engine will order by the slot before you promise that: not every one of them can sort a timestamp with an
+offset server-side.
 
 `GetStatusAuditsPage` and `GetRunsAuditsPage` are the same argument on the other two trails: a long-lived
 recurring row records one transition per state per run, and the task detail shows twenty of them at a time.
-The defaults read the row's materialized audit navigations — correct, and no faster than answering the whole history — so
-override them with a count and a slice over the `(QueuedTaskId)` index the audit tables already need. Order
-them newest first (the in-box providers order on the audit IDENTITY, which is insertion
-order and therefore total, so no page boundary can repeat or drop an entry), and answer the count alone for
-`take = 0` rather than emitting a zero-row `FETCH`, which is a syntax error on some engines.
+The defaults read the row's materialized audit navigations, which is correct and no faster than answering the
+whole history, so override them with a count and a slice over an index on the audit row's task id. Order them
+newest first on a key that is total and follows insertion order (the audit identity), so no page boundary can
+repeat or drop an entry, and answer the count alone for `take = 0` rather than emitting a zero-row `FETCH`,
+which is a syntax error on some engines.
 
 `GetLastRunStarts` answers when the last run of each of a page of rows began. No column holds that.
 `LastExecutionUtc` is written on terminal transitions, so it is when a run ENDED, and a row still running has
 not written it at all; the only trace of the moment is the `InProgress` transition in the status audit trail,
 so it has to be read. The default walks `QueuedTask.StatusAudits`, which answers only in a store that
-materializes that navigation; the in-box providers override it with one indexed query over the audit table.
+materializes that navigation; override it with one indexed query over the audit table.
 Answer nothing for a row you have no recorded start for. The dashboard would rather show no lateness than an
 invented one.
 
@@ -249,13 +247,13 @@ invented one.
 trails of one row, newest first, and they exist for the same reason. Nothing populates
 `QueuedTask.StatusAudits` or `QueuedTask.RunsAudits` on a row a query hands back, so the dashboard reads them
 through the storage. The defaults walk the two navigations, which is right only in a store that materializes
-them; the in-box providers override both with an indexed count and slice. Order on the audit identity, not on
-its timestamp: the rows of one task are inserted in transition order, and SQLite will not order by a
-`DateTimeOffset` at all. A task id you hold nothing for gets an empty page, not an error.
+them; override both with an indexed count and slice. Order on the audit identity, not on its timestamp: the
+rows of one task are inserted in transition order, and not every engine can order by a timestamp with an
+offset. A task id you hold nothing for gets an empty page, not an error.
 
-Three columns back all of this: `ParentTaskId` (with a restrict self-foreign-key, a unique index on
-`(ParentTaskId, ScheduledExecutionUtc)` named `UX_QueuedTasks_Occurrence`, and a check constraint that an
-occurrence always names its slot), `RuntimeInfo` (opaque JSON) and `ScheduleVersion` (int, default 0).
+Three pieces of per-row state back all of this, however your backend stores them: the id of the schedule an
+occurrence belongs to (null on an ordinary row, and unique together with the slot, so one slot can never hold
+two occurrences); `RuntimeInfo`, an opaque JSON blob; and `ScheduleVersion`, an integer that starts at 0.
 
 ## Example: Redis Storage
 

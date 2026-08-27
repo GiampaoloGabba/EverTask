@@ -38,7 +38,7 @@ that can run twice. See [Durable Occurrences](recurring-tasks/durable-occurrence
 ## Topics
 
 ### [Overview](resilience/overview.md)
-Introduction to resilience features with quick examples and feature overview.
+Introduction to the resilience features, with quick examples.
 
 ### [Retry Policies](resilience/retry-policies.md)
 Configure automatic retry behavior for failed tasks. Learn about LinearRetryPolicy, ExponentialRetryPolicy (exponential backoff), custom policies, and Polly integration.
