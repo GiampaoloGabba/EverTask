@@ -24,7 +24,7 @@ overrides 9).
 - Migrations are generated fresh (DEBUG-only `TaskStoreEfDbContextFactory`, `SchemaName="evertask"`) then
   hand-edited exactly as in `../EverTask.Storage.SqlServer/CLAUDE.md`, plus one delta: append the recovery
   index via `migrationBuilder.Sql`, schema interpolated with a `public` fallback.
-- Phase 2 — `SetStatus`, `UpdateCurrentRun` and `CompleteRecurringRun` override the base with
+- `SetStatus`, `UpdateCurrentRun` and `CompleteRecurringRun` override the base with
   single-statement data-modifying CTEs (one statement = atomic, so the audit insert and the row update commit
   together; no stored object, no migration). Audit gates: `SetStatus` decides in C#, `UpdateCurrentRun` decides
   **server-side** from the row's `Status`/`Exception` read via `RETURNING`, `CompleteRecurringRun` audits

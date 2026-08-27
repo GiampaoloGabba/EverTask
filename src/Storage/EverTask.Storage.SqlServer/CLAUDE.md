@@ -41,22 +41,16 @@ Refer to the root CLAUDE.md for project-wide rules.
   add the `ITaskStoreDbContext` ctor (keep the class `partial`) and replace every `schema: "EverTask"` with
   `schema: _dbContext.Schema`. Do NOT edit the `.Designer.cs` — injection targets the migration class.
 - **Every read of this provider re-runs itself when SQL Server names it the deadlock victim** (error 1205,
-  `SqlServerTaskStorage`, at most 3 attempts). The engine reads with shared locks, and a read that resolves
-  rows through a nonclustered index takes them in the opposite order to a write: index entry first, clustered
-  row second, while an UPDATE takes the clustered row first and the index entries after it.
-  `RetrievePending` is that read — it walks `IX_QueuedTasks_Recovery` and looks the rows up in the clustered
-  index — and it runs while tasks recovered from earlier pages are already writing their `Status`, which both
-  `IX_QueuedTasks_Recovery` and `IX_QueuedTasks_Status` carry. The victim of the cycle is always a read
-  (nothing to roll back), and **any other read queued on the same clustered row can be picked instead** — a
-  poll of unrelated rows dying of a recovery it never asked about. Letting 1205 out is the one unacceptable
-  answer: on the recovery path it aborts the whole startup recovery (`WorkerService` logs `RecoveryFailed`)
-  and the backlog waits for the next restart. Writes are deliberately NOT re-run: each is a compare-and-swap
-  or a single-transaction procedure whose caller already knows what a lost race means. Only SQL Server needs
-  this — PostgreSQL and MySQL answer plain reads from a snapshot and take no shared locks. Pinned by
+  `SqlServerTaskStorage`, at most 3 attempts). Reads through a nonclustered index take locks in the opposite
+  order to writes, so a read racing status updates (recovery above all) can be picked as the victim — and
+  letting 1205 out on the recovery path aborts the whole startup recovery (`WorkerService` logs
+  `RecoveryFailed`), leaving the backlog for the next restart. Writes are deliberately NOT re-run: each is a
+  compare-and-swap or a single-transaction procedure whose caller already knows what a lost race means. Only
+  SQL Server needs this — PostgreSQL and MySQL answer plain reads from a snapshot. Guard test:
   `SqlServerEfCoreTaskStorageTests.Should_rerun_a_read_that_sql_server_picked_as_the_deadlock_victim`.
 - Only the **clock-carrying** `RetrievePending` overload is overridden here: overriding the legacy one would
   make `EfCoreTaskStorage`'s reflection probe take this provider for a pre-4.0 storage and route every call
-  through it, dropping the caller's `nowUtc` (P9).
+  through it, dropping the caller's `nowUtc`.
 - `IX_QueuedTasks_Recovery` is a non-filtered covering index (`(CreatedAtUtc, Id)` plus `INCLUDE`), added by
   raw SQL; the recoverable-status predicate stays a runtime filter, so it needs no edit when that list changes
   (unlike Postgres — see `../EverTask.Storage.EfCore/CLAUDE.md`).

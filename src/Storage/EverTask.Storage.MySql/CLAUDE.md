@@ -25,7 +25,7 @@ Pomelo), which publishes EF Core 9 and 10 but **no EF Core 8 build** — hence t
   overrides resolve the ids with a `SELECT` and delete by primary key in `CleanupBatchSize` batches
   (`DeleteByIdsAsync`). Any future cleanup with an `EXISTS` guard needs the same shape; the ones without one
   inherit the base.
-- Phase 2 (`Migrations/20260629214027_AddHotWriteStoredProcedures.cs`): MySQL has read-only CTEs and no
+- `Migrations/20260629214027_AddHotWriteStoredProcedures.cs`: MySQL has read-only CTEs and no
   `UPDATE … RETURNING`, so the three hot writes are stored procedures, each a single
   `START TRANSACTION … COMMIT` with an `EXIT HANDLER FOR SQLEXCEPTION` that rolls back and `RESIGNAL`s.
   MySQL-specific mechanics: the proc params take the GUID as `CHAR(36)` (the C# overrides pass

@@ -8,8 +8,7 @@ Base EF Core storage for every relational provider; never used standalone.
   leased per operation, never shared. A pooled context admits only the single `DbContextOptions<T>` ctor
   parameter, so the schema travels in the options via `UseEverTaskSchema` (`EverTaskSchemaExtension`) instead
   of being injected. No `IServiceScopeFactory.CreateScope()` exists in this layer.
-- **`Persist` and `UpdateTask` normalize the row's timestamps to offset zero** (`NormalizeTimestampsToUtc`,
-  F1/#37). They are the two public writes a caller drives directly, and SQLite compares a `DateTimeOffset` as
+- **`Persist` and `UpdateTask` normalize the row's timestamps to offset zero** (`NormalizeTimestampsToUtc`, #37). They are the two public writes a caller drives directly, and SQLite compares a `DateTimeOffset` as
   the TEXT it stored, offset included — so a row written at `+02:00` lost every cursor compare-and-swap
   against the same instant in UTC, for ever. The CAS operations already normalize their own operands; the
   stored value was the half still free to disagree. `MemoryTaskStorage` does the same so the two stores round
@@ -57,7 +56,7 @@ Base EF Core storage for every relational provider; never used standalone.
   CTE spell the same columns out in their `INSERT`. Skip it in one of them and the same
   `MaterializeOccurrence(...)` call persists a different row per provider.
 - **`CancelSchedule` cancels the exact complement of what recovery requeues** — `WaitingQueue`, `Queued`,
-  `Pending` and `ServiceStopped` (R7). Leave one out and an occurrence of a cancelled schedule comes back at
+  `Pending` and `ServiceStopped`. Leave one out and an occurrence of a cancelled schedule comes back at
   the next restart and runs. `InProgress` is deliberately left alone: it owns a live delivery.
   It **audits what the UPDATE changed, not what the lookup found.** `ExecuteUpdate` reports a
   count and no ids, and the id lookup and the conditional UPDATE are two statements: an occurrence that
@@ -80,16 +79,12 @@ Base EF Core storage for every relational provider; never used standalone.
   `CleanupTerminalOccurrences`) preserve rows that still own execution logs. The occurrence window is
   typically much shorter than the log window, so without that guard it cascade-deletes logs the log retention
   deliberately kept.
-  - **The AUDIT trail needs the same guard, and for a stronger reason**: `FK_StatusAudit_QueuedTasks` and
-    `FK_RunsAudit_QueuedTasks` cascade on delete, so purging an occurrence destroys the transitions and runs
-    under it. `CleanupCompletedTasks` has always refused a row with any audit left; the occurrence pass now
-    carries the same refusal through `preserveStatusAudits` / `preserveRunsAudits`, each set when its OWN
-    window is active. Seven days of occurrence retention against ninety of error retention erased a failure on
-    day eight, and the cleanup line reported an occurrence count and nothing else. **One flag per trail**,
-    unlike the log guard, whose two knobs prune the same rows: each audit pass runs only when its own knob is
-    set, so a single flag for both keeps rows for a trail nothing will prune — and every occurrence owns the
-    `StatusAudit` row its materialization wrote, so `OccurrenceRetentionDays` beside `RunsAuditRetentionDays`
-    alone deleted nothing, ever. All three are parameters because SQLite and MySQL override the method, and an
-    override that drops one silently purges what the corresponding window kept.
+  - **The AUDIT trails need the same guard**: `FK_StatusAudit_QueuedTasks` and `FK_RunsAudit_QueuedTasks`
+    cascade on delete, so purging an occurrence destroys the transitions and runs under it. The occurrence
+    pass refuses such rows through `preserveStatusAudits` / `preserveRunsAudits` — **one flag per trail,
+    each set only when its OWN retention window is active** (a single flag for both would keep rows for a
+    trail nothing will prune, since every occurrence owns the `StatusAudit` row its materialization wrote).
+    All three preserve flags are parameters because SQLite and MySQL override the method, and an override
+    that drops one silently purges what the corresponding window kept.
 - A new `ITaskStorage` method goes in `test/EverTask.Tests.Storage/EfCore/EfCoreTaskStorageTestsBase.cs` and
   then runs on all four providers. New provider: use the `new-relational-storage-provider` skill.
