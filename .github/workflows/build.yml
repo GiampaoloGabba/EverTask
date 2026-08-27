@@ -71,12 +71,10 @@ jobs:
       - name: Test (EverTask.Tests)
         run: dotnet test test/EverTask.Tests/EverTask.Tests.csproj --no-restore --verbosity normal --framework net9.0
 
-      # Every provider of the four-provider storage contract suite, SQL Server and PostgreSQL included: they
-      # are what runs the hand-written SQL the shared EF model cannot check (the SQL Server stored procedures
-      # and the PostgreSQL writable CTEs), so filtering them out left half of D7's provider-specific work with
-      # no gate at all. The runner has Docker, which the MariaDB cell here has always relied on.
-      - name: Test (EverTask.Tests.Storage)
-        run: dotnet test test/EverTask.Tests.Storage/EverTask.Tests.Storage.csproj --no-restore --verbosity normal --framework net9.0
+      # SQL Server and PostgreSQL container suites stay out of CI by maintainer decision: those providers run
+      # locally with Testcontainers before every release.
+      - name: Test (EverTask.Tests.Storage - exclude SQL Server + Postgres)
+        run: dotnet test test/EverTask.Tests.Storage/EverTask.Tests.Storage.csproj --no-restore --verbosity normal --framework net9.0 --filter "FullyQualifiedName!~SqlServerEfCoreTaskStorageTests&FullyQualifiedName!~PostgresEfCoreTaskStorageTests&FullyQualifiedName!~AuditLevelIntegrationTests"
 
       # The three suites the gate never opened. Between them they hold the whole monitoring API and dashboard
       # contract, the analyzer rules and the Serilog integration: a change to a DTO, to TaskQueryService or to
