@@ -659,22 +659,12 @@ internal sealed class DueSlotEnumerator(IScheduleEvaluator evaluator, TimeSpan m
         RecurringTask definition, DateTimeOffset from, DateTimeOffset through, int limit, ScheduleIdentity identity,
         CancellationToken ct)
     {
-        var counted = 0;
-        var slot    = from;
+        var walked = await BoundedOccurrenceWalker
+                           .WalkAsync(from, through, limit, includeStart: false,
+                               slot => evaluator.NextAfterAsync(definition, slot, slot, identity, ct))
+                           .ConfigureAwait(false);
 
-        while (counted < limit)
-        {
-            var following = await evaluator.NextAfterAsync(definition, slot, slot, identity, ct)
-                                           .ConfigureAwait(false);
-
-            if (following is not { } next || next > through || next <= slot)
-                return (counted, slot, false);
-
-            slot = next;
-            counted++;
-        }
-
-        return (counted, slot, true);
+        return (walked.Count, walked.NewestUtc, walked.Bounded);
     }
 
     /// <summary>What one measurement of a backlog answers.</summary>
@@ -786,28 +776,23 @@ internal sealed class DueSlotEnumerator(IScheduleEvaluator evaluator, TimeSpan m
         // is already paid for.
         async ValueTask<int> CountRememberingTheChainAsync(DateTimeOffset from)
         {
-            var ceiling = ProviderScheduleGrid.CountCeiling(n);
-            var counted = 1;
-            var slot    = from;
+            var walked = await BoundedOccurrenceWalker
+                               .WalkAsync(from, nowUtc, (int)ProviderScheduleGrid.CountCeiling(n),
+                                   includeStart: true, NextRememberedAsync)
+                               .ConfigureAwait(false);
 
-            while (counted < ceiling)
+            return walked.Count;
+
+            async ValueTask<DateTimeOffset?> NextRememberedAsync(DateTimeOffset slot)
             {
-                if (!chain!.TryGetValue(slot, out var following))
-                {
-                    following = await evaluator.NextAfterAsync(definition, slot, slot, identity, ct)
+                if (chain!.TryGetValue(slot, out var remembered))
+                    return remembered;
+
+                var following = await evaluator.NextAfterAsync(definition, slot, slot, identity, ct)
                                                .ConfigureAwait(false);
-
-                    chain[slot] = following;
-                }
-
-                if (following is not { } next || next > nowUtc || next <= slot)
-                    break;
-
-                slot = next;
-                counted++;
+                chain[slot] = following;
+                return following;
             }
-
-            return counted;
         }
     }
 }

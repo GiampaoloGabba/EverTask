@@ -203,53 +203,73 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         {
             var task = _pendingTasks.FirstOrDefault(x => x.Id == taskId);
             if (task != null)
-            {
-                task.Status    = status;
-                task.Exception = exception.ToDetailedString();
-
-                // LastExecutionUtc only on terminal transitions, same rule as EfCoreTaskStorage.SetStatus:
-                // intermediate statuses (WaitingQueue, Queued, InProgress, Cancelled, Pending) preserve
-                // the previous value (no fake execution time, no wipe of the last real run).
-                if (status is not (QueuedTaskStatus.WaitingQueue or QueuedTaskStatus.Queued
-                    or QueuedTaskStatus.InProgress or QueuedTaskStatus.Cancelled or QueuedTaskStatus.Pending))
-                {
-                    task.LastExecutionUtc = DateTimeOffset.UtcNow;
-                }
-
-                // Set execution time if provided
-                if (executionTimeMs.HasValue)
-                {
-                    task.ExecutionTimeMs = executionTimeMs.Value;
-                }
-
-                // Respect audit level
-                if (AuditPolicy.ShouldCreateStatusAudit(auditLevel, status, exception))
-                {
-                    task.StatusAudits.Add(new StatusAudit
-                    {
-                        QueuedTaskId = taskId,
-                        UpdatedAtUtc = DateTimeOffset.UtcNow,
-                        NewStatus    = status,
-                        Exception    = exception.ToDetailedString()
-                    });
-                }
-            }
+                ApplyStatusLocked(task, status, exception, auditLevel, executionTimeMs);
         }
 
         return Task.CompletedTask;
     }
 
-    public Task<int> GetCurrentRunCount(Guid taskId)
+    /// <summary>
+    /// Applies a status transition and its audit to a row already held under
+    /// <see cref="_pendingTasksLock"/>: the body every status write shares, so the compare-and-swapped ones
+    /// cannot drift from the unconditional one.
+    /// </summary>
+    private static void ApplyStatusLocked(QueuedTask task, QueuedTaskStatus status, Exception? exception,
+                                          AuditLevel auditLevel, double? executionTimeMs)
     {
-        logger.GettingCurrentRunCount(taskId);
+        task.Status    = status;
+        task.Exception = exception.ToDetailedString();
+
+        // LastExecutionUtc only on terminal transitions, same rule as EfCoreTaskStorage.SetStatus:
+        // intermediate statuses (WaitingQueue, Queued, InProgress, Cancelled, Pending) preserve
+        // the previous value (no fake execution time, no wipe of the last real run).
+        if (status is not (QueuedTaskStatus.WaitingQueue or QueuedTaskStatus.Queued
+            or QueuedTaskStatus.InProgress or QueuedTaskStatus.Cancelled or QueuedTaskStatus.Pending))
+        {
+            task.LastExecutionUtc = DateTimeOffset.UtcNow;
+        }
+
+        // Set execution time if provided
+        if (executionTimeMs.HasValue)
+        {
+            task.ExecutionTimeMs = executionTimeMs.Value;
+        }
+
+        // Respect audit level
+        if (AuditPolicy.ShouldCreateStatusAudit(auditLevel, status, exception))
+        {
+            task.StatusAudits.Add(new StatusAudit
+            {
+                QueuedTaskId = task.Id,
+                UpdatedAtUtc = DateTimeOffset.UtcNow,
+                NewStatus    = status,
+                Exception    = exception.ToDetailedString()
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<bool> TrySetTerminalOutcome(Guid taskId, QueuedTaskStatus status, Exception? exception,
+                                            int expectedScheduleVersion, AuditLevel auditLevel,
+                                            CancellationToken ct = default)
+    {
+        logger.StatusSet(taskId, status);
 
         lock (_pendingTasksLock)
         {
             var task = _pendingTasks.FirstOrDefault(x => x.Id == taskId);
 
-            // Return 0 if task not found or CurrentRunCount is null (before first run)
-            // The count represents completed runs, so 0 = no runs completed yet
-            return Task.FromResult(task?.CurrentRunCount ?? 0);
+            // A cancellation over a cancellation is the ending of the run the cancel could not stop in time;
+            // any other outcome would erase the operator's decision.
+            if (task == null
+                || task.ScheduleVersion != expectedScheduleVersion
+                || (status != QueuedTaskStatus.Cancelled && task.Status == QueuedTaskStatus.Cancelled))
+            {
+                return Task.FromResult(false);
+            }
+
+            ApplyStatusLocked(task, status, exception, auditLevel, null);
+            return Task.FromResult(true);
         }
     }
 
@@ -484,6 +504,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
             // Same row shape the relational providers write: this store keeps the caller's entity, so the
             // contract is stamped on it rather than spelled out in an INSERT column list.
             occurrence.ApplyOccurrenceContract(parentId, expectedScheduleVersion);
+            occurrence.NormalizeTimestampsToUtc();
             ValidateOccurrenceConstraints(occurrence);
             _pendingTasks.Add(occurrence);
 
@@ -784,28 +805,6 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
     }
 
     /// <inheritdoc />
-    public Task<StatusAudit[]> GetStatusAudits(Guid taskId, CancellationToken ct = default)
-    {
-        lock (_pendingTasksLock)
-        {
-            // Reversed insertion order, not ordered by timestamp: the audits of a row are appended in
-            // transition order and the clock here is coarse enough for two of them to share an instant.
-            var task = _pendingTasks.FirstOrDefault(t => t.Id == taskId);
-            return Task.FromResult(task == null ? [] : task.StatusAudits.Reverse().ToArray());
-        }
-    }
-
-    /// <inheritdoc />
-    public Task<RunsAudit[]> GetRunsAudits(Guid taskId, CancellationToken ct = default)
-    {
-        lock (_pendingTasksLock)
-        {
-            var task = _pendingTasks.FirstOrDefault(t => t.Id == taskId);
-            return Task.FromResult(task == null ? [] : task.RunsAudits.Reverse().ToArray());
-        }
-    }
-
-    /// <inheritdoc />
     public Task<AuditPage<StatusAudit>> GetStatusAuditsPage(Guid taskId, int skip, int take,
                                                             CancellationToken ct = default)
     {
@@ -816,7 +815,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
             if (task == null)
                 return Task.FromResult(new AuditPage<StatusAudit>([], 0));
 
-            // Same order as the unpaged read: reversed insertion order, never the timestamp.
+            // Reversed insertion order, never the timestamp.
             var audits = task.StatusAudits;
 
             return Task.FromResult(new AuditPage<StatusAudit>(
@@ -839,16 +838,6 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
 
             return Task.FromResult(new AuditPage<RunsAudit>(
                 audits.Reverse().Skip(skip).Take(take).ToArray(), audits.Count));
-        }
-    }
-
-    /// <inheritdoc />
-    public Task<int> CountActiveOccurrences(Guid parentId, CancellationToken ct = default)
-    {
-        lock (_pendingTasksLock)
-        {
-            return Task.FromResult(_pendingTasks.Count(t => t.ParentTaskId == parentId
-                                                            && QueuedTask.IsNonTerminalStatus(t.Status)));
         }
     }
 

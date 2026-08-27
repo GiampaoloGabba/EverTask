@@ -43,6 +43,16 @@ public sealed class RescheduleRecorder
     /// </remarks>
     public bool CancelAfterHold { get; set; }
 
+    /// <summary>
+    /// Makes the held delivery end with a <see cref="TimeoutException"/> once released.
+    /// </summary>
+    /// <remarks>
+    /// The shape of a run that faulted on its own while a cancel was landing: an ending that is NOT an
+    /// <see cref="OperationCanceledException"/> — and one no retry policy retries — so it takes the branch
+    /// where the cancellation the row already carries is the only thing that can refuse the write.
+    /// </remarks>
+    public bool FaultAfterHold { get; set; }
+
     public void Release() => _released.TrySetResult();
 
     public async Task RecordAsync(ITaskExecutionContext context, CancellationToken ct)
@@ -54,6 +64,13 @@ public sealed class RescheduleRecorder
             return;
 
         _entered.TrySetResult();
+
+        if (FaultAfterHold)
+        {
+            await _released.Task;
+
+            throw new TimeoutException("the run faulted while the cancel was landing");
+        }
 
         if (!CancelAfterHold)
         {

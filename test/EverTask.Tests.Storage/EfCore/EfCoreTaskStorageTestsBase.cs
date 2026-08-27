@@ -368,21 +368,6 @@ public abstract class EfCoreTaskStorageTestsBase
     }
 
     [Fact]
-    public async Task GetCurrentRunCount_Should_ReturnCorrectCount()
-    {
-        var queued = QueuedTasks[0];
-        await _storage.Persist(queued);
-        var taskId = queued.Id;
-
-        var count = await _storage.GetCurrentRunCount(taskId);
-        count.ShouldBe(0); // Inizialmente zero
-
-        await _storage.UpdateCurrentRun(taskId, 100.0, null, AuditLevel.Full); // Aggiorna la corsa
-        count = await _storage.GetCurrentRunCount(taskId);
-        count.ShouldBe(1); // Dovrebbe essere incrementato
-    }
-
-    [Fact]
     public async Task UpdateCurrentRun_Should_UpdateRunCountAndNextRun()
     {
         var queued = QueuedTasks[0];
@@ -2875,6 +2860,37 @@ public abstract class EfCoreTaskStorageTestsBase
         _mockedDbContext.StatusAudit.Count(a => a.QueuedTaskId == pending.Id).ShouldBe(expectedAuditsPerRow);
     }
 
+    [Fact]
+    public async Task Durable_operations_should_treat_an_unknown_audit_level_as_full()
+    {
+        const AuditLevel unknown = (AuditLevel)99;
+        var cursor = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+
+        var finalized = await PersistSchedule(cursor);
+        var occurrence = NewOccurrence(finalized.Id, cursor);
+        (await _storage.MaterializeOccurrence(finalized.Id, 0, cursor, occurrence, null, unknown))
+            .ShouldBe(OccurrenceMaterializationOutcome.Created);
+        (await _storage.GetStatusAuditsPage(finalized.Id, 0, 10)).Audits.Length.ShouldBe(1);
+
+        var cancelled = await PersistSchedule(cursor);
+        var pending   = NewOccurrence(cancelled.Id, cursor);
+        await _storage.Persist(pending);
+        await _storage.CancelSchedule(cancelled.Id, unknown);
+        (await _storage.GetStatusAuditsPage(cancelled.Id, 0, 10)).Audits.Length.ShouldBe(1);
+        (await _storage.GetStatusAuditsPage(pending.Id, 0, 10)).Audits.Length.ShouldBe(1);
+
+        var advanced = await PersistSchedule(cursor);
+        (await _storage.UpdateCurrentRun(advanced.Id, 10, cursor.AddMinutes(5), unknown, 0))
+            .ShouldBe(ScheduleCasResult.Applied);
+        (await _storage.GetRunsAuditsPage(advanced.Id, 0, 10)).Audits.Length.ShouldBe(1);
+
+        var completed = await PersistSchedule(cursor);
+        (await _storage.CompleteRecurringRun(completed.Id, 10, null, unknown, 0))
+            .ShouldBe(ScheduleCasResult.Applied);
+        (await _storage.GetStatusAuditsPage(completed.Id, 0, 10)).Audits.Length.ShouldBe(1);
+        (await _storage.GetRunsAuditsPage(completed.Id, 0, 10)).Audits.Length.ShouldBe(1);
+    }
+
     [Theory]
     [InlineData(AuditLevel.Full, 1)]
     [InlineData(AuditLevel.Minimal, 0)]
@@ -3251,6 +3267,69 @@ public abstract class EfCoreTaskStorageTestsBase
     }
 
     [Fact]
+    public async Task TrySetTerminalOutcome_should_write_the_ending_of_a_run_the_row_still_belongs_to()
+    {
+        // The ending of a delivery, guarded the way the advance beside it already is. The happy path still
+        // owes what SetStatus wrote: the status, the error and the moment the run ended, plus its audit row.
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor, scheduleVersion: 2, status: QueuedTaskStatus.InProgress);
+
+        (await _storage.TrySetTerminalOutcome(schedule.Id, QueuedTaskStatus.Failed,
+             new TimeoutException("boom"), 2, AuditLevel.Full)).ShouldBeTrue();
+
+        var row = (await _storage.Get(t => t.Id == schedule.Id))[0];
+        row.Status.ShouldBe(QueuedTaskStatus.Failed);
+        row.Exception.ShouldNotBeNull().ShouldContain(nameof(TimeoutException));
+        row.LastExecutionUtc.ShouldNotBeNull("a terminal transition stamps the end of the run");
+
+        (await _storage.GetStatusAuditsPage(schedule.Id, 0, 10)).Audits
+            .ShouldContain(a => a.NewStatus == QueuedTaskStatus.Failed);
+    }
+
+    [Fact]
+    public async Task TrySetTerminalOutcome_should_refuse_a_version_the_row_no_longer_carries()
+    {
+        // A re-dispatch under the schedule's own key revives the row at the next version while a run of the
+        // series the cancel ended is still unwinding. Its terminal status landing there ends the series that
+        // has just taken the row over — behind a dispatch that answered with an id.
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor, scheduleVersion: 1, status: QueuedTaskStatus.WaitingQueue);
+
+        (await _storage.TrySetTerminalOutcome(schedule.Id, QueuedTaskStatus.Cancelled, null, 0, AuditLevel.Full))
+            .ShouldBeFalse();
+
+        var row = (await _storage.Get(t => t.Id == schedule.Id))[0];
+        row.Status.ShouldBe(QueuedTaskStatus.WaitingQueue);
+        row.ScheduleVersion.ShouldBe(1);
+
+        (await _storage.GetStatusAuditsPage(schedule.Id, 0, 10)).Audits
+            .ShouldNotContain(a => a.NewStatus == QueuedTaskStatus.Cancelled,
+                "a refused write leaves no audit for a status the row never took");
+    }
+
+    [Fact]
+    public async Task TrySetTerminalOutcome_should_refuse_anything_but_a_cancellation_over_a_cancelled_row()
+    {
+        // The half no version can answer for: a cancel writes the status and leaves the version and the
+        // cursor exactly where they were. A Failed landing over it erases the cancellation, and a recurring
+        // row that reads Failed with a live cursor is recoverable — the next restart brings the series back.
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor, status: QueuedTaskStatus.Cancelled);
+
+        (await _storage.TrySetTerminalOutcome(schedule.Id, QueuedTaskStatus.Failed,
+             new TimeoutException("late"), 0, AuditLevel.Full)).ShouldBeFalse();
+
+        (await _storage.Get(t => t.Id == schedule.Id))[0].Status.ShouldBe(QueuedTaskStatus.Cancelled);
+
+        // The one ending that IS allowed there: the run the cancel could not stop in time says what the row
+        // already says.
+        (await _storage.TrySetTerminalOutcome(schedule.Id, QueuedTaskStatus.Cancelled, null, 0, AuditLevel.Full))
+            .ShouldBeTrue();
+
+        (await _storage.Get(t => t.Id == schedule.Id))[0].Status.ShouldBe(QueuedTaskStatus.Cancelled);
+    }
+
+    [Fact]
     public async Task TryHaltSchedule_should_refuse_a_halt_computed_on_a_stale_cursor()
     {
         var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
@@ -3320,6 +3399,26 @@ public abstract class EfCoreTaskStorageTestsBase
 
         (await _storage.Get(t => t.Id == schedule.Id))[0].NextRunUtc.ShouldNotBeNull().Offset
             .ShouldBe(TimeSpan.Zero);
+    }
+
+    [Fact]
+    public async Task MaterializeOccurrence_should_normalize_occurrence_timestamps_to_utc()
+    {
+        var cursor     = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule   = await PersistSchedule(cursor);
+        var localSlot  = cursor.ToOffset(TimeSpan.FromHours(2));
+        var occurrence = NewOccurrence(schedule.Id, localSlot);
+        occurrence.CreatedAtUtc = localSlot.AddMinutes(-1);
+
+        (await _storage.MaterializeOccurrence(schedule.Id, 0, cursor, occurrence,
+             FloorToMicroseconds(cursor.AddMinutes(5)), AuditLevel.Full))
+            .ShouldBe(OccurrenceMaterializationOutcome.Created);
+
+        var row = (await _storage.Get(t => t.Id == occurrence.Id)).ShouldHaveSingleItem();
+        row.CreatedAtUtc.ShouldBe(localSlot.AddMinutes(-1).ToUniversalTime());
+        row.CreatedAtUtc.Offset.ShouldBe(TimeSpan.Zero);
+        row.ScheduledExecutionUtc.ShouldBe(localSlot.ToUniversalTime());
+        row.ScheduledExecutionUtc.ShouldNotBeNull().Offset.ShouldBe(TimeSpan.Zero);
     }
 
     [Fact]
@@ -3407,7 +3506,7 @@ public abstract class EfCoreTaskStorageTestsBase
         // The self-referencing foreign key, from the other side than Remove_should_delete_a_schedule_together
         // _with_its_occurrences: it is what stops an occurrence from existing without a schedule at all. An
         // orphan is a row nothing advances, nothing cancels and nothing prunes, because every occurrence query
-        // — GetOccurrences, CountActiveOccurrences, CancelSchedule — starts from a parent id.
+        // — GetOccurrences and CancelSchedule — starts from a parent id.
         var cursor = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
 
         var orphan = NewOccurrence(GetGuidForProvider(), cursor);
@@ -3417,7 +3516,7 @@ public abstract class EfCoreTaskStorageTestsBase
     }
 
     [Fact]
-    public async Task GetOccurrences_and_CountActiveOccurrences_should_see_only_this_schedule()
+    public async Task GetOccurrences_should_see_only_this_schedule()
     {
         var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
         var schedule = await PersistSchedule(cursor);
@@ -3435,7 +3534,6 @@ public abstract class EfCoreTaskStorageTestsBase
         (await _storage.GetOccurrences(schedule.Id)).Length.ShouldBe(2);
         (await _storage.GetOccurrences(schedule.Id, nonTerminalOnly: true)).ShouldHaveSingleItem()
                                                                           .Id.ShouldBe(active.Id);
-        (await _storage.CountActiveOccurrences(schedule.Id)).ShouldBe(1);
     }
 
     [Fact]
@@ -3663,7 +3761,7 @@ public abstract class EfCoreTaskStorageTestsBase
     }
 
     [Fact]
-    public async Task GetStatusAudits_should_answer_the_whole_transition_history_newest_first()
+    public async Task GetStatusAuditsPage_should_answer_the_whole_transition_history_newest_first()
     {
         // The audit trail has to be READ. Nothing populates the StatusAudits navigation on a row a query
         // hands back, so a reader walking it answers an empty history for a row whose audit table holds
@@ -3679,18 +3777,19 @@ public abstract class EfCoreTaskStorageTestsBase
         (await _storage.Get(t => t.Id == occurrence.Id))[0].StatusAudits
             .ShouldBeEmpty("the premise: the row a read hands back carries no audits at all");
 
-        var audits = await _storage.GetStatusAudits(occurrence.Id);
+        var audits = (await _storage.GetStatusAuditsPage(occurrence.Id, 0, int.MaxValue)).Audits;
 
         audits.Select(a => a.NewStatus)
               .ShouldBe([QueuedTaskStatus.Completed, QueuedTaskStatus.InProgress],
                   "newest transition first, like the endpoint that reads it");
         audits.ShouldAllBe(a => a.QueuedTaskId == occurrence.Id);
 
-        (await _storage.GetStatusAudits(Guid.NewGuid())).ShouldBeEmpty("a row nobody stored has no history");
+        (await _storage.GetStatusAuditsPage(Guid.NewGuid(), 0, int.MaxValue)).Audits
+            .ShouldBeEmpty("a row nobody stored has no history");
     }
 
     [Fact]
-    public async Task GetStatusAudits_should_answer_only_for_the_row_it_was_asked_about()
+    public async Task GetStatusAuditsPage_should_answer_only_for_the_row_it_was_asked_about()
     {
         var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-10));
         var schedule = await PersistSchedule(cursor);
@@ -3704,14 +3803,14 @@ public abstract class EfCoreTaskStorageTestsBase
         await _storage.SetStatus(other.Id, QueuedTaskStatus.Failed, new InvalidOperationException("boom"),
             AuditLevel.Full);
 
-        var audits = await _storage.GetStatusAudits(asked.Id);
+        var audits = (await _storage.GetStatusAuditsPage(asked.Id, 0, int.MaxValue)).Audits;
 
         audits.ShouldAllBe(a => a.QueuedTaskId == asked.Id);
         audits.ShouldNotContain(a => a.NewStatus == QueuedTaskStatus.Failed);
     }
 
     [Fact]
-    public async Task GetRunsAudits_should_answer_every_recorded_run_newest_first()
+    public async Task GetRunsAuditsPage_should_answer_every_recorded_run_newest_first()
     {
         // A recurring row is the one that runs more than once, and its runs live in their own table for
         // exactly that reason: the row itself keeps only the last duration.
@@ -3723,13 +3822,13 @@ public abstract class EfCoreTaskStorageTestsBase
         (await _storage.Get(t => t.Id == series.Id))[0].RunsAudits
             .ShouldBeEmpty("the premise, again: the navigation is empty on the row a read hands back");
 
-        var runs = await _storage.GetRunsAudits(series.Id);
+        var runs = (await _storage.GetRunsAuditsPage(series.Id, 0, int.MaxValue)).Audits;
 
         runs.Length.ShouldBe(2);
         runs.Select(r => r.ExecutionTimeMs).ShouldBe([22, 11], "newest run first");
         runs.ShouldAllBe(r => r.QueuedTaskId == series.Id);
 
-        (await _storage.GetRunsAudits(Guid.NewGuid())).ShouldBeEmpty();
+        (await _storage.GetRunsAuditsPage(Guid.NewGuid(), 0, int.MaxValue)).Audits.ShouldBeEmpty();
     }
 
     [Fact]
@@ -3762,8 +3861,9 @@ public abstract class EfCoreTaskStorageTestsBase
         }
 
         walked.Distinct().Count().ShouldBe(20, "no page repeated or dropped an entry");
-        walked.ShouldBe((await _storage.GetStatusAudits(occurrence.Id)).Select(a => a.Id).ToList(),
-            "newest first, exactly the order the unpaged read answers");
+        var whole = await _storage.GetStatusAuditsPage(occurrence.Id, 0, int.MaxValue);
+        walked.ShouldBe(whole.Audits.Select(a => a.Id).ToList(),
+            "newest first, exactly the order a full page answers");
 
         var past = await _storage.GetStatusAuditsPage(occurrence.Id, 100, 5);
 
@@ -3826,6 +3926,33 @@ public abstract class EfCoreTaskStorageTestsBase
         deleted.ShouldBe(3, "the ordinary completed-task purge would have kept the failed and cancelled ones");
         (await _storage.Get(t => t.Id == pending.Id)).ShouldHaveSingleItem();
         (await _storage.Get(t => t.Id == schedule.Id)).ShouldHaveSingleItem();
+    }
+
+    [Fact]
+    public async Task CleanupCompletedTasks_should_leave_occurrence_children_to_occurrence_retention()
+    {
+        var now              = FloorToMicroseconds(DateTimeOffset.UtcNow);
+        var completedCutoff  = now.AddDays(-7);
+        var occurrenceCutoff = now.AddDays(-30);
+        var schedule         = await PersistSchedule(now.AddDays(-10));
+        var child    = NewOccurrence(schedule.Id, now.AddDays(-10));
+        child.Status           = QueuedTaskStatus.Completed;
+        child.CreatedAtUtc     = now.AddDays(-10);
+        child.LastExecutionUtc = now.AddDays(-10);
+        await _storage.Persist(child);
+
+        var standalone = NewTask(QueuedTaskStatus.Completed, now.AddDays(-10));
+        standalone.LastExecutionUtc = now.AddDays(-10);
+        await _storage.Persist(standalone);
+
+        var deleted = await ((EfCoreTaskStorage)_storage)
+            .CleanupCompletedTasks(completedCutoff, preserveTasksWithLogs: false);
+
+        child.LastExecutionUtc.ShouldNotBeNull().ShouldBeGreaterThan(occurrenceCutoff);
+        deleted.ShouldBe(1, "ordinary completed-task retention still owns standalone rows");
+        (await _storage.Get(t => t.Id == standalone.Id)).ShouldBeEmpty();
+        (await _storage.Get(t => t.Id == child.Id)).ShouldHaveSingleItem(
+            "the occurrence is still inside its independent retention window");
     }
 
     [Fact]
@@ -3903,7 +4030,7 @@ public abstract class EfCoreTaskStorageTestsBase
             new InvalidOperationException("kept by the error window"), AuditLevel.Full);
         await _storage.SetCompleted(unaudited.Id, 1, AuditLevel.None);
 
-        (await _storage.GetStatusAudits(audited.Id)).ShouldNotBeEmpty(
+        (await _storage.GetStatusAuditsPage(audited.Id, 0, 10)).Audits.ShouldNotBeEmpty(
             "the premise: the row really carries the audit trail the window is holding");
 
         var cutoff = DateTimeOffset.UtcNow.AddMinutes(1);
@@ -3914,7 +4041,7 @@ public abstract class EfCoreTaskStorageTestsBase
 
         preserved.ShouldBe(1, "only the occurrence with no surviving audit row may be pruned");
         (await _storage.Get(t => t.Id == audited.Id)).ShouldHaveSingleItem();
-        (await _storage.GetStatusAudits(audited.Id)).ShouldNotBeEmpty(
+        (await _storage.GetStatusAuditsPage(audited.Id, 0, 10)).Audits.ShouldNotBeEmpty(
             "the cascade must not destroy an audit row 82 days before its own window expires");
         (await _storage.Get(t => t.Id == unaudited.Id)).ShouldBeEmpty();
 

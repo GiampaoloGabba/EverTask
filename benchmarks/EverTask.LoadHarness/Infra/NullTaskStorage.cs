@@ -26,7 +26,6 @@ public sealed class NullTaskStorage : ITaskStorage
     public Task SetCancelledByUser(Guid taskId, AuditLevel auditLevel) => Task.CompletedTask;
     public Task SetCancelledByService(Guid taskId, Exception exception, AuditLevel auditLevel) => Task.CompletedTask;
     public Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception, AuditLevel auditLevel, double? executionTimeMs = null, CancellationToken ct = default) => Task.CompletedTask;
-    public Task<int> GetCurrentRunCount(Guid taskId) => Task.FromResult(0);
     public Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel) => Task.CompletedTask;
     public Task<QueuedTask?> GetByTaskKey(string taskKey, CancellationToken ct = default) => Task.FromResult<QueuedTask?>(null);
     public Task UpdateTask(QueuedTask task, CancellationToken ct = default) => Task.CompletedTask;

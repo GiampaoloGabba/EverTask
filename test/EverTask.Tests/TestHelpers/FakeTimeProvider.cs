@@ -17,6 +17,7 @@ public sealed class FakeTimeProvider : TimeProvider
     private readonly object          _gate = new();
     private readonly List<FakeTimer> _timers = [];
     private          DateTimeOffset  _utcNow;
+    private          int             _createdTimerCount;
 
     public FakeTimeProvider(DateTimeOffset? startUtc = null)
     {
@@ -33,7 +34,11 @@ public sealed class FakeTimeProvider : TimeProvider
         ArgumentNullException.ThrowIfNull(callback);
 
         var timer = new FakeTimer(this, callback, state);
-        lock (_gate) _timers.Add(timer);
+        lock (_gate)
+        {
+            _timers.Add(timer);
+            _createdTimerCount++;
+        }
 
         timer.Change(dueTime, period);
         return timer;
@@ -43,6 +48,12 @@ public sealed class FakeTimeProvider : TimeProvider
     public int PendingTimerCount
     {
         get { lock (_gate) return _timers.Count(t => t.IsArmed); }
+    }
+
+    /// <summary>Total timers created by code using this clock.</summary>
+    public int CreatedTimerCount
+    {
+        get { lock (_gate) return _createdTimerCount; }
     }
 
     /// <summary>

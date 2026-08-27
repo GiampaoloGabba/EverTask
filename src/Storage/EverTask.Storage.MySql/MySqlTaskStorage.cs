@@ -180,6 +180,7 @@ public class MySqlTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTa
         {
             ids = await dbContext.QueuedTasks
                 .Where(qt => qt.Status == QueuedTaskStatus.Completed
+                          && qt.ParentTaskId == null
                           && !qt.IsRecurring
                           && !dbContext.StatusAudit.Any(sa => sa.QueuedTaskId == qt.Id)
                           && !dbContext.RunsAudit.Any(ra => ra.QueuedTaskId == qt.Id)
@@ -236,7 +237,19 @@ public class MySqlTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTa
                 break;
 
             total += await DeleteByIdsAsync(dbContext.QueuedTasks, ids,
-                (set, batch) => set.Where(qt => batch.Contains(qt.Id)), ct).ConfigureAwait(false);
+                (set, batch) => set.Where(qt => batch.Contains(qt.Id)
+                                               && qt.ParentTaskId != null
+                                               && (qt.Status == QueuedTaskStatus.Completed
+                                                   || qt.Status == QueuedTaskStatus.Failed
+                                                   || qt.Status == QueuedTaskStatus.Cancelled)
+                                               && (!preserveTasksWithLogs
+                                                   || !dbContext.TaskExecutionLogs.Any(l => l.TaskId == qt.Id))
+                                               && (!preserveStatusAudits
+                                                   || !dbContext.StatusAudit.Any(sa => sa.QueuedTaskId == qt.Id))
+                                               && (!preserveRunsAudits
+                                                   || !dbContext.RunsAudit.Any(ra => ra.QueuedTaskId == qt.Id))
+                                               && (qt.LastExecutionUtc ?? qt.CreatedAtUtc) < cutoff), ct)
+                .ConfigureAwait(false);
         } while (ids.Count == CleanupBatchSize && !ct.IsCancellationRequested);
 
         return total;
@@ -254,14 +267,15 @@ public class MySqlTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTa
     {
         ArgumentNullException.ThrowIfNull(occurrence);
 
-        if (occurrence.ScheduledExecutionUtc is not { } slotUtc)
-            throw new ArgumentException("An occurrence must carry its nominal slot.", nameof(occurrence));
-
         await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         // The INSERT below writes the canonical occurrence shape; stamping it on the caller's entity too
         // keeps the object it goes on using (scheduling the child) identical to the row that was stored.
         occurrence.ApplyOccurrenceContract(parentId, expectedScheduleVersion);
+        occurrence.NormalizeTimestampsToUtc();
+
+        if (occurrence.ScheduledExecutionUtc is not { } slotUtc)
+            throw new ArgumentException("An occurrence must carry its nominal slot.", nameof(occurrence));
 
         var outcome = new MySqlParameter("@p_Outcome", MySqlDbType.Int32) { Direction = ParameterDirection.Output };
 

@@ -7,6 +7,8 @@ ALTER TABLE evertask."QueuedTasks" ADD "ScheduleVersion" integer NOT NULL DEFAUL
 
 CREATE INDEX "IX_QueuedTasks_ParentTaskId" ON evertask."QueuedTasks" ("ParentTaskId");
 
+CREATE INDEX "IX_QueuedTasks_ParentTaskId_Status" ON evertask."QueuedTasks" ("ParentTaskId", "Status");
+
 CREATE UNIQUE INDEX "UX_QueuedTasks_Occurrence" ON evertask."QueuedTasks" ("ParentTaskId", "ScheduledExecutionUtc");
 
 ALTER TABLE evertask."QueuedTasks" ADD CONSTRAINT "CK_QueuedTasks_OccurrenceSlot" CHECK ("ParentTaskId" IS NULL OR "ScheduledExecutionUtc" IS NOT NULL);

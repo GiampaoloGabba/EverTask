@@ -45,13 +45,6 @@ internal sealed class ScheduleEvaluator(ProviderScheduleGrid? providerGrid = nul
             ? new ValueTask<int>(definition.CountMissedOccurrences(anchor, after, cap))
             : Provider(definition).CountMissedAsync(definition, anchor, after, cap, identity, ct);
 
-    public ValueTask<bool> IsOccurrenceStillCurrentAsync(
-        RecurringTask definition, DateTimeOffset occurrence, DateTimeOffset nowUtc,
-        ScheduleIdentity identity = default, CancellationToken ct = default) =>
-        definition.Provider is null
-            ? new ValueTask<bool>(definition.IsOccurrenceStillCurrent(occurrence, nowUtc))
-            : Provider(definition).IsOccurrenceStillCurrentAsync(definition, occurrence, nowUtc, identity, ct);
-
     public ValueTask<DateTimeOffset?> NextGridOccurrenceAfterAsync(
         RecurringTask definition, DateTimeOffset occurrence, ScheduleIdentity identity = default,
         CancellationToken ct = default) =>
@@ -85,25 +78,12 @@ internal sealed class ScheduleEvaluator(ProviderScheduleGrid? providerGrid = nul
         if (cap == 0 || cursor > nowUtc || (definition.RunUntil is { } end && cursor >= end))
             return Array.Empty<DateTimeOffset>();
 
-        var slots = new List<DateTimeOffset>();
-        var slot  = cursor;
+        var slots = new List<DateTimeOffset>(Math.Min(cap, 256));
 
-        while (true)
-        {
-            slots.Add(slot);
-
-            if (slots.Count == cap)
-                break;
-
-            // Null means the series ends here (RunUntil); a non-advancing answer is a defensive stop — the
-            // same guard the walk inside the primitive keeps, because a slot that never moves would spin.
-            var next = await NextAfterAsync(definition, slot, slot, identity, ct).ConfigureAwait(false);
-
-            if (next is not { } following || following <= slot || following > nowUtc)
-                break;
-
-            slot = following;
-        }
+        await BoundedOccurrenceWalker
+              .WalkAsync(cursor, nowUtc, cap, includeStart: true,
+                  slot => NextAfterAsync(definition, slot, slot, identity, ct), slots)
+              .ConfigureAwait(false);
 
         return slots;
     }

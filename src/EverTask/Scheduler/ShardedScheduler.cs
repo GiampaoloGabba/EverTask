@@ -91,10 +91,9 @@ public class ShardedScheduler : IScheduler, IDisposable
 
             _logger.ShardSchedulingTask(_shardId, item.PersistenceId, scheduledTime);
 
-            // Latest-wins registration per PersistenceId: a previously parked entry for the same
-            // task becomes stale and is discarded at dequeue time (single execution per occurrence).
-            // That rule and the S4 refusal live in ScheduledRegistrations, shared with
-            // PeriodicTimerScheduler.
+            // Latest-wins registration per PersistenceId: a previously parked entry for the same task is
+            // evicted (single execution per occurrence). That rule and the S4 refusal live in
+            // ScheduledRegistrations, shared with PeriodicTimerScheduler.
             if (!_registrations.Swap(item, refuseSuperseded))
                 return false;
 
@@ -111,8 +110,11 @@ public class ShardedScheduler : IScheduler, IDisposable
         /// </summary>
         public bool TryUnschedule(Guid persistenceId)
         {
-            // The orphan entry left in the priority queue is discarded by the staleness check
-            return _registrations.Remove(persistenceId);
+            if (!_registrations.Remove(persistenceId))
+                return false;
+
+            _wakeUp.Signal();
+            return true;
         }
 
         /// <summary>
@@ -121,7 +123,11 @@ public class ShardedScheduler : IScheduler, IDisposable
         /// </summary>
         public bool TryUnschedule(Guid persistenceId, TaskHandlerExecutor expected)
         {
-            return _registrations.Remove(persistenceId, expected);
+            if (!_registrations.Remove(persistenceId, expected))
+                return false;
+
+            _wakeUp.Signal();
+            return true;
         }
 
         /// <summary>

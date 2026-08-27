@@ -182,13 +182,6 @@ public interface ITaskStorage
                        double? executionTimeMs = null, CancellationToken ct = default);
 
     /// <summary>
-    /// Get the current run counter for this task.
-    /// </summary>
-    /// <param name="taskId">The ID of the task.</param>
-    /// <returns>The current run count for this task.</returns>
-    Task<int> GetCurrentRunCount(Guid taskId);
-
-    /// <summary>
     /// Advances the run counter by exactly one real execution and updates the next run / execution time.
     /// Occurrences skipped to realign the schedule after a downtime do NOT count toward the counter:
     /// <c>CurrentRunCount</c> tracks real executions only (== <see cref="QueuedTask.RunsAudits"/> rows),
@@ -576,6 +569,38 @@ public interface ITaskStorage
     }
 
     /// <summary>
+    /// Writes the TERMINAL outcome of a delivery that ended — <see cref="QueuedTaskStatus.Failed"/>,
+    /// <see cref="QueuedTaskStatus.Cancelled"/> or <see cref="QueuedTaskStatus.ServiceStopped"/> — only while
+    /// the row is still the one that delivery ran: at <paramref name="expectedScheduleVersion"/>, and, unless
+    /// the outcome IS a cancellation, not already <see cref="QueuedTaskStatus.Cancelled"/>.
+    /// </summary>
+    /// <remarks>
+    /// The two guards answer for the two writes that can take a row away from a run while it unwinds, and
+    /// neither of them can be seen from the process. The VERSION answers for the generation: a re-dispatch
+    /// under the schedule's own task key revives the row through
+    /// <see cref="TryReviveCancelledSchedule"/>, and an unconditional terminal status landing after it ends the
+    /// series that has just taken the row over — behind a dispatch that answered with an id. The STATUS
+    /// answers for the plain cancel no version can speak for: a cancel moves neither the version nor the
+    /// cursor, so a late <c>Failed</c> erased it, and a recurring row that reads <c>Failed</c> with a live
+    /// cursor is recoverable — the series an operator ended comes back at the next restart.
+    /// <para>
+    /// A cancellation IS allowed over a cancellation: that is the historical write of the very run the cancel
+    /// could not stop in time, and it says what the row already says.
+    /// </para>
+    /// <para>
+    /// Best effort like <see cref="SetStatus"/> — a relational provider logs its own failed write — but unlike
+    /// it, this one ANSWERS, so the caller can report an ending it did not persist instead of assuming it did.
+    /// </para>
+    /// </remarks>
+    /// <returns>True when the outcome was written.</returns>
+    Task<bool> TrySetTerminalOutcome(Guid taskId, QueuedTaskStatus status, Exception? exception,
+                                     int expectedScheduleVersion, AuditLevel auditLevel,
+                                     CancellationToken ct = default) =>
+        throw new NotSupportedException(
+            "This storage does not implement schedule versioning. Use a built-in provider, or implement " +
+            $"{nameof(TrySetTerminalOutcome)} atomically and set {nameof(SupportsScheduleVersioning)} to true.");
+
+    /// <summary>
     /// Persists a durable "halted" marker in <see cref="QueuedTask.RuntimeInfo"/>, guarded by a full
     /// compare-and-swap on version, cursor and status.
     /// </summary>
@@ -658,13 +683,6 @@ public interface ITaskStorage
     }
 
     /// <summary>
-    /// Number of occurrences of a schedule that are not terminal yet — the storage half of the
-    /// concurrency budget (the in-process delivery and scheduler registries complete it).
-    /// </summary>
-    async Task<int> CountActiveOccurrences(Guid parentId, CancellationToken ct = default) =>
-        (await GetOccurrences(parentId, nonTerminalOnly: true, ct).ConfigureAwait(false)).Length;
-
-    /// <summary>
     /// When the last run of each of the given rows STARTED, as the status audit trail recorded it. Rows with
     /// no recorded start are simply absent from the result.
     /// </summary>
@@ -712,63 +730,15 @@ public interface ITaskStorage
     }
 
     /// <summary>
-    /// The status transitions recorded for one row, newest first.
-    /// </summary>
-    /// <remarks>
-    /// Same reason as <see cref="GetLastRunStarts"/>: the audit trail has to be READ. No read populates
-    /// <see cref="QueuedTask.StatusAudits"/>, so a reader walking that navigation answers only over a store
-    /// that keeps the audits on the row object itself and hands back an empty history on every relational
-    /// one — for a row whose audit table holds the whole transition history.
-    /// <para>
-    /// Read-only, so the default is a correct query over <see cref="Get"/> rather than a refusal: a custom
-    /// storage that materializes the navigation keeps working, and the built-in providers override it with
-    /// one indexed query over the audit table.
-    /// </para>
-    /// </remarks>
-    /// <param name="taskId">The row to answer for.</param>
-    /// <param name="ct">Cancellation token.</param>
-    async Task<StatusAudit[]> GetStatusAudits(Guid taskId, CancellationToken ct = default)
-    {
-        var rows = await Get(t => t.Id == taskId, ct).ConfigureAwait(false);
-
-        // Reversed first, so that audits sharing an instant — a coarse clock makes that ordinary — come back
-        // in the order they were recorded rather than upside down: a stable sort keeps whatever order it was
-        // handed for equal keys.
-        return rows.Length == 0
-                   ? []
-                   : rows[0].StatusAudits.Reverse().OrderByDescending(a => a.UpdatedAtUtc).ToArray();
-    }
-
-    /// <summary>
-    /// The runs recorded for one row, newest first.
-    /// </summary>
-    /// <remarks>
-    /// The <see cref="RunsAudit"/> half of <see cref="GetStatusAudits"/>, and dead in exactly the same way
-    /// when read off <see cref="QueuedTask.RunsAudits"/>.
-    /// </remarks>
-    /// <param name="taskId">The row to answer for.</param>
-    /// <param name="ct">Cancellation token.</param>
-    async Task<RunsAudit[]> GetRunsAudits(Guid taskId, CancellationToken ct = default)
-    {
-        var rows = await Get(t => t.Id == taskId, ct).ConfigureAwait(false);
-
-        return rows.Length == 0
-                   ? []
-                   : rows[0].RunsAudits.Reverse().OrderByDescending(a => a.ExecutedAt).ToArray();
-    }
-
-    /// <summary>
     /// One page of the status transitions recorded for one row, newest first, with the total the trail holds.
     /// </summary>
     /// <remarks>
-    /// The paged half of <see cref="GetStatusAudits"/>, and it exists for the same reason as
-    /// <see cref="GetOccurrencesPage"/>: a long-lived recurring row accumulates one transition per state per
-    /// run, so a reader that shows the first twenty of them must not transfer the whole series to do it. The
-    /// unpaged read stays exactly what it was — the two members shipped in 4.0.0 and are frozen.
+    /// A long-lived recurring row accumulates one transition per state per run, so a reader that shows the
+    /// first twenty of them must not transfer the whole series to do it.
     /// <para>
-    /// The default composes the unpaged read so a custom storage keeps working; the built-in providers
-    /// override it and let the database count and slice over the <c>(QueuedTaskId)</c> index the audit table
-    /// already has.
+    /// The default queries the row's materialized navigation so a custom storage keeps working; the built-in
+    /// providers override it and let the database count and slice over the <c>(QueuedTaskId)</c> index the
+    /// audit table already has.
     /// </para>
     /// </remarks>
     /// <param name="taskId">The row to answer for.</param>
@@ -778,7 +748,13 @@ public interface ITaskStorage
     async Task<AuditPage<StatusAudit>> GetStatusAuditsPage(Guid taskId, int skip, int take,
                                                            CancellationToken ct = default)
     {
-        var audits = await GetStatusAudits(taskId, ct).ConfigureAwait(false);
+        var rows = await Get(t => t.Id == taskId, ct).ConfigureAwait(false);
+
+        if (rows.Length == 0)
+            return new AuditPage<StatusAudit>([], 0);
+
+        // Reversed first, so that audits sharing an instant keep transition order under the stable sort.
+        var audits = rows[0].StatusAudits.Reverse().OrderByDescending(a => a.UpdatedAtUtc).ToArray();
 
         return new AuditPage<StatusAudit>(audits.Skip(skip).Take(take).ToArray(), audits.Length);
     }
@@ -794,7 +770,12 @@ public interface ITaskStorage
     async Task<AuditPage<RunsAudit>> GetRunsAuditsPage(Guid taskId, int skip, int take,
                                                        CancellationToken ct = default)
     {
-        var audits = await GetRunsAudits(taskId, ct).ConfigureAwait(false);
+        var rows = await Get(t => t.Id == taskId, ct).ConfigureAwait(false);
+
+        if (rows.Length == 0)
+            return new AuditPage<RunsAudit>([], 0);
+
+        var audits = rows[0].RunsAudits.Reverse().OrderByDescending(a => a.ExecutedAt).ToArray();
 
         return new AuditPage<RunsAudit>(audits.Skip(skip).Take(take).ToArray(), audits.Length);
     }

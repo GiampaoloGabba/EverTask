@@ -14,9 +14,8 @@ namespace EverTask.Tests;
 /// the real clock; the wait is now a race between the wake-up signal and a <c>TimeProvider</c>-driven delay.
 /// These tests hold the clock still while real time passes — nothing may fire — and then move the clock,
 /// which is the only thing that makes an occurrence due. The delay itself is virtual: <see cref="FakeTimeProvider"/>
-/// hands out timers that only <c>Advance</c> can elapse, so neither a periodic re-check nor a wake-up signal
-/// can stand in for the clock here. The check interval is deliberately far larger than the test's real-time
-/// budget, so a scheduler that slept in wall time would still be asleep when the assertion runs.
+/// hands out timers that only <c>Advance</c> can elapse, so neither a wake-up signal nor wall time can stand
+/// in for the clock here.
 /// </remarks>
 [Collection("TimingSensitiveTests")]
 public class SchedulerDeterministicClockTests
@@ -74,7 +73,7 @@ public class SchedulerDeterministicClockTests
 
         scheduler.Schedule(ExecutorDueAt(clock.GetUtcNow().AddHours(1)));
 
-        // The loop is now parked on a delay of the injected clock — half an hour of it — and nothing else.
+        // The loop is now parked on the whole remaining delay of the injected clock, and nothing else.
         (await clock.WaitForPendingTimersAsync(1)).ShouldBeTrue("the wait must be armed on the injected clock");
 
         (await WaitForDispatchAsync(1, 400)).ShouldBeFalse(
@@ -130,5 +129,36 @@ public class SchedulerDeterministicClockTests
         scheduler.Schedule(ExecutorDueAt(clock.GetUtcNow().AddSeconds(-1)));
 
         (await WaitForDispatchAsync(1, 4000)).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task PeriodicTimerScheduler_should_sleep_past_the_old_check_grid_and_wake_for_an_earlier_registration()
+    {
+        var clock = new FakeTimeProvider(new DateTimeOffset(2026, 5, 1, 12, 0, 0, TimeSpan.Zero));
+
+        using var scheduler = new PeriodicTimerScheduler(
+            _queueManager.Object,
+            Mock.Of<IEverTaskLogger<PeriodicTimerScheduler>>(),
+            checkInterval: TimeSpan.FromSeconds(1),
+            taskStorage: null,
+            timeProvider: clock);
+
+        scheduler.Schedule(ExecutorDueAt(clock.GetUtcNow().AddHours(1)));
+
+        (await clock.WaitForPendingTimersAsync(1)).ShouldBeTrue("the long wait must be armed before moving the clock");
+        var timersBeforeOldGrid = clock.CreatedTimerCount;
+
+        clock.Advance(TimeSpan.FromSeconds(1));
+        await Task.Delay(200);
+
+        clock.CreatedTimerCount.ShouldBe(timersBeforeOldGrid,
+            "the removed one-second clamp must not wake and re-arm the scheduler");
+        DispatchedCount.ShouldBe(0);
+
+        scheduler.Schedule(ExecutorDueAt(clock.GetUtcNow()));
+
+        (await WaitForDispatchAsync(1, 4000)).ShouldBeTrue(
+            "an earlier registration must interrupt the existing long wait without advancing the clock again");
+        DispatchedCount.ShouldBe(1);
     }
 }

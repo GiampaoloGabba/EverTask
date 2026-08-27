@@ -335,6 +335,59 @@ public class MemoryStorageScheduleCasTests
     }
 
     [Fact]
+    public async Task Should_refuse_a_terminal_outcome_whose_row_moved_or_was_cancelled()
+    {
+        // The memory store's half of what EfCoreTaskStorageTestsBase pins on the four relational ones: the
+        // ending of a run may not take a row that is not the one it ran. The version answers for a revival or
+        // a reschedule; the status answers for a plain cancel, which moves neither the version nor the cursor.
+        var revived = await SeedScheduleAsync(scheduleVersion: 1);
+
+        (await _storage.TrySetTerminalOutcome(revived, QueuedTaskStatus.Cancelled, null, 0, AuditLevel.Full))
+            .ShouldBeFalse("the row belongs to the generation that replaced the one this run was delivered for");
+
+        var revivedRow = await ReloadAsync(revived);
+        revivedRow.Status.ShouldBe(QueuedTaskStatus.Queued);
+        revivedRow.StatusAudits.ShouldBeEmpty("a refused write leaves no trace of a status the row never took");
+
+        var cancelled = await SeedScheduleAsync();
+        await _storage.SetStatus(cancelled, QueuedTaskStatus.Cancelled, null, AuditLevel.Full);
+
+        (await _storage.TrySetTerminalOutcome(cancelled, QueuedTaskStatus.Failed,
+             new TimeoutException("late"), 0, AuditLevel.Full))
+            .ShouldBeFalse("a Failed over a Cancelled erases the decision that ended the series");
+
+        var cancelledRow = await ReloadAsync(cancelled);
+        cancelledRow.Status.ShouldBe(QueuedTaskStatus.Cancelled);
+        cancelledRow.NextRunUtc.ShouldBe(Cursor,
+            "and the row stays the shape no recovery predicate selects: Failed with a live cursor is recoverable");
+    }
+
+    [Fact]
+    public async Task Should_write_a_terminal_outcome_the_row_still_belongs_to()
+    {
+        // The other side of the same guard, including the one case that is allowed over a cancellation: the
+        // ending of the very run the cancel could not stop in time says what the row already says.
+        var failed = await SeedScheduleAsync(scheduleVersion: 2);
+
+        (await _storage.TrySetTerminalOutcome(failed, QueuedTaskStatus.Failed, new TimeoutException("boom"), 2,
+             AuditLevel.Full)).ShouldBeTrue();
+
+        var failedRow = await ReloadAsync(failed);
+        failedRow.Status.ShouldBe(QueuedTaskStatus.Failed);
+        failedRow.Exception.ShouldNotBeNull().ShouldContain(nameof(TimeoutException));
+        failedRow.LastExecutionUtc.ShouldNotBeNull("a terminal transition stamps the end of the run");
+        failedRow.StatusAudits.ShouldContain(a => a.NewStatus == QueuedTaskStatus.Failed);
+
+        var cancelled = await SeedScheduleAsync();
+        await _storage.SetStatus(cancelled, QueuedTaskStatus.Cancelled, null, AuditLevel.Full);
+
+        (await _storage.TrySetTerminalOutcome(cancelled, QueuedTaskStatus.Cancelled, null, 0, AuditLevel.Full))
+            .ShouldBeTrue("a cancellation over a cancellation is the historical write of that run's ending");
+
+        (await ReloadAsync(cancelled)).Status.ShouldBe(QueuedTaskStatus.Cancelled);
+    }
+
+    [Fact]
     public async Task Should_refuse_a_null_expected_cursor_on_both_conditional_schedule_writes()
     {
         // The memory store's half of the contract pinned for the relational providers in

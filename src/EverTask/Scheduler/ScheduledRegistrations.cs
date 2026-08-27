@@ -14,8 +14,8 @@ namespace EverTask.Scheduler;
 /// on whichever scheduler the failing test happened to use and left the other with the old behaviour.
 /// </remarks>
 /// <param name="queue">
-/// The heap the scheduler dequeues from. A replaced registration is evicted from it immediately (CU19), so
-/// repeated far-future re-registrations of the same id cannot accumulate orphans held until their due time.
+/// The heap the scheduler dequeues from. A replaced or removed registration is evicted from it immediately
+/// (CU19), so far-future registrations cannot remain held until their former due time.
 /// </param>
 /// <param name="reportSuperseded">
 /// How this scheduler logs a refused registration: the id, the version offered and the version parked.
@@ -30,17 +30,27 @@ internal sealed class ScheduledRegistrations(
     public bool Contains(Guid persistenceId) => _items.ContainsKey(persistenceId);
 
     /// <summary>Drops whatever is registered for <paramref name="persistenceId"/>.</summary>
-    /// <remarks>
-    /// The orphan entry left behind in the heap is discarded by the staleness check at dequeue time.
-    /// </remarks>
-    public bool Remove(Guid persistenceId) => _items.TryRemove(persistenceId, out _);
+    public bool Remove(Guid persistenceId)
+    {
+        if (!_items.TryRemove(persistenceId, out var removed))
+            return false;
+
+        queue.Remove(removed);
+        return true;
+    }
 
     /// <summary>
     /// Drops the registration of <paramref name="persistenceId"/> only while it is still
     /// <paramref name="expected"/>, so a concurrent newer one is preserved.
     /// </summary>
-    public bool Remove(Guid persistenceId, TaskHandlerExecutor expected) =>
-        _items.TryRemove(new KeyValuePair<Guid, TaskHandlerExecutor>(persistenceId, expected));
+    public bool Remove(Guid persistenceId, TaskHandlerExecutor expected)
+    {
+        if (!_items.TryRemove(new KeyValuePair<Guid, TaskHandlerExecutor>(persistenceId, expected)))
+            return false;
+
+        queue.Remove(expected);
+        return true;
+    }
 
     /// <summary>True while <paramref name="item"/> is still the registration its id carries.</summary>
     public bool IsCurrent(TaskHandlerExecutor item) =>

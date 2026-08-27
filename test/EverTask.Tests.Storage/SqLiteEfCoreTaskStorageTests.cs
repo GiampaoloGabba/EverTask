@@ -71,6 +71,10 @@ public class SqliteEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IDisposa
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'IX_QueuedTasks_ParentTaskId'");
         parentIndex.ShouldBe(1);
 
+        var drainIndex = await ScalarAsync<string>(
+            "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'IX_QueuedTasks_ParentTaskId_Status'");
+        drainIndex.ShouldContain("\"ParentTaskId\", \"Status\"");
+
         // SQLite keeps the table's CREATE statement verbatim, so the check constraint and the foreign key
         // are read straight out of it.
         var tableSql = await ScalarAsync<string>(

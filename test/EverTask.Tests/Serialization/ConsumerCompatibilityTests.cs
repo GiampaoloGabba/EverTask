@@ -69,8 +69,6 @@ public class ConsumerCompatibilityTests : IsolatedIntegrationTestBase
         public Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception, AuditLevel auditLevel,
                               double? executionTimeMs = null, CancellationToken ct = default) => Task.CompletedTask;
 
-        public Task<int> GetCurrentRunCount(Guid taskId) => Task.FromResult(0);
-
         public Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
                                      AuditLevel auditLevel) => Task.CompletedTask;
 
@@ -174,7 +172,6 @@ public class ConsumerCompatibilityTests : IsolatedIntegrationTestBase
         await storage.Persist(child);
 
         (await ((ITaskStorage)storage).GetOccurrences(parent.Id)).ShouldHaveSingleItem().Id.ShouldBe(child.Id);
-        (await ((ITaskStorage)storage).CountActiveOccurrences(parent.Id)).ShouldBe(1);
     }
 
     [Theory]

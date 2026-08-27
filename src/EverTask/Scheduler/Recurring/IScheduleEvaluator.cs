@@ -39,14 +39,6 @@ internal interface IScheduleEvaluator
         ScheduleIdentity identity = default, CancellationToken ct = default);
 
     /// <summary>
-    /// True while <paramref name="occurrence"/> is still the current slot, i.e. its bounded successor has not
-    /// come due at <paramref name="nowUtc"/>.
-    /// </summary>
-    ValueTask<bool> IsOccurrenceStillCurrentAsync(
-        RecurringTask definition, DateTimeOffset occurrence, DateTimeOffset nowUtc,
-        ScheduleIdentity identity = default, CancellationToken ct = default);
-
-    /// <summary>
     /// The natural successor of <paramref name="occurrence"/> on the grid, IGNORING <c>RunUntil</c> and
     /// <c>MaxRuns</c>. The recovery grace window needs this to tell "still the current slot" from "the series
     /// simply ended", which the bounded successor collapses into the same null.

@@ -49,6 +49,11 @@ namespace EverTask.Storage.MySql.Migrations
                 column: "ParentTaskId");
 
             migrationBuilder.CreateIndex(
+                name: "IX_QueuedTasks_ParentTaskId_Status",
+                table: "QueuedTasks",
+                columns: new[] { "ParentTaskId", "Status" });
+
+            migrationBuilder.CreateIndex(
                 name: "UX_QueuedTasks_Occurrence",
                 table: "QueuedTasks",
                 columns: new[] { "ParentTaskId", "ScheduledExecutionUtc" },
@@ -156,7 +161,7 @@ BEGIN
                 LastExecutionUtc = CASE WHEN p_NewCursorUtc IS NULL THEN v_now ELSE LastExecutionUtc END
             WHERE Id = p_ParentId;
 
-            IF p_NewCursorUtc IS NULL AND p_AuditLevel = 0 THEN
+            IF p_NewCursorUtc IS NULL AND (p_AuditLevel = 0 OR p_AuditLevel NOT IN (0, 1, 2, 3)) THEN
                 INSERT INTO StatusAudit (QueuedTaskId, UpdatedAtUtc, NewStatus, Exception)
                 VALUES (p_ParentId, v_now, 'Completed', NULL);
             END IF;
@@ -167,9 +172,8 @@ BEGIN
 END;", suppressTransaction: true);
 
             migrationBuilder.Sql(DropCancelSchedule, suppressTransaction: true);
-            // The child audits are inserted BEFORE the update that cancels them, selecting the rows about to
-            // change: MySQL has no OUTPUT clause, and inside the transaction the order is not observable.
-            // Cancelled carries no exception, so only AuditLevel.Full (0) audits it.
+            // The parent lock serializes materialization, while the temporary table captures the exact child
+            // rows locked and changed by this cancellation. Unknown audit levels fall back to Full.
             migrationBuilder.Sql(@"
 CREATE PROCEDURE usp_CancelSchedule(
     IN p_ParentId CHAR(36),
@@ -177,30 +181,52 @@ CREATE PROCEDURE usp_CancelSchedule(
 )
 BEGIN
     DECLARE v_now DATETIME(6);
+    DECLARE v_parentId CHAR(36);
+    DECLARE v_found INT DEFAULT 1;
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
+        DROP TEMPORARY TABLE IF EXISTS tmp_CancelScheduleIds;
         ROLLBACK;
         RESIGNAL;
     END;
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_found = 0;
 
     SET v_now = UTC_TIMESTAMP(6);
 
     START TRANSACTION;
 
-    IF p_AuditLevel = 0 THEN
-        INSERT INTO StatusAudit (QueuedTaskId, UpdatedAtUtc, NewStatus, Exception)
-        SELECT Id, v_now, 'Cancelled', NULL
+    SELECT Id INTO v_parentId
+    FROM QueuedTasks
+    WHERE Id = p_ParentId FOR UPDATE;
+
+    IF v_found = 0 THEN
+        ROLLBACK;
+    ELSE
+        DROP TEMPORARY TABLE IF EXISTS tmp_CancelScheduleIds;
+        CREATE TEMPORARY TABLE tmp_CancelScheduleIds (
+            Id CHAR(36) COLLATE ascii_general_ci NOT NULL PRIMARY KEY
+        ) ENGINE = MEMORY;
+
+        INSERT INTO tmp_CancelScheduleIds (Id) VALUES (v_parentId);
+        INSERT INTO tmp_CancelScheduleIds (Id)
+        SELECT Id
         FROM QueuedTasks
-        WHERE Id = p_ParentId
-           OR (ParentTaskId = p_ParentId AND Status IN ('WaitingQueue', 'Queued', 'Pending', 'ServiceStopped'));
+        WHERE ParentTaskId = p_ParentId
+          AND Status IN ('WaitingQueue', 'Queued', 'Pending', 'ServiceStopped')
+        FOR UPDATE;
+
+        UPDATE QueuedTasks AS task
+        INNER JOIN tmp_CancelScheduleIds AS cancelled ON cancelled.Id = task.Id
+        SET task.Status = 'Cancelled';
+
+        IF p_AuditLevel = 0 OR p_AuditLevel NOT IN (0, 1, 2, 3) THEN
+            INSERT INTO StatusAudit (QueuedTaskId, UpdatedAtUtc, NewStatus, Exception)
+            SELECT Id, v_now, 'Cancelled', NULL FROM tmp_CancelScheduleIds;
+        END IF;
+
+        DROP TEMPORARY TABLE tmp_CancelScheduleIds;
+        COMMIT;
     END IF;
-
-    UPDATE QueuedTasks
-    SET Status = 'Cancelled'
-    WHERE Id = p_ParentId
-       OR (ParentTaskId = p_ParentId AND Status IN ('WaitingQueue', 'Queued', 'Pending', 'ServiceStopped'));
-
-    COMMIT;
 END;", suppressTransaction: true);
 
             migrationBuilder.Sql(DropUpdateCurrentRunCas, suppressTransaction: true);
@@ -240,7 +266,7 @@ BEGIN
     IF v_found = 0 THEN
         ROLLBACK;
     ELSE
-        IF p_AuditLevel IN (0, 1) THEN
+        IF p_AuditLevel IN (0, 1) OR p_AuditLevel NOT IN (0, 1, 2, 3) THEN
             SET v_shouldAudit = 1;
         ELSEIF p_AuditLevel = 2 AND (v_status = 'Failed' OR (v_exception IS NOT NULL AND v_exception <> '')) THEN
             SET v_shouldAudit = 1;
@@ -332,12 +358,18 @@ END;", suppressTransaction: true);
             migrationBuilder.Sql(DropUpdateCurrentRunCas, suppressTransaction: true);
             migrationBuilder.Sql(DropCompleteRecurringRunCas, suppressTransaction: true);
 
+            migrationBuilder.Sql("DELETE FROM `QueuedTasks` WHERE `ParentTaskId` IS NOT NULL");
+
             migrationBuilder.DropForeignKey(
                 name: "FK_QueuedTasks_QueuedTasks_ParentTaskId",
                 table: "QueuedTasks");
 
             migrationBuilder.DropIndex(
                 name: "IX_QueuedTasks_ParentTaskId",
+                table: "QueuedTasks");
+
+            migrationBuilder.DropIndex(
+                name: "IX_QueuedTasks_ParentTaskId_Status",
                 table: "QueuedTasks");
 
             migrationBuilder.DropIndex(

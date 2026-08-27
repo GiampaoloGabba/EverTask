@@ -27,7 +27,6 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
     private readonly ScheduledRegistrations _registrations;
     private readonly IWorkerQueueManager _queueManager;
     private readonly IEverTaskLogger<PeriodicTimerScheduler> _logger;
-    private readonly TimeSpan _checkInterval;
     private readonly CancellationTokenSource _cts;
     private readonly CancellationToken _shutdownToken;
     private readonly SchedulerWakeUp _wakeUp;
@@ -75,9 +74,6 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
         _shutdownToken = _cts.Token;
         _wakeUp = new SchedulerWakeUp(_timeProvider);
 
-        // Default: check ogni 1 secondo (bilanciamento ottimale)
-        _checkInterval = checkInterval ?? TimeSpan.FromSeconds(1);
-
         // Avvia background loop
         _ = ProcessScheduledTasksAsync(_shutdownToken);
     }
@@ -117,10 +113,9 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
             return false;
         }
 
-        // Latest-wins registration per PersistenceId: a previously parked entry for the same task
-        // (e.g. recovery racing with a taskKey re-registration at startup) becomes stale and is
-        // discarded at dequeue time, so the task executes only once per occurrence. That rule and the S4
-        // refusal both live in ScheduledRegistrations, which the sharded scheduler shares.
+        // Latest-wins registration per PersistenceId: a previously parked entry for the same task is evicted,
+        // so the task executes only once per occurrence. That rule and the S4 refusal both live in
+        // ScheduledRegistrations, which the sharded scheduler shares.
         if (!_registrations.Swap(item, refuseSuperseded))
             return false;
 
@@ -135,17 +130,21 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
     /// <inheritdoc />
     public bool TryUnschedule(Guid persistenceId)
     {
-        // The orphan entry left in the priority queue is discarded by the staleness
-        // check in ProcessReadyTasksAsync.
-        return _registrations.Remove(persistenceId);
+        if (!_registrations.Remove(persistenceId))
+            return false;
+
+        _wakeUp.Signal();
+        return true;
     }
 
     /// <inheritdoc />
     public bool TryUnschedule(Guid persistenceId, TaskHandlerExecutor expected)
     {
-        // Conditional remove (same pattern as the consume in ProcessReadyTasksAsync):
-        // a concurrent newer registration for the same task is preserved.
-        return _registrations.Remove(persistenceId, expected);
+        if (!_registrations.Remove(persistenceId, expected))
+            return false;
+
+        _wakeUp.Signal();
+        return true;
     }
 
     /// <inheritdoc />
@@ -174,10 +173,7 @@ public class PeriodicTimerScheduler : IScheduler, IDisposable
                 }
                 else
                 {
-                    // Attendi il minore tra: delay calcolato o checkInterval
-                    var waitTime = delay < _checkInterval ? delay : _checkInterval;
-
-                    var signaled = await _wakeUp.WaitAsync(waitTime, cancellationToken).ConfigureAwait(false);
+                    var signaled = await _wakeUp.WaitAsync(delay, cancellationToken).ConfigureAwait(false);
 
                     // Resetta il flag solo se il semaforo è stato effettivamente segnalato
                     if (signaled)

@@ -176,12 +176,6 @@ public sealed class FaultInjectingTaskStorage(ITaskStorage inner) : ITaskStorage
                    : inner.SetStatus(taskId, status, exception, auditLevel, executionTimeMs, ct);
     }
 
-    public Task<int> GetCurrentRunCount(Guid taskId)
-    {
-        Gate(nameof(GetCurrentRunCount));
-        return inner.GetCurrentRunCount(taskId);
-    }
-
     public Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel)
     {
         Gate(nameof(UpdateCurrentRun));
@@ -318,6 +312,14 @@ public sealed class FaultInjectingTaskStorage(ITaskStorage inner) : ITaskStorage
                    : inner.TryReviveCancelledSchedule(taskId, expectedScheduleVersion, auditLevel, ct);
     }
 
+    public Task<bool> TrySetTerminalOutcome(Guid taskId, QueuedTaskStatus status, Exception? exception,
+                                            int expectedScheduleVersion, AuditLevel auditLevel,
+                                            CancellationToken ct = default)
+    {
+        Gate(nameof(TrySetTerminalOutcome));
+        return inner.TrySetTerminalOutcome(taskId, status, exception, expectedScheduleVersion, auditLevel, ct);
+    }
+
     public Task<bool> TryHaltSchedule(Guid parentId, int expectedScheduleVersion, DateTimeOffset? expectedCursorUtc,
                                       QueuedTaskStatus expectedStatus, string runtimeInfo,
                                       CancellationToken ct = default)
@@ -349,23 +351,11 @@ public sealed class FaultInjectingTaskStorage(ITaskStorage inner) : ITaskStorage
         return inner.GetOccurrencesPage(parentId, nonTerminalOnly, skip, take, ct);
     }
 
-    public Task<int> CountActiveOccurrences(Guid parentId, CancellationToken ct = default)
-    {
-        Gate(nameof(CountActiveOccurrences));
-        return inner.CountActiveOccurrences(parentId, ct);
-    }
-
     public Task<IReadOnlyDictionary<Guid, DateTimeOffset>> GetLastRunStarts(IReadOnlyCollection<Guid> taskIds,
                                                                            CancellationToken ct = default)
     {
         Gate(nameof(GetLastRunStarts));
         return inner.GetLastRunStarts(taskIds, ct);
-    }
-
-    public Task<StatusAudit[]> GetStatusAudits(Guid taskId, CancellationToken ct = default)
-    {
-        Gate(nameof(GetStatusAudits));
-        return inner.GetStatusAudits(taskId, ct);
     }
 
     public Task<AuditPage<StatusAudit>> GetStatusAuditsPage(Guid taskId, int skip, int take,
@@ -380,12 +370,6 @@ public sealed class FaultInjectingTaskStorage(ITaskStorage inner) : ITaskStorage
     {
         Gate(nameof(GetRunsAuditsPage));
         return inner.GetRunsAuditsPage(taskId, skip, take, ct);
-    }
-
-    public Task<RunsAudit[]> GetRunsAudits(Guid taskId, CancellationToken ct = default)
-    {
-        Gate(nameof(GetRunsAudits));
-        return inner.GetRunsAudits(taskId, ct);
     }
 
     public Task SaveExecutionLogsAsync(Guid taskId, IReadOnlyList<TaskExecutionLog> logs,

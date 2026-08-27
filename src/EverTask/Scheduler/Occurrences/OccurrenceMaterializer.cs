@@ -563,9 +563,9 @@ internal sealed class OccurrenceMaterializer
 
                 if (next is not { } pastTakenSlot)
                 {
-                    var closed = await storage
-                                       .TrySetRecurringSeriesCompleted(parentId, cursor, snapshot.Status, version, 0,
-                                           auditLevel, ct)
+                    var closed = await RecurringSeriesFinalizer
+                                       .FinalizeAsync(storage, parentId, cursor, snapshot.Status, version, 0,
+                                           auditLevel, RecurringSeriesFinalizationPolicy.Conditional, ct)
                                        .ConfigureAwait(false);
 
                     return new MaterializationPass(cursor, created, served, closed, closed);
@@ -614,9 +614,9 @@ internal sealed class OccurrenceMaterializer
         {
             // Losing this compare-and-swap means the row is not the one the decision was computed from, so it
             // is a lost race like any other — never a finished series this run may stop watching.
-            var ended = await storage
-                              .TrySetRecurringSeriesCompleted(parentId, cursor, snapshot.Status, version, 0,
-                                  auditLevel, ct)
+            var ended = await RecurringSeriesFinalizer
+                              .FinalizeAsync(storage, parentId, cursor, snapshot.Status, version, 0,
+                                  auditLevel, RecurringSeriesFinalizationPolicy.Conditional, ct)
                               .ConfigureAwait(false);
 
             return new MaterializationPass(cursor, created, served, ended, ended);
@@ -706,76 +706,50 @@ internal sealed class OccurrenceMaterializer
     /// the EverTask-owned scope of the delivery that is ending, exactly as the ordinary re-park does. Never
     /// throws — this is already the failure path, and its caller is holding the per-schedule gate.
     /// </remarks>
-    private async Task<ReParkOutcome> ReParkAfterFailureAsync(Guid parentId, TaskHandlerExecutor? parentExecutor,
-                                                              TimeSpan delay, CancellationToken ct)
+    private async Task<ProviderRetryParkOutcome> ReParkAfterFailureAsync(
+        Guid parentId, TaskHandlerExecutor? parentExecutor, TimeSpan delay, CancellationToken ct)
     {
-        TaskHandlerExecutor? built = null;
+        var retryAt = _timeProvider.GetUtcNow() + delay;
 
-        try
+        return await ProviderRetryParker
+                     .ParkAsync(_scheduler, retryAt, BuildExecutorAsync,
+                         executor => executor with { ExecutionTime = retryAt },
+                         (executor, at) => _logger.ScheduleReparkRefused(parentId, at, executor.ScheduleVersion),
+                         (_, at) => _logger.ScheduleReparked(parentId, at),
+                         (executor, error) =>
+                         {
+                             _logger.ReparkAfterFailureFailed(error, parentId);
+                             PublishReParkFailedEvent(executor ?? parentExecutor, parentId, error);
+                         },
+                         error => error is OperationCanceledException && ct.IsCancellationRequested)
+                     .ConfigureAwait(false);
+
+        async ValueTask<TaskHandlerExecutor?> BuildExecutorAsync()
         {
-            var retryAt = _timeProvider.GetUtcNow() + delay;
-
             if (parentExecutor is { } delivered)
-            {
-                built = delivered.ToLazy();
-
-                // A refusal parked NOTHING, so it hands back the same empty outcome as a row there was
-                // nothing to park for: the sentence "parked to ask again" is exactly what must not be said
-                // over it.
-                return RePark(built, parentId, retryAt) ? new ReParkOutcome(built, null) : default;
-            }
+                return delivered.ToLazy();
 
             using var scope = _scopeFactory.CreateScope();
 
             if (scope.ServiceProvider.GetService<ITaskStorage>() is not { } storage)
-                return default;
+                return null;
 
             var row = (await storage.Get(t => t.Id == parentId, ct).ConfigureAwait(false)).FirstOrDefault();
 
             if (row is null || !row.IsRecurring || row.Status == QueuedTaskStatus.Cancelled ||
                 row.NextRunUtc is null)
-                return default;
+                return null;
 
             var recovered = RecoveredTaskFactory.FromRow(row);
 
             if (recovered.Recurring is not { IsDurable: true } definition || recovered.Task is null)
-                return default;
+                return null;
 
-            built = await BuildScheduleExecutorAsync(scope.ServiceProvider, recovered, row, definition,
-                row.NextRunUtc.Value).ConfigureAwait(false);
-
-            return RePark(built, parentId, retryAt) ? new ReParkOutcome(built, null) : default;
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            // Shutdown: the row keeps its cursor and startup recovery parks it again.
-            return default;
-        }
-        catch (Exception ex)
-        {
-            // Nothing else can arm the retry from here, so this is the one place the situation is visible:
-            // the schedule stays unparked until the next restart, and that has to be said out loud — a log
-            // line AND the monitoring event, because there is no poller behind this and a log file is not
-            // where a dashboard looks (V4(2)).
-            _logger.ReparkAfterFailureFailed(ex, parentId);
-
-            PublishReParkFailedEvent(built ?? parentExecutor, parentId, ex);
-
-            return new ReParkOutcome(built, ex);
+            return await BuildScheduleExecutorAsync(scope.ServiceProvider, recovered, row, definition,
+                             row.NextRunUtc.Value)
+                         .ConfigureAwait(false);
         }
     }
-
-    /// <summary>What a re-park after a failed run left behind.</summary>
-    /// <param name="Executor">
-    /// The executor the schedule was parked with, when the registration was really made. Null on the exits
-    /// that park nothing — a row that is gone, cancelled or no longer durable, and a registration the
-    /// scheduler REFUSED because a newer definition owns the row or because it is shutting down.
-    /// </param>
-    /// <param name="Failure">
-    /// The exception that stopped the re-park, when it failed. Null both when it succeeded and when there was
-    /// nothing to park, which are the two cases a caller must not report as a schedule left in the air.
-    /// </param>
-    private readonly record struct ReParkOutcome(TaskHandlerExecutor? Executor, Exception? Failure);
 
     /// <summary>Tells a monitoring subscriber that a schedule is parked nowhere until the next restart.</summary>
     private void PublishReParkFailedEvent(TaskHandlerExecutor? executor, Guid parentId, Exception failure)

@@ -131,7 +131,7 @@ the execution predicate: a spent series must be finalized, never handed back to 
   occurrence a series had already scheduled before a boundary that elapsed *during* the downtime is silently
   lost, and the row stays `Queued` forever.
 - **The recovery grace window asks the NATURAL successor** (`RecurringTask.NextGridOccurrenceAfter`, bounds
-  ignored), never `IsOccurrenceStillCurrent`: the bounded successor is null both when the slot is still
+  ignored): the bounded successor is null both when the slot is still
   current and when the series simply ended, and reading that null as the former executes a months-old slot at
   restart. Order in the dispatcher's recovery branch: finalize → grace → skip-forward. **Both finalization
   sites are conditional** wherever the storage can be — `WorkerService` for category (ii) and the dispatcher's
@@ -139,10 +139,10 @@ the execution predicate: a spent series must be finalized, never handed back to 
   status and version **of the row the decision was computed from** (the recovery page's, carried to the
   dispatcher in `DispatchRowMetadata`). Never read them back at write time: `SetStatus` leaves a cancellation's
   cursor and version untouched, so a fresh read hands `Cancelled` to the guard as its own expectation and the
-  cancellation is overwritten with `Completed`. Both sites check `SupportsScheduleVersioning` first — a storage
-  without the compare-and-swap keeps the historical unconditional write, since letting the member's
-  `NotSupportedException` reach the recovery counts a normal end of series as an L18 failure and poisons the
-  row. The L18 counter reset runs OUTSIDE the try that guards the terminal write: the write is already
+  cancellation is overwritten with `Completed`. Legacy stores without durable occurrences keep the historical
+  unconditional write when they have no compare-and-swap. A store advertising durable occurrences but no
+  schedule versioning stays conservative and leaves the row unchanged, because its occurrences can race the
+  recovery snapshot. The L18 counter reset runs OUTSIDE the try that guards the terminal write: the write is already
   committed, and a failing reset must not be reclassified as a failing finalization.
 - **A poison is REPORTED only once the ROW confirms it** (`WorkerService.TryPoisonAsync`, every poison site
   including the finalization's). Both writes are best effort — `SetStatus` and `SetRecurringTaskPoisoned` log
@@ -551,12 +551,23 @@ happened and has to be recorded.
 
 - **A run that was already EXECUTING when its definition was replaced does not persist its ending either.**
   The same question is asked again in `HandleExceptionAsync`, where it means something else: that delivery is
-  past the pre-gate drop, and both writes there are unconditional terminal ones. `Cancelled` is the status no
-  recovery predicate selects and no advance moves past, so an ending that lands late killed the series that
-  had just taken the row over — a cancel-then-redispatch restart and a plain reschedule reach it the same
-  way. The advance beside it was already compare-and-swapped; this is the half that had nothing to lose to.
-  Only the storage write is skipped: the run really ended that way, and its `OnError` callback and its
-  monitoring event still say so.
+  past the pre-gate drop, and every write there is a terminal one. `Cancelled` is the status no recovery
+  predicate selects and no advance moves past, so an ending that lands late killed the series that had just
+  taken the row over — a cancel-then-redispatch restart and a plain reschedule reach it the same way. The
+  advance beside it was already compare-and-swapped; this is the half that had nothing to lose to. Only the
+  storage write is skipped: the run really ended that way, and its `OnError` callback and its monitoring
+  event still say so.
+  - **The registry is the fast answer, never the whole one** (`PersistEndingAsync`): it is EMPTY for the
+    entire cancel-to-publish span — `Cancel` removes the entry and the revival publishes only after the
+    re-park — so an ending unwinding across the documented restart sees no lower bound at all and its
+    `Cancelled` landed on the row `TryReviveCancelledSchedule` had just taken to the next version. The write
+    is therefore `TrySetTerminalOutcome`, compare-and-swapped on the version the DELIVERY carries, exactly
+    like the advance. A plain cancel is the other half and no version answers for it — it moves neither the
+    version nor the cursor — so the same write refuses anything but a cancellation over a `Cancelled` row:
+    a late `Failed` erased the cancellation, and `Failed` with a live cursor is recoverable, which brought
+    the series an operator had ended back at the next restart and left `revivedSchedule` (keyed on
+    `Cancelled`) unable to restart it. A storage without `SupportsScheduleVersioning` keeps the historical
+    unconditional writes, byte for byte.
 
 - **Past the last re-aim the GUARD is given up, never the write.** The bound exists so a third party rewriting
   the row in a loop cannot spin an advance; reaching it recorded nothing at all, which left the row in the

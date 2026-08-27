@@ -7,6 +7,8 @@ ALTER TABLE `QueuedTasks` ADD `ScheduleVersion` int NOT NULL DEFAULT 0;
 
 CREATE INDEX `IX_QueuedTasks_ParentTaskId` ON `QueuedTasks` (`ParentTaskId`);
 
+CREATE INDEX `IX_QueuedTasks_ParentTaskId_Status` ON `QueuedTasks` (`ParentTaskId`, `Status`);
+
 CREATE UNIQUE INDEX `UX_QueuedTasks_Occurrence` ON `QueuedTasks` (`ParentTaskId`, `ScheduledExecutionUtc`);
 
 ALTER TABLE `QueuedTasks` ADD CONSTRAINT `CK_QueuedTasks_OccurrenceSlot` CHECK (ParentTaskId IS NULL OR ScheduledExecutionUtc IS NOT NULL);
@@ -90,7 +92,7 @@ BEGIN
                 LastExecutionUtc = CASE WHEN p_NewCursorUtc IS NULL THEN v_now ELSE LastExecutionUtc END
             WHERE Id = p_ParentId;
 
-            IF p_NewCursorUtc IS NULL AND p_AuditLevel = 0 THEN
+            IF p_NewCursorUtc IS NULL AND (p_AuditLevel = 0 OR p_AuditLevel NOT IN (0, 1, 2, 3)) THEN
                 INSERT INTO StatusAudit (QueuedTaskId, UpdatedAtUtc, NewStatus, Exception)
                 VALUES (p_ParentId, v_now, 'Completed', NULL);
             END IF;
@@ -108,30 +110,52 @@ CREATE PROCEDURE usp_CancelSchedule(
 )
 BEGIN
     DECLARE v_now DATETIME(6);
+    DECLARE v_parentId CHAR(36);
+    DECLARE v_found INT DEFAULT 1;
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
+        DROP TEMPORARY TABLE IF EXISTS tmp_CancelScheduleIds;
         ROLLBACK;
         RESIGNAL;
     END;
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_found = 0;
 
     SET v_now = UTC_TIMESTAMP(6);
 
     START TRANSACTION;
 
-    IF p_AuditLevel = 0 THEN
-        INSERT INTO StatusAudit (QueuedTaskId, UpdatedAtUtc, NewStatus, Exception)
-        SELECT Id, v_now, 'Cancelled', NULL
+    SELECT Id INTO v_parentId
+    FROM QueuedTasks
+    WHERE Id = p_ParentId FOR UPDATE;
+
+    IF v_found = 0 THEN
+        ROLLBACK;
+    ELSE
+        DROP TEMPORARY TABLE IF EXISTS tmp_CancelScheduleIds;
+        CREATE TEMPORARY TABLE tmp_CancelScheduleIds (
+            Id CHAR(36) COLLATE ascii_general_ci NOT NULL PRIMARY KEY
+        ) ENGINE = MEMORY;
+
+        INSERT INTO tmp_CancelScheduleIds (Id) VALUES (v_parentId);
+        INSERT INTO tmp_CancelScheduleIds (Id)
+        SELECT Id
         FROM QueuedTasks
-        WHERE Id = p_ParentId
-           OR (ParentTaskId = p_ParentId AND Status IN ('WaitingQueue', 'Queued', 'Pending', 'ServiceStopped'));
+        WHERE ParentTaskId = p_ParentId
+          AND Status IN ('WaitingQueue', 'Queued', 'Pending', 'ServiceStopped')
+        FOR UPDATE;
+
+        UPDATE QueuedTasks AS task
+        INNER JOIN tmp_CancelScheduleIds AS cancelled ON cancelled.Id = task.Id
+        SET task.Status = 'Cancelled';
+
+        IF p_AuditLevel = 0 OR p_AuditLevel NOT IN (0, 1, 2, 3) THEN
+            INSERT INTO StatusAudit (QueuedTaskId, UpdatedAtUtc, NewStatus, Exception)
+            SELECT Id, v_now, 'Cancelled', NULL FROM tmp_CancelScheduleIds;
+        END IF;
+
+        DROP TEMPORARY TABLE tmp_CancelScheduleIds;
+        COMMIT;
     END IF;
-
-    UPDATE QueuedTasks
-    SET Status = 'Cancelled'
-    WHERE Id = p_ParentId
-       OR (ParentTaskId = p_ParentId AND Status IN ('WaitingQueue', 'Queued', 'Pending', 'ServiceStopped'));
-
-    COMMIT;
 END;
 
 DROP PROCEDURE IF EXISTS usp_UpdateCurrentRunCas;
@@ -169,7 +193,7 @@ BEGIN
     IF v_found = 0 THEN
         ROLLBACK;
     ELSE
-        IF p_AuditLevel IN (0, 1) THEN
+        IF p_AuditLevel IN (0, 1) OR p_AuditLevel NOT IN (0, 1, 2, 3) THEN
             SET v_shouldAudit = 1;
         ELSEIF p_AuditLevel = 2 AND (v_status = 'Failed' OR (v_exception IS NOT NULL AND v_exception <> '')) THEN
             SET v_shouldAudit = 1;

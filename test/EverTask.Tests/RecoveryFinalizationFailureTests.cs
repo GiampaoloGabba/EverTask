@@ -149,6 +149,25 @@ public class RecoveryFinalizationFailureTests
             "the end of a series is not a recovery failure");
     }
 
+    [Fact]
+    public async Task Should_not_finalize_a_durable_series_unconditionally_without_schedule_versioning()
+    {
+        var storage = new CapabilityBlindStorage(new Mock<IEverTaskLogger<MemoryTaskStorage>>().Object,
+            scheduleVersioning: false, durableOccurrences: true);
+        var row = SeriesToFinalize();
+        await storage.Persist(row);
+
+        var service = CreateRecovery(storage, maxAttempts: 2);
+
+        await service.ProcessPendingAsync();
+
+        var unchanged = (await storage.Get(t => t.Id == row.Id)).Single();
+        unchanged.Status.ShouldBe(QueuedTaskStatus.Queued,
+            "a durable store cannot safely finalize a series without a conditional write");
+        unchanged.NextRunUtc.ShouldBe(row.NextRunUtc,
+            "recovery must leave the cursor intact when it cannot prove that the snapshot still owns the row");
+    }
+
     /// <summary>
     /// A custom <see cref="ITaskStorage"/> as <c>docs/storage/custom-storage.md</c> describes one: it
     /// implements the members that existed before durable occurrences and inherits every new one from the
@@ -193,8 +212,6 @@ public class RecoveryFinalizationFailureTests
         public Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception, AuditLevel auditLevel,
                               double? executionTimeMs = null, CancellationToken ct = default) =>
             inner.SetStatus(taskId, status, exception, auditLevel, executionTimeMs, ct);
-
-        public Task<int> GetCurrentRunCount(Guid taskId) => inner.GetCurrentRunCount(taskId);
 
         public Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
                                      AuditLevel auditLevel) =>

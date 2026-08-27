@@ -7,6 +7,8 @@ ALTER TABLE [EverTask].[QueuedTasks] ADD [ScheduleVersion] int NOT NULL DEFAULT 
 
 CREATE INDEX [IX_QueuedTasks_ParentTaskId] ON [EverTask].[QueuedTasks] ([ParentTaskId]);
 
+CREATE INDEX [IX_QueuedTasks_ParentTaskId_Status] ON [EverTask].[QueuedTasks] ([ParentTaskId], [Status]);
+
 CREATE UNIQUE INDEX [UX_QueuedTasks_Occurrence] ON [EverTask].[QueuedTasks] ([ParentTaskId], [ScheduledExecutionUtc]) WHERE [ParentTaskId] IS NOT NULL AND [ScheduledExecutionUtc] IS NOT NULL;
 
 ALTER TABLE [EverTask].[QueuedTasks] ADD CONSTRAINT [CK_QueuedTasks_OccurrenceSlot] CHECK (ParentTaskId IS NULL OR ScheduledExecutionUtc IS NOT NULL);
@@ -97,7 +99,7 @@ BEGIN
       LastExecutionUtc = CASE WHEN @NewCursorUtc IS NULL THEN @Now ELSE LastExecutionUtc END
   WHERE Id = @ParentId;
 
-  IF @NewCursorUtc IS NULL AND @AuditLevel = 0
+  IF @NewCursorUtc IS NULL AND (@AuditLevel = 0 OR @AuditLevel NOT IN (0, 1, 2, 3))
       INSERT INTO [EverTask].[StatusAudit] (QueuedTaskId, UpdatedAtUtc, NewStatus, Exception)
       VALUES (@ParentId, @Now, 'Completed', NULL);
 
@@ -135,10 +137,10 @@ BEGIN
   OUTPUT inserted.Id INTO @Cancelled
   WHERE ParentTaskId = @ParentId AND Status IN ('WaitingQueue', 'Queued', 'Pending', 'ServiceStopped');
 
-  -- Cancelled carries no exception, so only AuditLevel.Full (0) audits it. The schedule row is audited only
-  -- when the update actually found it: cancelling a schedule a concurrent Remove already deleted is a silent
-  -- no-op on every other provider, while an audit row for a missing task violates the foreign key.
-  IF @AuditLevel = 0
+  -- The schedule row is audited only when the update actually found it: cancelling a schedule a concurrent
+  -- Remove already deleted is a silent no-op on every other provider, while an audit row for a missing task
+  -- violates the foreign key. Unknown audit levels fall back to Full.
+  IF @AuditLevel = 0 OR @AuditLevel NOT IN (0, 1, 2, 3)
   BEGIN
       IF @ParentCancelled > 0
           INSERT INTO [EverTask].[StatusAudit] (QueuedTaskId, UpdatedAtUtc, NewStatus, Exception)
@@ -188,7 +190,7 @@ BEGIN
       RETURN;
   END
 
-  IF @AuditLevel IN (0, 1)
+  IF @AuditLevel IN (0, 1) OR @AuditLevel NOT IN (0, 1, 2, 3)
       SET @ShouldAudit = 1;
   ELSE IF @AuditLevel = 2 AND (@Status = 'Failed' OR (@Exception IS NOT NULL AND @Exception <> ''))
       SET @ShouldAudit = 1;
@@ -228,8 +230,8 @@ BEGIN
   SET XACT_ABORT ON;
 
   DECLARE @Now DATETIMEOFFSET = SWITCHOFFSET(SYSDATETIMEOFFSET(), '+00:00');
-  DECLARE @ShouldStatusAudit BIT = CASE WHEN @AuditLevel = 0      THEN 1 ELSE 0 END;
-  DECLARE @ShouldRunsAudit   BIT = CASE WHEN @AuditLevel IN (0,1) THEN 1 ELSE 0 END;
+  DECLARE @ShouldStatusAudit BIT = CASE WHEN @AuditLevel = 0 OR @AuditLevel NOT IN (0,1,2,3) THEN 1 ELSE 0 END;
+  DECLARE @ShouldRunsAudit   BIT = CASE WHEN @AuditLevel IN (0,1) OR @AuditLevel NOT IN (0,1,2,3) THEN 1 ELSE 0 END;
 
   SET @Applied = 0;
 

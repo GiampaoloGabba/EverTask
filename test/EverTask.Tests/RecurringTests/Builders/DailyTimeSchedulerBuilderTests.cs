@@ -102,13 +102,4 @@ public class DailyTimeSchedulerBuilderTests
         next.ShouldBe(new DateTimeOffset(2026, 5, 11, 6, 0, 0, 250, TimeSpan.Zero));
     }
 
-    [Fact]
-    public void Should_return_the_same_time_less_its_milliseconds_when_the_deprecated_helper_is_called()
-    {
-        // TimeOnly.ToUniversalTime() stays on the public surface (no [Obsolete]: warnings-as-errors, R13), so
-        // what it does is pinned rather than left to a reader of its name. It is the identity T12 calls it,
-        // with the sub-second component dropped — and it no longer reads the clock to work that out.
-        new TimeOnly(23, 45, 30).ToUniversalTime().ShouldBe(new TimeOnly(23, 45, 30));
-        new TimeOnly(23, 45, 30, 750).ToUniversalTime().ShouldBe(new TimeOnly(23, 45, 30));
-    }
 }

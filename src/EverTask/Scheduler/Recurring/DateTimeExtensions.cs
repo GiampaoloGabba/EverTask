@@ -223,28 +223,6 @@ public static class DateTimeOffsetExtensions
     internal static DateTimeOffset WithTimeOfDay(this DateTimeOffset day, TimeOnly time) =>
         new DateTimeOffset(day.Year, day.Month, day.Day, 0, 0, 0, day.Offset).Add(time.ToTimeSpan());
 
-    /// <summary>
-    /// Returns <paramref name="time"/> unchanged, less any sub-second component.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// <b>Deprecated (T12): do not call it, and do not use it on a time you are about to schedule.</b> It
-    /// dates from when EverTask read every schedule on the UTC clock and a "time of day" had to be declared
-    /// as one. It never converted anything — it rebuilt the value from today's UTC date, whose offset is
-    /// zero — so the only thing it has ever done is drop the milliseconds. It is kept, unmarked, because
-    /// <c>[Obsolete]</c> would fail the build of every consumer compiling warnings-as-errors (R13); it will
-    /// be removed in a future major.
-    /// </para>
-    /// <para>
-    /// A time of day is now read on the schedule's own zone: pass the local time you mean to
-    /// <c>AtTime</c>/<c>AtTimes</c> and name the zone with <c>InTimeZone</c>. Converting it yourself freezes
-    /// one offset into the schedule and is wrong for half the year — see
-    /// <c>docs/recurring-tasks/time-zones.md</c>.
-    /// </para>
-    /// </remarks>
-    public static TimeOnly ToUniversalTime(this TimeOnly time) =>
-        new(time.Hour, time.Minute, time.Second);
-
     public static DateTimeOffset Adjust(this DateTimeOffset dateTime, int? day = null, int? hour = null, int? minute = null, int? second = null)
     {
         return new DateTimeOffset(

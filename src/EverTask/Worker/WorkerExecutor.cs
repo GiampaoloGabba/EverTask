@@ -1599,11 +1599,12 @@ public class WorkerExecutor(
             var cancelledByService = serviceToken.IsCancellationRequested && !userCancelled;
             if (outcomeStore != null)
             {
-                if (cancelledByService)
-                    await outcomeStore.SetCancelledByService(task.PersistenceId, oce, task.AuditLevel)
-                                      .ConfigureAwait(false);
-                else
-                    await outcomeStore.SetCancelledByUser(task.PersistenceId, task.AuditLevel).ConfigureAwait(false);
+                // Never the service token: on a shutdown it is already cancelled, and the ending of the run it
+                // is stopping still has to be persisted.
+                await PersistEndingAsync(outcomeStore, task,
+                        cancelledByService ? QueuedTaskStatus.ServiceStopped : QueuedTaskStatus.Cancelled,
+                        cancelledByService ? oce : null, CancellationToken.None)
+                    .ConfigureAwait(false);
             }
 
             await ExecuteCallback(GetErrorCallback(task, handler), task, oce,
@@ -1625,9 +1626,8 @@ public class WorkerExecutor(
         {
             // Logica per le altre eccezioni
             if (outcomeStore != null)
-                await outcomeStore.SetStatus(task.PersistenceId, QueuedTaskStatus.Failed, ex, task.AuditLevel, null,
-                                      serviceToken)
-                                  .ConfigureAwait(false);
+                await PersistEndingAsync(outcomeStore, task, QueuedTaskStatus.Failed, ex, serviceToken)
+                    .ConfigureAwait(false);
 
             // G11: the retry policy throws AggregateException("All retry attempts failed", ...) when
             // retries are exhausted. The PERSISTED status and the error log keep that aggregate (full
@@ -1642,6 +1642,50 @@ public class WorkerExecutor(
                 static id => string.Create(CultureInfo.InvariantCulture,
                     $"Error occurred executing task with id {id}"));
         }
+    }
+
+    /// <summary>
+    /// Persists the terminal outcome of a delivery that ENDED, without taking the row from whoever owns it now.
+    /// </summary>
+    /// <remarks>
+    /// The registry above cannot answer this on its own: <c>Cancel</c> REMOVES the entry and the revival
+    /// publishes the new generation only after the re-park, so a run unwinding across a cancel-then-redispatch
+    /// restart finds no lower bound at all and its <c>Cancelled</c> landed on the row the revival had just
+    /// taken to a new version — ending the restarted series behind a dispatch that answered with an id. The
+    /// plain cancel is the other half and no version can speak for it: it moves neither the version nor the
+    /// cursor, so a late <c>Failed</c> erased it and left a recurring row recoverable, which brings the
+    /// cancelled series back at the next restart. Both are the storage's compare-and-swap to refuse, exactly
+    /// as the advance beside this one is; a storage without it keeps the historical unconditional writes.
+    /// </remarks>
+    private async Task PersistEndingAsync(ITaskStorage store, TaskHandlerExecutor task, QueuedTaskStatus status,
+                                          Exception? exception, CancellationToken ct)
+    {
+        if (!store.SupportsScheduleVersioning)
+        {
+            switch (status)
+            {
+                case QueuedTaskStatus.Cancelled:
+                    await store.SetCancelledByUser(task.PersistenceId, task.AuditLevel).ConfigureAwait(false);
+                    break;
+                case QueuedTaskStatus.ServiceStopped when exception is { } serviceStop:
+                    await store.SetCancelledByService(task.PersistenceId, serviceStop, task.AuditLevel)
+                               .ConfigureAwait(false);
+                    break;
+                default:
+                    await store.SetStatus(task.PersistenceId, status, exception, task.AuditLevel, null, ct)
+                               .ConfigureAwait(false);
+                    break;
+            }
+
+            return;
+        }
+
+        var applied = await store.TrySetTerminalOutcome(task.PersistenceId, status, exception,
+                                     task.ScheduleVersion, task.AuditLevel, ct)
+                                 .ConfigureAwait(false);
+
+        if (!applied)
+            logger.EndingOutcomeNotPersisted(task.PersistenceId, status, task.ScheduleVersion);
     }
 
     // Unwraps a retry-policy AggregateException to the underlying handler failure for the OnError
@@ -1678,9 +1722,8 @@ public class WorkerExecutor(
             return;
         }
 
-        // N: a SINGLE storage read serves both the Cancelled-status guard and the run counter below —
-        // the durable row carries CurrentRunCount, so a separate GetCurrentRunCount round-trip (loading the
-        // same row a second time) is redundant.
+        // A single storage read serves both the Cancelled-status guard and the run counter below: the durable
+        // row carries CurrentRunCount, so a separate run-count round trip is redundant.
         QueuedTask? current = null;
         if (taskStorage != null)
         {
@@ -1770,7 +1813,7 @@ public class WorkerExecutor(
             // computing — so the row keeps the state a crash between a side effect and its storage write
             // leaves, and the at-least-once contract covers the replay. What must not happen is the series
             // stopping: it is parked to ask again after the backoff.
-            DeferScheduleForProvider(task, failure, nowUtc);
+            await DeferScheduleForProviderAsync(task, failure, nowUtc).ConfigureAwait(false);
             return;
         }
 
@@ -1910,51 +1953,40 @@ public class WorkerExecutor(
     /// could break, and no event at all for the break (V4(2)).
     /// </para>
     /// </remarks>
-    private void DeferScheduleForProvider(TaskHandlerExecutor task, OccurrenceProviderException failure,
-                                          DateTimeOffset nowUtc)
+    private async Task DeferScheduleForProviderAsync(TaskHandlerExecutor task, OccurrenceProviderException failure,
+                                                     DateTimeOffset nowUtc)
     {
         var retryAt = nowUtc + failure.RetryAfter;
 
-        try
-        {
-            var retry = task.ToLazy() with
-            {
-                ExecutionTime        = retryAt,
-                IsScheduleRetry      = true,
-                ScheduleRetryFromUtc = task.ExecutionTime
-            };
-
-            if (!scheduler.TrySchedule(retry, retryAt))
-            {
-                // A newer definition owns the row's parking now: this schedule is not the one waiting on a
-                // provider any more, and saying so would describe a series nobody is running.
-                logger.NextOccurrenceRefusedBySuccessor(task.PersistenceId, task.ScheduleVersion);
-                return;
-            }
-        }
-        catch (Exception e)
-        {
-            // The re-park IS what brings this schedule back, and nothing polls behind it: a failure here ends
-            // the series until the next restart, so it is an error event and not only a log line.
-            RegisterEvent(LogLevel.Error, SeverityLevel.Error, task, e, null,
-                (TaskId: task.PersistenceId, failure.ProviderKey),
-                static (l, a, ex) => l.ProviderRetryParkFailed(ex, a.TaskId, a.ProviderKey),
-                static a => string.Create(CultureInfo.InvariantCulture,
-                    $"Schedule {a.TaskId} could not be parked to ask the occurrence provider " +
-                    $"'{a.ProviderKey}' again: nothing was written and the series stays where it is " +
-                    $"until the next startup recovery"));
-
-            return;
-        }
-
-        RegisterEvent(LogLevel.Warning, SeverityLevel.Warning, task, failure, null,
-            (TaskId: task.PersistenceId, failure.ProviderKey, failure.ConsecutiveFailures, RetryAt: retryAt),
-            static (l, a, e) => l.ScheduleAdvanceDeferredByProvider(e!, a.ProviderKey, a.TaskId,
-                a.ConsecutiveFailures, a.RetryAt),
-            static a => string.Create(CultureInfo.InvariantCulture,
-                $"Occurrence provider '{a.ProviderKey}' could not answer for schedule {a.TaskId} " +
-                $"({a.ConsecutiveFailures} consecutive failure(s)): nothing was written and the schedule is " +
-                $"parked to ask again at {a.RetryAt:O}"));
+        await ProviderRetryParker
+              .ParkAsync(scheduler, retryAt,
+                  () => new ValueTask<TaskHandlerExecutor?>(task.ToLazy()),
+                  executor => executor with
+                  {
+                      ExecutionTime        = retryAt,
+                      IsScheduleRetry      = true,
+                      ScheduleRetryFromUtc = task.ExecutionTime
+                  },
+                  (_, _) => logger.NextOccurrenceRefusedBySuccessor(task.PersistenceId, task.ScheduleVersion),
+                  (_, at) =>
+                      RegisterEvent(LogLevel.Warning, SeverityLevel.Warning, task, failure, null,
+                          (TaskId: task.PersistenceId, failure.ProviderKey, failure.ConsecutiveFailures,
+                           RetryAt: at),
+                          static (l, a, e) => l.ScheduleAdvanceDeferredByProvider(e!, a.ProviderKey, a.TaskId,
+                              a.ConsecutiveFailures, a.RetryAt),
+                          static a => string.Create(CultureInfo.InvariantCulture,
+                              $"Occurrence provider '{a.ProviderKey}' could not answer for schedule {a.TaskId} " +
+                              $"({a.ConsecutiveFailures} consecutive failure(s)): nothing was written and the " +
+                              $"schedule is parked to ask again at {a.RetryAt:O}")),
+                  (_, error) =>
+                      RegisterEvent(LogLevel.Error, SeverityLevel.Error, task, error, null,
+                          (TaskId: task.PersistenceId, failure.ProviderKey),
+                          static (l, a, ex) => l.ProviderRetryParkFailed(ex, a.TaskId, a.ProviderKey),
+                          static a => string.Create(CultureInfo.InvariantCulture,
+                              $"Schedule {a.TaskId} could not be parked to ask the occurrence provider " +
+                              $"'{a.ProviderKey}' again: nothing was written and the series stays where it is " +
+                              $"until the next startup recovery")))
+              .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1981,18 +2013,13 @@ public class WorkerExecutor(
                                                         QueuedTaskStatus expectedStatus, ITaskStorage taskStorage,
                                                         QueuedTask? row, CancellationToken ct)
     {
-        // A schedule nobody can address, or a storage without the compare-and-swap, keeps the historical
-        // unconditional write byte for byte.
-        if (!IsVersionedSchedule(task, row, taskStorage))
-        {
-            await taskStorage.SetRecurringSeriesCompleted(task.PersistenceId, executionTimeMs, task.AuditLevel)
-                             .ConfigureAwait(false);
-            return true;
-        }
+        var policy = IsVersionedSchedule(task, row, taskStorage)
+                         ? RecurringSeriesFinalizationPolicy.Conditional
+                         : RecurringSeriesFinalizationPolicy.Unconditional;
 
-        var finalized = await taskStorage
-                              .TrySetRecurringSeriesCompleted(task.PersistenceId, expectedCursorUtc, expectedStatus,
-                                  task.ScheduleVersion, executionTimeMs, task.AuditLevel)
+        var finalized = await RecurringSeriesFinalizer
+                              .FinalizeAsync(taskStorage, task.PersistenceId, expectedCursorUtc, expectedStatus,
+                                  task.ScheduleVersion, executionTimeMs, task.AuditLevel, policy)
                               .ConfigureAwait(false);
 
         if (finalized)

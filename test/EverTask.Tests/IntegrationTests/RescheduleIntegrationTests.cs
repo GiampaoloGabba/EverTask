@@ -11,7 +11,6 @@ using EverTask.Scheduler.Recurring.Intervals;
 using EverTask.Serialization;
 using EverTask.Storage;
 using EverTask.Tests.TestHelpers;
-using EverTask.Worker;
 using Microsoft.Extensions.Logging;
 
 namespace EverTask.Tests.IntegrationTests;
@@ -47,14 +46,14 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
     /// racing that one. Waiting for the recovery's own terminal event is what makes "the rows of this test
     /// come after recovery" a fact instead of an assumption.
     /// </remarks>
-    private async Task<IHost> StartHostAsync(bool startHost = true, bool faultyScheduler = false,
+    private async Task StartHostAsync(bool startHost = true, bool faultyScheduler = false,
                                              bool watchRegistrations = false, ITaskStorage? storage = null,
                                              TimeProvider? clock = null,
                                              Action<EverTaskServiceConfiguration>? configureEverTask = null)
     {
         var recovery = new StartupRecoveryWatch();
 
-        var host = await CreateIsolatedHostWithBuilderAsync(b =>
+        await CreateIsolatedHostWithBuilderAsync(b =>
         {
             b.Services.AddSingleton<IEverTaskLogger<WorkerService>>(recovery);
             b.Services.AddSingleton(storage ?? _shared);
@@ -88,8 +87,6 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
 
         if (startHost)
             await recovery.Finished.WaitAsync(TimeSpan.FromSeconds(30));
-
-        return host;
     }
 
     private static PeriodicTimerScheduler BuildRealScheduler(IServiceProvider sp) =>
@@ -118,12 +115,6 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
     {
         var events = new ConcurrentQueue<EverTaskEventData>();
 
-        Task Collect(EverTaskEventData data)
-        {
-            events.Enqueue(data);
-            return Task.CompletedTask;
-        }
-
         WorkerExecutor.TaskEventOccurredAsync += Collect;
 
         try
@@ -139,7 +130,13 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
             WorkerExecutor.TaskEventOccurredAsync -= Collect;
         }
 
-        return events.ToArray();
+        return [.. events];
+
+        Task Collect(EverTaskEventData data)
+        {
+            events.Enqueue(data);
+            return Task.CompletedTask;
+        }
     }
 
     /// <summary>
@@ -158,7 +155,7 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
                                    useLazyExecutor: true, recovered.RowMetadata);
     }
 
-    /// <param name="cursor">Where the schedule stands, or null for a series that has already ended.</param>
+    // cursor: where the schedule stands, or null for a series that has already ended.
     private async Task<Guid> SeedDurableScheduleAsync(RecurringTask definition, DateTimeOffset? cursor,
                                                       string taskKey,
                                                       QueuedTaskStatus status = QueuedTaskStatus.Queued)
@@ -695,6 +692,147 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
     }
 
     [Fact]
+    public async Task An_ending_that_lands_after_the_revival_is_not_written_over_the_restarted_series()
+    {
+        // The same half, in the window the registry cannot see at all: Cancel REMOVES the entry and the
+        // revival publishes the new generation only after the re-park, so the superseded guard answers "no"
+        // for the whole cancel-to-publish span. An ending whose guard read falls in there wrote its Cancelled
+        // over the row TryReviveCancelledSchedule had just taken to the next version — the restarted series
+        // parked nowhere, selected by no recovery predicate, behind a dispatch that answered with an id.
+        var faulty = new FaultInjectingTaskStorage(_shared);
+
+        await StartHostAsync(storage: faulty);
+
+        _recorder.Hold            = true;
+        _recorder.CancelAfterHold = true;
+
+        var id = await Dispatcher.Dispatch(new RescheduleProbeTask("cancelled-run"),
+            r => r.Schedule().Every(1).Seconds(), taskKey: "reschedule-ending-vs-revival");
+
+        await _recorder.Entered.WaitAsync(TimeSpan.FromSeconds(20));
+
+        // This run is past the point where the token would have turned it back: dropping its source is how the
+        // test says so. On a real storage the ending is asynchronous anyway — in memory every await completes
+        // inline, so a cancel would otherwise run the whole unwind on the cancelling thread and no ending
+        // could ever land after the cancel it belongs to.
+        CancellationSourceProvider.Delete(id);
+
+        await Dispatcher.Cancel(id);
+
+        (await RowAsync(id)).Status.ShouldBe(QueuedTaskStatus.Cancelled,
+            "the premise: the operator ended the series and the run is still unwinding behind it");
+
+        var atTheDoor      = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var restartWritten = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var held           = 0;
+
+        // The ending is stopped on the threshold of its own write, which is where the race lives: its guard
+        // has already been read against a registry the cancel emptied, and the restart is what happens next.
+        faulty.RunBefore(nameof(ITaskStorage.TrySetTerminalOutcome), () =>
+        {
+            if (Interlocked.Exchange(ref held, 1) == 1)
+                return;
+
+            atTheDoor.SetResult();
+            restartWritten.Task.GetAwaiter().GetResult();
+        });
+
+        // Everything from here belongs to the series the restart registers, so nothing else is held.
+        _recorder.Hold            = false;
+        _recorder.CancelAfterHold = false;
+        var before = _recorder.Count;
+
+        _recorder.Release();
+
+        await atTheDoor.Task.WaitAsync(TimeSpan.FromSeconds(20));
+
+        var restarted = await Dispatcher.Dispatch(new RescheduleProbeTask("restarted"),
+            r => r.Schedule().Every(1).Seconds(), taskKey: "reschedule-ending-vs-revival");
+
+        restarted.ShouldBe(id, "a recurring re-registration keeps the row, which is why the cancel follows it");
+        (await RowAsync(id)).ScheduleVersion.ShouldBe(1,
+            "the premise: the revival replaces the definition, so it moves the version too");
+
+        // The ending commits only now, on a row that already belongs to the definition just registered.
+        restartWritten.SetResult();
+
+        var deliveries = Host!.Services.GetRequiredService<TaskDeliveryRegistry>();
+        await TaskWaitHelper.WaitForConditionAsync(() => !deliveries.IsDelivering(id), 20000);
+
+        (await RowAsync(id)).Status.ShouldNotBe(QueuedTaskStatus.Cancelled,
+            "the run that ended belonged to the series the cancel closed, not to the one that owns the row now");
+
+        await TaskWaitHelper.WaitForConditionAsync(() => _recorder.Count > before, 20000);
+
+        _recorder.Count.ShouldBeGreaterThan(before, "and the restarted series really runs");
+    }
+
+    [Fact]
+    public async Task A_failure_that_lands_after_a_cancel_does_not_erase_it_and_resurrect_the_series()
+    {
+        // The half no version can answer for: a cancel writes the status and leaves the version and the
+        // cursor exactly where they were, so an ending that is not a cancellation matched every guard and
+        // wrote its Failed straight over the Cancelled. A recurring row that reads Failed with a live cursor
+        // is recoverable, so the next restart re-dispatched the series an operator had ended — and the
+        // documented restart was broken with it, since the revival keys on Cancelled alone.
+        var faulty = new FaultInjectingTaskStorage(_shared);
+
+        await StartHostAsync(storage: faulty);
+
+        _recorder.Hold           = true;
+        _recorder.FaultAfterHold = true;
+
+        var id = await Dispatcher.Dispatch(new RescheduleProbeTask("faulting-run"),
+            r => r.Schedule().Every(1).Seconds(), taskKey: "reschedule-failure-vs-cancel");
+
+        await _recorder.Entered.WaitAsync(TimeSpan.FromSeconds(20));
+
+        var atTheDoor       = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelPersisted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var held            = 0;
+
+        faulty.RunBefore(nameof(ITaskStorage.TrySetTerminalOutcome), () =>
+        {
+            if (Interlocked.Exchange(ref held, 1) == 1)
+                return;
+
+            atTheDoor.SetResult();
+            cancelPersisted.Task.GetAwaiter().GetResult();
+        });
+
+        // The run faults on its own — a TimeoutException, which no retry policy retries — while nothing has
+        // cancelled anything yet, so its ending takes the Failed branch.
+        _recorder.Hold           = false;
+        _recorder.FaultAfterHold = false;
+        _recorder.Release();
+
+        await atTheDoor.Task.WaitAsync(TimeSpan.FromSeconds(20));
+
+        await Dispatcher.Cancel(id);
+
+        (await RowAsync(id)).Status.ShouldBe(QueuedTaskStatus.Cancelled, "the premise: the operator ended it");
+
+        cancelPersisted.SetResult();
+
+        var deliveries = Host!.Services.GetRequiredService<TaskDeliveryRegistry>();
+        await TaskWaitHelper.WaitForConditionAsync(() => !deliveries.IsDelivering(id), 20000);
+
+        var row = await RowAsync(id);
+        row.Status.ShouldBe(QueuedTaskStatus.Cancelled,
+            "an ending that lands after the cancel must not erase the decision that ended the series");
+        row.IsRecoverableForExecution(Clock.GetUtcNow()).ShouldBeFalse(
+            "a recurring row left Failed with a live cursor is exactly what a restart puts back in a queue");
+
+        var runs = _recorder.Count;
+
+        // The same rows, a new process: the only thing that decides now is what the row says.
+        await StartHostAsync();
+        await Task.Delay(1500);
+
+        _recorder.Count.ShouldBe(runs, "so the cancelled series does not come back at the next restart");
+    }
+
+    [Fact]
     public async Task A_revival_whose_un_cancel_is_lost_fails_the_dispatch_instead_of_reporting_a_restart()
     {
         // SetStatus is best effort on every relational provider — it logs its own failed write and hands the
@@ -811,7 +949,8 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
             "a cancelled series is already terminal and is never rewritten to Completed");
         row.NextRunUtc.ShouldBe(cursor, "and its cursor is left where the cancel found it");
 
-        (await _shared.GetStatusAudits(id)).ShouldNotContain(a => a.NewStatus == QueuedTaskStatus.Completed,
+        (await _shared.GetStatusAuditsPage(id, 0, int.MaxValue)).Audits
+            .ShouldNotContain(a => a.NewStatus == QueuedTaskStatus.Completed,
             "the trail must not say a series ran to completion at the moment of a deploy that ran nothing");
 
         // The second-order half: because the row is still Cancelled, the key still leads back to the revival.
@@ -851,7 +990,7 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
 
         var row = await RowAsync(id);
         row.NextRunUtc.ShouldBe(result.NextRunUtc);
-        row.RecurringTask!.ShouldContain("SecondInterval", Case.Insensitive);
+        row.RecurringTask!.ShouldContain("SecondInterval");
 
         await TaskWaitHelper.WaitForConditionAsync(() => _recorder.Count >= 2, 20000);
 
@@ -1173,11 +1312,9 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
         var id       = await SeedDurableScheduleAsync(MinuteCatchUp(100), seededAt.AddMinutes(-5),
             "reschedule-backlog");
 
-        ScheduleUpdateResult? result = null;
-
         await EventsOfAsync(async () =>
         {
-            result = await Manager.ReevaluateSchedule("reschedule-backlog");
+            var result = await Manager.ReevaluateSchedule("reschedule-backlog");
 
             result.DiscardedBacklog.ShouldBe(6, "the cursor and the five minutes behind it were all owed");
             result.DiscardedBacklogIsExact.ShouldBeTrue("a plain cadence is counted by division, never walked");
@@ -1200,11 +1337,9 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
         var id = await SeedDurableScheduleAsync(MinuteCatchUp(100), Clock.GetUtcNow().AddDays(-8),
             "reschedule-lower-bound");
 
-        ScheduleUpdateResult? result = null;
-
         await EventsOfAsync(async () =>
         {
-            result = await Manager.ReevaluateSchedule("reschedule-lower-bound");
+            var result = await Manager.ReevaluateSchedule("reschedule-lower-bound");
 
             result.DiscardedBacklogIsExact.ShouldBeFalse("the count was truncated, and it says so");
             result.DiscardedBacklog.ShouldBe(10_001,
@@ -1268,7 +1403,7 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
         (await RowAsync(id)).ScheduleVersion.ShouldBe(1, "the definition really is committed");
 
         events.First(e => e.Message.Contains("could not be handed back", StringComparison.Ordinal))
-              .Severity.ShouldBe(SeverityLevel.Error.ToString());
+              .Severity.ShouldBe(nameof(SeverityLevel.Error));
     }
 
     [Fact]
@@ -1303,7 +1438,7 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
         var halted = ScheduleRuntimeInfo.TryParse((await RowAsync(id)).RuntimeInfo)?.Halted;
 
         halted.ShouldNotBeNull("the premise: ten owed slots against a cap of five really did trip the breaker");
-        halted!.DetectedAtLeast.ShouldBe(10);
+        halted.DetectedAtLeast.ShouldBe(10);
         (await _shared.Get(t => t.ParentTaskId == id)).ShouldBeEmpty("and a halt materializes nothing");
 
         clock.Advance(TimeSpan.FromMinutes(12));
@@ -1773,7 +1908,7 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
 
         var row = await RowAsync(id);
         row.ScheduleVersion.ShouldBe(1);
-        row.RecurringTask!.ShouldContain("SecondInterval", Case.Insensitive);
+        row.RecurringTask!.ShouldContain("SecondInterval");
     }
 
     [Fact]

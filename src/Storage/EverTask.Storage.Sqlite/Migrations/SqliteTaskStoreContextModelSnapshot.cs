@@ -106,6 +106,9 @@ namespace EverTask.Storage.Sqlite.Migrations
                     b.HasIndex("ParentTaskId")
                         .HasDatabaseName("IX_QueuedTasks_ParentTaskId");
 
+                    b.HasIndex("ParentTaskId", "Status")
+                        .HasDatabaseName("IX_QueuedTasks_ParentTaskId_Status");
+
                     b.HasIndex("Status");
 
                     b.HasIndex("TaskKey")

@@ -88,6 +88,11 @@ public abstract class TaskStoreEfDbContext<T>(DbContextOptions<T> options)
                     .IsUnique(false);
 
         modelBuilder.Entity<QueuedTask>()
+                    .HasIndex(q => new { q.ParentTaskId, q.Status })
+                    .HasDatabaseName("IX_QueuedTasks_ParentTaskId_Status")
+                    .IsUnique(false);
+
+        modelBuilder.Entity<QueuedTask>()
                     .ToTable(t => t.HasCheckConstraint("CK_QueuedTasks_OccurrenceSlot", OccurrenceSlotCheckSql));
 
         // The DEFAULT belongs to the MODEL, not just to the AddColumn of one migration: SQLite cannot ALTER a

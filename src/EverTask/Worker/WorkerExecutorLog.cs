@@ -233,4 +233,11 @@ internal static partial class WorkerExecutorLog
                   "written here would end the series that replaced it")]
     public static partial void SupersededScheduleOutcomeNotPersisted(this ILogger logger, Guid taskId,
                                                                      int deliveredVersion, int publishedVersion);
+
+    [LoggerMessage(EventId = 1243, Level = LogLevel.Warning,
+        Message = "The terminal status {Status} of task {TaskId} was not persisted: the row no longer stands " +
+                  "at the schedule version {DeliveredVersion} this run was delivered for, or it carries a " +
+                  "cancellation this ending must not erase")]
+    public static partial void EndingOutcomeNotPersisted(this ILogger logger, Guid taskId, QueuedTaskStatus status,
+                                                         int deliveredVersion);
 }

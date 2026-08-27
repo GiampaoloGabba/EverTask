@@ -50,21 +50,21 @@ public class MisfireSettings
         if (!Enum.IsDefined(Policy))
             throw new ArgumentException($"Invalid MisfirePolicy '{(int)Policy}': not a defined value.", nameof(Policy));
 
-        if (!Enum.IsDefined(OverflowPolicy))
+        if (!CatchUpConstraints.IsValidOverflowPolicy(OverflowPolicy))
         {
             throw new ArgumentException(
                 $"Invalid CatchUpOverflowPolicy '{(int)OverflowPolicy}': not a defined value.",
                 nameof(OverflowPolicy));
         }
 
-        if (MaxPendingOccurrences < 1)
+        if (!CatchUpConstraints.IsValidPendingCap(MaxPendingOccurrences))
         {
             throw new ArgumentException(
                 $"MaxPendingOccurrences must be at least 1, was {MaxPendingOccurrences}: a schedule that may " +
                 "have no occurrence alive would never make progress.", nameof(MaxPendingOccurrences));
         }
 
-        if (MaxAge is { } age && age <= TimeSpan.Zero)
+        if (MaxAge is { } age && !CatchUpConstraints.IsValidAge(age))
             throw new ArgumentException($"The misfire age window must be positive, was {age}.", nameof(MaxAge));
 
         if (Policy != MisfirePolicy.CatchUp)
@@ -77,7 +77,7 @@ public class MisfireSettings
                 "replay an unbounded backlog.", nameof(Policy));
         }
 
-        if (MaxOccurrences < 1)
+        if (!CatchUpConstraints.IsValidEpisodeCap(MaxOccurrences.Value))
         {
             throw new ArgumentException(
                 $"MaxOccurrences must be at least 1, was {MaxOccurrences}.", nameof(MaxOccurrences));

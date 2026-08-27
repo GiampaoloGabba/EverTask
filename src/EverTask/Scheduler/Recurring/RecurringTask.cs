@@ -897,30 +897,16 @@ public class RecurringTask
         && MonthInterval?.Interval is > 0;
 
     /// <summary>
-    /// True iff <paramref name="occurrence"/> is still the current one to run — i.e. the NEXT occurrence
-    /// after it has not yet come due at <paramref name="now"/>. Used by recovery to decide whether a
-    /// just-slipped occurrence should be executed now (grace) or skipped forward. Calendar-exact: it
-    /// replaces the flat <see cref="GetMinimumInterval"/> heuristic, which is wrong for OnDays/Month/Week
-    /// (too narrow → drops a just-due occurrence; too wide → executes a stale, superseded one) — U4/U5.
-    /// </summary>
-    internal bool IsOccurrenceStillCurrent(DateTimeOffset occurrence, DateTimeOffset now)
-    {
-        var following = NextOccurrenceStrictlyAfter(occurrence, occurrence);
-        return following == null || following.Value > now;
-    }
-
-    /// <summary>
     /// The NATURAL successor of <paramref name="occurrence"/> on the occurrence grid, computed while
     /// IGNORING the termination bounds (<see cref="RunUntil"/> / <see cref="MaxRuns"/>). Returns
     /// <c>null</c> only when the grid itself cannot produce one.
     /// </summary>
     /// <remarks>
-    /// This is what the recovery grace window must ask. <see cref="IsOccurrenceStillCurrent"/> reads
-    /// "no successor" as "still current forever", but the bounded successor is also null once the series
-    /// ends — so a slot months old would be executed at restart. Asking the unbounded grid separates the
+    /// This is what the recovery grace window must ask. The bounded successor is null once the series ends,
+    /// so a slot months old could otherwise be executed at restart. Asking the unbounded grid separates the
     /// two: a successor still in the future means the stored slot is genuinely the current one (a grace
-    /// window as wide as one period, be it a minute or a month), a successor already past means the slot
-    /// is stale and the series must be finalized instead.
+    /// window as wide as one period, be it a minute or a month), a successor already past means the slot is
+    /// stale and the series must be finalized instead.
     /// </remarks>
     internal DateTimeOffset? NextGridOccurrenceAfter(DateTimeOffset occurrence) =>
         Unbounded().NextOccurrenceStrictlyAfter(occurrence, occurrence);
@@ -1175,6 +1161,7 @@ public class RecurringTask
         {
             parts.Add("Use Cron expression:");
             parts.Add(CronInterval.CronExpression);
+            AppendBounds(parts);
             AppendModifiers(parts);
             return string.Join(" ", parts);
         }

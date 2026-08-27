@@ -136,6 +136,13 @@ public class PostgresEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsync
             """);
         parentIndex.ShouldBe(1);
 
+        var drainIndex = await ScalarAsync<string>(connection,
+            """
+            SELECT indexdef FROM pg_indexes
+            WHERE schemaname = 'evertask' AND indexname = 'IX_QueuedTasks_ParentTaskId_Status'
+            """);
+        drainIndex.ShouldContain("\"ParentTaskId\", \"Status\"");
+
         var checkConstraint = await ScalarAsync<string>(connection,
             """
             SELECT pg_get_constraintdef(c.oid)

@@ -66,9 +66,6 @@ public class ScheduleEvaluatorTests
         (await Evaluator.CountMissedAsync(task, Anchor, after, int.MaxValue))
             .ShouldBe(task.CountMissedOccurrences(Anchor, after), $"missed count diverged for '{shape}'");
 
-        (await Evaluator.IsOccurrenceStillCurrentAsync(task, Anchor, after))
-            .ShouldBe(task.IsOccurrenceStillCurrent(Anchor, after), $"grace verdict diverged for '{shape}'");
-
         var expected = task.CalculateNextValidRun(Anchor, 1, after);
         var actual   = await Evaluator.CalculateNextValidRunAsync(task, Anchor, 1, after, after);
         actual.NextRun.ShouldBe(expected.NextRun, $"next valid run diverged for '{shape}'");

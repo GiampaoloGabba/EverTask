@@ -36,6 +36,11 @@ namespace EverTask.Storage.Sqlite.Migrations
                 column: "ParentTaskId");
 
             migrationBuilder.CreateIndex(
+                name: "IX_QueuedTasks_ParentTaskId_Status",
+                table: "QueuedTasks",
+                columns: new[] { "ParentTaskId", "Status" });
+
+            migrationBuilder.CreateIndex(
                 name: "UX_QueuedTasks_Occurrence",
                 table: "QueuedTasks",
                 columns: new[] { "ParentTaskId", "ScheduledExecutionUtc" },
@@ -58,12 +63,18 @@ namespace EverTask.Storage.Sqlite.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
+            migrationBuilder.Sql("DELETE FROM \"QueuedTasks\" WHERE \"ParentTaskId\" IS NOT NULL");
+
             migrationBuilder.DropForeignKey(
                 name: "FK_QueuedTasks_QueuedTasks_ParentTaskId",
                 table: "QueuedTasks");
 
             migrationBuilder.DropIndex(
                 name: "IX_QueuedTasks_ParentTaskId",
+                table: "QueuedTasks");
+
+            migrationBuilder.DropIndex(
+                name: "IX_QueuedTasks_ParentTaskId_Status",
                 table: "QueuedTasks");
 
             migrationBuilder.DropIndex(

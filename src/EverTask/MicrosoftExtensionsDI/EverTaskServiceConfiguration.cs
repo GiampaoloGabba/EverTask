@@ -356,20 +356,22 @@ public class EverTaskServiceConfiguration
     }
 
     /// <summary>
-    /// Sets how late a task may start before its execution context reports the delivery as a misfire.
+    /// Sets the lateness threshold used to classify delivery and durable-occurrence misfire metadata.
     /// </summary>
     /// <param name="threshold">
-    /// The tolerance between the nominal slot and the actual start. Default: 5 seconds. Zero reports every
-    /// delivery that starts after its slot.
+    /// The tolerance between a nominal slot and the time it is observed. Default: 5 seconds. Zero classifies
+    /// every delivery that starts after its slot, and every overdue durable slot, as a misfire.
     /// </param>
     /// <returns>The configuration instance for method chaining.</returns>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when the threshold is negative.</exception>
     /// <remarks>
     /// <para>
-    /// This is an OBSERVATION threshold: it decides what
-    /// <see cref="ITaskExecutionContext.Misfire"/> reports to a handler, and nothing else. A late occurrence
-    /// runs exactly as it did before, and the one-second tolerance the recurring skip-forward path uses to
-    /// avoid treating a just-scheduled occurrence as past is a separate, untouched rule.
+    /// This is a classification threshold: it decides what
+    /// <see cref="ITaskExecutionContext.Misfire"/> reports to a handler and whether the durable planner stamps
+    /// a materialized row with catch-up or fire-once misfire metadata. It is not an execution gate: a late
+    /// occurrence runs exactly as it did before. A backlog containing more than one due slot is always missed
+    /// work, regardless of this threshold, and the one-second tolerance the recurring skip-forward path uses
+    /// to avoid treating a just-scheduled occurrence as past is a separate, untouched rule.
     /// </para>
     /// <para>
     /// Raise it for schedules whose handler does not care about seconds; lower it when a handler compensates

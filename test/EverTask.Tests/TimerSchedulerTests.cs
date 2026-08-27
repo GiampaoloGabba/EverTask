@@ -356,7 +356,7 @@ public class TimerSchedulerTests
     [Fact]
     public async Task PeriodicTimerScheduler_Should_UseDynamicDelay_ForShortIntervals()
     {
-        // Arrange: Schedule task with delay < checkInterval (1 second)
+        // Arrange: Schedule a task with a short delay
         var shortDelay = DateTimeOffset.UtcNow.AddMilliseconds(300);
         var task       = CreateTaskHandlerExecutor(shortDelay);
 
@@ -366,7 +366,7 @@ public class TimerSchedulerTests
         await Task.Delay(100);
 
 #if DEBUG
-        // Assert: Should calculate delay based on task time, not checkInterval
+        // Assert: Should calculate the delay from the task's due time
         _timerScheduler.LastCalculatedDelay.ShouldBeLessThan(TimeSpan.FromSeconds(1));
         _timerScheduler.LastCalculatedDelay.ShouldBeGreaterThan(TimeSpan.Zero);
 #endif

@@ -7,6 +7,8 @@ ALTER TABLE "QueuedTasks" ADD "ScheduleVersion" INTEGER NOT NULL DEFAULT 0;
 
 CREATE INDEX "IX_QueuedTasks_ParentTaskId" ON "QueuedTasks" ("ParentTaskId");
 
+CREATE INDEX "IX_QueuedTasks_ParentTaskId_Status" ON "QueuedTasks" ("ParentTaskId", "Status");
+
 CREATE UNIQUE INDEX "UX_QueuedTasks_Occurrence" ON "QueuedTasks" ("ParentTaskId", "ScheduledExecutionUtc");
 
 CREATE TABLE "ef_temp_QueuedTasks" (
@@ -57,6 +59,8 @@ PRAGMA foreign_keys = 1;
 
 BEGIN TRANSACTION;
 CREATE INDEX "IX_QueuedTasks_ParentTaskId" ON "QueuedTasks" ("ParentTaskId");
+
+CREATE INDEX "IX_QueuedTasks_ParentTaskId_Status" ON "QueuedTasks" ("ParentTaskId", "Status");
 
 CREATE INDEX "IX_QueuedTasks_Status" ON "QueuedTasks" ("Status");
 

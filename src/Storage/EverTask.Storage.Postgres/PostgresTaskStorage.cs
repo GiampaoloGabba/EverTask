@@ -123,7 +123,8 @@ public class PostgresTaskStorage(
                    INSERT INTO "{_schema}"."RunsAudit" ("QueuedTaskId", "ExecutedAt", "ExecutionTimeMs", "Status", "Exception")
                    SELECT @taskId, now(), @execTime, u."Status", u."Exception"
                    FROM updated u
-                   WHERE (@auditLevel IN (0, 1))
+                   -- An unknown level audits like Full, matching AuditPolicy: only ErrorsOnly (2) and None (3) skip.
+                   WHERE (@auditLevel NOT IN (2, 3))
                       OR (@auditLevel = 2 AND (u."Status" = 'Failed' OR (u."Exception" IS NOT NULL AND u."Exception" <> '')));
                    """;
 
@@ -150,7 +151,8 @@ public class PostgresTaskStorage(
     /// occurrence at recovery. The audited Status/Exception are the CONSTANTS <c>Completed</c>/<c>NULL</c>, so
     /// the audit gates depend ONLY on the AuditLevel and are computed in C# (no pre-update read needed):
     /// StatusAudit at Full only, RunsAudit at Full+Minimal — matching usp_CompleteRecurringRun and the EF base.
-    /// Propagates on failure (Residual D), same as <see cref="UpdateCurrentRun"/>.
+    /// Propagates on failure (Residual D), same as
+    /// <see cref="UpdateCurrentRun(Guid, double, DateTimeOffset?, AuditLevel, int)"/>.
     /// </summary>
     public override async Task CompleteRecurringRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
                                                     AuditLevel auditLevel)
@@ -223,14 +225,15 @@ public class PostgresTaskStorage(
     {
         ArgumentNullException.ThrowIfNull(occurrence);
 
-        if (occurrence.ScheduledExecutionUtc is not { } slotUtc)
-            throw new ArgumentException("An occurrence must carry its nominal slot.", nameof(occurrence));
-
         await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         // The INSERT below writes the canonical occurrence shape; stamping it on the caller's entity too
         // keeps the object it goes on using (scheduling the child) identical to the row that was stored.
         occurrence.ApplyOccurrenceContract(parentId, expectedScheduleVersion);
+        occurrence.NormalizeTimestampsToUtc();
+
+        if (occurrence.ScheduledExecutionUtc is not { } slotUtc)
+            throw new ArgumentException("An occurrence must carry its nominal slot.", nameof(occurrence));
 
         var finalizeAudit = AuditPolicy.ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Completed, null);
 
@@ -395,7 +398,8 @@ public class PostgresTaskStorage(
                        INSERT INTO "{_schema}"."RunsAudit" ("QueuedTaskId", "ExecutedAt", "ExecutionTimeMs", "Status", "Exception")
                        SELECT @taskId, now(), @execTime, u."Status", u."Exception"
                        FROM updated u
-                       WHERE (@auditLevel IN (0, 1))
+                       -- An unknown level audits like Full, matching AuditPolicy: only ErrorsOnly (2) and None (3) skip.
+                   WHERE (@auditLevel NOT IN (2, 3))
                           OR (@auditLevel = 2 AND (u."Status" = 'Failed' OR (u."Exception" IS NOT NULL AND u."Exception" <> '')))
                        RETURNING "Id"
                    )
@@ -503,7 +507,7 @@ public class PostgresTaskStorage(
         await database.OpenConnectionAsync(ct).ConfigureAwait(false);
         try
         {
-            using var command = database.GetDbConnection().CreateCommand();
+            await using var command = database.GetDbConnection().CreateCommand();
             command.CommandText = sql;
             command.Transaction = database.CurrentTransaction?.GetDbTransaction();
 

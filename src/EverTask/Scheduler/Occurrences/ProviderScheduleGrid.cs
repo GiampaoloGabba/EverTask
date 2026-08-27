@@ -120,16 +120,6 @@ internal sealed class ProviderScheduleGrid(
                                                                    CancellationToken ct) =>
         AskAsync(definition, occurrence, identity, ct);
 
-    /// <inheritdoc cref="IScheduleEvaluator.IsOccurrenceStillCurrentAsync"/>
-    public async ValueTask<bool> IsOccurrenceStillCurrentAsync(RecurringTask definition, DateTimeOffset occurrence,
-                                                               DateTimeOffset nowUtc, ScheduleIdentity identity,
-                                                               CancellationToken ct)
-    {
-        var following = await NextAfterAsync(definition, occurrence, occurrence, identity, ct).ConfigureAwait(false);
-
-        return following is not { } next || next > nowUtc;
-    }
-
     /// <summary>
     /// <see cref="RecurringTask.FirstOccurrenceOnOrAfter"/> over a provider grid.
     /// </summary>
@@ -157,21 +147,12 @@ internal sealed class ProviderScheduleGrid(
         // caller compares it against.
         var ceiling = CountCeiling(cap);
 
-        var counted = 1;
-        var slot    = anchor;
+        var walked = await BoundedOccurrenceWalker
+                           .WalkAsync(anchor, after, (int)ceiling, includeStart: true,
+                               slot => NextAfterAsync(definition, slot, slot, identity, ct))
+                           .ConfigureAwait(false);
 
-        while (counted < ceiling)
-        {
-            var following = await NextAfterAsync(definition, slot, slot, identity, ct).ConfigureAwait(false);
-
-            if (following is not { } next || next > after || next <= slot)
-                break;
-
-            slot = next;
-            counted++;
-        }
-
-        return counted;
+        return walked.Count;
     }
 
     /// <summary>The provider's answer, with <c>RunUntil</c> applied to it.</summary>

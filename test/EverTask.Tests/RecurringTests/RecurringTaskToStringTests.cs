@@ -69,6 +69,20 @@ public class RecurringTaskToStringTests
         Assert.Contains($"Start after a delay of {delay} then every 30 minute(s)", str);
     }
 
+    [Fact]
+    public void A_cron_description_includes_its_bounds()
+    {
+        var task = new RecurringTask
+        {
+            CronInterval = new CronInterval("0 9 * * *"),
+            RunUntil     = new DateTimeOffset(2026, 12, 31, 23, 0, 0, TimeSpan.Zero),
+            MaxRuns      = 50
+        };
+
+        task.ToString().ShouldBe(
+            "Use Cron expression: 0 9 * * * until 2026-12-31 23:00:00 UTC up to 50 times");
+    }
+
     // The description is persisted as QueuedTask.RecurringInfo and served by the monitoring API on both the
     // list and the detail, so it is what an operator reads to answer "when does this series stop?". Rendering
     // an absolute bound with ToLocalTime() answered on the HOST's clock — a different sentence per machine for

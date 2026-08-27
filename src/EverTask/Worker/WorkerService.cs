@@ -668,23 +668,11 @@ public class WorkerService(
 
             try
             {
-                // Conditional wherever the storage CAN be, exactly like the dispatcher's exhausted-series
-                // branch. A storage without the compare-and-swap keeps the historical unconditional write:
-                // calling the CAS member there raises NotSupportedException, the catch below counts a normal
-                // end of series as an L18 failure, and the row is poisoned (or retried at every restart
-                // forever) instead of being finalized.
-                if (taskStorage.SupportsScheduleVersioning)
-                {
-                    finalized = await taskStorage
-                                      .TrySetRecurringSeriesCompleted(row.Id, row.NextRunUtc, row.Status,
-                                          row.ScheduleVersion, 0, auditLevel, token)
-                                      .ConfigureAwait(false);
-                }
-                else
-                {
-                    await taskStorage.SetRecurringSeriesCompleted(row.Id, 0, auditLevel).ConfigureAwait(false);
-                    finalized = true;
-                }
+                finalized = await RecurringSeriesFinalizer
+                                  .FinalizeAsync(taskStorage, row.Id, row.NextRunUtc, row.Status,
+                                      row.ScheduleVersion, 0, auditLevel,
+                                      RecurringSeriesFinalizationPolicy.Recovery, token)
+                                  .ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {

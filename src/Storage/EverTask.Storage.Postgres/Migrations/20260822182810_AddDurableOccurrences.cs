@@ -47,6 +47,12 @@ namespace EverTask.Storage.Postgres.Migrations
                 column: "ParentTaskId");
 
             migrationBuilder.CreateIndex(
+                name: "IX_QueuedTasks_ParentTaskId_Status",
+                schema: _dbContext.Schema,
+                table: "QueuedTasks",
+                columns: new[] { "ParentTaskId", "Status" });
+
+            migrationBuilder.CreateIndex(
                 name: "UX_QueuedTasks_Occurrence",
                 schema: _dbContext.Schema,
                 table: "QueuedTasks",
@@ -75,6 +81,10 @@ namespace EverTask.Storage.Postgres.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
+            var schema = string.IsNullOrEmpty(_dbContext.Schema) ? "public" : _dbContext.Schema;
+
+            migrationBuilder.Sql($"DELETE FROM \"{schema}\".\"QueuedTasks\" WHERE \"ParentTaskId\" IS NOT NULL");
+
             migrationBuilder.DropForeignKey(
                 name: "FK_QueuedTasks_QueuedTasks_ParentTaskId",
                 schema: _dbContext.Schema,
@@ -82,6 +92,11 @@ namespace EverTask.Storage.Postgres.Migrations
 
             migrationBuilder.DropIndex(
                 name: "IX_QueuedTasks_ParentTaskId",
+                schema: _dbContext.Schema,
+                table: "QueuedTasks");
+
+            migrationBuilder.DropIndex(
+                name: "IX_QueuedTasks_ParentTaskId_Status",
                 schema: _dbContext.Schema,
                 table: "QueuedTasks");
 

@@ -190,6 +190,15 @@ public class MySqlEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsyncLif
             """);
         parentIndex.ShouldBeGreaterThan(0);
 
+        var drainIndexColumns = await ScalarAsync<string>(
+            """
+            SELECT GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ',')
+            FROM information_schema.statistics
+            WHERE table_schema = @db AND table_name = 'QueuedTasks'
+              AND index_name = 'IX_QueuedTasks_ParentTaskId_Status'
+            """);
+        drainIndexColumns.ShouldBe("ParentTaskId,Status");
+
         var checkConstraint = await ScalarAsync<long>(
             """
             SELECT COUNT(*) FROM information_schema.table_constraints

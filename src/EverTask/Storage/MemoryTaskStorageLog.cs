@@ -25,10 +25,6 @@ internal static partial class MemoryTaskStorageLog
         Message = "Set Task {TaskId} with Status {Status}")]
     public static partial void StatusSet(this ILogger logger, Guid taskId, QueuedTaskStatus status);
 
-    [LoggerMessage(EventId = 1604, Level = LogLevel.Debug,
-        Message = "Get the current run counter for Task {TaskId}")]
-    public static partial void GettingCurrentRunCount(this ILogger logger, Guid taskId);
-
     [LoggerMessage(EventId = 1605, Level = LogLevel.Debug,
         Message = "Update the current run counter for Task {TaskId}")]
     public static partial void UpdatingCurrentRunCount(this ILogger logger, Guid taskId);

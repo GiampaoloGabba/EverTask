@@ -185,9 +185,8 @@ public class SqliteTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     }
 
     /// <summary>
-    /// Occurrence cleanup with the age gate in memory: SQLite cannot translate the DateTimeOffset
-    /// comparison, the same limitation behind every other override here. The execution-log and audit-trail
-    /// guards translate and stay server-side, exactly as in <see cref="CleanupCompletedTasks"/>.
+    /// Occurrence cleanup with the age gate expressed against SQLite's normalized UTC text representation.
+    /// Each statement deletes at most one bounded page and reasserts every retention guard at deletion time.
     /// </summary>
     public override async Task<int> CleanupTerminalOccurrences(DateTimeOffset cutoff, bool preserveTasksWithLogs,
                                                                bool preserveStatusAudits, bool preserveRunsAudits,
@@ -195,24 +194,51 @@ public class SqliteTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     {
         await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
-        var candidates = await dbContext.QueuedTasks
-            .Where(qt => qt.ParentTaskId != null
-                      && (qt.Status == QueuedTaskStatus.Completed
-                          || qt.Status == QueuedTaskStatus.Failed
-                          || qt.Status == QueuedTaskStatus.Cancelled)
-                      && (!preserveTasksWithLogs || !dbContext.TaskExecutionLogs.Any(l => l.TaskId == qt.Id))
-                      && (!preserveStatusAudits || !dbContext.StatusAudit.Any(sa => sa.QueuedTaskId == qt.Id))
-                      && (!preserveRunsAudits || !dbContext.RunsAudit.Any(ra => ra.QueuedTaskId == qt.Id)))
-            .Select(qt => new { qt.Id, qt.LastExecutionUtc, qt.CreatedAtUtc })
-            .ToListAsync(ct).ConfigureAwait(false);
+        var cutoffUtc = cutoff.ToUniversalTime();
+        var total     = 0;
+        int deleted;
 
-        var ids = candidates
-            .Where(c => (c.LastExecutionUtc ?? c.CreatedAtUtc) < cutoff)
-            .Select(c => c.Id)
-            .ToList();
+        do
+        {
+            deleted = await ((DbContext)dbContext).Database.ExecuteSqlInterpolatedAsync($"""
+                DELETE FROM "QueuedTasks"
+                WHERE "Id" IN (
+                    SELECT candidate."Id"
+                    FROM "QueuedTasks" AS candidate
+                    WHERE candidate."ParentTaskId" IS NOT NULL
+                      AND candidate."Status" IN ({nameof(QueuedTaskStatus.Completed)},
+                                                  {nameof(QueuedTaskStatus.Failed)},
+                                                  {nameof(QueuedTaskStatus.Cancelled)})
+                      AND COALESCE(candidate."LastExecutionUtc", candidate."CreatedAtUtc") < {cutoffUtc}
+                      AND ({!preserveTasksWithLogs} OR NOT EXISTS (
+                          SELECT 1 FROM "TaskExecutionLogs" AS logs WHERE logs."TaskId" = candidate."Id"))
+                      AND ({!preserveStatusAudits} OR NOT EXISTS (
+                          SELECT 1 FROM "StatusAudit" AS status_audit
+                          WHERE status_audit."QueuedTaskId" = candidate."Id"))
+                      AND ({!preserveRunsAudits} OR NOT EXISTS (
+                          SELECT 1 FROM "RunsAudit" AS runs_audit
+                          WHERE runs_audit."QueuedTaskId" = candidate."Id"))
+                    LIMIT {CleanupBatchSize}
+                )
+                  AND "ParentTaskId" IS NOT NULL
+                  AND "Status" IN ({nameof(QueuedTaskStatus.Completed)},
+                                     {nameof(QueuedTaskStatus.Failed)},
+                                     {nameof(QueuedTaskStatus.Cancelled)})
+                  AND COALESCE("LastExecutionUtc", "CreatedAtUtc") < {cutoffUtc}
+                  AND ({!preserveTasksWithLogs} OR NOT EXISTS (
+                      SELECT 1 FROM "TaskExecutionLogs" AS logs WHERE logs."TaskId" = "QueuedTasks"."Id"))
+                  AND ({!preserveStatusAudits} OR NOT EXISTS (
+                      SELECT 1 FROM "StatusAudit" AS status_audit
+                      WHERE status_audit."QueuedTaskId" = "QueuedTasks"."Id"))
+                  AND ({!preserveRunsAudits} OR NOT EXISTS (
+                      SELECT 1 FROM "RunsAudit" AS runs_audit
+                      WHERE runs_audit."QueuedTaskId" = "QueuedTasks"."Id"))
+                """, ct).ConfigureAwait(false);
 
-        return await DeleteByIdsAsync(dbContext.QueuedTasks, ids,
-            (set, batch) => set.Where(qt => batch.Contains(qt.Id)), ct).ConfigureAwait(false);
+            total += deleted;
+        } while (deleted == CleanupBatchSize && !ct.IsCancellationRequested);
+
+        return total;
     }
 
     // ---- Retention cleanup (SQLite overrides) -----------------------------------------------------
@@ -308,6 +334,7 @@ public class SqliteTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         // The status/recurring/audit/log filters translate; the age gate runs in memory (DateTimeOffset).
         var candidates = await dbContext.QueuedTasks
             .Where(qt => qt.Status == QueuedTaskStatus.Completed
+                      && qt.ParentTaskId == null
                       && !qt.IsRecurring
                       && !dbContext.StatusAudit.Any(sa => sa.QueuedTaskId == qt.Id)
                       && !dbContext.RunsAudit.Any(ra => ra.QueuedTaskId == qt.Id)

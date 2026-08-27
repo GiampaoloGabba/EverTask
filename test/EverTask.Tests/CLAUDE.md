@@ -157,6 +157,13 @@ Docker or Testcontainers here. Subsets filter on namespace: `--filter "FullyQual
   `UpdateSchedule` (the reschedule loses the compare-and-swap and must write, publish and park nothing), and
   a rewrite in front of EVERY `CompleteRecurringRun` attempt, which is the only way to reach the end of the
   advance's re-aim loop — where the guard is dropped but the run still has to be recorded.
+  A hook on `TrySetTerminalOutcome` holds an ENDING on the threshold of its own write, which is where the
+  cancel-to-publish window lives: the restart, or the cancel, then commits while the ending waits, and only
+  then does the ending land. **An in-memory cancel ends its run on the CANCELLING thread**: nothing in that
+  unwind suspends, so `Dispatcher.Cancel` runs the whole ending inline and a blocking hook there deadlocks the
+  test — and no ending could ever land after the cancel that caused it. `CancellationSourceProvider.Delete(id)`
+  before the cancel is how a test says "this run is already past the point where the token turns it back",
+  which is the shape the window needs and the one a real storage produces on its own.
   Monitoring events are read through `EventsOfAsync`, which subscribes, runs the call and WAITS for every
   phrase it was given: publishing is fire-and-forget by contract, so a read taken when the call returns is a
   race, and two events published in a row arrive in no order.

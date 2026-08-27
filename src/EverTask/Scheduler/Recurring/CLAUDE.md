@@ -51,8 +51,8 @@ Fluent builder (`Builder/RecurringTaskBuilder.cs`) + occurrence math (`Recurring
      counting `[anchor, RunUntil]`. Counting it made the two paths disagree by one, and that one is not a log
      line: it is what `DueSlotEnumerator` compares against `MaxOccurrences`, so a backlog that fits its cap
      exactly tripped the `Halt` breaker — which never releases itself.
-   - The recovery grace-window decides via `RecurringTask.IsOccurrenceStillCurrent` (calendar-exact), **not**
-     `GetMinimumInterval`. Do NOT reintroduce flat `GetMinimumInterval()` arithmetic for skip-forward: it is
+   - The recovery grace-window decides from the natural calendar successor, **not** `GetMinimumInterval`.
+     Do NOT reintroduce flat `GetMinimumInterval()` arithmetic for skip-forward: it is
      approximate (30 days for Month, the 5-minute default for `DayInterval(Interval=0)` from `OnDays`) and
      lands on invalid days/times. It stays legitimate elsewhere as a rough "≈ one period" heuristic.
    - **Ground truth**: skip-forward must equal stepping `CalculateNextRun(occ, 1)` one occurrence at a time
@@ -116,9 +116,9 @@ Fluent builder (`Builder/RecurringTaskBuilder.cs`) + occurrence math (`Recurring
       `ScheduleTimeZoneIntegrationTests.A_schedule_handed_straight_to_the_dispatcher_is_persisted_with_the_IANA_id`).
       Keep any future normalization there for the same reason.
 15. **`AtTime`/`AtTimes` store the `TimeOnly` VERBATIM** (T12): a time of day is read on whatever clock the
-    schedule ends up on, so there is nothing to convert. `TimeOnly.ToUniversalTime()` never converted anything
-    either — it rebuilt the value from today's UTC date, offset zero — it only dropped the milliseconds; it is
-    deprecated in docs and XML-doc, with no `[Obsolete]` (R13), and nothing in the library calls it. The two
+    schedule ends up on, so there is nothing to convert. The removed `TimeOnly.ToUniversalTime()` never
+    converted anything either — it rebuilt the value from today's UTC date, offset zero — and only dropped the
+    milliseconds. The two
     places that apply an `OnTimes` to a date go through `WithTimeOfDay`, not `Adjust(hour, minute, second)`,
     so the grid can land on the precision the builder kept.
 16. **`OnHours()` is not a calendar selector, and is not on the fluent API.** It sits on the concrete

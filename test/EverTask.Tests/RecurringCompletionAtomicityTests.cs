@@ -93,7 +93,6 @@ public class RecurringCompletionAtomicityTests : IsolatedIntegrationTestBase
         public Task SetCancelledByUser(Guid taskId, AuditLevel auditLevel) => inner.SetCancelledByUser(taskId, auditLevel);
         public Task SetCancelledByService(Guid taskId, Exception exception, AuditLevel auditLevel) => inner.SetCancelledByService(taskId, exception, auditLevel);
         public Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception, AuditLevel auditLevel, double? executionTimeMs = null, CancellationToken ct = default) => inner.SetStatus(taskId, status, exception, auditLevel, executionTimeMs, ct);
-        public Task<int> GetCurrentRunCount(Guid taskId) => inner.GetCurrentRunCount(taskId);
         public Task<QueuedTask?> GetByTaskKey(string taskKey, CancellationToken ct = default) => inner.GetByTaskKey(taskKey, ct);
         public Task UpdateTask(QueuedTask task, CancellationToken ct = default) => inner.UpdateTask(task, ct);
         public Task Remove(Guid taskId, CancellationToken ct = default) => inner.Remove(taskId, ct);

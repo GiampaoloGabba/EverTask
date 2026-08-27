@@ -1189,48 +1189,29 @@ public class Dispatcher(
     {
         var retryAt = nowUtc + failure.RetryAfter;
 
-        TaskHandlerExecutor? built = null;
+        await ProviderRetryParker
+              .ParkAsync(scheduler, retryAt, BuildExecutorAsync,
+                  static executor => executor with { IsScheduleRetry = true },
+                  (_, at) => logger.ProviderRetryParkRefused(scheduleId, at),
+                  (executor, at) =>
+                  {
+                      logger.RecoveryDeferredByProvider(failure, failure.ProviderKey, scheduleId,
+                          failure.ConsecutiveFailures, at);
+                      PublishProviderRetryEvent(executor, failure, scheduleId, at);
+                  },
+                  (executor, error) =>
+                  {
+                      logger.ProviderRetryParkFailed(error, scheduleId);
+                      PublishProviderParkFailedEvent(executor, error, scheduleId, failure);
+                  })
+              .ConfigureAwait(false);
 
-        try
-        {
-            var executor = await CreateCachedWrapper(task.GetType())
-                                 .Handle(task, retryAt, recurring, serviceProvider,
-                                     auditLevel ?? serviceConfiguration.DefaultAuditLevel, scheduleId, taskKey,
-                                     useLazyExecutor: true, rowMetadata)
-                                 .ConfigureAwait(false);
-
-            built = executor;
-
-            // Conditional, like every other re-park: a reschedule may have committed a newer definition and
-            // parked it while the provider was failing, and that registration owns the row now.
-            if (!scheduler.TrySchedule(executor with { IsScheduleRetry = true }, retryAt))
-            {
-                // Refused: this recovery parked nothing. Either a newer definition owns the row — so the
-                // series is not the one waiting on a provider any more — or the scheduler is stopping and
-                // startup recovery finds the row again. Announcing it as "parked to ask again" is the one
-                // sentence that is not true in either case.
-                logger.ProviderRetryParkRefused(scheduleId, retryAt);
-                return;
-            }
-
-            // Said only once the registration is really in, log line and event alike — the same order
-            // WorkerExecutor.DeferScheduleForProvider keeps, and for the same reason: before that point the
-            // sentence is a promise the very next line can break.
-            logger.RecoveryDeferredByProvider(failure, failure.ProviderKey, scheduleId,
-                failure.ConsecutiveFailures, retryAt);
-
-            PublishProviderRetryEvent(executor, failure, scheduleId, retryAt);
-        }
-        catch (Exception e)
-        {
-            logger.ProviderRetryParkFailed(e, scheduleId);
-
-            // V4(2): the re-park is what makes this schedule come back at all, and nothing polls behind it —
-            // so a failure here is not a log line, it is the series stopping until the next restart. The
-            // executor is whatever was built before the throw: without one there is no task identity to hang
-            // an event on, and the log line is all this can say.
-            PublishProviderParkFailedEvent(built, e, scheduleId, failure);
-        }
+        async ValueTask<TaskHandlerExecutor?> BuildExecutorAsync() =>
+            await CreateCachedWrapper(task.GetType())
+                 .Handle(task, retryAt, recurring, serviceProvider,
+                     auditLevel ?? serviceConfiguration.DefaultAuditLevel, scheduleId, taskKey,
+                     useLazyExecutor: true, rowMetadata)
+                 .ConfigureAwait(false);
     }
 
     /// <summary>Tells a monitoring subscriber that a schedule waiting on its provider is parked nowhere.</summary>
@@ -1308,14 +1289,14 @@ public class Dispatcher(
                                                            int expectedScheduleVersion, AuditLevel auditLevel,
                                                            CancellationToken ct)
     {
-        if (!storage.SupportsScheduleVersioning || expectedStatus is not { } status)
-        {
-            await storage.SetRecurringSeriesCompleted(taskId, 0, auditLevel).ConfigureAwait(false);
-            return;
-        }
+        var policy = storage.SupportsScheduleVersioning && expectedStatus.HasValue
+                         ? RecurringSeriesFinalizationPolicy.Conditional
+                         : RecurringSeriesFinalizationPolicy.Unconditional;
 
-        await storage.TrySetRecurringSeriesCompleted(taskId, expectedCursorUtc, status, expectedScheduleVersion,
-            0, auditLevel, ct).ConfigureAwait(false);
+        await RecurringSeriesFinalizer
+              .FinalizeAsync(storage, taskId, expectedCursorUtc, expectedStatus.GetValueOrDefault(),
+                  expectedScheduleVersion, 0, auditLevel, policy, ct)
+              .ConfigureAwait(false);
     }
 
     /// <summary>

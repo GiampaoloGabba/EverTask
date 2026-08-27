@@ -2787,12 +2787,6 @@ public class DurableOccurrencesIntegrationTests : IsolatedIntegrationTestBase
             return inner.CountMissedAsync(definition, anchor, after, cap, identity, ct);
         }
 
-        public ValueTask<bool> IsOccurrenceStillCurrentAsync(RecurringTask definition, DateTimeOffset occurrence,
-                                                             DateTimeOffset nowUtc,
-                                                             ScheduleIdentity identity = default,
-                                                             CancellationToken ct = default) =>
-            inner.IsOccurrenceStillCurrentAsync(definition, occurrence, nowUtc, identity, ct);
-
         public ValueTask<DateTimeOffset?> NextGridOccurrenceAfterAsync(
             RecurringTask definition, DateTimeOffset occurrence, ScheduleIdentity identity = default,
             CancellationToken ct = default) =>

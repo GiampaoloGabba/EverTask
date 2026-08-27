@@ -361,18 +361,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         var createAudit = AuditPolicy.ShouldCreateStatusAudit(auditLevel, status, exception);
         var ex          = exception.ToDetailedString();
 
-        // LastExecutionUtc is written only on terminal transitions (a run actually finished).
-        // Intermediate transitions (WaitingQueue, Queued, InProgress, Cancelled, Pending) PRESERVE
-        // the previous value (COALESCE in the update below): a full-queue revert to WaitingQueue
-        // must not stamp a fake execution time, and re-queueing a recurring task must not wipe
-        // the timestamp of its last real run.
-        var lastExecutionUtc = status != QueuedTaskStatus.WaitingQueue
-                               && status != QueuedTaskStatus.Queued
-                               && status != QueuedTaskStatus.InProgress
-                               && status != QueuedTaskStatus.Cancelled
-                               && status != QueuedTaskStatus.Pending
-                                   ? UtcNowNormalized
-                                   : (DateTimeOffset?)null;
+        var lastExecutionUtc = LastExecutionUtcFor(status, UtcNowNormalized);
 
         // Non-relational providers (EF Core InMemory) can translate neither ExecuteUpdate nor an explicit
         // transaction: run the audit insert and the column update as ONE tracked SaveChanges, which the
@@ -418,6 +407,20 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             logger.StatusUpdateFailed(e, status, taskId);
         }
     }
+
+    /// <summary>
+    /// When a transition stamps the end of a run, and when it PRESERVES the timestamp of the last one.
+    /// </summary>
+    /// <remarks>
+    /// Only a terminal transition means a run actually finished: a full-queue revert to WaitingQueue must not
+    /// stamp a fake execution time, and re-queueing a recurring task must not wipe the timestamp of its last
+    /// real run. Shared by every write that applies the status column, so the rule cannot drift between them.
+    /// </remarks>
+    private static DateTimeOffset? LastExecutionUtcFor(QueuedTaskStatus status, DateTimeOffset now) =>
+        status is QueuedTaskStatus.WaitingQueue or QueuedTaskStatus.Queued or QueuedTaskStatus.InProgress
+            or QueuedTaskStatus.Cancelled or QueuedTaskStatus.Pending
+            ? null
+            : now;
 
     /// <summary>
     /// Status transition + audit for non-relational providers (EF Core InMemory): a single tracked
@@ -479,19 +482,6 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
                                                        .SetProperty(t => t.Exception, exception), ct);
     }
 
-
-    public virtual async Task<int> GetCurrentRunCount(Guid taskId)
-    {
-        logger.GettingCurrentRunCount(taskId);
-        await using var dbContext = await contextFactory.CreateDbContextAsync().ConfigureAwait(false);
-
-        var task = await dbContext.QueuedTasks
-                                  .Where(x => x.Id == taskId)
-                                  .FirstOrDefaultAsync()
-                                  .ConfigureAwait(false);
-
-        return task?.CurrentRunCount ?? 0;
-    }
 
     /// <inheritdoc />
     public virtual async Task<int> IncrementRecoveryFailure(Guid taskId, CancellationToken ct = default)
@@ -946,6 +936,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         // The row this base INSERTS is the caller's entity, so the contract shape has to be stamped on it
         // explicitly — the procedures and the writable CTE spell the same shape out in their column list.
         occurrence.ApplyOccurrenceContract(parentId, expectedScheduleVersion);
+        occurrence.NormalizeTimestampsToUtc();
 
         // A schedule with no cursor is over — finalized, or poisoned — so a NULL expected cursor can never
         // describe a live one. Left to EF, the compare-and-swap would be rewritten to "NextRunUtc IS NULL"
@@ -1314,6 +1305,60 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     }
 
     /// <inheritdoc />
+    public virtual async Task<bool> TrySetTerminalOutcome(Guid taskId, QueuedTaskStatus status,
+                                                          Exception? exception, int expectedScheduleVersion,
+                                                          AuditLevel auditLevel, CancellationToken ct = default)
+    {
+        logger.SettingTaskStatus(taskId, status);
+
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        var             efContext = RequireRelational(dbContext);
+
+        var now              = UtcNowNormalized;
+        var ex               = exception.ToDetailedString();
+        var lastExecutionUtc = LastExecutionUtcFor(status, now);
+
+        var candidates = dbContext.QueuedTasks
+                                  .Where(t => t.Id == taskId && t.ScheduleVersion == expectedScheduleVersion);
+
+        // A cancellation over a cancellation is the ending of the very run the cancel could not stop, and it
+        // says what the row already says. Anything else would erase the operator's decision.
+        if (status != QueuedTaskStatus.Cancelled)
+            candidates = candidates.Where(t => t.Status != QueuedTaskStatus.Cancelled);
+
+        await using var transaction = await efContext.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var rows = await candidates
+                             .ExecuteUpdateAsync(s => s
+                                                      .SetProperty(t => t.Status, status)
+                                                      .SetProperty(t => t.Exception, ex)
+                                                      .SetProperty(t => t.LastExecutionUtc,
+                                                          t => lastExecutionUtc ?? t.LastExecutionUtc), ct)
+                             .ConfigureAwait(false);
+
+            if (rows == 0)
+            {
+                await transaction.RollbackAsync(ct).ConfigureAwait(false);
+                return false;
+            }
+
+            // The audit says what the UPDATE did, not what the caller asked for: a refused write leaves no
+            // trace of a status the row never took.
+            await CommitWithStatusAuditAsync(dbContext, transaction, taskId, status, exception, auditLevel, now, ct)
+                .ConfigureAwait(false);
+
+            return true;
+        }
+        catch (Exception e)
+        {
+            await transaction.RollbackAsync(ct).ConfigureAwait(false);
+            logger.StatusUpdateFailed(e, status, taskId);
+            return false;
+        }
+    }
+
+    /// <inheritdoc />
     public virtual async Task<bool> TryHaltSchedule(Guid parentId, int expectedScheduleVersion,
                                                     DateTimeOffset? expectedCursorUtc, QueuedTaskStatus expectedStatus,
                                                     string runtimeInfo, CancellationToken ct = default)
@@ -1526,19 +1571,6 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     }
 
     /// <inheritdoc />
-    public virtual async Task<int> CountActiveOccurrences(Guid parentId, CancellationToken ct = default)
-    {
-        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
-
-        return await dbContext.QueuedTasks
-                              .AsNoTracking()
-                              .Where(t => t.ParentTaskId == parentId)
-                              .Where(NonTerminalOccurrence)
-                              .CountAsync(ct)
-                              .ConfigureAwait(false);
-    }
-
-    /// <inheritdoc />
     public virtual async Task<IReadOnlyDictionary<Guid, DateTimeOffset>> GetLastRunStarts(
         IReadOnlyCollection<Guid> taskIds, CancellationToken ct = default)
     {
@@ -1572,35 +1604,6 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     }
 
     /// <inheritdoc />
-    public virtual async Task<StatusAudit[]> GetStatusAudits(Guid taskId, CancellationToken ct = default)
-    {
-        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
-
-        // Ordered on the audit IDENTITY, never on its timestamp, for the same two reasons as
-        // GetLastRunStarts: SQLite refuses a DateTimeOffset in an ORDER BY, and the audits of one row are
-        // inserted in transition order, so the newest id IS the newest transition.
-        return await dbContext.StatusAudit
-                              .AsNoTracking()
-                              .Where(a => a.QueuedTaskId == taskId)
-                              .OrderByDescending(a => a.Id)
-                              .ToArrayAsync(ct)
-                              .ConfigureAwait(false);
-    }
-
-    /// <inheritdoc />
-    public virtual async Task<RunsAudit[]> GetRunsAudits(Guid taskId, CancellationToken ct = default)
-    {
-        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
-
-        return await dbContext.RunsAudit
-                              .AsNoTracking()
-                              .Where(a => a.QueuedTaskId == taskId)
-                              .OrderByDescending(a => a.Id)
-                              .ToArrayAsync(ct)
-                              .ConfigureAwait(false);
-    }
-
-    /// <inheritdoc />
     public virtual async Task<AuditPage<StatusAudit>> GetStatusAuditsPage(Guid taskId, int skip, int take,
                                                                           CancellationToken ct = default)
     {
@@ -1628,7 +1631,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
     /// materialized — and counting it in memory would materialize it anyway.
     /// </summary>
     /// <remarks>
-    /// Ordered on the audit IDENTITY, never on its timestamp, for the same two reasons as the unpaged reads:
+    /// Ordered on the audit IDENTITY, never on its timestamp, for two provider and ordering constraints:
     /// SQLite refuses a <see cref="DateTimeOffset"/> in an <c>ORDER BY</c>, and the audits of one row are
     /// inserted in transition order, so the newest id IS the newest entry — which also makes the order
     /// total, so a page boundary can never repeat or drop an entry.
@@ -1933,6 +1936,7 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
         return await BatchDeleteAsync(dbContext.QueuedTasks,
             qt => qt.Status == QueuedTaskStatus.Completed
+               && qt.ParentTaskId == null
                && !qt.IsRecurring
                && !dbContext.StatusAudit.Any(sa => sa.QueuedTaskId == qt.Id)
                && !dbContext.RunsAudit.Any(ra => ra.QueuedTaskId == qt.Id)

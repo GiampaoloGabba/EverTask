@@ -19,13 +19,14 @@ public sealed class CatchUpOptions
     /// <exception cref="ArgumentOutOfRangeException">Either cap is zero or negative.</exception>
     public CatchUpOptions(TimeSpan maxAge, int maxOccurrences)
     {
-        if (maxAge <= TimeSpan.Zero)
+        if (!CatchUpConstraints.IsValidAge(maxAge))
         {
             throw new ArgumentOutOfRangeException(nameof(maxAge), maxAge,
                 "The catch-up age window must be positive: a zero window would drop every missed slot.");
         }
 
-        ArgumentOutOfRangeException.ThrowIfLessThan(maxOccurrences, 1);
+        if (!CatchUpConstraints.IsValidEpisodeCap(maxOccurrences))
+            ArgumentOutOfRangeException.ThrowIfLessThan(maxOccurrences, 1);
 
         MaxAge         = maxAge;
         MaxOccurrences = maxOccurrences;
@@ -53,7 +54,7 @@ public sealed class CatchUpOptions
         get => _overflowPolicy;
         init
         {
-            if (!Enum.IsDefined(value))
+            if (!CatchUpConstraints.IsValidOverflowPolicy(value))
                 throw new ArgumentOutOfRangeException(nameof(value), value, "Not a defined overflow policy.");
 
             _overflowPolicy = value;
@@ -71,7 +72,9 @@ public sealed class CatchUpOptions
         get => _maxPendingOccurrences;
         init
         {
-            ArgumentOutOfRangeException.ThrowIfLessThan(value, 1);
+            if (!CatchUpConstraints.IsValidPendingCap(value))
+                ArgumentOutOfRangeException.ThrowIfLessThan(value, 1);
+
             _maxPendingOccurrences = value;
         }
     }

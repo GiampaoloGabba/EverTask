@@ -1048,8 +1048,6 @@ public class RateLimitGateTests
         // pre-execution rejection: occurrence skipped (no Failed, no OnError), series advanced
         // via QueueNextOccourrence, status back to Queued.
         var storage = new Mock<ITaskStorage>();
-        storage.Setup(s => s.GetCurrentRunCount(It.IsAny<Guid>())).ReturnsAsync(0);
-
         var services = new ServiceCollection();
         services.AddSingleton(storage.Object);
         services.AddTransient<AlwaysFailingRecurringHandler>();

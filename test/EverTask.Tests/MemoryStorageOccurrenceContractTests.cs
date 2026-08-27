@@ -340,25 +340,27 @@ public class MemoryStorageOccurrenceContractTests
         await _storage.SetStatus(sibling.Id, QueuedTaskStatus.Failed, new InvalidOperationException("boom"),
             AuditLevel.Full);
 
-        var audits = await _storage.GetStatusAudits(occurrence.Id);
+        var audits = (await _storage.GetStatusAuditsPage(occurrence.Id, 0, int.MaxValue)).Audits;
 
         audits.Select(a => a.NewStatus)
               .ShouldBe([QueuedTaskStatus.Completed, QueuedTaskStatus.InProgress]);
         audits.ShouldNotContain(a => a.NewStatus == QueuedTaskStatus.Failed, "the sibling's history is its own");
 
-        (await _storage.GetStatusAudits(TestGuidGenerator.New())).ShouldBeEmpty();
+        (await _storage.GetStatusAuditsPage(TestGuidGenerator.New(), 0, int.MaxValue)).Audits.ShouldBeEmpty();
 
         await _storage.UpdateCurrentRun(id, 11, Cursor.AddMinutes(5), AuditLevel.Full);
         await _storage.UpdateCurrentRun(id, 22, Cursor.AddMinutes(10), AuditLevel.Full);
 
-        (await _storage.GetRunsAudits(id)).Select(r => r.ExecutionTimeMs).ShouldBe([22d, 11d]);
-        (await _storage.GetRunsAudits(occurrence.Id)).ShouldBeEmpty("a one-shot records no runs");
+        (await _storage.GetRunsAuditsPage(id, 0, int.MaxValue)).Audits
+            .Select(r => r.ExecutionTimeMs).ShouldBe([22d, 11d]);
+        (await _storage.GetRunsAuditsPage(occurrence.Id, 0, int.MaxValue)).Audits
+            .ShouldBeEmpty("a one-shot records no runs");
     }
 
     [Fact]
     public async Task Should_page_the_two_trails_and_keep_the_total_and_the_order_whole()
     {
-        // The memory twin of the paged reads (#44): same order as the unpaged one, a total that is the trail
+        // The memory twin of the paged reads (#44): same order as a full page, a total that is the trail
         // and not the page, and no entry repeated or dropped at a page boundary.
         // The audits are told apart by their exception text, not by an id: this store keeps them on the row
         // object and assigns them no identity at all.
@@ -384,8 +386,9 @@ public class MemoryStorageOccurrenceContractTests
             walked.AddRange(page.Audits.Select(a => a.Exception));
         }
 
-        walked.ShouldBe((await _storage.GetStatusAudits(row.Id)).Select(a => a.Exception).ToList(),
-            "the pages walked are exactly the trail the unpaged read answers, in the same order");
+        var whole = await _storage.GetStatusAuditsPage(row.Id, 0, int.MaxValue);
+        walked.ShouldBe(whole.Audits.Select(a => a.Exception).ToList(),
+            "the pages walked are exactly the trail a full page answers, in the same order");
 
         var past = await _storage.GetStatusAuditsPage(row.Id, 100, 5);
 
@@ -454,5 +457,24 @@ public class MemoryStorageOccurrenceContractTests
         child.ParentTaskId.ShouldBe(id);
         child.ScheduledExecutionUtc.ShouldBe(Cursor);
         child.QueueName.ShouldBe("recurring");
+    }
+
+    [Fact]
+    public async Task Should_normalize_materialized_occurrence_timestamps_to_utc()
+    {
+        var id         = await SeedScheduleAsync();
+        var localSlot  = Cursor.ToOffset(TimeSpan.FromHours(2));
+        var occurrence = NewOccurrence(id);
+        occurrence.CreatedAtUtc          = localSlot.AddMinutes(-1);
+        occurrence.ScheduledExecutionUtc = localSlot;
+
+        (await _storage.MaterializeOccurrence(id, 0, Cursor, occurrence, Cursor.AddMinutes(5), AuditLevel.Full))
+            .ShouldBe(OccurrenceMaterializationOutcome.Created);
+
+        var child = await ReloadAsync(occurrence.Id);
+        child.CreatedAtUtc.ShouldBe(localSlot.AddMinutes(-1).ToUniversalTime());
+        child.CreatedAtUtc.Offset.ShouldBe(TimeSpan.Zero);
+        child.ScheduledExecutionUtc.ShouldBe(localSlot.ToUniversalTime());
+        child.ScheduledExecutionUtc.ShouldNotBeNull().Offset.ShouldBe(TimeSpan.Zero);
     }
 }

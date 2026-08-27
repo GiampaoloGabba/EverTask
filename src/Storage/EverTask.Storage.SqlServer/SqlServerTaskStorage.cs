@@ -157,14 +157,15 @@ public class SqlServerTaskStorage(
     {
         ArgumentNullException.ThrowIfNull(occurrence);
 
-        if (occurrence.ScheduledExecutionUtc is not { } slotUtc)
-            throw new ArgumentException("An occurrence must carry its nominal slot.", nameof(occurrence));
-
         await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         // The INSERT below writes the canonical occurrence shape; stamping it on the caller's entity too
         // keeps the object it goes on using (scheduling the child) identical to the row that was stored.
         occurrence.ApplyOccurrenceContract(parentId, expectedScheduleVersion);
+        occurrence.NormalizeTimestampsToUtc();
+
+        if (occurrence.ScheduledExecutionUtc is not { } slotUtc)
+            throw new ArgumentException("An occurrence must carry its nominal slot.", nameof(occurrence));
 
         var outcome = new SqlParameter("@Outcome", SqlDbType.Int) { Direction = ParameterDirection.Output };
 
@@ -344,11 +345,6 @@ public class SqlServerTaskStorage(
             nameof(RetrievePending), ct);
 
     /// <inheritdoc />
-    public override Task<int> GetCurrentRunCount(Guid taskId) =>
-        RereadOnDeadlockAsync(_ => base.GetCurrentRunCount(taskId), nameof(GetCurrentRunCount),
-            CancellationToken.None);
-
-    /// <inheritdoc />
     public override Task<QueuedTask?> GetByTaskKey(string taskKey, CancellationToken ct = default) =>
         RereadOnDeadlockAsync(token => base.GetByTaskKey(taskKey, token), nameof(GetByTaskKey), ct);
 
@@ -370,14 +366,6 @@ public class SqlServerTaskStorage(
         RereadOnDeadlockAsync(token => base.GetLastRunStarts(taskIds, token), nameof(GetLastRunStarts), ct);
 
     /// <inheritdoc />
-    public override Task<StatusAudit[]> GetStatusAudits(Guid taskId, CancellationToken ct = default) =>
-        RereadOnDeadlockAsync(token => base.GetStatusAudits(taskId, token), nameof(GetStatusAudits), ct);
-
-    /// <inheritdoc />
-    public override Task<RunsAudit[]> GetRunsAudits(Guid taskId, CancellationToken ct = default) =>
-        RereadOnDeadlockAsync(token => base.GetRunsAudits(taskId, token), nameof(GetRunsAudits), ct);
-
-    /// <inheritdoc />
     public override Task<AuditPage<StatusAudit>> GetStatusAuditsPage(Guid taskId, int skip, int take,
                                                                      CancellationToken ct = default) =>
         RereadOnDeadlockAsync(token => base.GetStatusAuditsPage(taskId, skip, take, token),
@@ -388,11 +376,6 @@ public class SqlServerTaskStorage(
                                                                  CancellationToken ct = default) =>
         RereadOnDeadlockAsync(token => base.GetRunsAuditsPage(taskId, skip, take, token),
             nameof(GetRunsAuditsPage), ct);
-
-    /// <inheritdoc />
-    public override Task<int> CountActiveOccurrences(Guid parentId, CancellationToken ct = default) =>
-        RereadOnDeadlockAsync(token => base.CountActiveOccurrences(parentId, token),
-            nameof(CountActiveOccurrences), ct);
 
     /// <summary>Runs a read, re-running it while SQL Server keeps picking it as the deadlock victim.</summary>
     private async Task<T> RereadOnDeadlockAsync<T>(Func<CancellationToken, Task<T>> read, string operation,
