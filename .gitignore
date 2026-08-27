@@ -598,6 +598,11 @@ benchmarks/results/
 /review/recurring-skipforward-deep-review.raw.json
 /review/usp-completerecurringrun-plan-review.md
 /review/usp-completerecurringrun-tdd-plan.md
+/review/recurring-occurrences-phase1-adversarial-review.md
+/review/recurring-occurrences-phase1-adversarial-review.raw.json
+/review/recurring-occurrences-phase1-verification.md
+/review/recurring-occurrences-phase4-adversarial-review.md
+/review/recurring-occurrences-followups.md
 
 # issue23 orchestrator working files (reports are posted to GitHub)
 review/orchestrator/
