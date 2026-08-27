@@ -226,7 +226,8 @@ export function TaskDetailModal({ task }: TaskDetailModalProps) {
           <OctagonX className="h-4 w-4" />
           <AlertTitle>Catch-up halted</AlertTitle>
           <AlertDescription>
-            {task.halt.reason ?? 'The backlog exceeded the configured cap.'}{' '}
+            {task.halt.reason ?? 'The backlog exceeded the configured cap'}
+            {'. '}
             {task.halt.isExact ? '' : 'At least '}
             {task.halt.detectedAtLeast} slot{task.halt.detectedAtLeast === 1 ? ' was' : 's were'} due at cursor{' '}
             {formatDate(task.halt.cursorUtc)}, decided {formatDate(task.halt.atUtc)} against schedule version{' '}
