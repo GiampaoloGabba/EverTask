@@ -1,7 +1,9 @@
 using EverTask.Dispatcher;
 using EverTask.Logger;
 using EverTask.Scheduler.Recurring;
+using EverTask.Scheduler.Recurring.Intervals;
 using EverTask.Storage;
+using EverTask.Tests.TestHelpers;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 
@@ -37,6 +39,53 @@ public class WorkerServiceRecoveryPoisonTests
             public static readonly NullScope Instance = new();
             public void Dispose() { }
         }
+    }
+
+    [Fact]
+    public async Task Should_route_exclusion_budget_exhaustion_through_the_bounded_recovery_counter()
+    {
+        var storage = new MemoryTaskStorage(Mock.Of<IEverTaskLogger<MemoryTaskStorage>>());
+        var row = new QueuedTask
+        {
+            Id              = Guid.NewGuid(),
+            Type            = typeof(RecoveryFailProbeTask).AssemblyQualifiedName!,
+            Request         = JsonConvert.SerializeObject(new RecoveryFailProbeTask()),
+            Handler         = "seeded-by-test",
+            Status          = QueuedTaskStatus.Queued,
+            IsRecurring     = true,
+            RecurringTask   = JsonConvert.SerializeObject(new RecurringTask
+            {
+                MinuteInterval = new MinuteInterval(1)
+            }),
+            NextRunUtc      = DateTimeOffset.UtcNow.AddMinutes(-1),
+            CurrentRunCount = 0,
+            CreatedAtUtc    = DateTimeOffset.UtcNow.AddMinutes(-5)
+        };
+
+        await storage.Persist(row);
+
+        var dispatcher = new Mock<ITaskDispatcherInternal>();
+        dispatcher.Setup(d => d.ExecuteDispatch(It.IsAny<IEverTask>(), It.IsAny<DateTimeOffset?>(),
+                      It.IsAny<RecurringTask?>(), It.IsAny<int?>(), It.IsAny<CancellationToken>(),
+                      It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<AuditLevel?>(), It.IsAny<bool>(),
+                      It.IsAny<DispatchRowMetadata>()))
+                  .ThrowsAsync(new ExclusionSearchBudgetExceededException(row.NextRunUtc.Value));
+
+        var service = RecoveryHarness.CreateRecoveryService(storage, maxAttempts: 2, dispatcher.Object);
+
+        await service.ProcessPendingAsync();
+
+        var retriable = (await storage.Get(t => t.Id == row.Id))[0];
+        retriable.Status.ShouldBe(QueuedTaskStatus.Queued);
+        retriable.NextRunUtc.ShouldBe(row.NextRunUtc);
+        retriable.RecoveryDispatchFailureCount.ShouldBe(1);
+
+        await service.ProcessPendingAsync();
+
+        var poisoned = (await storage.Get(t => t.Id == row.Id))[0];
+        poisoned.Status.ShouldBe(QueuedTaskStatus.Failed);
+        poisoned.NextRunUtc.ShouldBeNull();
+        poisoned.RecoveryDispatchFailureCount.ShouldBe(2);
     }
 
     [Fact]

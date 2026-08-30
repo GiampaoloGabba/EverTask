@@ -80,6 +80,31 @@ internal sealed class DueSlotEnumerator(IScheduleEvaluator evaluator, TimeSpan m
     {
         ArgumentNullException.ThrowIfNull(definition);
 
+        if (definition.Exclusions is null)
+        {
+            return await PlanCoreAsync(definition, cursorUtc, nowUtc, currentRunCount, activeOccurrences,
+                             identity, ct)
+                         .ConfigureAwait(false);
+        }
+
+        var normalized = await evaluator
+                               .NormalizeCursorAsync(definition, cursorUtc, currentRunCount, identity, ct)
+                               .ConfigureAwait(false);
+
+        if (normalized is not { } currentCursor)
+            return new DueSlotPlan { NextCursorUtc = null };
+
+        var plan = await PlanCoreAsync(definition, currentCursor, nowUtc, currentRunCount, activeOccurrences,
+                           identity, ct)
+                       .ConfigureAwait(false);
+
+        return currentCursor == cursorUtc ? plan : plan with { NormalizedCursorUtc = currentCursor };
+    }
+
+    private async Task<DueSlotPlan> PlanCoreAsync(
+        RecurringTask definition, DateTimeOffset cursorUtc, DateTimeOffset nowUtc, int currentRunCount,
+        int activeOccurrences, ScheduleIdentity identity, CancellationToken ct)
+    {
         var settings      = definition.Misfire;
         var policy        = definition.MisfirePolicy;
         var maxPending    = settings?.MaxPendingOccurrences ?? 1;

@@ -1016,6 +1016,17 @@ public class Dispatcher(
         DateTimeOffset? executionTime, Guid? existingTaskId, int? currentRun, DateTimeOffset nowUtc,
         ScheduleIdentity identity, CancellationToken ct)
     {
+        if (recurring.Exclusions != null && existingNextRunUtc is { } storedCursor)
+        {
+            existingNextRunUtc = await Evaluator
+                                      .NormalizeCursorAsync(recurring, storedCursor,
+                                          existingCurrentRunCount ?? currentRun ?? 0, identity, ct)
+                                      .ConfigureAwait(false);
+
+            if (existingNextRunUtc is null)
+                return new RecurringRunDecision(null, true);
+        }
+
         // A DURABLE schedule's cursor belongs to the materializer, which owns every decision about a slot
         // that came due — the grace window, the skip-forward and the finalization are all the inline path's
         // answers to a misfire, and applying them here would silently consume the backlog the misfire policy

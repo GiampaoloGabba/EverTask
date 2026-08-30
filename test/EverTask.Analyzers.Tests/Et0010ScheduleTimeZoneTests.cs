@@ -61,6 +61,14 @@ public class Et0010ScheduleTimeZoneTests
     [InlineData("""r.RunAt(DateTimeOffset.UtcNow).Then().EveryDay().InTimeZone("Europe/Rome")""")]
     public Task Reports_nothing_on_a_calendar_chain(string chain) => VerifyChainAsync(chain);
 
+    [Theory]
+    [InlineData("""r.Schedule().EveryHour().ExceptWeekends().InTimeZone("Europe/Rome")""")]
+    [InlineData("""r.Schedule().EveryHour().InTimeZone("Europe/Rome").ExceptWeekends()""")]
+    [InlineData("""r.Schedule().EveryHour().Except(e => e.OnDays(DayOfWeek.Saturday)).InTimeZone("Europe/Rome")""")]
+    [InlineData("""r.Schedule().EveryHour().InTimeZone("Europe/Rome").Except(e => e.OnDates(new DateOnly(2026, 12, 25)))""")]
+    public Task Should_not_report_when_an_exclusion_appears_anywhere_in_the_completed_chain(string chain) =>
+        VerifyChainAsync(chain);
+
     [Fact]
     public Task Reports_nothing_when_the_chain_is_split_over_a_variable() => VerifyAsync("""
         using System;
@@ -137,6 +145,11 @@ public class Et0010ScheduleTimeZoneTests
                 IIntervalSchedulerBuilder Schedule();
             }
             public interface IThenableSchedulerBuilder { IIntervalSchedulerBuilder Then(); }
+            public interface IExclusionBuilder
+            {
+                IExclusionBuilder OnDays(params DayOfWeek[] days);
+                IExclusionBuilder OnDates(params DateOnly[] dates);
+            }
             public interface IIntervalSchedulerBuilder
             {
                 IBuildableSchedulerBuilder UseCron(string cronExpression);
@@ -154,6 +167,8 @@ public class Et0010ScheduleTimeZoneTests
                 IIntervalSchedulerBuilder InTimeZone(string timeZoneId);
                 IIntervalSchedulerBuilder WithDurableOccurrences();
                 IIntervalSchedulerBuilder BackfillFrom(DateTimeOffset startUtc);
+                IIntervalSchedulerBuilder Except(Action<IExclusionBuilder> configure);
+                IIntervalSchedulerBuilder ExceptWeekends();
             }
             public interface IEverySchedulerBuilder
             {
@@ -172,6 +187,8 @@ public class Et0010ScheduleTimeZoneTests
                 IHourSchedulerBuilder InTimeZone(TimeZoneInfo timeZone);
                 IHourSchedulerBuilder InTimeZone(string timeZoneId);
                 IHourSchedulerBuilder WithDurableOccurrences();
+                IHourSchedulerBuilder Except(Action<IExclusionBuilder> configure);
+                IHourSchedulerBuilder ExceptWeekends();
             }
             public interface IMinuteSchedulerBuilder
             {
@@ -181,6 +198,8 @@ public class Et0010ScheduleTimeZoneTests
                 IMinuteSchedulerBuilder InTimeZone(TimeZoneInfo timeZone);
                 IMinuteSchedulerBuilder InTimeZone(string timeZoneId);
                 IMinuteSchedulerBuilder WithDurableOccurrences();
+                IMinuteSchedulerBuilder Except(Action<IExclusionBuilder> configure);
+                IMinuteSchedulerBuilder ExceptWeekends();
             }
             public interface IBuildableSchedulerBuilder
             {
@@ -189,6 +208,8 @@ public class Et0010ScheduleTimeZoneTests
                 IBuildableSchedulerBuilder InTimeZone(TimeZoneInfo timeZone);
                 IBuildableSchedulerBuilder InTimeZone(string timeZoneId);
                 IBuildableSchedulerBuilder WithDurableOccurrences();
+                IBuildableSchedulerBuilder Except(Action<IExclusionBuilder> configure);
+                IBuildableSchedulerBuilder ExceptWeekends();
             }
             public interface IDailyTimeSchedulerBuilder : IBuildableSchedulerBuilder
             {

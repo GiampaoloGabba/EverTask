@@ -1,12 +1,11 @@
 namespace EverTask.Scheduler.Occurrences;
 
 /// <summary>
-/// How long a schedule waits before asking its <see cref="INextOccurrenceProvider"/> again, after the provider
-/// could not answer.
+/// How long a schedule waits before retrying an occurrence evaluation after a provider could not answer or an
+/// exclusion search exhausted its budget.
 /// </summary>
 /// <remarks>
-/// A provider failure is transient by contract — the application's own database being briefly unavailable must
-/// not end a series — so the schedule writes nothing and comes back. The wait doubles from
+/// Neither failure is the end of a series, so the schedule keeps its cursor and comes back. The wait doubles from
 /// <see cref="InitialBackoff"/> at each consecutive failure of the same schedule and stops at
 /// <see cref="MaxBackoff"/>; one answer resets it.
 /// </remarks>
@@ -53,14 +52,14 @@ public sealed class OccurrenceProviderRetryOptions
         if (value <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(name, value,
-                "The occurrence provider backoff must be positive: a schedule that retries with no wait at " +
+                "The occurrence-evaluation backoff must be positive: a schedule that retries with no wait at " +
                 "all hammers the source that just failed.");
         }
 
         if (value > MaxRetryBackoff)
         {
             throw new ArgumentOutOfRangeException(name, value,
-                "The occurrence provider backoff must be at most one day: it is what brings a stalled " +
+                "The occurrence-evaluation backoff must be at most one day: it is what brings a stalled " +
                 "schedule back without a restart, and a longer one is indistinguishable from none.");
         }
     }

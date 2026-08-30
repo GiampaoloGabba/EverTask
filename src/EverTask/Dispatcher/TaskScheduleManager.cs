@@ -394,9 +394,17 @@ internal sealed class TaskScheduleManager(
         // put there to prevent — drop the work nobody has looked at yet.
         if (keepCursor)
         {
-            return row.NextRunUtc
-                   ?? throw new InvalidOperationException(
-                       $"The schedule {row.Id} has already ended, so there is no cursor to resume from.");
+            var cursor = row.NextRunUtc
+                         ?? throw new InvalidOperationException(
+                             $"The schedule {row.Id} has already ended, so there is no cursor to resume from.");
+
+            if (definition.Exclusions is null)
+                return cursor;
+
+            return await evaluator
+                         .NormalizeCursorAsync(definition, cursor, row.CurrentRunCount ?? 0,
+                             new ScheduleIdentity(row.Id, row.TaskKey, (row.CurrentRunCount ?? 0) + 1), ct)
+                         .ConfigureAwait(false);
         }
 
         if (mode == RescheduleMode.RebaseFromCursor)

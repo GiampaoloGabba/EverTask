@@ -348,6 +348,52 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
         error.Message.ShouldContain("no nominal period");
     }
 
+    [Fact]
+    public async Task Should_recalculate_onto_the_first_non_excluded_grid_slot()
+    {
+        var saturday = new DateTimeOffset(2026, 8, 29, 12, 0, 0, TimeSpan.Zero);
+
+        await StartHostAsync(clock: new FakeTimeProvider(saturday));
+
+        await Dispatcher.Dispatch(new RescheduleProbeTask("filtered-recalculate"),
+            recurring => recurring.Schedule().Every(1).Hours(), taskKey: "filtered-recalculate");
+
+        var result = await Manager.Reschedule("filtered-recalculate",
+            recurring => recurring.Schedule()
+                                  .EveryDay()
+                                  .AtTime(new TimeOnly(9, 0))
+                                  .ExceptWeekends());
+
+        result.NextRunUtc.ShouldBe(new DateTimeOffset(2026, 8, 31, 9, 0, 0, TimeSpan.Zero));
+    }
+
+    [Fact]
+    public async Task Should_surface_exclusion_budget_exhaustion_before_a_schedule_update_is_written()
+    {
+        var saturday = new DateTimeOffset(2026, 8, 29, 12, 0, 0, TimeSpan.Zero);
+
+        await StartHostAsync(clock: new FakeTimeProvider(saturday));
+
+        var id = await Dispatcher.Dispatch(new RescheduleProbeTask("budget-refusal"),
+            recurring => recurring.Schedule().Every(1).Hours(), taskKey: "budget-refusal");
+        var before           = await RowAsync(id);
+        var previousVersion  = before.ScheduleVersion;
+        var previousCursor   = before.NextRunUtc;
+        var previousSchedule = before.RecurringTask;
+
+        await Should.ThrowAsync<ExclusionSearchBudgetExceededException>(() =>
+            Manager.Reschedule("budget-refusal",
+                recurring => recurring.Schedule()
+                                      .Every(7)
+                                      .Days()
+                                      .Except(exclusion => exclusion.OnDays(DayOfWeek.Saturday))));
+
+        var after = await RowAsync(id);
+        after.ScheduleVersion.ShouldBe(previousVersion);
+        after.NextRunUtc.ShouldBe(previousCursor);
+        after.RecurringTask.ShouldBe(previousSchedule);
+    }
+
     // ---- What it refuses --------------------------------------------------------------------------
 
     [Fact]
@@ -1165,6 +1211,59 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
         await Task.Delay(2500);
 
         _recorder.Count.ShouldBe(afterReschedule, "and the per-second grid it belonged to is gone");
+    }
+
+    [Fact]
+    public async Task Should_repark_from_the_winning_row_when_an_exclusion_budget_advance_loses_ownership()
+    {
+        _recorder.Hold = true;
+
+        var saturday = new DateTimeOffset(2026, 8, 29, 12, 0, 0, TimeSpan.Zero);
+        var faulty   = new FaultInjectingTaskStorage(_shared);
+
+        await StartHostAsync(startHost: false, storage: faulty, watchRegistrations: true,
+            clock: new FakeTimeProvider(saturday));
+
+        var definition = new RecurringTask
+        {
+            RunNow      = true,
+            DayInterval = new DayInterval(7),
+            MaxRuns     = 2,
+            Exclusions  = new ScheduleExclusions { Days = [DayOfWeek.Saturday] }
+        };
+        var id = await SeedDurableScheduleAsync(definition, saturday, "budget-race");
+        var work = WorkerExecutor.DoWork(await BuildExecutorAsync(await RowAsync(id)), CancellationToken.None)
+                                 .AsTask();
+
+        await _recorder.Entered.WaitAsync(TimeSpan.FromSeconds(20));
+
+        ScheduleUpdateResult? rescheduled = null;
+        var landed = 0;
+
+        faulty.RunBefore(nameof(ITaskStorage.CompleteRecurringRun), () =>
+        {
+            if (Interlocked.Exchange(ref landed, 1) == 1)
+                return;
+
+            rescheduled = Manager.Reschedule("budget-race", recurring => recurring.Schedule().Every(1).Hours())
+                                 .GetAwaiter().GetResult();
+        });
+
+        _recorder.Release();
+
+        await work;
+
+        await TaskWaitHelper.WaitForConditionAsync(() => Volatile.Read(ref landed) == 1 && rescheduled != null,
+            30000);
+        await TaskWaitHelper.WaitUntilAsync(() => _shared.Get(t => t.Id == id),
+            rows => (rows[0].CurrentRunCount ?? 0) == 1, 30000);
+
+        _registrations.Registrations.Count(registration =>
+                registration.Id == id && registration.Version == rescheduled!.ScheduleVersion &&
+                registration.Accepted)
+            .ShouldBeGreaterThanOrEqualTo(2,
+                "the manager parks its definition, then the losing advance reparks from that same row");
+        _registrations.AcceptedAStaleRegistration(id).ShouldBeFalse();
     }
 
     [Fact]

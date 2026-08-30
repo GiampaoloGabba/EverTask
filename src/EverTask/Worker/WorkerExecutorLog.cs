@@ -240,4 +240,18 @@ internal static partial class WorkerExecutorLog
                   "cancellation this ending must not erase")]
     public static partial void EndingOutcomeNotPersisted(this ILogger logger, Guid taskId, QueuedTaskStatus status,
                                                          int deliveredVersion);
+
+    [LoggerMessage(EventId = 1244, Level = LogLevel.Warning,
+        Message = "Exclusion search for schedule {TaskId} exhausted at {StandingInstant:O} " +
+                  "({Failures} consecutive failure(s)); the cursor was retained and the schedule is parked " +
+                  "to retry at {RetryAtUtc:O}")]
+    public static partial void ExclusionSearchDeferred(this ILogger logger, Exception exception, Guid taskId,
+                                                       DateTimeOffset standingInstant, int failures,
+                                                       DateTimeOffset retryAtUtc);
+
+    [LoggerMessage(EventId = 1245, Level = LogLevel.Error,
+        Message = "Schedule {TaskId} could not be parked after its exclusion search exhausted at " +
+                  "{StandingInstant:O}; the retained cursor waits for startup recovery")]
+    public static partial void ExclusionSearchRetryParkFailed(this ILogger logger, Exception exception, Guid taskId,
+                                                              DateTimeOffset standingInstant);
 }

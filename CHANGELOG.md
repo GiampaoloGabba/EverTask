@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [4.0.0] - 2026-08-26
 
+### Added (recurring exclusions, #36)
+
+- **Built-in recurring grids can exclude fixed moments.** `.Except(...)` unions whole weekdays, dates and
+  absolute half-open windows; `.ExceptWeekends()` is the Saturday/Sunday shortcut. Exclusions are serialized
+  with the definition and apply inside the occurrence grid, so excluded slots consume no run, misfire count,
+  durable row, audit or event. First-run overrides remain explicit and unfiltered.
+- **The filtered grid works throughout the pipeline:** cron and every built-in interval, time-zone/DST date
+  semantics, skip-forward and recovery grace, CatchUp/FireOnce/Skip, SkipOldest, backfill, durable
+  materialization, cursor normalization after definition drift, and runtime `RecalculateFromNow`.
+  `INextOccurrenceProvider` and `RebaseFromCursor` are deliberately refused with exclusions.
+- **Search exhaustion is a failure, never a false end-of-series.** New definitions surface it before any
+  write; startup recovery uses its bounded poison counter; materialization re-parks; a live advance records
+  the completed run with its cursor retained and retries under doubling backoff.
+
 ### Added (monitoring the durable side, #30)
 
 - **The dashboard and the REST API report occurrences.** A task's detail says which schedule it belongs to,

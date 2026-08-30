@@ -43,6 +43,57 @@ public class DueSlotEnumeratorTests
         MaxPendingOccurrences = maxPending
     };
 
+    [Fact]
+    public async Task Should_normalize_an_excluded_cursor_without_counting_or_materializing_it()
+    {
+        var cursor   = Now.AddMinutes(1);
+        var schedule = MinuteSchedule();
+        schedule.Exclusions = new ScheduleExclusions
+        {
+            Ranges = [new ExclusionRange { FromUtc = cursor, ToUtc = cursor.AddSeconds(30) }]
+        };
+
+        var plan = await _enumerator.PlanAsync(schedule, cursor, Now, 0, 0);
+
+        plan.NormalizedCursorUtc.ShouldBe(cursor.AddMinutes(1));
+        plan.NextCursorUtc.ShouldBe(cursor.AddMinutes(1));
+        plan.Slots.ShouldBeEmpty();
+        plan.Losses.ShouldBeEmpty();
+        plan.Misfire.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Should_not_exempt_a_stale_specific_run_time_from_cursor_normalization()
+    {
+        var cursor   = Now.AddMinutes(1);
+        var schedule = MinuteSchedule();
+        schedule.SpecificRunTime = Now.AddHours(-1);
+        schedule.Exclusions = new ScheduleExclusions
+        {
+            Ranges = [new ExclusionRange { FromUtc = cursor, ToUtc = cursor.AddSeconds(30) }]
+        };
+
+        var plan = await _enumerator.PlanAsync(schedule, cursor, Now, 0, 0);
+
+        plan.NormalizedCursorUtc.ShouldBe(cursor.AddMinutes(1));
+    }
+
+    [Fact]
+    public async Task Should_preserve_a_pending_specific_run_time_inside_an_exclusion()
+    {
+        var schedule = MinuteSchedule();
+        schedule.SpecificRunTime = Now;
+        schedule.Exclusions = new ScheduleExclusions
+        {
+            Ranges = [new ExclusionRange { FromUtc = Now, ToUtc = Now.AddSeconds(30) }]
+        };
+
+        var plan = await _enumerator.PlanAsync(schedule, Now, Now, 0, 0);
+
+        plan.NormalizedCursorUtc.ShouldBeNull();
+        plan.Slots.ShouldBe([Now]);
+    }
+
     // ---- Skip -------------------------------------------------------------------------------------
 
     [Fact]
@@ -1073,6 +1124,14 @@ public class DueSlotEnumeratorTests
         {
             Interlocked.Increment(ref _calls);
             return inner.FirstOccurrenceOnOrAfterAsync(definition, instant, identity, ct);
+        }
+
+        public ValueTask<DateTimeOffset?> NormalizeCursorAsync(
+            RecurringTask definition, DateTimeOffset cursor, int currentRunCount,
+            ScheduleIdentity identity = default, CancellationToken ct = default)
+        {
+            Interlocked.Increment(ref _calls);
+            return inner.NormalizeCursorAsync(definition, cursor, currentRunCount, identity, ct);
         }
 
         public ValueTask<IReadOnlyList<DateTimeOffset>> EnumerateDueSlotsAsync(

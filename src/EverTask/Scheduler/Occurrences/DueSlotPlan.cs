@@ -72,6 +72,11 @@ internal readonly record struct SlotLoss(SlotLossReason Reason, DateTimeOffset F
 /// </remarks>
 internal sealed record DueSlotPlan
 {
+    /// <summary>
+    /// The inclusive current-grid replacement for the persisted cursor, when normalization moved it.
+    /// </summary>
+    public DateTimeOffset? NormalizedCursorUtc { get; init; }
+
     /// <summary>The slots to materialize, oldest first. Consecutive on the grid.</summary>
     public IReadOnlyList<DateTimeOffset> Slots { get; init; } = [];
 

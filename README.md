@@ -40,6 +40,7 @@ Tasks can be CPU-bound or I/O-bound, long- or short-running. Works with ASP.NET 
   and whether its delivery is late or replayed work (`Context.Misfire`)
 - **Runtime schedule management**: change, re-evaluate, resume or cancel a schedule while the app is running
 - **Custom occurrence providers**: compute the next run yourself, from a calendar the library cannot know
+- **Fixed recurring exclusions**: subtract weekdays, dates and absolute maintenance windows from any built-in interval or cron grid
 - **Idempotent registration**: a task key keeps duplicate recurring registrations out
 
 ### Performance & scalability

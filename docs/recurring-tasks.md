@@ -54,6 +54,35 @@ await dispatcher.Dispatch(
     builder => builder.RunNow().Then().EveryHour());
 ```
 
+## Excluding moments
+
+Subtract fixed weekdays, dates or absolute windows from any built-in interval or cron grid:
+
+```csharp
+.Schedule().Every(1).Days().AtTime(new TimeOnly(8, 0))
+    .Except(e => e
+        .OnDays(DayOfWeek.Saturday, DayOfWeek.Sunday)
+        .OnDates(new DateOnly(2026, 12, 25))
+        .Between(maintenanceStart, maintenanceEnd))
+
+.Schedule().Every(4).Hours().ExceptWeekends()
+```
+
+Calls to `Except` are additive and repeatable. `OnDays` and `OnDates` use the schedule's persisted time zone,
+or UTC when none is named; `Between(from, to)` compares absolute instants in the half-open range `[from, to)`.
+`ExceptWeekends()` is sugar for excluding Saturday and Sunday.
+
+An excluded grid slot does not exist: it consumes no `MaxRuns` budget, misfire or skipped count, durable row,
+audit entry, log or monitoring event. Explicit first-run overrides (`RunNow`, `RunDelayed`, `RunAt`) are not
+grid slots and are not filtered.
+
+Exclusions compose with cron and every built-in interval. They automatically apply to `RunUntil`, misfire
+`Skip`/`FireOnce`/`CatchUp`, `SkipOldest`, backfill and durable occurrences because all of those operate on the
+filtered grid. They cannot be combined with `INextOccurrenceProvider`, whose implementation owns its own
+calendar. `RescheduleMode.RebaseFromCursor` is also refused when either definition has exclusions; use
+`RecalculateFromNow`. A search that cannot find a usable slot within the fixed evaluation budget fails
+explicitly—it is never treated as the end of the series.
+
 ## Topics
 
 ### [Overview](recurring-tasks/overview.md)

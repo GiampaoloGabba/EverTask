@@ -255,6 +255,25 @@ everywhere, so `InTimeZone` on one throws rather than doing nothing.
 
 Full rules, including what happens on the two transition days, are in [Time Zones](time-zones.md).
 
+## Excluding moments
+
+Use `.Except(...)` to subtract whole weekdays, whole dates and absolute half-open windows from the grid;
+calls union together. `.ExceptWeekends()` is the Saturday/Sunday shortcut.
+
+```csharp
+builder.Schedule().EveryDay().AtTime(new TimeOnly(8, 0))
+       .Except(e => e.OnDays(DayOfWeek.Saturday, DayOfWeek.Sunday)
+                     .OnDates(new DateOnly(2026, 12, 25))
+                     .Between(maintenanceStart, maintenanceEnd));
+
+builder.Schedule().Every(4).Hours().ExceptWeekends();
+```
+
+Day/date exclusions use the persisted schedule zone (or UTC); `Between` compares instants. Excluded slots
+consume no run or misfire count and produce no durable occurrence. Built-in intervals and cron are supported;
+occurrence providers and `RescheduleMode.RebaseFromCursor` are not. See [Recurring Tasks](../recurring-tasks.md#excluding-moments)
+for the full interaction rules.
+
 ## Complex Schedules
 
 ```csharp

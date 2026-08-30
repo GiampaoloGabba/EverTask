@@ -280,6 +280,21 @@ internal sealed class OccurrenceMaterializer
                              ct)
                          .ConfigureAwait(false);
 
+        if (plan.NormalizedCursorUtc is { } normalizedCursor)
+        {
+            if (!await storage
+                      .TryAdvanceScheduleCursor(parentId, snapshot.ScheduleVersion, snapshot.CursorUtc,
+                          normalizedCursor, ct)
+                      .ConfigureAwait(false))
+            {
+                _logger.CursorAdvanceLost(parentId);
+                RePark(executor, parentId, now + _options.BacklogRetryInterval);
+                return;
+            }
+
+            snapshot = snapshot with { CursorUtc = normalizedCursor };
+        }
+
         foreach (var loss in plan.Losses)
             ReportLoss(executor, parentId, loss);
 

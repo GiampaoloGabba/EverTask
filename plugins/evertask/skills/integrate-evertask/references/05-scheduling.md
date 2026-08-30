@@ -87,16 +87,17 @@ r => r.Schedule().UseCron("0 2 * * *").InTimeZone("Asia/Tokyo")
 | Semantics | Schedules | A zone… |
 |---|---|---|
 | **Calendar** | days/weeks/months (`EveryDay`, `Every(3).Days()`, …), `AtTime`/`AtTimes`, `OnDays`, `OnMonths`, `UseCron` | governs them |
-| **Elapsed** | `Every(n).Seconds()/.Minutes()/.Hours()`, `EverySecond`/`EveryMinute`/`EveryHour` (+ `AtSecond`/`AtMinute`) | is **refused** |
+| **Elapsed** | `Every(n).Seconds()/.Minutes()/.Hours()`, `EverySecond`/`EveryMinute`/`EveryHour` (+ `AtSecond`/`AtMinute`) | is refused unless day/date exclusions need its calendar clock |
 
 - A day, week or month cadence is calendar-anchored even without `AtTime`: it defaults to midnight, and
   midnight is a local time. `Every(3).Days()` in Rome fires at local midnight.
 - There is no hourly calendar selector. `OnHours()` is not one (see above), so an hour of the day is named the
   same way as any other: `EveryDay().AtTimes(new TimeOnly(8,0), new TimeOnly(20,0)).InTimeZone(...)`.
-- `InTimeZone` on an elapsed cadence throws `InvalidOperationException` when the schedule is **built** (not at
+- `InTimeZone` on an elapsed cadence without day/date exclusions throws `InvalidOperationException` when the schedule is **built** (not at
   the call): an elapsed step is the same set of instants in every zone. `AtMinute`/`AtSecond` therefore align
   on UTC — `EveryHour().AtMinute(30)` fires at :00 local in India (+05:30) and :15 in Nepal (+05:45).
-  Analyzer **ET0010** warns at compile time on a chain it can prove is elapsed; a chain split over a variable
+  Analyzer **ET0010** warns at compile time on a completed chain it can prove is elapsed; `Except` or
+  `ExceptWeekends` anywhere in that chain suppresses it. A chain split over a variable
   or a helper method is left to the exception, so a clean build proves nothing on its own.
 - An id this machine cannot resolve, or a `TimeZoneInfo.CreateCustomTimeZone` zone, throws `ArgumentException`
   at build. A stored id that stops resolving later is poisoned at recovery like a corrupt cron.
@@ -108,9 +109,34 @@ r => r.Schedule().UseCron("0 2 * * *").InTimeZone("Asia/Tokyo")
   hour (Lord Howe moves 30 minutes). An elapsed cadence is untouched by both: it fires twice through the
   repeated hour, and 01:45 + 30 min is 03:15 local across the gap.
 - Global default: `SetDefaultScheduleTimeZone(TimeZoneInfo)` (`01-setup.md`), applied at dispatch to calendar
-  schedules that did not call `InTimeZone`. It is written INTO the definition, so existing rows never move.
+  schedules and day/date exclusions that did not call `InTimeZone`. It is written INTO the definition, so existing rows never move.
 - The handler reads `Context.TimeZoneId` and `Context.ScheduledAtLocal` (offset included, which is what tells
   the two passes of a fall-back apart); both are null for a schedule with no zone.
+
+## Fixed exclusions
+
+Subtract moments from any built-in interval or cron grid:
+
+```csharp
+r => r.Schedule().EveryDay().AtTime(new TimeOnly(8,0))
+      .Except(e => e.OnDays(DayOfWeek.Saturday, DayOfWeek.Sunday)
+                    .OnDates(new DateOnly(2026,12,25))
+                    .Between(maintenanceStart, maintenanceEnd))
+
+r => r.Schedule().Every(4).Hours().ExceptWeekends()
+```
+
+- `Except` calls union. `OnDays`/`OnDates` use the persisted schedule zone or UTC; `Between` is an absolute
+  half-open `[from, to)` range. `ExceptWeekends()` excludes Saturday and Sunday.
+- An excluded grid slot does not exist: no run budget, misfire count, durable occurrence, audit or event.
+  `RunNow`/`RunDelayed`/`RunAt` first-run overrides are explicit instants and stay unfiltered.
+- Works with built-in intervals, cron, `RunUntil`, all misfire policies, `SkipOldest`, backfill and durable
+  occurrences. Refuse it with `UseOccurrenceProvider`: that provider owns its calendar.
+- `RescheduleMode.RebaseFromCursor` is refused when either definition has exclusions; use
+  `RecalculateFromNow`.
+- Evaluation has a fixed search budget. Exhaustion surfaces at dispatch/schedule management without a write;
+  live schedules retry with the `SetOccurrenceProviderRetry` backoff, while startup recovery uses its bounded
+  poison counter. Never interpret it as a completed series.
 
 ## Cron
 

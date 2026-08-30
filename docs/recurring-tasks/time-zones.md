@@ -68,15 +68,15 @@ Not every schedule has anything for a zone to move. EverTask classifies each one
 | Semantics | Schedules | What a zone does |
 |-----------|-----------|------------------|
 | **Calendar** | `EveryDay`, `EveryWeek`, `EveryMonth`, `Every(n).Days()/.Weeks()/.Months()`, `OnDays`, `OnMonths`, `AtTime`/`AtTimes`, `UseCron` | Governs them. The calendar is read on the zone's clock. |
-| **Elapsed** | `Every(n).Seconds()`, `Every(n).Minutes()`, `Every(n).Hours()`, with `AtSecond` / `AtMinute` | Nothing. These are constant steps in elapsed time and produce identical instants in every zone. |
+| **Elapsed** | `Every(n).Seconds()`, `Every(n).Minutes()`, `Every(n).Hours()`, with `AtSecond` / `AtMinute` | Nothing on the grid. A day/date exclusion may still use the zone as its calendar clock. |
 
 A cadence in days, weeks or months sits in the first row, not the second. It lands on a time of day (midnight,
 if you never named one), and a time of day only means something on a clock. `Every(3).Days()` in Rome fires at
 local midnight, so the step across the March transition is 71 hours and the one across October is 73. Seconds,
 minutes and hours have no such component to read.
 
-`InTimeZone` on an elapsed schedule throws `InvalidOperationException` when the schedule is built, rather than
-being accepted and quietly ignored:
+`InTimeZone` on an elapsed schedule without day/date exclusions throws `InvalidOperationException` when the
+schedule is built, rather than being accepted and quietly ignored:
 
 ```csharp
 // Throws: "every 30 minutes" is the same set of instants everywhere
@@ -89,12 +89,13 @@ reports **ET0010** on that line at compile time, with the same explanation:
 ```
 warning ET0010: 'InTimeZone' throws when this schedule is built: a plain cadence (every N
 seconds/minutes/hours) is a constant step in elapsed time and produces the same instants in every zone;
-anchor the schedule to a calendar (a time of day, a day of the week, a month selector or a cron
-expression) or drop the call
+anchor the schedule to a calendar (a time of day, a day of the week, a month selector, a cron
+expression or a day/date exclusion) or drop the call
 ```
 
-It is a warning, not the guard: the exception is what enforces the rule, and the analyzer only reports what it
-can prove from the chain in front of it. A chain broken over a variable or returned by a helper method gets
+It is a warning, not the guard: the exception is what enforces the rule, and the analyzer considers the
+completed chain, so `Except`/`ExceptWeekends` before or after `InTimeZone` suppresses it. A chain broken over a
+variable or returned by a helper method gets
 nothing, so a clean build is not a promise that every schedule is fine. Tune or silence it like any other
 diagnostic:
 

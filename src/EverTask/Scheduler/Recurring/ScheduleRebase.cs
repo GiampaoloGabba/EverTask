@@ -226,6 +226,14 @@ internal static class ScheduleRebase
     /// </remarks>
     private static void RequireSameShape(RecurringTask current, RecurringTask replacement)
     {
+        if (current.Exclusions != null || replacement.Exclusions != null)
+        {
+            throw new InvalidOperationException(
+                "A schedule with exclusions cannot be rebased because adding or removing an exclusion shifts " +
+                "the ordinal position of every later occurrence. Reschedule with " +
+                "RescheduleMode.RecalculateFromNow instead.");
+        }
+
         if (current.PeriodKind == SchedulePeriodKind.None || replacement.PeriodKind == SchedulePeriodKind.None)
         {
             var shape = current.Provider != null || replacement.Provider != null

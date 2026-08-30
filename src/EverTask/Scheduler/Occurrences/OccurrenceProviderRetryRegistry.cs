@@ -3,12 +3,12 @@ using System.Collections.Concurrent;
 namespace EverTask.Scheduler.Occurrences;
 
 /// <summary>
-/// How many times in a row each schedule's occurrence provider has failed on this host, and therefore how long
-/// the next attempt waits.
+/// How many times in a row each schedule's occurrence evaluation has failed without ending the series on this
+/// host, and therefore how long the next attempt waits.
 /// </summary>
 /// <remarks>
 /// In memory on purpose, and per host: it is a backoff, not state. A crash loses nothing that matters —
-/// the schedule row was never written, so startup recovery asks the provider again and the wait starts over
+/// the schedule row retained its cursor, so startup recovery asks the grid again and the wait starts over
 /// at <see cref="OccurrenceProviderRetryOptions.InitialBackoff"/>.
 /// </remarks>
 internal sealed class OccurrenceProviderRetryRegistry(EverTaskServiceConfiguration options)
@@ -33,16 +33,16 @@ internal sealed class OccurrenceProviderRetryRegistry(EverTaskServiceConfigurati
         return (BackoffFor(failures), failures);
     }
 
-    /// <summary>Forgets <paramref name="scheduleId"/>'s failures: its provider answered.</summary>
+    /// <summary>Forgets <paramref name="scheduleId"/>'s failures: its occurrence evaluation succeeded.</summary>
     public void RecordSuccess(Guid scheduleId) => Forget(scheduleId);
 
     /// <summary>
     /// Forgets a schedule that will not ask again: it was cancelled, removed, or its series ended.
     /// </summary>
     /// <remarks>
-    /// An answer is the ordinary way an entry goes away; this covers the schedules that never got one —
-    /// cancelled mid-outage, or moved onto a grid with no provider at all — so a host does not keep an entry
-    /// per schedule it ever had. Same lifetime, and the same call sites, as the published schedule version.
+    /// An answer is the ordinary way an entry goes away; this covers schedules cancelled mid-failure or moved
+    /// onto a definition that no longer fails, so a host does not keep an entry per schedule it ever had. Same
+    /// lifetime, and the same call sites, as the published schedule version.
     /// </remarks>
     public void Forget(Guid scheduleId)
     {
@@ -58,8 +58,8 @@ internal sealed class OccurrenceProviderRetryRegistry(EverTaskServiceConfigurati
     /// </summary>
     /// <remarks>
     /// The doubling stops AT the cap rather than being computed and clamped afterwards: an initial backoff
-    /// measured in hours reaches the ceiling in a handful of failures, and a schedule whose provider has been
-    /// down for a day would otherwise overflow the tick arithmetic on the way to a value the cap discards.
+    /// measured in hours reaches the ceiling in a handful of failures, and a schedule that has failed for a day
+    /// would otherwise overflow the tick arithmetic on the way to a value the cap discards.
     /// </remarks>
     private TimeSpan BackoffFor(int failures)
     {

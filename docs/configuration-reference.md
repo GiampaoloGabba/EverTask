@@ -252,7 +252,8 @@ opt.SetMisfireThreshold(TimeSpan.FromMinutes(5))
 
 ### SetDefaultScheduleTimeZone
 
-Sets the time zone every calendar-anchored schedule is read on when it does not name one itself.
+Sets the time zone every calendar-anchored schedule or day/date exclusion is read on when it does not name
+one itself.
 
 **Signature:**
 ```csharp
@@ -274,8 +275,10 @@ r.Schedule().EveryDay().AtTime(new TimeOnly(9, 0)).InTimeZone("Asia/Tokyo")
 ```
 
 **Notes:**
-- It applies at dispatch, to schedules built through `Dispatch(task, r => ...)` that are **calendar-anchored** (days, weeks, months, `AtTime`/`AtTimes`, weekday and month selectors, cron) and did not call `InTimeZone`. An explicit `InTimeZone` always wins.
-- A plain cadence (`Every(n).Seconds/Minutes/Hours`) is never touched: it is a constant step in elapsed time and produces identical instants in every zone, and `InTimeZone` on one throws.
+- It applies at dispatch to calendar-anchored schedules and schedules carrying `Except` day/date selectors,
+  when they did not call `InTimeZone`. An explicit `InTimeZone` always wins.
+- A plain cadence without calendar exclusions is never touched. A cadence with `Except(e => e.OnDays/OnDates)`
+  keeps its elapsed grid and uses the zone only to decide the excluded local date.
 - The zone is written **into the definition** when the schedule is built. Rows already stored keep whatever they were dispatched with, so changing this default later does not silently move existing schedules by an hour; re-register them under the same `taskKey` to move them.
 - See [Recurring Tasks › Time Zones](recurring-tasks/time-zones.md) for daylight-saving behaviour and the id rules.
 
@@ -347,7 +350,8 @@ opt.SetBacklogRetryInterval(TimeSpan.FromSeconds(15))
 
 ### SetOccurrenceProviderRetry
 
-Sets how long a schedule waits before asking an `INextOccurrenceProvider` that could not answer again.
+Sets how long a live schedule waits before retrying an occurrence evaluation that could not answer: an
+`INextOccurrenceProvider` failure or exclusion-search budget exhaustion.
 
 **Signature:**
 ```csharp
@@ -2204,9 +2208,25 @@ The `Action<IRecurringTaskBuilder>` overload of `Dispatch` configures a recurrin
 - Week → `.OnDay(DayOfWeek)` / `.OnDays(params DayOfWeek[])` → then `.AtTime(...)`.
 - Month → `.OnDay(1–31)` / `.OnDays(params int[])` / `.OnFirst(DayOfWeek)` → then `.AtTime(...)`.
 
+**Exclusions:**
+- `.Except(Action<IExclusionBuilder>)` subtracts any union of whole weekdays (`OnDays`), whole dates
+  (`OnDates`) and absolute half-open windows (`Between(from, to)`, where `from` is included and `to` is not).
+  Calls are additive and repeatable.
+- `.ExceptWeekends()` is exactly `.Except(e => e.OnDays(DayOfWeek.Saturday, DayOfWeek.Sunday))`.
+- Excluded grid slots do not exist: they consume no run, misfire count, durable row, audit or event. First-run
+  overrides from `RunNow`, `RunDelayed` and `RunAt` are explicit instants and are not filtered.
+- Day/date exclusions use the persisted schedule zone, or UTC when none is named. This makes
+  `Every(4).Hours().InTimeZone("Europe/Rome").ExceptWeekends()` legal: the cadence stays elapsed while the zone
+  governs only which local dates are excluded. Absolute `Between` windows compare instants.
+- Allowed with built-in intervals and cron; refused with `INextOccurrenceProvider`. `MaxRuns`, `RunUntil`,
+  misfire policies, `SkipOldest`, backfill and durable occurrences operate on the filtered grid.
+- `RescheduleMode.RebaseFromCursor` is refused when either definition has exclusions; use
+  `RecalculateFromNow`. Evaluation is bounded, and a definition whose filtered grid cannot be found surfaces
+  an error instead of being mistaken for a finished series.
+
 **Cron:** `UseCron("expr")`: 5-field (`min hour dom month dow`) or 6-field (with seconds), via Cronos. **Overrides** every other interval call; invalid expressions throw `ArgumentException` on the first schedule calculation.
 
-**Time zone:** `.InTimeZone(TimeZoneInfo)` / `.InTimeZone(string)`, accepted before the interval (on `Schedule()`), on the interval builder itself (`EveryDay().InTimeZone(z).AtTime(...)`) and after the final refinement: every position but between `Every(n)` and its unit. The id may be IANA or Windows; the IANA form is what gets persisted, inside the schedule definition, with no new column. It governs **calendar-anchored** schedules only: days, weeks and months (cadences included: `Every(3).Days()` lands on local midnight), `AtTime`/`AtTimes`, weekday and month selectors, cron. On a plain cadence (`Every(n).Seconds/Minutes/Hours`, with `AtSecond`/`AtMinute`) it throws `InvalidOperationException` when the schedule is built: an elapsed step is the same set of instants in every zone. An unresolvable id, or a zone with no IANA id, throws `ArgumentException` at build; an id that stops resolving later is poisoned at recovery like a corrupt cron. Across daylight saving, a skipped local time fires at the gap's exit (several slots inside one gap produce one occurrence) and a repeated one fires on its first pass. Global default: [`SetDefaultScheduleTimeZone`](#setdefaultscheduletimezone). Full rules: [Time Zones](recurring-tasks/time-zones.md).
+**Time zone:** `.InTimeZone(TimeZoneInfo)` / `.InTimeZone(string)`, accepted before the interval (on `Schedule()`), on the interval builder itself (`EveryDay().InTimeZone(z).AtTime(...)`) and after the final refinement: every position but between `Every(n)` and its unit. The id may be IANA or Windows; the IANA form is what gets persisted, inside the schedule definition, with no new column. It governs calendar-anchored schedules and the local dates read by day/date exclusions. A plain cadence without calendar exclusions still refuses it. Across daylight saving, a skipped local time fires at the gap's exit and a repeated one fires on its first pass. Global default: [`SetDefaultScheduleTimeZone`](#setdefaultscheduletimezone). Full rules: [Time Zones](recurring-tasks/time-zones.md).
 
 **Occurrence provider:** `.UseOccurrenceProvider(string key, string? config = null)` on `Schedule()`, for a calendar no interval and no cron can express. The grid then comes from the `INextOccurrenceProvider` registered as [`AddOccurrenceProvider<T>(key)`](#addoccurrenceprovidert), which answers "which occurrence comes strictly after this instant" in UTC; `null` ends the series. **Exclusive** with every interval and with cron — a provider replaces the grid instead of refining it, and naming both throws `InvalidOperationException` at build. Only the key and the opaque `config` string are persisted (never a type name), and the schedule's `InTimeZone` id travels to the provider, which is what reads the calendar on it. Everything else applies unchanged: misfire policies, durable occurrences, `MaxRuns`/`RunUntil`, the skip-forward after a downtime, and `ReevaluateSchedule` as the way to say the calendar changed. Two exceptions: `CatchUpOverflowPolicy.SkipOldest` needs `IsDeterministic => true` on the provider (refused at dispatch otherwise) and `RescheduleMode.RebaseFromCursor` is refused, because a provider exposes no nominal period. An unknown key is a configuration error (`ArgumentException` at dispatch, terminal poison at recovery); a provider that throws is transient — nothing is written, the schedule is re-parked after [`SetOccurrenceProviderRetry`](#setoccurrenceproviderretry)'s backoff, and it surfaces as `OccurrenceProviderException` only where a caller is holding the call: a dispatch, and the `ITaskScheduleManager` methods that decide a new cursor (`Reschedule`, `ReevaluateSchedule`). Full rules: [Occurrence Providers](recurring-tasks/occurrence-providers.md).
 

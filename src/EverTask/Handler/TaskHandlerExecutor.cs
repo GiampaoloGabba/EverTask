@@ -95,6 +95,12 @@ public record TaskHandlerExecutor(
     internal DateTimeOffset? ScheduleRetryFromUtc { get; init; }
 
     /// <summary>
+    /// True when an exclusion-search retry must resume the interrupted advance without counting its run
+    /// again. Memory-only; a stored schedule reads the already-advanced counter from its row.
+    /// </summary>
+    internal bool ScheduleRunAlreadyRecorded { get; init; }
+
+    /// <summary>
     /// What the persisted ROW states about this delivery when it is an occurrence — its slot and its run of
     /// the series — or null when the delivery is not one.
     /// </summary>

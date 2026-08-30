@@ -17,6 +17,27 @@ public class ScheduleRebaseTests
     private const string Rome       = "Europe/Rome";
     private const string Kiritimati = "Pacific/Kiritimati";
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Should_refuse_a_rebase_with_exclusions_on_either_definition(bool exclusionsOnCurrent)
+    {
+        var current     = Daily(new TimeOnly(9, 0));
+        var replacement = Daily(new TimeOnly(10, 0));
+        var exclusions  = new ScheduleExclusions { Days = [DayOfWeek.Sunday] };
+
+        if (exclusionsOnCurrent)
+            current.Exclusions = exclusions;
+        else
+            replacement.Exclusions = exclusions;
+
+        var error = Should.Throw<InvalidOperationException>(() =>
+            ScheduleRebase.Rebase(current, replacement,
+                new DateTimeOffset(2026, 8, 31, 9, 0, 0, TimeSpan.Zero)));
+
+        error.Message.ShouldContain(nameof(RescheduleMode.RecalculateFromNow));
+    }
+
     private static RecurringTask Daily(TimeOnly at, string? zone = null, DateTimeOffset? runUntil = null) => new()
     {
         DayInterval = new DayInterval { Interval = 1, OnTimes = [at] },

@@ -55,6 +55,14 @@ internal interface IScheduleEvaluator
         CancellationToken ct = default);
 
     /// <summary>
+    /// Normalizes a persisted cursor onto the current grid, inclusively. A pending first-run override is
+    /// returned unchanged because it is not a grid occurrence.
+    /// </summary>
+    ValueTask<DateTimeOffset?> NormalizeCursorAsync(
+        RecurringTask definition, DateTimeOffset cursor, int currentRunCount,
+        ScheduleIdentity identity = default, CancellationToken ct = default);
+
+    /// <summary>
     /// The slots that have already come due at <paramref name="nowUtc"/>, oldest first: the schedule's own
     /// pending slot <paramref name="cursor"/> and every grid occurrence after it that is not later than
     /// <paramref name="nowUtc"/>, stopping at <c>RunUntil</c>.

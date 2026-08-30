@@ -21,10 +21,10 @@ Every EverTask configuration option at a glance: one row per option with its def
 | `SetDefaultTimeout` | `TimeSpan?` | `null` (no timeout) | Global per-attempt timeout |
 | `SetDefaultAuditLevel` | `AuditLevel` | `Full` | Audit trail verbosity (see table below) |
 | `SetMisfireThreshold` | `TimeSpan` | `5 s` | How late a delivery may start before `ITaskExecutionContext.Misfire` reports it, and how old a due slot must be for a durable schedule to stamp the occurrence it materializes as missed work. Observation only: nothing about execution changes, and the 1 s tolerance of the recurring skip path is untouched. A run of more than one missed slot is reported whatever the threshold |
-| `SetDefaultScheduleTimeZone` | `TimeZoneInfo` | `null` (UTC) | Zone for **calendar-anchored** schedules built without `InTimeZone` (days/weeks/months, `AtTime`, cron). Plain cadences (`Every(n).Seconds/Minutes/Hours`) are never touched. Stamped into the definition at dispatch, so existing rows keep their meaning. Custom zones throw |
+| `SetDefaultScheduleTimeZone` | `TimeZoneInfo` | `null` (UTC) | Zone for **calendar-anchored** schedules and day/date exclusions built without `InTimeZone` (days/weeks/months, `AtTime`, cron, `Except(e => e.OnDays/OnDates)`). Plain cadences without calendar exclusions are never touched. Stamped into the definition at dispatch, so existing rows keep their meaning. Custom zones throw |
 | `SetMaterializationConcurrency` | `int` | same as `SetMaxDegreeOfParallelism` | How many durable schedules may materialize occurrences at once. Bounds the storage burst of a large restart backlog; unrelated to how many occurrences RUN concurrently (queue parallelism) or to `MaxPendingOccurrences` (per schedule). Below 1 throws |
 | `SetBacklogRetryInterval` | `TimeSpan` | `1 min` | How long a durable schedule waits before trying again when it could not make progress (concurrency budget full, or a compare-and-swapped write that lost its race). The normal way it resumes is the kick each occurrence gives when it ends; this is the guarantee behind it. A **halted** catch-up is not retried at all: only an explicit schedule change releases one (`ResumeSchedule`, `Reschedule`, or dispatching the series again after a cancel). Below 1 s or above 1 day throws |
-| `SetOccurrenceProviderRetry` | `Action<OccurrenceProviderRetryOptions>` | `InitialBackoff` 1 min, `MaxBackoff` 15 min | How long a schedule waits before asking an `INextOccurrenceProvider` that could not answer again. A provider failure is TRANSIENT: nothing is written, the cursor stays put, the wait doubles per consecutive failure of that schedule and one answer resets it. Either bound outside `(0, 1 day]` throws |
+| `SetOccurrenceProviderRetry` | `Action<OccurrenceProviderRetryOptions>` | `InitialBackoff` 1 min, `MaxBackoff` 15 min | How long a live schedule waits after its occurrence evaluation could not answer: an `INextOccurrenceProvider` failure or exclusion-search budget exhaustion. The wait doubles per consecutive failure of that schedule and one answer resets it. Either bound outside `(0, 1 day]` throws |
 | `SetThrowIfUnableToPersist` | `bool` | `true` | Throw on storage save failure |
 | `UseShardedScheduler` | `int shardCount = 0` | Off (`PeriodicTimerScheduler`); auto-scale when 0 | High `Schedule()`-call rates (scheduling axis, not task-execution throughput) |
 | `SetUseLazyHandlerResolution` | `bool` | `true` (adaptive) | `DisableLazyHandlerResolution()` to opt out |
@@ -226,6 +226,11 @@ Optional parameters on every `ITaskDispatcher.Dispatch(...)` overload:
 | Cron | `UseCron("expr")` (5- or 6-field; **overrides** all other interval calls) |
 | Provider | `UseOccurrenceProvider(key, config?)` — the grid comes from an `INextOccurrenceProvider` registered as `AddOccurrenceProvider<T>(key)` on the EverTask builder. **Exclusive** with every interval and with cron |
 | Zone | `.InTimeZone(TimeZoneInfo)` / `.InTimeZone(string)` (IANA or Windows id; stored as IANA) |
+| Exclude | `.Except(Action<IExclusionBuilder>)` — adds the callback's selectors to the schedule; calls are additive |
+| Exclude days | `IExclusionBuilder.OnDays(params DayOfWeek[])` — whole weekdays on the exclusion clock |
+| Exclude dates | `IExclusionBuilder.OnDates(params DateOnly[])` — whole dates on the exclusion clock |
+| Exclude range | `IExclusionBuilder.Between(DateTimeOffset from, DateTimeOffset to)` — absolute half-open `[from, to)` window |
+| Exclude weekends | `.ExceptWeekends()` — sugar for excluding Saturday and Sunday |
 | Occurrences | `.WithDurableOccurrences()` · `.OnMisfire(m => m.Skip() / m.FireOnce(FireOnceOptions?) / m.CatchUp(CatchUpOptions))` · `.BackfillFrom(DateTimeOffset)` |
 | Limit | `.RunUntil(DateTimeOffset)` · `.MaxRuns(int)` (counts real runs; skipped-after-downtime don't count. On a DURABLE schedule it counts materializations) |
 
@@ -235,7 +240,7 @@ Optional parameters on every `ITaskDispatcher.Dispatch(...)` overload:
 
 > `OnLast(DayOfWeek)` does **not** exist (only `OnFirst`), and neither does an hourly counterpart of `OnDays`/`OnMonths`: `OnHours()` is on the concrete `IntervalSchedulerBuilder`, not on `IIntervalSchedulerBuilder`, so `Schedule().OnHours()` does not compile, and it selects no hours anyway — it is `EveryHour()`'s cadence. Use a stable `taskKey` for idempotent startup registration.
 
-> **`InTimeZone` governs calendar-anchored schedules only**: days/weeks/months, `AtTime`/`AtTimes`, weekday and month selectors, cron. On a plain cadence (`Every(n).Seconds/Minutes/Hours`, with `AtSecond`/`AtMinute`) it throws `InvalidOperationException` when the schedule is built: an elapsed step is the same set of instants in every zone, and `AtMinute`/`AtSecond` therefore align on UTC. An unresolvable or custom zone throws `ArgumentException` at build; a stored id that stops resolving is poisoned at recovery like a corrupt cron. DST: a skipped local time fires at the gap's exit (several slots inside one gap collapse into one occurrence), a repeated one fires on its first pass. See [Time Zones](recurring-tasks/time-zones.md).
+> **`InTimeZone` governs calendar-anchored schedules and day/date exclusions**. On a plain cadence with no calendar exclusion it throws `InvalidOperationException`: an elapsed step is the same set of instants in every zone. A zone on `Every(4).Hours().ExceptWeekends()` governs only the exclusion calendar; an absolute `Between` window needs no zone. See [Time Zones](recurring-tasks/time-zones.md).
 
 ## Schedule Management (runtime)
 

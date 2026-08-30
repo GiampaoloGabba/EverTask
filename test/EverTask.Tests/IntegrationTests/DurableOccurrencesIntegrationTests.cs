@@ -133,6 +133,127 @@ public class DurableOccurrencesIntegrationTests : IsolatedIntegrationTestBase
         TaskWaitHelper.WaitUntilAsync(() => OccurrencesOfAsync(scheduleId), rows => rows.Length >= count,
             timeoutMs);
 
+    [Fact]
+    public async Task Should_persist_a_normalized_future_cursor_without_materializing_or_reporting_a_slot()
+    {
+        var now    = new DateTimeOffset(2026, 8, 31, 12, 0, 0, TimeSpan.Zero);
+        var cursor = now.AddHours(1);
+        var clock  = new FakeTimeProvider(now);
+        var events = new ConcurrentQueue<EverTaskEventData>();
+
+        await StartHostAsync(startHost: false, clock: clock);
+
+        var scheduleId = await SeedScheduleAsync(new RecurringTask
+        {
+            HourInterval = new HourInterval(1),
+            OccurrenceMode = OccurrenceMode.Durable,
+            Exclusions = new ScheduleExclusions
+            {
+                Ranges = [new ExclusionRange { FromUtc = cursor, ToUtc = cursor.AddMinutes(30) }]
+            }
+        }, cursor);
+
+        WorkerExecutor.TaskEventOccurredAsync += Collect;
+
+        try
+        {
+            await Host!.Services.GetRequiredService<OccurrenceMaterializer>()
+                      .RunAsync(scheduleId, null);
+        }
+        finally
+        {
+            WorkerExecutor.TaskEventOccurredAsync -= Collect;
+        }
+
+        var row = (await _shared.Get(t => t.Id == scheduleId))[0];
+        row.NextRunUtc.ShouldBe(cursor.AddHours(1));
+        row.CurrentRunCount.ShouldBe(0);
+        (await OccurrencesOfAsync(scheduleId)).ShouldBeEmpty();
+        events.ShouldBeEmpty("normalizing a cursor is not a skipped or materialized occurrence");
+
+        Task Collect(EverTaskEventData data)
+        {
+            events.Enqueue(data);
+            return Task.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public async Task Should_replay_only_weekday_slots_when_catch_up_crosses_a_weekend()
+    {
+        var now    = new DateTimeOffset(2026, 8, 31, 12, 0, 0, TimeSpan.Zero);
+        var friday = new DateTimeOffset(2026, 8, 28, 12, 0, 0, TimeSpan.Zero);
+        var clock  = new FakeTimeProvider(now);
+
+        await StartHostAsync(startHost: false, clock: clock);
+
+        var scheduleId = await SeedScheduleAsync(new RecurringTask
+        {
+            DayInterval   = new DayInterval(1) { OnTimes = [new TimeOnly(12, 0)] },
+            OccurrenceMode = OccurrenceMode.Durable,
+            Exclusions     = new ScheduleExclusions
+            {
+                Days = [DayOfWeek.Saturday, DayOfWeek.Sunday]
+            },
+            Misfire = new MisfireSettings
+            {
+                Policy                = MisfirePolicy.CatchUp,
+                MaxAge                = TimeSpan.FromDays(7),
+                MaxOccurrences        = 10,
+                OverflowPolicy        = CatchUpOverflowPolicy.Halt,
+                MaxPendingOccurrences = 5
+            }
+        }, friday);
+
+        await Host!.StartAsync();
+        await WaitForOccurrencesAsync(scheduleId, 2);
+
+        var slots = (await OccurrencesOfAsync(scheduleId))
+                    .Select(row => row.ScheduledExecutionUtc!.Value)
+                    .OrderBy(slot => slot)
+                    .ToArray();
+
+        slots.ShouldBe([friday, now]);
+        slots.ShouldAllBe(slot => slot.DayOfWeek != DayOfWeek.Saturday && slot.DayOfWeek != DayOfWeek.Sunday);
+    }
+
+    [Fact]
+    public async Task Should_start_a_backfill_after_the_excluded_region_containing_its_requested_instant()
+    {
+        var now      = new DateTimeOffset(2026, 8, 31, 13, 0, 0, TimeSpan.Zero);
+        var saturday = new DateTimeOffset(2026, 8, 29, 9, 0, 0, TimeSpan.Zero);
+
+        await StartHostAsync(startHost: false, clock: new FakeTimeProvider(now));
+
+        var scheduleId = await Dispatcher.Dispatch(new DurableProbeTask("excluded-backfill"),
+            recurring => recurring.Schedule()
+                                  .EveryDay()
+                                  .AtTime(new TimeOnly(12, 0))
+                                  .ExceptWeekends()
+                                  .OnMisfire(m => m.CatchUp(new CatchUpOptions(TimeSpan.FromDays(7), 10)))
+                                  .BackfillFrom(saturday));
+
+        var row = (await _shared.Get(t => t.Id == scheduleId))[0];
+        row.NextRunUtc.ShouldBe(new DateTimeOffset(2026, 8, 31, 12, 0, 0, TimeSpan.Zero));
+    }
+
+    [Fact]
+    public async Task Should_surface_exclusion_budget_exhaustion_at_dispatch_without_persisting_a_row()
+    {
+        var saturday = new DateTimeOffset(2026, 8, 29, 12, 0, 0, TimeSpan.Zero);
+
+        await StartHostAsync(clock: new FakeTimeProvider(saturday));
+
+        await Should.ThrowAsync<ExclusionSearchBudgetExceededException>(() =>
+            Dispatcher.Dispatch(new DurableProbeTask("empty-grid"),
+                recurring => recurring.Schedule()
+                                      .Every(7)
+                                      .Days()
+                                      .Except(exclusion => exclusion.OnDays(DayOfWeek.Saturday))));
+
+        (await _shared.Get(_ => true)).ShouldBeEmpty();
+    }
+
     // ---- The shape of a durable series ------------------------------------------------------------
 
     [Fact]
@@ -2796,6 +2917,11 @@ public class DurableOccurrencesIntegrationTests : IsolatedIntegrationTestBase
             RecurringTask definition, DateTimeOffset instant, ScheduleIdentity identity = default,
             CancellationToken ct = default) =>
             inner.FirstOccurrenceOnOrAfterAsync(definition, instant, identity, ct);
+
+        public ValueTask<DateTimeOffset?> NormalizeCursorAsync(
+            RecurringTask definition, DateTimeOffset cursor, int currentRunCount,
+            ScheduleIdentity identity = default, CancellationToken ct = default) =>
+            inner.NormalizeCursorAsync(definition, cursor, currentRunCount, identity, ct);
 
         public ValueTask<IReadOnlyList<DateTimeOffset>> EnumerateDueSlotsAsync(
             RecurringTask definition, DateTimeOffset cursor, DateTimeOffset nowUtc, int cap,

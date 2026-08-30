@@ -13,6 +13,7 @@ using EverTask.Tests.TestHelpers;
 using EverTask.Worker;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 
 namespace EverTask.Tests.IntegrationTests;
 
@@ -1027,6 +1028,61 @@ public class OccurrenceProviderIntegrationTests : IsolatedIntegrationTestBase
         }
     }
 
+    [Fact]
+    public async Task Should_count_a_storage_less_run_once_across_repeated_exclusion_budget_retries()
+    {
+        var log = new EventIdLogger<WorkerExecutor>();
+
+        using var host = new HostBuilder()
+            .ConfigureServices(services =>
+            {
+                services.AddLogging();
+                services.AddSingleton(_recorder);
+                services.AddSingleton<IEverTaskLogger<WorkerExecutor>>(log);
+
+                services.AddEverTask(cfg => cfg
+                    .RegisterTasksFromAssembly(typeof(ProviderScheduleTask).Assembly)
+                    .SetOccurrenceProviderRetry(retry =>
+                    {
+                        retry.InitialBackoff = TimeSpan.FromMilliseconds(50);
+                        retry.MaxBackoff     = TimeSpan.FromMilliseconds(50);
+                    }));
+            })
+            .Build();
+
+        try
+        {
+            await host.StartAsync();
+
+            var now        = DateTimeOffset.UtcNow;
+            var definition = new RecurringTask
+            {
+                RunNow      = true,
+                DayInterval = new EverTask.Scheduler.Recurring.Intervals.DayInterval(7),
+                MaxRuns     = 2,
+                Exclusions  = new ScheduleExclusions { Days = [now.DayOfWeek] }
+            };
+            var payload = new ProviderScheduleTask("exclusion-budget-no-storage");
+
+            using var scope = host.Services.CreateScope();
+            var executor = await EverTask.Dispatcher.Dispatcher.CreateCachedWrapper(payload.GetType())
+                                         .Handle(payload, now, definition, scope.ServiceProvider, AuditLevel.Full,
+                                             Guid.NewGuid(), taskKey: null, useLazyExecutor: true);
+
+            await host.Services.GetRequiredService<IEverTaskWorkerExecutor>()
+                      .DoWork(executor, CancellationToken.None);
+
+            await TaskWaitHelper.WaitForConditionAsync(() => log.Count(1244) >= 2, 30000);
+
+            _recorder.Count.ShouldBe(1,
+                "the retry resumes the failed advance and never counts the completed handler run again");
+        }
+        finally
+        {
+            await host.StopAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
     // ---- A re-park that fails (V4's second mandatory condition) -----------------------------------
 
     [Fact]
@@ -1286,6 +1342,20 @@ public class OccurrenceProviderIntegrationTests : IsolatedIntegrationTestBase
         public bool SupportsScheduleInspection => inner.SupportsScheduleInspection;
 
         public void Dispose() => inner.Dispose();
+    }
+
+    private sealed class EventIdLogger<T> : IEverTaskLogger<T>
+    {
+        private readonly ConcurrentBag<int> _events = [];
+
+        public int Count(int eventId) => _events.Count(id => id == eventId);
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+                                Func<TState, Exception?, string> formatter) => _events.Add(eventId.Id);
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
     }
 
     private static DateTimeOffset FloorToMinute(DateTimeOffset instant) =>

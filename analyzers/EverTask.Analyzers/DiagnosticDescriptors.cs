@@ -101,11 +101,11 @@ internal static class DiagnosticDescriptors
     public static readonly DiagnosticDescriptor TimeZoneOnElapsedSchedule = new(
         id: "ET0010",
         title: "Time zone has no effect on a plain cadence",
-        messageFormat: "'InTimeZone' throws when this schedule is built: a plain cadence (every N seconds/minutes/hours) is a constant step in elapsed time and produces the same instants in every zone; anchor the schedule to a calendar (a time of day, a day of the week, a month selector or a cron expression) or drop the call",
+        messageFormat: "'InTimeZone' throws when this schedule is built: a plain cadence (every N seconds/minutes/hours) is a constant step in elapsed time and produces the same instants in every zone; anchor the schedule to a calendar (a time of day, a day of the week, a month selector, a cron expression or a day/date exclusion) or drop the call",
         category: "EverTask.Scheduling",
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true,
-        description: "A time zone governs calendar-anchored schedules only. On a cadence in seconds, minutes or hours EverTask refuses it with an InvalidOperationException when the schedule is built, rather than accepting a call it could not honor. Reported only for a chain whose shape is provable in place; a chain split across variables or methods is left to the runtime check.",
+        description: "A time zone governs calendar-anchored schedules and day/date exclusions only. On a cadence in seconds, minutes or hours with no calendar exclusion EverTask refuses it with an InvalidOperationException when the schedule is built, rather than accepting a call it could not honor. Reported only for a completed chain whose shape is provable in place; a chain split across variables or methods is left to the runtime check.",
         helpLinkUri: "https://github.com/GiampaoloGabba/EverTask/blob/master/docs/recurring-tasks/time-zones.md");
 
     public static readonly DiagnosticDescriptor UnresolvableConstructor = new(

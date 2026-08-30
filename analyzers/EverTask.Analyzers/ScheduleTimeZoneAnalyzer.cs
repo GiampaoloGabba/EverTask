@@ -25,6 +25,9 @@ public sealed class ScheduleTimeZoneAnalyzer : DiagnosticAnalyzer
 {
     private const string InTimeZone = "InTimeZone";
 
+    private static readonly ImmutableHashSet<string> Exclusions = ImmutableHashSet.Create(
+        "Except", "ExceptWeekends");
+
     // Where a fresh interval selection begins. `Then` qualifies too: it is reachable only from the first-run
     // calls, none of which touch the grid.
     private static readonly ImmutableHashSet<string> ChainOrigins = ImmutableHashSet.Create("Schedule", "Then");
@@ -89,6 +92,7 @@ public sealed class ScheduleTimeZoneAnalyzer : DiagnosticAnalyzer
 
         if (invocation.TargetMethod.Name != InTimeZone ||
             !IsBuilderMethod(invocation.TargetMethod, builders) ||
+            HasExclusionInCompletedChain(invocation, builders) ||
             !IsProvablyElapsed(invocation.Instance, builders) ||
             !IsTheOnlyChainInScope(context, invocation, builders))
         {
@@ -104,10 +108,6 @@ public sealed class ScheduleTimeZoneAnalyzer : DiagnosticAnalyzer
     /// of them anchors the grid in elapsed time, and none anchors it to a calendar. Anything else — an unknown
     /// call, a receiver that is not a builder invocation — is unprovable and reports nothing.
     /// </summary>
-    /// <remarks>
-    /// Only the calls BEFORE <c>InTimeZone</c> need looking at: every elapsed-anchoring call returns a builder
-    /// on which no calendar selector exists, so nothing after it can change the classification.
-    /// </remarks>
     private static bool IsProvablyElapsed(IOperation? receiver, ImmutableHashSet<INamedTypeSymbol> builders)
     {
         var sawElapsed = false;
@@ -130,6 +130,57 @@ public sealed class ScheduleTimeZoneAnalyzer : DiagnosticAnalyzer
             receiver = step.Instance;
         }
 
+        return false;
+    }
+
+    /// <summary>
+    /// True when a calendar exclusion occurs before or after <c>InTimeZone</c> on the same fluent chain.
+    /// </summary>
+    private static bool HasExclusionInCompletedChain(
+        IInvocationOperation invocation, ImmutableHashSet<INamedTypeSymbol> builders)
+    {
+        IOperation? step = invocation;
+
+        while (Unwrap(step) is IInvocationOperation current &&
+               IsBuilderMethod(current.TargetMethod, builders))
+        {
+            if (Exclusions.Contains(current.TargetMethod.Name))
+                return true;
+
+            step = current.Instance;
+        }
+
+        step = invocation;
+
+        while (TryGetOuterInvocation(step, builders, out var outer))
+        {
+            if (Exclusions.Contains(outer.TargetMethod.Name))
+                return true;
+
+            step = outer;
+        }
+
+        return false;
+    }
+
+    private static bool TryGetOuterInvocation(
+        IOperation operation, ImmutableHashSet<INamedTypeSymbol> builders,
+        out IInvocationOperation invocation)
+    {
+        IOperation current = operation;
+
+        while (current.Parent is IConversionOperation conversion)
+            current = conversion;
+
+        if (current.Parent is IInvocationOperation outer &&
+            IsBuilderMethod(outer.TargetMethod, builders) &&
+            ReferenceEquals(Unwrap(outer.Instance), current))
+        {
+            invocation = outer;
+            return true;
+        }
+
+        invocation = null!;
         return false;
     }
 

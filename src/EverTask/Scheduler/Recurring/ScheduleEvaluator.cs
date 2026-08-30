@@ -57,6 +57,18 @@ internal sealed class ScheduleEvaluator(ProviderScheduleGrid? providerGrid = nul
             ? new ValueTask<DateTimeOffset?>(definition.FirstOccurrenceOnOrAfter(instant))
             : Provider(definition).FirstOccurrenceOnOrAfterAsync(definition, instant, identity, ct);
 
+    public ValueTask<DateTimeOffset?> NormalizeCursorAsync(
+        RecurringTask definition, DateTimeOffset cursor, int currentRunCount,
+        ScheduleIdentity identity = default, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+
+        if (definition.Exclusions is null || IsPendingFirstRunOverride(definition, cursor, currentRunCount))
+            return new ValueTask<DateTimeOffset?>(cursor);
+
+        return FirstOccurrenceOnOrAfterAsync(definition, cursor, identity, ct);
+    }
+
     /// <summary>
     /// Composed from <see cref="NextAfterAsync"/> one step at a time, so the due set comes by construction
     /// from the same grid as every other answer here, with no second implementation of the walk.
@@ -95,4 +107,10 @@ internal sealed class ScheduleEvaluator(ProviderScheduleGrid? providerGrid = nul
         ?? throw new NotSupportedException(
             $"The schedule takes its occurrences from the provider '{definition.Provider?.Key}', which needs " +
             "the schedule evaluator registered by AddEverTask. This one was built without a container.");
+
+    private static bool IsPendingFirstRunOverride(RecurringTask definition, DateTimeOffset cursor,
+                                                  int currentRunCount) =>
+        currentRunCount == 0 &&
+        (definition.RunNow || definition.InitialDelay != null ||
+         definition.SpecificRunTime?.ToUniversalTime() == cursor.ToUniversalTime());
 }

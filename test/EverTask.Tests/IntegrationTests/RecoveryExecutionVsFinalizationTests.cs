@@ -73,6 +73,78 @@ public class RecoveryExecutionVsFinalizationTests : IsolatedIntegrationTestBase
     }
 
     [Fact]
+    public async Task Should_skip_forward_over_an_excluded_weekend_during_recovery()
+    {
+        var monday = new DateTimeOffset(2026, 8, 31, 13, 0, 0, TimeSpan.Zero);
+        var friday = new DateTimeOffset(2026, 8, 28, 12, 0, 0, TimeSpan.Zero);
+        var clock  = new FakeTimeProvider(monday);
+
+        await StartHostWithoutConsumersAsync(clock);
+
+        var recurring = DailyAtNoonExceptWeekends();
+        var seeded = await SeedSeriesAsync(recurring, friday, QueuedTaskStatus.Queued,
+            createdAtUtc: monday.AddDays(-30));
+
+        await Host!.StartAsync();
+        await Task.Delay(300);
+
+        _state.ExecutedIndexes.ShouldBeEmpty("the stale Friday slot and excluded weekend slots do not run");
+
+        clock.Advance(TimeSpan.FromHours(23));
+        await WaitForRowAsync(seeded.Id, row => (row.CurrentRunCount ?? 0) == 2, 20000);
+
+        _state.ExecutedIndexes.Count.ShouldBe(1,
+            "the first delivery after realignment is Tuesday's grid slot");
+    }
+
+    [Fact]
+    public async Task Should_grant_recovery_grace_when_the_natural_successor_crosses_excluded_days()
+    {
+        var sunday = new DateTimeOffset(2026, 8, 30, 12, 0, 0, TimeSpan.Zero);
+        var friday = new DateTimeOffset(2026, 8, 28, 12, 0, 0, TimeSpan.Zero);
+
+        await StartHostWithoutConsumersAsync(new FakeTimeProvider(sunday));
+
+        var seeded = await SeedSeriesAsync(DailyAtNoonExceptWeekends(), friday, QueuedTaskStatus.Queued,
+            createdAtUtc: sunday.AddDays(-30));
+
+        await Host!.StartAsync();
+        await WaitForRowAsync(seeded.Id, row => (row.CurrentRunCount ?? 0) == 2, 20000);
+
+        _state.ExecutedIndexes.Count.ShouldBe(1,
+            "Monday is the natural successor, so Friday remains the current slot throughout the weekend");
+    }
+
+    [Fact]
+    public async Task Should_preserve_a_RunAt_override_on_an_excluded_day_during_recovery()
+    {
+        var saturday = new DateTimeOffset(2026, 8, 29, 12, 0, 0, TimeSpan.Zero);
+        var sunday   = saturday.AddDays(1);
+        var recurring = DailyAtNoonExceptWeekends();
+        recurring.SpecificRunTime = saturday;
+
+        await StartHostWithoutConsumersAsync(new FakeTimeProvider(sunday));
+
+        var seeded = await SeedSeriesAsync(recurring, saturday, QueuedTaskStatus.Queued, currentRunCount: 0,
+            createdAtUtc: sunday.AddDays(-30));
+
+        await Host!.StartAsync();
+        await WaitForRowAsync(seeded.Id, row => (row.CurrentRunCount ?? 0) == 1, 20000);
+
+        _state.ExecutedIndexes.Count.ShouldBe(1,
+            "the Saturday cursor came from RunAt and is not a recurring grid slot to filter");
+    }
+
+    private static RecurringTask DailyAtNoonExceptWeekends() => new()
+    {
+        DayInterval = new DayInterval(1) { OnTimes = [new TimeOnly(12, 0)] },
+        Exclusions = new ScheduleExclusions
+        {
+            Days = [DayOfWeek.Saturday, DayOfWeek.Sunday]
+        }
+    };
+
+    [Fact]
     public async Task A_series_whose_RunUntil_elapsed_during_the_downtime_is_finalized_instead_of_staying_queued()
     {
         await StartHostWithoutConsumersAsync();

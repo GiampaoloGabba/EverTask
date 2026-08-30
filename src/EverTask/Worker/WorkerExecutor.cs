@@ -447,7 +447,9 @@ public class WorkerExecutor(
                     ScheduleRetryFromUtc = null
                 };
 
-                await QueueNextOccourrence(resumed, 0, null, serviceToken).ConfigureAwait(false);
+                await QueueNextOccourrence(resumed, 0, null, serviceToken,
+                        countsAsRun: !task.ScheduleRunAlreadyRecorded)
+                    .ConfigureAwait(false);
 
                 return;
             }
@@ -484,6 +486,9 @@ public class WorkerExecutor(
                     serviceToken, row.Id, row.TaskKey, recovered.AuditLevel, isRecovery: true,
                     recovered.RowMetadata)
                 .ConfigureAwait(false);
+
+            if (task.ScheduleRunAlreadyRecorded)
+                ProviderRetries?.RecordSuccess(task.PersistenceId);
         }
         catch (OperationCanceledException) when (serviceToken.IsCancellationRequested)
         {
@@ -494,6 +499,10 @@ public class WorkerExecutor(
             // The provider failed AGAIN: the dispatcher has already parked the next attempt and said so, as a
             // log line and a monitoring event. It is the normal answer to a calendar that is still down, and
             // reporting it as a retry that failed would blame this delivery for doing exactly its job.
+        }
+        catch (ExclusionSearchBudgetExceededException failure) when (task.ScheduleRunAlreadyRecorded)
+        {
+            await DeferScheduleForExclusionAsync(task, failure, _timeProvider.GetUtcNow()).ConfigureAwait(false);
         }
         catch (Exception e)
         {
@@ -1597,6 +1606,24 @@ public class WorkerExecutor(
             await DeferScheduleForProviderAsync(task, failure, nowUtc).ConfigureAwait(false);
             return;
         }
+        catch (ExclusionSearchBudgetExceededException failure)
+        {
+            var advance = await RecordRunBeforeExclusionRetryAsync(task, executionTimeMs, taskStorage, current,
+                              rowCursor ?? scheduledTime, markCompleted, countsAsRun)
+                              .ConfigureAwait(false);
+
+            if (!advance.OwnsNextOccurrence)
+            {
+                await ReparkFromRowAsync(advance.Rebased, runNumber + 1, ct).ConfigureAwait(false);
+                return;
+            }
+
+            await DeferScheduleForExclusionAsync(task, failure, nowUtc).ConfigureAwait(false);
+            return;
+        }
+
+        if (task.ScheduleRunAlreadyRecorded)
+            ProviderRetries?.RecordSuccess(task.PersistenceId);
 
         // Log skipped occurrences if any, saying whether the number is the real total: a walked grid — and
         // above all a provider grid, where each step is a round trip — counts under a bound.
@@ -1660,7 +1687,12 @@ public class WorkerExecutor(
             // disposed in the finally above, so reusing that executor would run on a disposed handler.
             // RunNumber travels with the occurrence so the handler reads it without a storage round trip, and
             // is one past the run this delivery WAS.
-            var updatedTask = task.ToLazy() with { ExecutionTime = result.NextRun, RunNumber = runNumber + 1 };
+            var updatedTask = task.ToLazy() with
+            {
+                ExecutionTime              = result.NextRun,
+                RunNumber                  = runNumber + 1,
+                ScheduleRunAlreadyRecorded = false
+            };
 
             // CONDITIONAL on every path: a reschedule can commit, park its own executor and publish its
             // version in the gap after the compare-and-swap above, and replacing that registration
@@ -1736,6 +1768,67 @@ public class WorkerExecutor(
                               $"Schedule {a.TaskId} could not be parked to ask the occurrence provider " +
                               $"'{a.ProviderKey}' again: nothing was written and the series stays where it is " +
                               $"until the next startup recovery")))
+              .ConfigureAwait(false);
+    }
+
+    private async Task<ScheduleAdvance> RecordRunBeforeExclusionRetryAsync(
+        TaskHandlerExecutor task, double executionTimeMs, ITaskStorage? taskStorage, QueuedTask? current,
+        DateTimeOffset retainedCursor, bool markCompleted, bool countsAsRun)
+    {
+        if (!countsAsRun)
+            return new ScheduleAdvance(true, null);
+
+        if (taskStorage is null)
+        {
+            _inMemoryRunCounts[task.PersistenceId] =
+                _inMemoryRunCounts.GetValueOrDefault(task.PersistenceId) + 1;
+            return new ScheduleAdvance(true, null);
+        }
+
+        if (IsVersionedSchedule(task, current, taskStorage))
+        {
+            return await AdvanceVersionedRunAsync(task, executionTimeMs, retainedCursor, markCompleted, taskStorage)
+                         .ConfigureAwait(false);
+        }
+
+        if (markCompleted)
+        {
+            await taskStorage
+                  .CompleteRecurringRun(task.PersistenceId, executionTimeMs, retainedCursor, task.AuditLevel)
+                  .ConfigureAwait(false);
+        }
+        else
+        {
+            await taskStorage
+                  .UpdateCurrentRun(task.PersistenceId, executionTimeMs, retainedCursor, task.AuditLevel)
+                  .ConfigureAwait(false);
+        }
+
+        return new ScheduleAdvance(true, null);
+    }
+
+    private async Task DeferScheduleForExclusionAsync(
+        TaskHandlerExecutor task, ExclusionSearchBudgetExceededException failure, DateTimeOffset nowUtc)
+    {
+        var (delay, failures) = ProviderRetries?.RecordFailure(task.PersistenceId)
+                                ?? (options.OccurrenceProviderRetry.InitialBackoff, 1);
+        var retryAt = nowUtc + delay;
+
+        await ProviderRetryParker
+              .ParkAsync(scheduler, retryAt,
+                  () => new ValueTask<TaskHandlerExecutor?>(task.ToLazy()),
+                  executor => executor with
+                  {
+                      ExecutionTime              = retryAt,
+                      IsScheduleRetry            = true,
+                      ScheduleRetryFromUtc       = task.ScheduleRetryFromUtc ?? task.ExecutionTime,
+                      ScheduleRunAlreadyRecorded = true
+                  },
+                  (_, _) => logger.NextOccurrenceRefusedBySuccessor(task.PersistenceId, task.ScheduleVersion),
+                  (_, at) => logger.ExclusionSearchDeferred(failure, task.PersistenceId,
+                      failure.StandingInstant, failures, at),
+                  (_, error) => logger.ExclusionSearchRetryParkFailed(error, task.PersistenceId,
+                      failure.StandingInstant))
               .ConfigureAwait(false);
     }
 
