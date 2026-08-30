@@ -626,6 +626,8 @@ public class RecurringTask
     /// </summary>
     private const int MaxWallMappingIterations = 100_000;
 
+    internal const int MaxExclusionSearchIterations = 200_000;
+
     private DateTimeOffset? GetNextOccurrence(DateTimeOffset current) => GetNextOccurrence(current, out _);
 
     /// <param name="collapsedSlots">
@@ -633,6 +635,17 @@ public class RecurringTask
     /// Always 0 for a schedule the zone does not govern and for cron, whose transition rules are Cronos's own.
     /// </param>
     private DateTimeOffset? GetNextOccurrence(DateTimeOffset current, out int collapsedSlots)
+    {
+        if (Exclusions == null)
+            return GetNextOccurrenceUnfiltered(current, out collapsedSlots);
+
+        var baseGrid = Base();
+        var candidate = GetNextBaseOccurrence(baseGrid, current, out var candidateCollapsed);
+
+        return FilterExcludedCandidates(baseGrid, candidate, candidateCollapsed, out collapsedSlots);
+    }
+
+    private DateTimeOffset? GetNextOccurrenceUnfiltered(DateTimeOffset current, out int collapsedSlots)
     {
         collapsedSlots = 0;
 
@@ -668,6 +681,116 @@ public class RecurringTask
 
         collapsedSlots = mapping.CollapsedCount;
         return mapping.Utc;
+    }
+
+    private DateTimeOffset? FilterExcludedCandidates(RecurringTask baseGrid, DateTimeOffset? candidate,
+                                                      int candidateCollapsed, out int collapsedSlots)
+    {
+        collapsedSlots = 0;
+
+        // Every advance starts from a real unfiltered occurrence. A discarded occurrence's DST collapse
+        // count is replaced with the next candidate's count instead of leaking onto the returned slot.
+        for (var discarded = 0; candidate is { } current; discarded++)
+        {
+            if (RunUntil <= current)
+                return null;
+
+            if (!TryGetExclusionRegionExit(current, out var exit))
+            {
+                collapsedSlots = candidateCollapsed;
+                return current;
+            }
+
+            if (exit == null)
+                return null;
+
+            if (discarded + 1 > MaxExclusionSearchIterations)
+                throw new ExclusionSearchBudgetExceededException(current);
+
+            candidate = AdvanceBasePastExcludedRegion(baseGrid, current, exit.Value, out candidateCollapsed);
+        }
+
+        return null;
+    }
+
+    private DateTimeOffset? AdvanceBasePastExcludedRegion(RecurringTask baseGrid, DateTimeOffset candidate,
+                                                           DateTimeOffset exit, out int collapsedSlots)
+    {
+        collapsedSlots = 0;
+
+        if (baseGrid.IsUniformGrid())
+            return TryJumpBaseUniformGrid(baseGrid, candidate, exit.AddTicks(-1));
+
+        if (!string.IsNullOrEmpty(baseGrid.CronInterval?.CronExpression))
+        {
+            var next = baseGrid.CronInterval.GetNextOccurrence(
+                exit.AddTicks(-1), baseGrid.GoverningZone ?? TimeZoneInfo.Utc);
+
+            return next == null || baseGrid.RunUntil <= next ? null : next;
+        }
+
+        return GetNextBaseOccurrence(baseGrid, candidate, out collapsedSlots);
+    }
+
+    private static DateTimeOffset? GetNextBaseOccurrence(RecurringTask baseGrid, DateTimeOffset current,
+                                                          out int collapsedSlots)
+    {
+        // An exclusion search may legitimately reach the end of DateTimeOffset; the legacy no-exclusion
+        // path remains untouched and keeps its historical overflow behaviour.
+        try
+        {
+            return baseGrid.GetNextOccurrence(current, out collapsedSlots);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            collapsedSlots = 0;
+            return null;
+        }
+    }
+
+    private static DateTimeOffset? TryJumpBaseUniformGrid(RecurringTask baseGrid, DateTimeOffset anchor,
+                                                          DateTimeOffset after)
+    {
+        try
+        {
+            return baseGrid.TryJumpUniformGrid(anchor, after);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return null;
+        }
+    }
+
+    private bool TryGetExclusionRegionExit(DateTimeOffset candidate, out DateTimeOffset? exit)
+    {
+        exit = null;
+        var exclusions = Exclusions!;
+
+        if (exclusions.Days.Length > 0 || exclusions.Dates.Length > 0)
+        {
+            var exclusionZone = Zone ?? TimeZoneInfo.Utc;
+            var localDate = DateOnly.FromDateTime(WallClock.ToWall(candidate, exclusionZone).DateTime);
+
+            if (exclusions.Days.Contains(localDate.DayOfWeek) || exclusions.Dates.Contains(localDate))
+            {
+                if (localDate == DateOnly.MaxValue)
+                    return true;
+
+                var nextMidnight = localDate.AddDays(1).ToDateTime(TimeOnly.MinValue);
+                exit = WallClock.ToUtc(nextMidnight, exclusionZone, candidate).Utc;
+            }
+        }
+
+        foreach (var range in exclusions.Ranges)
+        {
+            if (candidate < range.FromUtc || candidate >= range.ToUtc)
+                continue;
+
+            if (exit == null || range.ToUtc > exit)
+                exit = range.ToUtc;
+        }
+
+        return exit != null;
     }
 
     /// <summary>
@@ -813,11 +936,27 @@ public class RecurringTask
         // schedules where a walk would be O(millions). The candidate is self-verified on-grid; on any
         // mismatch we fall through to the walk, so the arithmetic can never emit an off-grid value. RunUntil
         // is applied HERE (once), so the jump itself need not consult it (keeping it O(1) near end-of-series).
-        if (IsUniformGrid())
+        if (Exclusions == null && IsUniformGrid())
         {
             var jumped = TryJumpUniformGrid(anchor, after);
             if (jumped.HasValue)
                 return RunUntil.HasValue && jumped.Value >= RunUntil.Value ? null : jumped;
+        }
+
+        if (Exclusions != null)
+        {
+            var baseGrid = Base();
+            if (baseGrid.IsUniformGrid())
+            {
+                var jumped = TryJumpBaseUniformGrid(baseGrid, anchor, after);
+                if (jumped.HasValue)
+                {
+                    if (RunUntil.HasValue && jumped.Value >= RunUntil.Value)
+                        return null;
+
+                    return FilterExcludedCandidates(baseGrid, jumped, candidateCollapsed: 0, out _);
+                }
+            }
         }
 
         // Calendar / non-uniform schedules (OnDays, OnHours, Month, multi-OnTimes, combinations): always
@@ -997,6 +1136,15 @@ public class RecurringTask
         unbounded.MaxRuns  = null;
 
         return unbounded;
+    }
+
+    /// <summary>A shallow copy exposing the inclusion grid without its fixed exclusions.</summary>
+    private RecurringTask Base()
+    {
+        var baseGrid = (RecurringTask)MemberwiseClone();
+        baseGrid.Exclusions = null;
+
+        return baseGrid;
     }
 
     /// <summary>
