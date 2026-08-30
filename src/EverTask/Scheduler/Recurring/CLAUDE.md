@@ -100,7 +100,24 @@ Fluent builder (`Builder/RecurringTaskBuilder.cs`) + occurrence math (`Recurring
     false. Async grid, throwing `GetNextOccurrence`, `PlanNextRun`/`SelectNextRun` split: see
     `src/EverTask/CLAUDE.md`.
 
+20. **An excluded slot never exists** (`ScheduleExclusions`, #36). The filter sits inside `GetNextOccurrence` as
+    an ANCHORED loop: it advances from the last real base-grid occurrence, never from a region boundary —
+    re-asking the cascade from an off-grid instant re-anchors a cadence. A region exit is a jump TARGET only
+    where phase-free (uniform `Base()` copy via `TryJumpUniformGrid`, cron via Cronos), with on-or-after
+    semantics (a slot exactly at a range's exclusive `ToUtc` is valid). `IsUniformGrid()` is false with
+    exclusions; skip-forward jumps the exclusions-cleared `Base()` copy and filter-fixes. Day/date exclusions
+    read the persisted `TimeZoneId` (legal on an Elapsed grid when they need it; the default zone stamps at
+    ingress only, never at evaluation). Spending the 200k-candidate budget throws
+    `ExclusionSearchBudgetExceededException`, NEVER null — "no occurrence" is mathematics, a spent budget is
+    not: ingress refuses, recovery takes the bounded-attempt poison route, the live advance records the run
+    FIRST (cursor retained; `ScheduleRunAlreadyRecorded` stops a storage-less retry double-counting; a lost
+    versioned advance goes to `ReparkFromRowAsync`). A stored cursor is normalized via `NormalizeCursorAsync`
+    (inclusive; a pending first-run override is exempt by PROVENANCE — `SpecificRunTime` only on cursor
+    equality); the durable planner persists the normalized cursor through the cursor-only CAS, inline
+    recovery re-derives and never writes. `ScheduleRebase` refuses exclusions on either side.
+
 Tests (`test/EverTask.Tests/`): `RecurringTests/` — `Builders/`, `Intervals/`, `TimeZones/` (mapping, DST,
 `CronOracleTests`, id normalization), `RecurringTaskScheduleDriftTests`, `RecurringCalendarSkipForwardTests`,
-`RecurringSkipForwardHardeningTests`, `BackfillCursorTests`, `ScheduleRebaseTests`, plus
+`RecurringSkipForwardHardeningTests`, `BackfillCursorTests`, `ScheduleRebaseTests`,
+`RecurringExclusionMathTests`, `ScheduleExclusionValidationTests`, `TimeZones/ExclusionTimeZoneTests`, plus
 `Serialization/IntervalSerializationParityTests` and `IntegrationTests/ScheduleTimeZoneIntegrationTests.cs`.

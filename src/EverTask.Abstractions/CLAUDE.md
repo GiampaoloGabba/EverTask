@@ -50,6 +50,9 @@ their serialized members (closure walk, visited-set + depth bound).
 | ET0010 | Warning | `InTimeZone` on a fluent chain that is provably Elapsed-only, which `RecurringTask.Validate()` refuses; separate `ScheduleTimeZoneAnalyzer`, category `EverTask.Scheduling` | — |
 
 Each rule is suppressible/promotable per-member via `dotnet_diagnostic.ETxxxx.severity` in `.editorconfig`.
+- **ET0010 stays silent on a chain carrying `Except`/`ExceptWeekends` anywhere** (either side of
+  `InTimeZone`): calendar exclusions make a zone legal on an Elapsed grid, and the zero-false-positive bar
+  wins over completeness.
 - **ET0010 mirrors `RecurringTask.IsCalendarAnchored()`, not the fluent method names**: a Day/Week/Month interval is
   calendar-anchored on its own, and `OnHours()` is NOT (it populates no hour selector — see
   `src/EverTask/Scheduler/Recurring/CLAUDE.md` gotchas 10 and 16). It reports only a chain it can follow back to the
