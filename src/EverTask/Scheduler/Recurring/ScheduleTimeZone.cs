@@ -105,19 +105,19 @@ internal static class ScheduleTimeZone
     internal static string Normalize(string timeZoneId) => Normalize(Resolve(timeZoneId));
 
     /// <summary>
-    /// Stamps the host's configured default zone onto a freshly built schedule that is calendar-anchored and
-    /// did not name one itself.
+    /// Stamps the host's configured default zone onto a freshly built schedule whose grid or exclusions read
+    /// a calendar and that did not name one itself.
     /// </summary>
     /// <remarks>
     /// It belongs to the moment a definition is BUILT, and nowhere else: the zone becomes part of what gets
     /// serialized, so a row persisted under one default keeps meaning the same thing when the default changes,
-    /// and recovery — which re-reads that row — never re-applies it. A plain cadence is left alone: it produces
-    /// the same instants in every zone, and <c>Validate</c> refuses a zone on one.
+    /// and recovery — which re-reads that row — never re-applies it. A plain cadence is left alone unless its
+    /// day/date exclusions need a calendar clock.
     /// </remarks>
     internal static void ApplyDefault(RecurringTask schedule, string? defaultZoneId)
     {
         if (defaultZoneId is null || schedule.TimeZoneId != null ||
-            schedule.Semantics != ScheduleSemantics.Calendar)
+            schedule.Semantics != ScheduleSemantics.Calendar && !schedule.HasCalendarExclusions())
         {
             return;
         }

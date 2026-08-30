@@ -82,4 +82,16 @@ public class BuildableSchedulerBuilder(RecurringTask task, TimeProvider? timePro
         ScheduleModifiers.BackfillFrom(task, startUtc);
         return new BuildableSchedulerBuilder(task, timeProvider);
     }
+
+    public IBuildableSchedulerBuilder Except(Action<IExclusionBuilder> configure)
+    {
+        ScheduleModifiers.Except(task, configure);
+        return new BuildableSchedulerBuilder(task, timeProvider);
+    }
+
+    public IBuildableSchedulerBuilder ExceptWeekends()
+    {
+        ScheduleModifiers.ExceptWeekends(task);
+        return new BuildableSchedulerBuilder(task, timeProvider);
+    }
 }

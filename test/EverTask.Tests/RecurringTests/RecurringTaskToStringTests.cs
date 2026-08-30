@@ -131,5 +131,55 @@ public class RecurringTaskToStringTests
         // July, so Rome is UTC+2.
         task.ToString().ShouldBe("Run at 2026-07-01 12:00:00 then every 1 day(s) at 09:00 (Europe/Rome)");
     }
+
+    [Fact]
+    public void Exclusions_are_rendered_as_a_human_readable_clause_on_the_schedule_clock()
+    {
+        var task = new RecurringTask
+        {
+            HourInterval = new HourInterval(4),
+            TimeZoneId = "Europe/Rome",
+            Exclusions = new ScheduleExclusions
+            {
+                Days = [DayOfWeek.Sunday, DayOfWeek.Saturday],
+                Dates = [new DateOnly(2026, 12, 25)],
+                Ranges =
+                [
+                    new ExclusionRange
+                    {
+                        FromUtc = new DateTimeOffset(2026, 7, 1, 8, 0, 0, TimeSpan.Zero),
+                        ToUtc = new DateTimeOffset(2026, 7, 1, 9, 0, 0, TimeSpan.Zero)
+                    }
+                ]
+            }
+        };
+        task.Validate();
+
+        task.ToString().ShouldBe(
+            "every 4 hour(s) except Saturday - Sunday, 2026-12-25, [2026-07-01 10:00:00, " +
+            "2026-07-01 11:00:00) (Europe/Rome)");
+    }
+
+    [Fact]
+    public void Large_date_and_window_sets_are_summarized()
+    {
+        var start = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var task = new RecurringTask
+        {
+            DayInterval = new DayInterval(1),
+            Exclusions = new ScheduleExclusions
+            {
+                Dates = Enumerable.Range(0, 4).Select(day => new DateOnly(2026, 1, 1).AddDays(day)).ToArray(),
+                Ranges = Enumerable.Range(0, 4).Select(day => new ExclusionRange
+                {
+                    FromUtc = start.AddDays(day).AddHours(1),
+                    ToUtc = start.AddDays(day).AddHours(2)
+                }).ToArray()
+            }
+        };
+        task.Validate();
+
+        task.ToString().ShouldBe("every 1 day(s) at 00:00 except 4 dates, 4 windows");
+    }
 }
 

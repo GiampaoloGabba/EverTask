@@ -85,6 +85,7 @@ public class RecurringTaskGoldenJsonTests
 
         restored.OccurrenceMode.ShouldBe(OccurrenceMode.Inline,
             $"a '{shape}' schedule written before durable occurrences existed keeps the legacy behaviour");
+        restored.Exclusions.ShouldBeNull();
     }
 
     [Fact]
@@ -102,5 +103,57 @@ public class RecurringTaskGoldenJsonTests
 
         json.ShouldContain("\"OccurrenceMode\":1");
         EverTaskJson.Deserialize<RecurringTask>(json)!.OccurrenceMode.ShouldBe(OccurrenceMode.Durable);
+    }
+
+    [Fact]
+    public void Schedule_exclusions_have_one_canonical_golden_json_and_round_trip()
+    {
+        var task = new RecurringTask
+        {
+            SecondInterval = new SecondInterval(30),
+            Exclusions = new ScheduleExclusions
+            {
+                Days = [DayOfWeek.Saturday, DayOfWeek.Sunday, DayOfWeek.Saturday],
+                Dates = [new DateOnly(2026, 12, 25), new DateOnly(2026, 1, 1)],
+                Ranges =
+                [
+                    new ExclusionRange
+                    {
+                        FromUtc = new DateTimeOffset(2026, 6, 1, 10, 0, 0, TimeSpan.FromHours(2)),
+                        ToUtc = new DateTimeOffset(2026, 6, 1, 12, 0, 0, TimeSpan.FromHours(2))
+                    },
+                    new ExclusionRange
+                    {
+                        FromUtc = new DateTimeOffset(2026, 6, 1, 9, 0, 0, TimeSpan.Zero),
+                        ToUtc = new DateTimeOffset(2026, 6, 1, 11, 0, 0, TimeSpan.Zero)
+                    }
+                ]
+            }
+        };
+        task.Validate();
+
+        var json = EverTaskJson.Serialize(task);
+
+        json.ShouldBe(
+            """{"RunNow":false,"InitialDelay":null,"SpecificRunTime":null,"CronInterval":null,"SecondInterval":{"Interval":30},"MinuteInterval":null,"HourInterval":null,"DayInterval":null,"WeekInterval":null,"MonthInterval":null,"MaxRuns":null,"RunUntil":null,"Exclusions":{"Days":[0,6],"Dates":["2026-01-01","2026-12-25"],"Ranges":[{"FromUtc":"2026-06-01T08:00:00+00:00","ToUtc":"2026-06-01T11:00:00+00:00"}]}}""");
+
+        var restored = EverTaskJson.Deserialize<RecurringTask>(json).ShouldNotBeNull();
+        restored.Validate();
+        EverTaskJson.Serialize(restored).ShouldBe(json);
+    }
+
+    [Fact]
+    public void Deserialized_null_arrays_are_lenient_but_a_null_range_is_poison()
+    {
+        var lenient = EverTaskJson.Deserialize<RecurringTask>(
+            """{"SecondInterval":{"Interval":30},"Exclusions":{"Days":null,"Dates":null,"Ranges":null}}""")
+            .ShouldNotBeNull();
+        var corrupt = EverTaskJson.Deserialize<RecurringTask>(
+            """{"SecondInterval":{"Interval":30},"Exclusions":{"Ranges":[null]}}""")
+            .ShouldNotBeNull();
+
+        Should.NotThrow(() => lenient.Validate());
+        lenient.Exclusions.ShouldBeNull();
+        Should.Throw<ArgumentException>(() => corrupt.Validate());
     }
 }

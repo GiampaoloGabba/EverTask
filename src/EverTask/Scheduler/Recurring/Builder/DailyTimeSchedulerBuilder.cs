@@ -101,6 +101,18 @@ public class DailyTimeSchedulerBuilder(RecurringTask task, TimeProvider? timePro
         return this;
     }
 
+    public IDailyTimeSchedulerBuilder Except(Action<IExclusionBuilder> configure)
+    {
+        ScheduleModifiers.Except(task, configure);
+        return this;
+    }
+
+    public IDailyTimeSchedulerBuilder ExceptWeekends()
+    {
+        ScheduleModifiers.ExceptWeekends(task);
+        return this;
+    }
+
     IBuildableSchedulerBuilder IBuildableSchedulerBuilder.OnMisfire(Action<IMisfirePolicyBuilder> configure) =>
         OnMisfire(configure);
 
@@ -108,4 +120,9 @@ public class DailyTimeSchedulerBuilder(RecurringTask task, TimeProvider? timePro
 
     IBuildableSchedulerBuilder IBuildableSchedulerBuilder.BackfillFrom(DateTimeOffset startUtc) =>
         BackfillFrom(startUtc);
+
+    IBuildableSchedulerBuilder IBuildableSchedulerBuilder.Except(Action<IExclusionBuilder> configure) =>
+        Except(configure);
+
+    IBuildableSchedulerBuilder IBuildableSchedulerBuilder.ExceptWeekends() => ExceptWeekends();
 }

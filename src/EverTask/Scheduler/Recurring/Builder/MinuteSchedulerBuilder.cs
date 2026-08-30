@@ -62,4 +62,16 @@ public class MinuteSchedulerBuilder(RecurringTask task, TimeProvider? timeProvid
         ScheduleModifiers.BackfillFrom(task, startUtc);
         return this;
     }
+
+    public IMinuteSchedulerBuilder Except(Action<IExclusionBuilder> configure)
+    {
+        ScheduleModifiers.Except(task, configure);
+        return this;
+    }
+
+    public IMinuteSchedulerBuilder ExceptWeekends()
+    {
+        ScheduleModifiers.ExceptWeekends(task);
+        return this;
+    }
 }

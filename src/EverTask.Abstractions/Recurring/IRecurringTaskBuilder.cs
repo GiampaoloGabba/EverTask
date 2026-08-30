@@ -44,6 +44,13 @@ public interface IIntervalSchedulerBuilder
     IIntervalSchedulerBuilder BackfillFrom(DateTimeOffset startUtc) =>
         throw SchedulerBuilderDefaults.NotImplemented();
 
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.Except"/>
+    IIntervalSchedulerBuilder Except(Action<IExclusionBuilder> configure) =>
+        throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.ExceptWeekends"/>
+    IIntervalSchedulerBuilder ExceptWeekends() => throw SchedulerBuilderDefaults.NotImplemented();
+
     /// <summary>
     /// Takes this schedule's occurrences from a registered <see cref="INextOccurrenceProvider"/> instead of
     /// from a cron expression or an interval — for the calendars the fluent API cannot express (business days,
@@ -121,6 +128,13 @@ public interface IHourSchedulerBuilder
 
     /// <inheritdoc cref="IBuildableSchedulerBuilder.BackfillFrom"/>
     IHourSchedulerBuilder BackfillFrom(DateTimeOffset startUtc) => throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.Except"/>
+    IHourSchedulerBuilder Except(Action<IExclusionBuilder> configure) =>
+        throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.ExceptWeekends"/>
+    IHourSchedulerBuilder ExceptWeekends() => throw SchedulerBuilderDefaults.NotImplemented();
 }
 
 public interface IMinuteSchedulerBuilder
@@ -144,6 +158,13 @@ public interface IMinuteSchedulerBuilder
 
     /// <inheritdoc cref="IBuildableSchedulerBuilder.BackfillFrom"/>
     IMinuteSchedulerBuilder BackfillFrom(DateTimeOffset startUtc) => throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.Except"/>
+    IMinuteSchedulerBuilder Except(Action<IExclusionBuilder> configure) =>
+        throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.ExceptWeekends"/>
+    IMinuteSchedulerBuilder ExceptWeekends() => throw SchedulerBuilderDefaults.NotImplemented();
 }
 
 public interface IDailyTimeSchedulerBuilder : IBuildableSchedulerBuilder
@@ -176,6 +197,13 @@ public interface IDailyTimeSchedulerBuilder : IBuildableSchedulerBuilder
     /// <inheritdoc cref="IBuildableSchedulerBuilder.BackfillFrom"/>
     new IDailyTimeSchedulerBuilder BackfillFrom(DateTimeOffset startUtc) =>
         throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.Except"/>
+    new IDailyTimeSchedulerBuilder Except(Action<IExclusionBuilder> configure) =>
+        throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.ExceptWeekends"/>
+    new IDailyTimeSchedulerBuilder ExceptWeekends() => throw SchedulerBuilderDefaults.NotImplemented();
 }
 
 /// <summary>
@@ -211,6 +239,13 @@ public interface IWeeklySchedulerBuilder : IBuildableSchedulerBuilder
     /// <inheritdoc cref="IBuildableSchedulerBuilder.BackfillFrom"/>
     new IWeeklySchedulerBuilder BackfillFrom(DateTimeOffset startUtc) =>
         throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.Except"/>
+    new IWeeklySchedulerBuilder Except(Action<IExclusionBuilder> configure) =>
+        throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.ExceptWeekends"/>
+    new IWeeklySchedulerBuilder ExceptWeekends() => throw SchedulerBuilderDefaults.NotImplemented();
 }
 
 public interface IMonthlySchedulerBuilder : IBuildableSchedulerBuilder
@@ -237,6 +272,13 @@ public interface IMonthlySchedulerBuilder : IBuildableSchedulerBuilder
     /// <inheritdoc cref="IBuildableSchedulerBuilder.BackfillFrom"/>
     new IMonthlySchedulerBuilder BackfillFrom(DateTimeOffset startUtc) =>
         throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.Except"/>
+    new IMonthlySchedulerBuilder Except(Action<IExclusionBuilder> configure) =>
+        throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.ExceptWeekends"/>
+    new IMonthlySchedulerBuilder ExceptWeekends() => throw SchedulerBuilderDefaults.NotImplemented();
 }
 
 public interface IThenableSchedulerBuilder
@@ -262,8 +304,8 @@ public interface IBuildableSchedulerBuilder
     /// <exception cref="InvalidOperationException">
     /// Thrown when the schedule is built: a plain cadence (every N seconds/minutes/hours) is a constant step
     /// in elapsed time and produces the same instants in every zone, so a zone on it is refused rather than
-    /// silently ignored. Anchor the schedule to a calendar — a time of day, a day of the week, a month
-    /// selector or a cron expression — or drop the call.
+    /// silently ignored. A day/date exclusion also makes the zone meaningful as its exclusion clock; otherwise
+    /// anchor the schedule to a calendar or drop the call.
     /// </exception>
     /// <remarks>
     /// A repeated hour (daylight saving ending) fires once, on its first pass. A time of day that a gap
@@ -278,7 +320,8 @@ public interface IBuildableSchedulerBuilder
     /// </summary>
     /// <exception cref="ArgumentException">This system cannot resolve the id.</exception>
     /// <exception cref="InvalidOperationException">
-    /// Thrown when the schedule is built, for a plain cadence — see <see cref="InTimeZone(TimeZoneInfo)"/>.
+    /// Thrown when the schedule is built, for a plain cadence without day/date exclusions — see
+    /// <see cref="InTimeZone(TimeZoneInfo)"/>.
     /// </exception>
     IBuildableSchedulerBuilder InTimeZone(string timeZoneId) => throw SchedulerBuilderDefaults.NotImplemented();
 
@@ -332,4 +375,16 @@ public interface IBuildableSchedulerBuilder
     /// </remarks>
     IBuildableSchedulerBuilder BackfillFrom(DateTimeOffset startUtc) =>
         throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <summary>Adds fixed days, dates or absolute windows that the recurring grid must not produce.</summary>
+    /// <param name="configure">Adds one or more exclusions. Calls are additive, including across callbacks.</param>
+    /// <returns>The builder, for chaining.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="configure"/> is null.</exception>
+    /// <exception cref="InvalidOperationException">The callback adds no exclusion.</exception>
+    IBuildableSchedulerBuilder Except(Action<IExclusionBuilder> configure) =>
+        throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <summary>Excludes Saturday and Sunday on the schedule's exclusion clock.</summary>
+    /// <returns>The builder, for chaining.</returns>
+    IBuildableSchedulerBuilder ExceptWeekends() => throw SchedulerBuilderDefaults.NotImplemented();
 }

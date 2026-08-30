@@ -48,8 +48,8 @@ internal sealed class MisfirePolicyBuilder : IMisfirePolicyBuilder
 }
 
 /// <summary>
-/// The three schedule-wide modifiers every builder in this namespace exposes, applied to the definition being
-/// built. One implementation instead of seven, so the rules that tie them together cannot drift per builder.
+/// The schedule-wide modifiers every builder in this namespace exposes, applied to the definition being built.
+/// One implementation instead of seven, so the rules that tie them together cannot drift per builder.
 /// </summary>
 internal static class ScheduleModifiers
 {
@@ -85,4 +85,16 @@ internal static class ScheduleModifiers
         task.BackfillFromUtc = startUtc.ToUniversalTime();
         task.OccurrenceMode  = OccurrenceMode.Durable;
     }
+
+    internal static void Except(RecurringTask task, Action<IExclusionBuilder> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+
+        var builder = new ExclusionBuilder();
+        configure(builder);
+        task.Exclusions = builder.Build(task.Exclusions);
+    }
+
+    internal static void ExceptWeekends(RecurringTask task) =>
+        Except(task, exclusions => exclusions.OnDays(DayOfWeek.Saturday, DayOfWeek.Sunday));
 }

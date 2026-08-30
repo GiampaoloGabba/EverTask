@@ -81,6 +81,18 @@ public class MonthlySchedulerBuilder(RecurringTask task, TimeProvider? timeProvi
         return this;
     }
 
+    public IMonthlySchedulerBuilder Except(Action<IExclusionBuilder> configure)
+    {
+        ScheduleModifiers.Except(task, configure);
+        return this;
+    }
+
+    public IMonthlySchedulerBuilder ExceptWeekends()
+    {
+        ScheduleModifiers.ExceptWeekends(task);
+        return this;
+    }
+
     IBuildableSchedulerBuilder IBuildableSchedulerBuilder.OnMisfire(Action<IMisfirePolicyBuilder> configure) =>
         OnMisfire(configure);
 
@@ -88,4 +100,9 @@ public class MonthlySchedulerBuilder(RecurringTask task, TimeProvider? timeProvi
 
     IBuildableSchedulerBuilder IBuildableSchedulerBuilder.BackfillFrom(DateTimeOffset startUtc) =>
         BackfillFrom(startUtc);
+
+    IBuildableSchedulerBuilder IBuildableSchedulerBuilder.Except(Action<IExclusionBuilder> configure) =>
+        Except(configure);
+
+    IBuildableSchedulerBuilder IBuildableSchedulerBuilder.ExceptWeekends() => ExceptWeekends();
 }

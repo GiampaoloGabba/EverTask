@@ -17,6 +17,11 @@ public class RecurringTask
     public int?            MaxRuns         { get; set; }
     public DateTimeOffset? RunUntil        { get; set; }
 
+    /// <summary>The fixed moments removed from this schedule's recurring grid, or <c>null</c> for none.</summary>
+    /// <remarks>Omitted while null so definitions written before exclusions remain byte-identical.</remarks>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ScheduleExclusions? Exclusions { get; set; }
+
     /// <summary>
     /// How this schedule produces its occurrences. <see cref="Abstractions.OccurrenceMode.Inline"/> (the
     /// default) is the legacy behaviour: the schedule row runs the handler itself.
@@ -30,14 +35,14 @@ public class RecurringTask
     public OccurrenceMode OccurrenceMode { get; set; }
 
     /// <summary>
-    /// The IANA id of the time zone this schedule's calendar is read on, or <c>null</c> for the legacy
-    /// behaviour, where every wall-clock component means UTC.
+    /// The IANA id of the time zone this schedule's calendar and calendar exclusions are read on, or
+    /// <c>null</c> for the legacy behaviour, where every wall-clock component means UTC.
     /// </summary>
     /// <remarks>
     /// Omitted from the JSON while it is null, so schedules written before zones existed stay byte-identical.
     /// The id is stored, never the resolved <see cref="TimeZoneInfo"/>: the row outlives the process and the
-    /// zone's rules change under it. Only a <see cref="ScheduleSemantics.Calendar"/> schedule may carry one;
-    /// see <see cref="Validate"/>.
+    /// zone's rules change under it. An elapsed schedule may carry one only when day/date exclusions need an
+    /// exclusion clock; see <see cref="Validate"/>.
     /// </remarks>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? TimeZoneId { get; set; }
@@ -214,9 +219,80 @@ public class RecurringTask
         WeekInterval?.Validate();
         MonthInterval?.Validate();
 
+        ValidateExclusions();
         ValidateProvider(providers);
         ValidateTimeZone();
         ValidateMisfire();
+    }
+
+    private void ValidateExclusions()
+    {
+        if (Exclusions is not { } exclusions)
+            return;
+
+        exclusions.Days ??= [];
+        exclusions.Dates ??= [];
+        exclusions.Ranges ??= [];
+
+        if (exclusions.Days.Any(day => !Enum.IsDefined(day)))
+            throw new ArgumentException("An exclusion day is outside the defined DayOfWeek values.", nameof(Exclusions));
+
+        exclusions.Days = exclusions.Days.Distinct().Order().ToArray();
+        exclusions.Dates = exclusions.Dates.Distinct().Order().ToArray();
+
+        var ranges = new List<ExclusionRange>(exclusions.Ranges.Length);
+        foreach (var range in exclusions.Ranges)
+        {
+            if (range is null)
+                throw new ArgumentException("An exclusion range cannot be null.", nameof(Exclusions));
+
+            var normalized = new ExclusionRange
+            {
+                FromUtc = range.FromUtc.ToUniversalTime(),
+                ToUtc   = range.ToUtc.ToUniversalTime()
+            };
+
+            if (normalized.FromUtc >= normalized.ToUtc)
+            {
+                throw new ArgumentException(
+                    "An exclusion range start must be earlier than its end.", nameof(Exclusions));
+            }
+
+            ranges.Add(normalized);
+        }
+
+        ranges.Sort(static (left, right) =>
+        {
+            var fromComparison = left.FromUtc.CompareTo(right.FromUtc);
+            return fromComparison != 0 ? fromComparison : left.ToUtc.CompareTo(right.ToUtc);
+        });
+
+        var merged = new List<ExclusionRange>(ranges.Count);
+        foreach (var range in ranges)
+        {
+            if (merged.Count == 0 || range.FromUtc > merged[^1].ToUtc)
+            {
+                merged.Add(range);
+                continue;
+            }
+
+            if (range.ToUtc > merged[^1].ToUtc)
+                merged[^1].ToUtc = range.ToUtc;
+        }
+
+        exclusions.Ranges = merged.ToArray();
+
+        if (exclusions.Dates.Length + exclusions.Ranges.Length > 1000)
+        {
+            throw new InvalidOperationException(
+                "A schedule may carry at most 1000 exclusion dates and windows after normalization.");
+        }
+
+        if (exclusions.Days.Length == 7)
+            throw new InvalidOperationException("Excluding every day of the week leaves no recurring occurrence.");
+
+        if (exclusions.Days.Length == 0 && exclusions.Dates.Length == 0 && exclusions.Ranges.Length == 0)
+            Exclusions = null;
     }
 
     /// <summary>
@@ -232,6 +308,13 @@ public class RecurringTask
             return;
 
         provider.Validate();
+
+        if (Exclusions != null)
+        {
+            throw new InvalidOperationException(
+                $"The schedule takes its occurrences from the provider '{provider.Key}' AND declares fixed " +
+                "exclusions. A provider owns its calendar and must apply its own exclusions.");
+        }
 
         if (!string.IsNullOrEmpty(CronInterval?.CronExpression) || SecondInterval != null || MinuteInterval != null
          || HourInterval != null || DayInterval != null || WeekInterval != null || MonthInterval != null)
@@ -293,9 +376,9 @@ public class RecurringTask
     /// Also where the id is CANONICALIZED to its IANA spelling, this being the one gate all those paths
     /// share: a definition handed straight to the public <c>ExecuteDispatch</c> never meets a builder, and
     /// would reach the row with a Windows id that resolves to nothing on a Linux replica. A zone on an
-    /// <see cref="ScheduleSemantics.Elapsed"/> schedule is refused rather than ignored, since that grid is the
-    /// same set of instants in every zone; the check lives here and not in <c>InTimeZone</c> because only the
-    /// built definition knows the chain's final shape.
+    /// <see cref="ScheduleSemantics.Elapsed"/> schedule is refused unless day/date exclusions read their
+    /// calendar on it; the check lives here and not in <c>InTimeZone</c> because only the built definition
+    /// knows the chain's final shape.
     /// </remarks>
     private void ValidateTimeZone()
     {
@@ -304,15 +387,19 @@ public class RecurringTask
 
         TimeZoneId = ScheduleTimeZone.Normalize(TimeZoneId);
 
-        if (Semantics == ScheduleSemantics.Elapsed)
+        if (Semantics == ScheduleSemantics.Elapsed && !HasCalendarExclusions())
         {
             throw new InvalidOperationException(
                 $"The time zone '{TimeZoneId}' has no effect on this schedule: a plain cadence " +
                 "(every N seconds/minutes/hours) is a constant step in elapsed time and produces the same " +
-                "instants in every zone. Anchor the schedule to a calendar — a time of day, a day of the " +
-                "week, a month selector or a cron expression — or drop the time zone.");
+                "instants in every zone. Anchor the schedule to a calendar, add a day/date exclusion that " +
+                "needs an exclusion clock, or drop the time zone.");
         }
     }
+
+    internal bool HasCalendarExclusions() =>
+        Exclusions is { } exclusions &&
+        ((exclusions.Days?.Length ?? 0) > 0 || (exclusions.Dates?.Length ?? 0) > 0);
 
 
     /// <summary>
@@ -1012,6 +1099,8 @@ public class RecurringTask
     /// </summary>
     internal bool IsUniformGrid()
     {
+        if (Exclusions != null) return false;
+
         // A calendar schedule read on a real clock has no constant step — local midnight is 24 hours after
         // the previous one on every day but the two the zone changes offset on. Elapsed grids and plain-UTC
         // calendars keep the arithmetic they always had.
@@ -1121,6 +1210,7 @@ public class RecurringTask
         if (Provider != null)
         {
             parts.Add(Provider.Describe());
+            AppendExclusions(parts);
             AppendBounds(parts);
             AppendModifiers(parts);
             return string.Join(" ", parts);
@@ -1130,6 +1220,7 @@ public class RecurringTask
         {
             parts.Add("Use Cron expression:");
             parts.Add(CronInterval.CronExpression);
+            AppendExclusions(parts);
             AppendBounds(parts);
             AppendModifiers(parts);
             return string.Join(" ", parts);
@@ -1191,10 +1282,45 @@ public class RecurringTask
                 parts.Add($"in {string.Join(" - ", MonthInterval.OnMonths)}");
         }
 
+        AppendExclusions(parts);
         AppendBounds(parts);
         AppendModifiers(parts);
 
         return string.Join(" ", parts);
+    }
+
+    private void AppendExclusions(List<string> parts)
+    {
+        if (Exclusions is not { } exclusions)
+            return;
+
+        var details = new List<string>();
+        var days = exclusions.Days ?? [];
+        var dates = exclusions.Dates ?? [];
+        var ranges = exclusions.Ranges ?? [];
+
+        if (days.Length > 0)
+        {
+            details.Add(string.Join(" - ", days.OrderBy(static day => day == DayOfWeek.Sunday ? 7 : (int)day)));
+        }
+
+        if (dates.Length is > 0 and <= 3)
+            details.Add(string.Join(" - ", dates.Select(static date => $"{date:yyyy-MM-dd}")));
+        else if (dates.Length > 3)
+            details.Add($"{dates.Length} dates");
+
+        if (ranges.Length is > 0 and <= 3)
+        {
+            details.Add(string.Join(" - ", ranges
+                .Select(range => $"[{OnScheduleClock(range.FromUtc)}, {OnScheduleClock(range.ToUtc)})")));
+        }
+        else if (ranges.Length > 3)
+        {
+            details.Add($"{ranges.Length} windows");
+        }
+
+        if (details.Count > 0)
+            parts.Add($"except {string.Join(", ", details)}");
     }
 
     /// <summary>The termination bounds, which read the same whatever produced the occurrences.</summary>

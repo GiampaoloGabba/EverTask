@@ -6,9 +6,8 @@ namespace EverTask.Tests.RecurringTests.TimeZones;
 
 /// <summary>
 /// T5: which schedules a time zone governs. The classification decides three things at once — whether
-/// <c>InTimeZone</c> is accepted, whether the global default zone is stamped on, and whether the grid is
-/// still a uniform arithmetic progression — so every shape the fluent API can build is pinned here, built
-/// through the real builder rather than by hand-setting intervals.
+/// <c>InTimeZone</c> is accepted and whether the grid is still a uniform arithmetic progression. Calendar
+/// exclusions add one explicit exception for the exclusion clock, pinned here beside the base shapes.
 /// </summary>
 public class ScheduleSemanticsTests
 {
@@ -184,5 +183,52 @@ public class ScheduleSemanticsTests
 
         task.TimeZoneId.ShouldBe("UTC");
         task.IsUniformGrid().ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Calendar_exclusions_make_a_zone_legal_without_changing_elapsed_semantics()
+    {
+        var task = Build(recurring => recurring.Schedule().Every(4).Hours()
+            .ExceptWeekends().InTimeZone("Europe/Rome"));
+
+        task.Validate();
+
+        task.Semantics.ShouldBe(ScheduleSemantics.Elapsed);
+        task.GoverningZone.ShouldBeNull("the zone governs only the exclusion clock, not the base cadence");
+        task.IsUniformGrid().ShouldBeFalse("a uniform base grid with excluded holes is not uniform");
+    }
+
+    [Fact]
+    public void Range_only_exclusions_do_not_make_a_zone_meaningful_on_an_elapsed_schedule()
+    {
+        var from = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var task = Build(recurring => recurring.Schedule().EveryHour()
+            .Except(exclusions => exclusions.Between(from, from.AddHours(1)))
+            .InTimeZone("Europe/Rome"));
+
+        Should.Throw<InvalidOperationException>(() => task.Validate()).Message.ShouldContain("no effect");
+    }
+
+    [Fact]
+    public void Default_zone_stamping_reads_calendar_exclusions_null_safely()
+    {
+        var calendarExcluded = Build(recurring => recurring.Schedule().EveryHour());
+        calendarExcluded.Exclusions = new ScheduleExclusions
+        {
+            Days = null!,
+            Dates = [new DateOnly(2026, 12, 25)],
+            Ranges = null!
+        };
+        var rangesOnly = Build(recurring => recurring.Schedule().EveryHour()
+            .Except(exclusions => exclusions.Between(
+                new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero),
+                new DateTimeOffset(2026, 1, 1, 1, 0, 0, TimeSpan.Zero))));
+
+        ScheduleTimeZone.ApplyDefault(calendarExcluded, "Europe/Rome");
+        ScheduleTimeZone.ApplyDefault(rangesOnly, "Europe/Rome");
+
+        calendarExcluded.TimeZoneId.ShouldBe("Europe/Rome");
+        rangesOnly.TimeZoneId.ShouldBeNull();
+        Should.NotThrow(() => calendarExcluded.Validate());
     }
 }

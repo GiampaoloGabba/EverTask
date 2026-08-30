@@ -100,6 +100,18 @@ public class IntervalSchedulerBuilder(RecurringTask task, TimeProvider? timeProv
         return this;
     }
 
+    public IIntervalSchedulerBuilder Except(Action<IExclusionBuilder> configure)
+    {
+        ScheduleModifiers.Except(task, configure);
+        return this;
+    }
+
+    public IIntervalSchedulerBuilder ExceptWeekends()
+    {
+        ScheduleModifiers.ExceptWeekends(task);
+        return this;
+    }
+
     public IBuildableSchedulerBuilder UseOccurrenceProvider(string key, string? config = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
