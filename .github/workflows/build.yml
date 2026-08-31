@@ -25,7 +25,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # 22.12+: the UI test deps call undici's markAsUncloneable, missing on Node 20
+          node-version: '24'
           cache: 'pnpm'
           cache-dependency-path: 'src/Monitoring/EverTask.Monitor.Api/UI/pnpm-lock.yaml'
 
