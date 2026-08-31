@@ -96,6 +96,11 @@ public record TaskHandlerExecutor(
     /// </summary>
     internal bool ScheduleRunAlreadyRecorded { get; init; }
 
+    /// <summary>
+    /// True only for a newly persisted immediate dispatch whose row already carries the Queued status.
+    /// </summary>
+    internal bool IsNewImmediateDispatch { get; init; }
+
     private OccurrenceRuntimeInfo? _rowOccurrence;
 
     /// <summary>
@@ -279,7 +284,9 @@ public record TaskHandlerExecutor(
             HandlerErrorCallback = null,
             HandlerStartedCallback = null,
             HandlerCompletedCallback = null,
-            HandlerScope = null
+            HandlerScope = null,
+            // Born-Queued applies only to the first handoff; every lazy copy is a later delivery.
+            IsNewImmediateDispatch = false
         };
 };
 
@@ -372,7 +379,9 @@ public static class TaskHandlerExecutorExtensions
             Type                  = requestType,
             Request               = request,
             Handler               = handlerType,
-            Status                = QueuedTaskStatus.WaitingQueue,
+            Status                = executor.IsNewImmediateDispatch
+                                        ? QueuedTaskStatus.Queued
+                                        : QueuedTaskStatus.WaitingQueue,
             CreatedAtUtc          = createdAtUtc ?? DateTimeOffset.UtcNow,
             ScheduledExecutionUtc = executor.ExecutionTime,
             IsRecurring           = isRecurring,

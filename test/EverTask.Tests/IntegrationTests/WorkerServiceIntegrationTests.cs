@@ -509,12 +509,12 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         var task1FromStorage = allTasks.First(t => t.Id == task1Id);
         var task2FromStorage = allTasks.First(t => t.Id == task2Id);
 
-        // Task1 should have completed before task2 started queueing (compare status audit timestamps)
+        // Task1 should have completed before task2 started execution (compare status audit timestamps)
         var task1CompletedAt = task1FromStorage.StatusAudits.First(x => x.NewStatus == QueuedTaskStatus.Completed).UpdatedAtUtc;
-        var task2QueuedAt = task2FromStorage.StatusAudits.First(x => x.NewStatus == QueuedTaskStatus.Queued).UpdatedAtUtc;
+        var task2StartedAt = task2FromStorage.StatusAudits.First(x => x.NewStatus == QueuedTaskStatus.InProgress).UpdatedAtUtc;
 
         // With sequential execution, task1 must complete before task2 even begins
-        (task1CompletedAt < task2QueuedAt).ShouldBeTrue();
+        (task1CompletedAt < task2StartedAt).ShouldBeTrue();
     }
 
     [Fact]

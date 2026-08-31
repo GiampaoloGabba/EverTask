@@ -115,6 +115,11 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
                             return false;
                     }
 
+                    // The first queue reverted a folded immediate dispatch to WaitingQueue. Its fallback
+                    // delivery must perform the ordinary Queued transition before entering another channel.
+                    if (task.IsNewImmediateDispatch)
+                        task = task with { IsNewImmediateDispatch = false };
+
                     if (targetQueueName != QueueNames.Default)
                     {
                         _logger.QueueFullFallingBackToDefault(targetQueueName, task.PersistenceId);

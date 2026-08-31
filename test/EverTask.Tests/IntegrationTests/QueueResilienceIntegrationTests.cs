@@ -71,6 +71,26 @@ public class QueueResilienceIntegrationTests : IsolatedIntegrationTestBase
     }
 
     [Fact]
+    public async Task Should_persist_new_immediate_dispatch_as_Queued_and_execute_it_once()
+    {
+        await CreateIsolatedHostWithBuilderAsync(b =>
+            {
+                b.AddMemoryStorage();
+                b.Services.AddSingleton(_state);
+            },
+            startHost: false);
+
+        var taskId = await Dispatcher.Dispatch(new ResilienceCounterTask(16));
+
+        (await Storage.Get(t => t.Id == taskId)).Single().Status.ShouldBe(QueuedTaskStatus.Queued);
+
+        await Host!.StartAsync();
+        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed, timeoutMs: 10000);
+
+        _state.ExecutedIndexes.Count(i => i == 16).ShouldBe(1);
+    }
+
+    [Fact]
     public async Task Should_recover_delayed_WaitingQueue_task_after_restart()
     {
         // Host 1: dispatch a delayed one-shot task; while parked in the in-memory scheduler
@@ -116,7 +136,7 @@ public class QueueResilienceIntegrationTests : IsolatedIntegrationTestBase
         var ex = await Should.ThrowAsync<QueueFullException>(
             () => Dispatcher.Dispatch(new ResilienceBlockingTask()));
 
-        // ...and the rejected task must stay persisted as WaitingQueue (recoverable), not lost.
+        // ...and the rejected task born Queued must be reverted to WaitingQueue (recoverable), not lost.
         var rejected = await TaskWaitHelper.WaitForTaskStatusAsync(
             Storage, ex.TaskId, QueuedTaskStatus.WaitingQueue, timeoutMs: 5000);
         rejected.ShouldNotBeNull();
@@ -137,6 +157,7 @@ public class QueueResilienceIntegrationTests : IsolatedIntegrationTestBase
 
         await TaskWaitHelper.WaitForConditionAsync(() => _state.BlockingCompleted >= 3, timeoutMs: 20000);
         await WaitForTaskStatusAsync(ex.TaskId, QueuedTaskStatus.Completed, timeoutMs: 10000);
+        _state.BlockingCompleted.ShouldBe(3);
     }
 
     [Fact]

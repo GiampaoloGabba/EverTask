@@ -659,13 +659,16 @@ public class Dispatcher(
         // by recovery, absent on a brand new task) plus one, because the counter only moves once a run ends.
         // An occurrence arrives with its own number already read from the row and keeps it: its counter is the
         // one-shot's, which says nothing about the run of the series the occurrence is.
+        var isNewImmediateDispatch = !isRecovery && existingTaskId == null && executionTime == null && recurring == null;
+
         var executor = await handler.Handle(task, executionTime, recurring, serviceProvider, effectiveAuditLevel,
                                        existingTaskId, taskKey, useLazyExecutor,
                                        rowMetadata with
                                        {
                                            RunNumber = rowMetadata.RunNumber
                                                        ?? (existingCurrentRunCount ?? currentRun ?? 0) + 1
-                                       })
+                                       },
+                                       isNewImmediateDispatch)
                                    .ConfigureAwait(false);
 
         // Persist or update task (lazy serialize only if storage exists).

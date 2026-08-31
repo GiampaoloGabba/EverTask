@@ -10,7 +10,8 @@ internal abstract class TaskHandlerWrapper
                                                           RecurringTask? recurring, IServiceProvider serviceFactory,
                                                           AuditLevel auditLevel, Guid? existingTaskId = null,
                                                           string? taskKey = null, bool useLazyExecutor = false,
-                                                          DispatchRowMetadata rowMetadata = default);
+                                                          DispatchRowMetadata rowMetadata = default,
+                                                          bool isNewImmediateDispatch = false);
 }
 
 internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TTask : IEverTask
@@ -28,7 +29,8 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
                                                                 IServiceProvider serviceFactory,
                                                                 AuditLevel auditLevel, Guid? existingTaskId = null,
                                                                 string? taskKey = null, bool useLazyExecutor = false,
-                                                                DispatchRowMetadata rowMetadata = default)
+                                                                DispatchRowMetadata rowMetadata = default,
+                                                                bool isNewImmediateDispatch = false)
     {
         var guidGenerator = serviceFactory.GetRequiredService<IGuidGenerator>();
 
@@ -69,11 +71,12 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
                 rateLimitKey
             )
             {
-                ParentTaskId    = rowMetadata.ParentTaskId,
-                RuntimeInfo     = rowMetadata.RuntimeInfo,
-                ScheduleVersion = rowMetadata.ScheduleVersion,
-                RunNumber       = rowMetadata.RunNumber,
-                NominalSlotUtc  = rowMetadata.NominalSlotUtc
+                ParentTaskId           = rowMetadata.ParentTaskId,
+                RuntimeInfo            = rowMetadata.RuntimeInfo,
+                ScheduleVersion        = rowMetadata.ScheduleVersion,
+                RunNumber              = rowMetadata.RunNumber,
+                NominalSlotUtc         = rowMetadata.NominalSlotUtc,
+                IsNewImmediateDispatch = isNewImmediateDispatch
             };
         }
 
@@ -121,11 +124,12 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
                 handlerScope
             )
             {
-                ParentTaskId    = rowMetadata.ParentTaskId,
-                RuntimeInfo     = rowMetadata.RuntimeInfo,
-                ScheduleVersion = rowMetadata.ScheduleVersion,
-                RunNumber       = rowMetadata.RunNumber,
-                NominalSlotUtc  = rowMetadata.NominalSlotUtc
+                ParentTaskId           = rowMetadata.ParentTaskId,
+                RuntimeInfo            = rowMetadata.RuntimeInfo,
+                ScheduleVersion        = rowMetadata.ScheduleVersion,
+                RunNumber              = rowMetadata.RunNumber,
+                NominalSlotUtc         = rowMetadata.NominalSlotUtc,
+                IsNewImmediateDispatch = isNewImmediateDispatch
             };
         }
         catch

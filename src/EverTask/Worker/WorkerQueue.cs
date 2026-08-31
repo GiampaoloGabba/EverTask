@@ -191,7 +191,7 @@ public class WorkerQueue : IWorkerQueue
                         return;
                     }
                 }
-                else
+                else if (!task.IsNewImmediateDispatch)
                 {
                     await _taskStorage.SetQueued(task.PersistenceId, task.AuditLevel, cancellationToken).ConfigureAwait(false);
                 }
@@ -261,6 +261,10 @@ public class WorkerQueue : IWorkerQueue
             && _queue.Reader.CanCount && _queue.Reader.Count >= Capacity)
         {
             _logger.QueueFull(Name, task.PersistenceId);
+
+            if (task.IsNewImmediateDispatch && _taskStorage != null)
+                await RevertDroppedToWaitingQueueAsync(task).ConfigureAwait(false);
+
             return EnqueueResult.QueueFull;
         }
 
@@ -294,7 +298,7 @@ public class WorkerQueue : IWorkerQueue
                         return EnqueueResult.Discarded;
                     }
                 }
-                else
+                else if (!task.IsNewImmediateDispatch)
                 {
                     await _taskStorage.SetQueued(task.PersistenceId, task.AuditLevel, cancellationToken).ConfigureAwait(false);
                 }

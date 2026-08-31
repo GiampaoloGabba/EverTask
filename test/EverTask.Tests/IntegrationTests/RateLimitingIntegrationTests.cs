@@ -125,6 +125,29 @@ public class RateLimitingIntegrationTests : IsolatedIntegrationTestBase
     }
 
     [Fact]
+    public async Task Should_transition_back_to_Queued_when_immediate_rate_limited_task_is_redelivered()
+    {
+        await CreateRateLimitHostAsync();
+
+        var warmupId = await Dispatcher.Dispatch(new RateLimitedLongWindowTask("redelivery-key", 0));
+        await WaitForTaskStatusAsync(warmupId, QueuedTaskStatus.Completed, timeoutMs: 10000);
+
+        using var deferrals = TaskWaitHelper.CreateDeferralCollector(WorkerExecutor);
+        var deferredId = await Dispatcher.Dispatch(new RateLimitedLongWindowTask("redelivery-key", 1));
+        await deferrals.WaitForTaskAsync(deferredId, timeoutMs: 10000);
+
+        var requeued = await TaskWaitHelper.WaitUntilAsync(
+            async () => (await Storage.Get(t => t.Id == deferredId)).Single(),
+            task => task.StatusAudits.Any(a => a.NewStatus == QueuedTaskStatus.Queued),
+            timeoutMs: 15000);
+
+        requeued.StatusAudits.Count(a => a.NewStatus == QueuedTaskStatus.Queued).ShouldBe(1);
+
+        await WaitForTaskStatusAsync(deferredId, QueuedTaskStatus.Completed, timeoutMs: 20000);
+        _state.ExecutionCountByIndex[1].ShouldBe(1);
+    }
+
+    [Fact]
     public async Task Should_not_execute_task_when_cancelled_while_parked()
     {
         await CreateRateLimitHostAsync();
