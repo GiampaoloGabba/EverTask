@@ -40,8 +40,7 @@ internal sealed class TaskExecutionContext : ITaskExecutionContext
     {
         var slot = task.NominalSlotOfDelivery;
 
-        // Read ONCE: the property parses the row's JSON on every access, and three of the values below come
-        // out of it.
+        // Keep one consistent occurrence snapshot for the three values derived from it below.
         var occurrence = task.RowOccurrence;
 
         // The zone is part of the SCHEDULE. An inline delivery carries the definition and reads it there; an

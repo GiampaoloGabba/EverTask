@@ -775,9 +775,9 @@ internal sealed class OccurrenceMaterializer
                                                       TaskHandlerExecutor executorForEvents, Guid parentId,
                                                       AuditLevel auditLevel, CancellationToken ct)
     {
-        var children = await storage.GetOccurrences(parentId, nonTerminalOnly: true, ct).ConfigureAwait(false);
+        var childIds = await storage.GetOccurrenceIds(parentId, nonTerminalOnly: true, ct).ConfigureAwait(false);
 
-        if (children.Length == 0)
+        if (childIds.Length == 0)
             return 0;
 
         if (!_scheduler.SupportsScheduleInspection)
@@ -785,14 +785,23 @@ internal sealed class OccurrenceMaterializer
             if (Interlocked.Exchange(ref _inspectionWarned, 1) == 0)
                 _logger.ScheduleInspectionUnsupported();
 
-            return children.Length;
+            return childIds.Length;
         }
 
-        var active = children.Length;
+        var active = childIds.Length;
 
-        foreach (var child in children)
+        foreach (var childId in childIds)
         {
-            if (_deliveryRegistry?.IsDelivering(child.Id) == true || _scheduler.IsScheduled(child.Id))
+            if (_deliveryRegistry?.IsDelivering(childId) == true || _scheduler.IsScheduled(childId))
+                continue;
+
+            var child = (await storage.Get(t => t.Id == childId, ct).ConfigureAwait(false)).FirstOrDefault();
+            if (child == null || !QueuedTask.IsNonTerminalStatus(child.Status))
+                continue;
+
+            // The fetched status must predate the final liveness check: if a delivery starts afterwards, the
+            // CAS below loses instead of requeuing a running occurrence.
+            if (_deliveryRegistry?.IsDelivering(childId) == true || _scheduler.IsScheduled(childId))
                 continue;
 
             var expected = child.Status;

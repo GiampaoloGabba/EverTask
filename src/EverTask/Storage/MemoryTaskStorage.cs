@@ -788,6 +788,20 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
     }
 
     /// <inheritdoc />
+    public Task<Guid[]> GetOccurrenceIds(Guid parentId, bool nonTerminalOnly = false,
+                                         CancellationToken ct = default)
+    {
+        lock (_pendingTasksLock)
+        {
+            return Task.FromResult(_pendingTasks
+                                   .Where(t => t.ParentTaskId == parentId
+                                               && (!nonTerminalOnly || QueuedTask.IsNonTerminalStatus(t.Status)))
+                                   .Select(t => t.Id)
+                                   .ToArray());
+        }
+    }
+
+    /// <inheritdoc />
     public Task<OccurrencePage> GetOccurrencesPage(Guid parentId, bool nonTerminalOnly, int skip, int take,
                                                    CancellationToken ct = default)
     {

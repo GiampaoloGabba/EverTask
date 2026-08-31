@@ -103,7 +103,10 @@ public class SqliteTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         var expectedNextRun  = observed.NextRunUtc;
         var expectedRunUntil = observed.RunUntil;
 
-        await using var transaction = await efContext.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        var createAudit = AuditPolicy.ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Queued, null);
+        await using var transaction = createAudit
+                                          ? await efContext.Database.BeginTransactionAsync(ct).ConfigureAwait(false)
+                                          : null;
 
         var transitioned = await dbContext.QueuedTasks
                                           .Where(t => t.Id == taskId)
@@ -115,12 +118,14 @@ public class SqliteTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
         if (transitioned == 0)
         {
-            await transaction.RollbackAsync(ct).ConfigureAwait(false);
+            if (transaction != null)
+                await transaction.RollbackAsync(ct).ConfigureAwait(false);
             logger.TaskNoLongerRecoverable(taskId);
             return false;
         }
 
-        await CommitQueuedTransitionAsync(dbContext, transaction, taskId, auditLevel, ct).ConfigureAwait(false);
+        if (transaction != null)
+            await CommitQueuedTransitionAsync(dbContext, transaction, taskId, auditLevel, ct).ConfigureAwait(false);
         return true;
     }
 

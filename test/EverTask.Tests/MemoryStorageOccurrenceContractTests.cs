@@ -285,6 +285,31 @@ public class MemoryStorageOccurrenceContractTests
     }
 
     [Fact]
+    public async Task Should_return_the_same_occurrence_ids_as_full_rows_for_both_filters()
+    {
+        var id    = await SeedScheduleAsync();
+        var other = await SeedScheduleAsync();
+
+        var active = NewOccurrence(id);
+        await _storage.Persist(active);
+
+        var finished = NewOccurrence(id);
+        finished.ScheduledExecutionUtc = Cursor.AddMinutes(1);
+        await _storage.Persist(finished);
+        await _storage.SetCompleted(finished.Id, 1, AuditLevel.Full);
+
+        await _storage.Persist(NewOccurrence(other));
+
+        foreach (var nonTerminalOnly in new[] { false, true })
+        {
+            var rows = await _storage.GetOccurrences(id, nonTerminalOnly);
+            var ids  = await _storage.GetOccurrenceIds(id, nonTerminalOnly);
+
+            ids.OrderBy(childId => childId).ShouldBe(rows.Select(row => row.Id).OrderBy(childId => childId));
+        }
+    }
+
+    [Fact]
     public async Task Should_report_when_a_run_began_from_the_audit_trail_and_nothing_when_none_recorded_it()
     {
         // The memory twin of the audit read the relational providers answer with one indexed query. Same

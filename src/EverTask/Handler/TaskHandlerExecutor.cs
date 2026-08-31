@@ -96,6 +96,8 @@ public record TaskHandlerExecutor(
     /// </summary>
     internal bool ScheduleRunAlreadyRecorded { get; init; }
 
+    private OccurrenceRuntimeInfo? _rowOccurrence;
+
     /// <summary>
     /// What the persisted ROW states about this delivery when it is an occurrence — its slot and its run of
     /// the series — or null when the delivery is not one.
@@ -108,7 +110,7 @@ public record TaskHandlerExecutor(
     /// preceding null check, without parsing anything.
     /// </remarks>
     internal OccurrenceRuntimeInfo? RowOccurrence =>
-        ParentTaskId != null ? OccurrenceRuntimeInfo.TryParse(RuntimeInfo) : null;
+        ParentTaskId != null ? _rowOccurrence ??= OccurrenceRuntimeInfo.TryParse(RuntimeInfo) : null;
 
     /// <summary>
     /// The slot this delivery stands for: the occurrence's own slot, the scheduled time of a delayed task, or

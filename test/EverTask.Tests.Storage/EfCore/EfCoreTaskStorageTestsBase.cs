@@ -3537,6 +3537,31 @@ public abstract class EfCoreTaskStorageTestsBase
     }
 
     [Fact]
+    public async Task Should_return_the_same_occurrence_ids_as_full_rows_for_both_filters()
+    {
+        var cursor   = FloorToMicroseconds(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var schedule = await PersistSchedule(cursor);
+        var other    = await PersistSchedule(cursor);
+
+        var active = NewOccurrence(schedule.Id, cursor);
+        await _storage.Persist(active);
+
+        var finished = NewOccurrence(schedule.Id, cursor.AddMinutes(1));
+        await _storage.Persist(finished);
+        await _storage.SetCompleted(finished.Id, 1, AuditLevel.Full);
+
+        await _storage.Persist(NewOccurrence(other.Id, cursor));
+
+        foreach (var nonTerminalOnly in new[] { false, true })
+        {
+            var rows = await _storage.GetOccurrences(schedule.Id, nonTerminalOnly);
+            var ids  = await _storage.GetOccurrenceIds(schedule.Id, nonTerminalOnly);
+
+            ids.OrderBy(id => id).ShouldBe(rows.Select(row => row.Id).OrderBy(id => id));
+        }
+    }
+
+    [Fact]
     public async Task GetOccurrencesPage_should_return_one_page_newest_first_with_the_whole_total()
     {
         // The page is what keeps a schedule with a long retention behind it readable: the caller asks for a

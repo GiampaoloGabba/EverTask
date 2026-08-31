@@ -21,10 +21,22 @@ public class SqlServerTaskStorage(
     : EfCoreTaskStorage(contextFactory, logger)
 {
     private readonly ITaskStoreDbContextFactory _contextFactory = contextFactory;
-    private readonly string _schema = string.IsNullOrEmpty(storeOptions.Value.SchemaName) ? "dbo" : storeOptions.Value.SchemaName!;
+    private readonly string _setStatusSql = $"EXEC [{GetSchema(storeOptions)}].[usp_SetTaskStatus] @TaskId, @Status, @Exception, @AuditLevel, @ExecutionTimeMs";
+    private readonly string _updateCurrentRunSql = $"EXEC [{GetSchema(storeOptions)}].[usp_UpdateCurrentRun] @TaskId, @ExecutionTimeMs, @NextRunUtc, @AuditLevel";
+    private readonly string _completeRecurringRunSql = $"EXEC [{GetSchema(storeOptions)}].[usp_CompleteRecurringRun] @TaskId, @ExecutionTimeMs, @NextRunUtc, @AuditLevel";
+    private readonly string _materializeOccurrenceSql = $"EXEC [{GetSchema(storeOptions)}].[usp_MaterializeOccurrence] @ParentId, @ExpectedScheduleVersion, " +
+                                                        "@ExpectedCursorUtc, @NewCursorUtc, @AuditLevel, @OccurrenceId, @SlotUtc, @CreatedAtUtc, " +
+                                                        "@Type, @Request, @Handler, @QueueName, @OccurrenceAuditLevel, @RuntimeInfo, @Outcome OUTPUT";
+    private readonly string _cancelScheduleSql = $"EXEC [{GetSchema(storeOptions)}].[usp_CancelSchedule] @ParentId, @AuditLevel";
+    private readonly string _updateCurrentRunCasSql = $"EXEC [{GetSchema(storeOptions)}].[usp_UpdateCurrentRunCas] @TaskId, @ExecutionTimeMs, @NextRunUtc, " +
+                                                       "@AuditLevel, @ExpectedScheduleVersion, @Applied OUTPUT";
+    private readonly string _completeRecurringRunCasSql = $"EXEC [{GetSchema(storeOptions)}].[usp_CompleteRecurringRunCas] @TaskId, @ExecutionTimeMs, @NextRunUtc, " +
+                                                           "@AuditLevel, @ExpectedScheduleVersion, @Applied OUTPUT";
 
     // The dbo fallback must match the migrations' one, or EXEC targets a schema the procs do not live in:
     // proc-not-found, swallowed by SetStatus, and the recoverable row is re-dispatched — double execution.
+    private static string GetSchema(IOptions<ITaskStoreOptions> options) =>
+        string.IsNullOrEmpty(options.Value.SchemaName) ? "dbo" : options.Value.SchemaName!;
 
     /// <summary>
     /// Sets task status using optimized stored procedure.
@@ -41,10 +53,8 @@ public class SqlServerTaskStorage(
 
         try
         {
-            var sql = $"EXEC [{_schema}].[usp_SetTaskStatus] @TaskId, @Status, @Exception, @AuditLevel, @ExecutionTimeMs";
-
             await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(
-                sql,
+                _setStatusSql,
                 [
                     new SqlParameter("@TaskId", taskId),
                     new SqlParameter("@Status", status.ToString()),
@@ -79,10 +89,8 @@ public class SqlServerTaskStorage(
 
         try
         {
-            var sql = $"EXEC [{_schema}].[usp_UpdateCurrentRun] @TaskId, @ExecutionTimeMs, @NextRunUtc, @AuditLevel";
-
             await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(
-                sql,
+                _updateCurrentRunSql,
                 new SqlParameter("@TaskId", taskId),
                 new SqlParameter("@ExecutionTimeMs", executionTimeMs),
                 new SqlParameter("@NextRunUtc", (object?)nextRun ?? DBNull.Value),
@@ -116,10 +124,8 @@ public class SqlServerTaskStorage(
 
         try
         {
-            var sql = $"EXEC [{_schema}].[usp_CompleteRecurringRun] @TaskId, @ExecutionTimeMs, @NextRunUtc, @AuditLevel";
-
             await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(
-                sql,
+                _completeRecurringRunSql,
                 new SqlParameter("@TaskId", taskId),
                 new SqlParameter("@ExecutionTimeMs", executionTimeMs),
                 new SqlParameter("@NextRunUtc", (object?)nextRun ?? DBNull.Value),
@@ -164,12 +170,8 @@ public class SqlServerTaskStorage(
 
         var outcome = new SqlParameter("@Outcome", SqlDbType.Int) { Direction = ParameterDirection.Output };
 
-        var sql = $"EXEC [{_schema}].[usp_MaterializeOccurrence] @ParentId, @ExpectedScheduleVersion, " +
-                  "@ExpectedCursorUtc, @NewCursorUtc, @AuditLevel, @OccurrenceId, @SlotUtc, @CreatedAtUtc, " +
-                  "@Type, @Request, @Handler, @QueueName, @OccurrenceAuditLevel, @RuntimeInfo, @Outcome OUTPUT";
-
         await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(
-            sql,
+            _materializeOccurrenceSql,
             [
                 new SqlParameter("@ParentId", parentId),
                 new SqlParameter("@ExpectedScheduleVersion", expectedScheduleVersion),
@@ -197,10 +199,8 @@ public class SqlServerTaskStorage(
     {
         await using var dbContext = await _contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
-        var sql = $"EXEC [{_schema}].[usp_CancelSchedule] @ParentId, @AuditLevel";
-
         await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(
-            sql,
+            _cancelScheduleSql,
             [
                 new SqlParameter("@ParentId", parentId),
                 new SqlParameter("@AuditLevel", (int)auditLevel)
@@ -221,11 +221,8 @@ public class SqlServerTaskStorage(
 
         try
         {
-            var sql = $"EXEC [{_schema}].[usp_UpdateCurrentRunCas] @TaskId, @ExecutionTimeMs, @NextRunUtc, " +
-                      "@AuditLevel, @ExpectedScheduleVersion, @Applied OUTPUT";
-
             await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(
-                sql,
+                _updateCurrentRunCasSql,
                 [
                     new SqlParameter("@TaskId", taskId),
                     new SqlParameter("@ExecutionTimeMs", executionTimeMs),
@@ -260,11 +257,8 @@ public class SqlServerTaskStorage(
 
         try
         {
-            var sql = $"EXEC [{_schema}].[usp_CompleteRecurringRunCas] @TaskId, @ExecutionTimeMs, @NextRunUtc, " +
-                      "@AuditLevel, @ExpectedScheduleVersion, @Applied OUTPUT";
-
             await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(
-                sql,
+                _completeRecurringRunCasSql,
                 [
                     new SqlParameter("@TaskId", taskId),
                     new SqlParameter("@ExecutionTimeMs", executionTimeMs),

@@ -708,6 +708,17 @@ public interface ITaskStorage
     }
 
     /// <summary>
+    /// The identities of a schedule's occurrences, optionally only those that can still lead to an execution.
+    /// </summary>
+    /// <remarks>
+    /// The default projects <see cref="GetOccurrences"/> so custom storages remain compatible; built-in
+    /// storages override it with a lean query over their native representation.
+    /// </remarks>
+    async Task<Guid[]> GetOccurrenceIds(Guid parentId, bool nonTerminalOnly = false,
+                                        CancellationToken ct = default) =>
+        (await GetOccurrences(parentId, nonTerminalOnly, ct).ConfigureAwait(false)).Select(t => t.Id).ToArray();
+
+    /// <summary>
     /// One page of the occurrences of a schedule, newest slot first, with the total that matches the request.
     /// </summary>
     /// <remarks>

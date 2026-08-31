@@ -353,6 +353,16 @@ public sealed class FaultInjectingTaskStorage(ITaskStorage inner) : ITaskStorage
         return inner.GetOccurrences(parentId, nonTerminalOnly, ct);
     }
 
+    public Task<Guid[]> GetOccurrenceIds(Guid parentId, bool nonTerminalOnly = false,
+                                         CancellationToken ct = default)
+    {
+        Gate(nameof(GetOccurrenceIds));
+        // The lean projection is still the materializer's occurrence read, so the established failure and
+        // race hooks for that seam must keep observing it.
+        Gate(nameof(GetOccurrences));
+        return inner.GetOccurrenceIds(parentId, nonTerminalOnly, ct);
+    }
+
     public Task<OccurrencePage> GetOccurrencesPage(Guid parentId, bool nonTerminalOnly, int skip, int take,
                                                    CancellationToken ct = default)
     {

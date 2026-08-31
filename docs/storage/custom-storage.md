@@ -219,9 +219,13 @@ re-read can attribute to this call an occurrence another writer cancelled, so th
 transition your transaction never made. A re-read inside the transaction is exact only while writers are
 serialized.
 
-The five read helpers (`GetOccurrences`, `GetOccurrencesPage`, `GetLastRunStarts`, `GetStatusAuditsPage`,
-`GetRunsAuditsPage`) carry no atomicity contract, so their defaults are a correct query over `Get`. Override them for an indexed
-one. `GetOccurrencesPage` is the one worth the effort: it answers the dashboard's occurrence list, and the
+The six read helpers (`GetOccurrences`, `GetOccurrenceIds`, `GetOccurrencesPage`, `GetLastRunStarts`,
+`GetStatusAuditsPage`, `GetRunsAuditsPage`) carry no atomicity contract, so their defaults are a correct query over `Get`. Override them for an indexed
+one. `GetOccurrenceIds` deserves an override on any real store: the materializer asks it on every kick of a
+durable schedule to check which children are still alive, and the default answers by reading every child row
+whole, payload included, just to return a list of ids. Project the id column over an index on
+`(ParentTaskId, Status)` and the reconcile pass stops dragging payloads it never looks at.
+`GetOccurrencesPage` is the other one worth the effort: it answers the dashboard's occurrence list, and the
 default reads the whole series to return one page of it, which on a schedule with a long retention behind it
 is hundreds of thousands of rows for a hundred. Order by slot descending, count and slice in the store, and
 return both the page and the total that matches the request. All five in-box stores do. Find out how your

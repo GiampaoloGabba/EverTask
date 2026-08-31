@@ -1,9 +1,11 @@
+using EverTask.Dispatcher;
 using EverTask.Handler;
 using EverTask.Monitoring;
 using EverTask.Scheduler.Recurring;
 using EverTask.Serialization;
 using EverTask.Storage;
 using EverTask.Tests.TestHelpers;
+using EverTask.Worker;
 using UUIDNext;
 
 namespace EverTask.Tests;
@@ -128,6 +130,39 @@ public class HanlderExecutorTests
         // The lazy executor must still serialize correctly (HandlerTypeName path)
         var queuedTask = executor.ToQueuedTask();
         queuedTask.Handler.ShouldBe(typeof(TestTaskHanlder).AssemblyQualifiedName);
+    }
+
+    [Fact]
+    public async Task Should_cache_row_occurrence_and_return_null_for_a_non_occurrence_executor()
+    {
+        var runtimeInfo = EverTaskJson.Serialize(new OccurrenceRuntimeInfo
+        {
+            SlotUtc   = DateTimeOffset.UtcNow,
+            RunNumber = 3
+        });
+        var row = new QueuedTask
+        {
+            Id           = Guid.NewGuid(),
+            Type         = typeof(TestTaskRequest).AssemblyQualifiedName!,
+            Request      = EverTaskJson.Serialize(new TestTaskRequest("occurrence")),
+            Handler      = typeof(TestTaskHanlder).AssemblyQualifiedName!,
+            Status       = QueuedTaskStatus.Queued,
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            ParentTaskId = Guid.NewGuid(),
+            RuntimeInfo  = runtimeInfo
+        };
+        var recovered = RecoveredTaskFactory.FromRowWithoutRegistries(row);
+        var wrapper   = new TaskHandlerWrapperImp<TestTaskRequest>();
+        var executor = await wrapper.Handle(recovered.Task!, recovered.ExecutionTime, recovered.Recurring, _provider,
+            recovered.AuditLevel, row.Id, row.TaskKey, useLazyExecutor: true, recovered.RowMetadata);
+
+        var first = executor.RowOccurrence.ShouldNotBeNull();
+        executor.RowOccurrence.ShouldBeSameAs(first);
+
+        var nonOccurrence = await wrapper.Handle(new TestTaskRequest("plain"), null, null, _provider,
+            AuditLevel.Full, useLazyExecutor: true, rowMetadata: DispatchRowMetadata.None);
+        nonOccurrence.ParentTaskId.ShouldBeNull();
+        nonOccurrence.RowOccurrence.ShouldBeNull();
     }
 
     [Fact]

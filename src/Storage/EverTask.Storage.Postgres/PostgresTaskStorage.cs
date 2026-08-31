@@ -26,7 +26,175 @@ public class PostgresTaskStorage(
     : EfCoreTaskStorage(contextFactory, logger)
 {
     private readonly ITaskStoreDbContextFactory _contextFactory = contextFactory;
-    private readonly string _schema = string.IsNullOrEmpty(storeOptions.Value.SchemaName) ? "public" : storeOptions.Value.SchemaName!;
+    private readonly string _setStatusSql = $"""
+
+                                                   WITH updated AS (
+                                                       UPDATE "{GetSchema(storeOptions)}"."QueuedTasks"
+                                                       SET "Status"           = @status,
+                                                           "Exception"        = @exception,
+                                                           "LastExecutionUtc" = CASE WHEN @stampLast THEN now() ELSE "LastExecutionUtc" END,
+                                                           "ExecutionTimeMs"  = CASE WHEN @hasExecTime THEN @execTime ELSE "ExecutionTimeMs" END
+                                                       WHERE "Id" = @taskId
+                                                       RETURNING "Id"
+                                                   )
+                                                   INSERT INTO "{GetSchema(storeOptions)}"."StatusAudit" ("QueuedTaskId", "UpdatedAtUtc", "NewStatus", "Exception")
+                                                   SELECT @taskId, now(), @status, @exception FROM updated WHERE @createAudit;
+                                                   """;
+    private readonly string _updateCurrentRunSql = $"""
+
+                                                          WITH updated AS (
+                                                              UPDATE "{GetSchema(storeOptions)}"."QueuedTasks"
+                                                              SET "ExecutionTimeMs" = @execTime,
+                                                                  "NextRunUtc"      = @nextRun,
+                                                                  "CurrentRunCount" = CASE WHEN COALESCE("CurrentRunCount", 0) >= 2147483647 THEN 2147483647 ELSE COALESCE("CurrentRunCount", 0) + 1 END
+                                                              WHERE "Id" = @taskId
+                                                              RETURNING "Status", "Exception"
+                                                          )
+                                                          INSERT INTO "{GetSchema(storeOptions)}"."RunsAudit" ("QueuedTaskId", "ExecutedAt", "ExecutionTimeMs", "Status", "Exception")
+                                                          SELECT @taskId, now(), @execTime, u."Status", u."Exception"
+                                                          FROM updated u
+                                                          -- An unknown level audits like Full, matching AuditPolicy: only ErrorsOnly (2) and None (3) skip.
+                                                          WHERE (@auditLevel NOT IN (2, 3))
+                                                             OR (@auditLevel = 2 AND (u."Status" = 'Failed' OR (u."Exception" IS NOT NULL AND u."Exception" <> '')));
+                                                          """;
+    private readonly string _completeRecurringRunSql = $"""
+
+                                                              WITH updated AS (
+                                                                  UPDATE "{GetSchema(storeOptions)}"."QueuedTasks"
+                                                                  SET "Status"           = 'Completed',
+                                                                      "Exception"        = NULL,
+                                                                      "LastExecutionUtc" = now(),
+                                                                      "ExecutionTimeMs"  = @execTime,
+                                                                      "NextRunUtc"       = @nextRun,
+                                                                      "CurrentRunCount"  = CASE WHEN COALESCE("CurrentRunCount", 0) >= 2147483647 THEN 2147483647 ELSE COALESCE("CurrentRunCount", 0) + 1 END
+                                                                  WHERE "Id" = @taskId
+                                                                  RETURNING "Id"
+                                                              ),
+                                                              ins_status AS (
+                                                                  INSERT INTO "{GetSchema(storeOptions)}"."StatusAudit" ("QueuedTaskId", "UpdatedAtUtc", "NewStatus", "Exception")
+                                                                  SELECT @taskId, now(), 'Completed', NULL FROM updated WHERE @statusAudit
+                                                                  RETURNING "Id"
+                                                              )
+                                                              INSERT INTO "{GetSchema(storeOptions)}"."RunsAudit" ("QueuedTaskId", "ExecutedAt", "ExecutionTimeMs", "Status", "Exception")
+                                                              SELECT @taskId, now(), @execTime, 'Completed', NULL FROM updated WHERE @runsAudit;
+                                                              """;
+    private readonly string _materializeOccurrenceSql = $"""
+
+                                                               WITH parent AS (
+                                                                   SELECT "Id", "ScheduleVersion", "NextRunUtc", "Status"
+                                                                   FROM "{GetSchema(storeOptions)}"."QueuedTasks"
+                                                                   WHERE "Id" = @parentId
+                                                                   FOR UPDATE
+                                                               ),
+                                                               decision AS (
+                                                                   SELECT CASE
+                                                                       WHEN NOT EXISTS (SELECT 1 FROM parent)                                   THEN 4
+                                                                       WHEN (SELECT "Status" FROM parent) = 'Cancelled'                       THEN 4
+                                                                       WHEN (SELECT "NextRunUtc" FROM parent) IS NULL                         THEN 4
+                                                                       WHEN (SELECT "ScheduleVersion" FROM parent) <> @expectedVersion        THEN 3
+                                                                       WHEN @expectedCursor IS NULL
+                                                                            OR (SELECT "NextRunUtc" FROM parent) <> @expectedCursor           THEN 2
+                                                                       WHEN EXISTS (SELECT 1 FROM "{GetSchema(storeOptions)}"."QueuedTasks"
+                                                                                    WHERE "ParentTaskId" = @parentId
+                                                                                      AND "ScheduledExecutionUtc" = @slotUtc)                 THEN 1
+                                                                       ELSE 0
+                                                                   END AS outcome
+                                                               ),
+                                                               inserted AS (
+                                                                   INSERT INTO "{GetSchema(storeOptions)}"."QueuedTasks"
+                                                                       ("Id", "CreatedAtUtc", "ExecutionTimeMs", "ScheduledExecutionUtc", "Type", "Request",
+                                                                        "Handler", "IsRecurring", "CurrentRunCount", "QueueName", "AuditLevel", "Status",
+                                                                        "ParentTaskId", "RuntimeInfo", "ScheduleVersion")
+                                                                   SELECT @occurrenceId, @createdAtUtc, 0, @slotUtc, @type, @request,
+                                                                          @handler, false, 0, @queueName, @occurrenceAuditLevel, 'WaitingQueue',
+                                                                          @parentId, @runtimeInfo, @expectedVersion
+                                                                   FROM decision WHERE outcome = 0
+                                                                   RETURNING "Id"
+                                                               ),
+                                                               advanced AS (
+                                                                   UPDATE "{GetSchema(storeOptions)}"."QueuedTasks"
+                                                                   SET "NextRunUtc"       = @newCursor,
+                                                                       "CurrentRunCount"  = CASE WHEN COALESCE("CurrentRunCount", 0) >= 2147483647
+                                                                                                   THEN 2147483647 ELSE COALESCE("CurrentRunCount", 0) + 1 END,
+                                                                       "Status"           = CASE WHEN @newCursor IS NULL THEN 'Completed' ELSE "Status" END,
+                                                                       "Exception"        = CASE WHEN @newCursor IS NULL THEN NULL ELSE "Exception" END,
+                                                                       "LastExecutionUtc" = CASE WHEN @newCursor IS NULL THEN now() ELSE "LastExecutionUtc" END
+                                                                   WHERE "Id" = @parentId AND (SELECT outcome FROM decision) = 0
+                                                                   RETURNING "Id"
+                                                               ),
+                                                               audited AS (
+                                                                   INSERT INTO "{GetSchema(storeOptions)}"."StatusAudit" ("QueuedTaskId", "UpdatedAtUtc", "NewStatus", "Exception")
+                                                                   SELECT @parentId, now(), 'Completed', NULL
+                                                                   FROM decision WHERE outcome = 0 AND @newCursor IS NULL AND @finalizeAudit
+                                                                   RETURNING "Id"
+                                                               )
+                                                               SELECT outcome FROM decision;
+                                                               """;
+    private readonly string _cancelScheduleLockSql = $"""SELECT "Id" FROM "{GetSchema(storeOptions)}"."QueuedTasks" WHERE "Id" = @parentId FOR UPDATE""";
+    private readonly string _cancelScheduleSql = $"""
+
+                                                      WITH cancelled AS (
+                                                          UPDATE "{GetSchema(storeOptions)}"."QueuedTasks"
+                                                          SET "Status" = 'Cancelled'
+                                                          WHERE "Id" = @parentId
+                                                             OR ("ParentTaskId" = @parentId
+                                                                 AND "Status" IN ('WaitingQueue', 'Queued', 'Pending', 'ServiceStopped'))
+                                                          RETURNING "Id"
+                                                      )
+                                                      INSERT INTO "{GetSchema(storeOptions)}"."StatusAudit" ("QueuedTaskId", "UpdatedAtUtc", "NewStatus", "Exception")
+                                                      SELECT "Id", now(), 'Cancelled', NULL FROM cancelled WHERE @createAudit;
+                                                      """;
+    private readonly string _updateCurrentRunCasSql = $"""
+
+                                                             WITH updated AS (
+                                                                 UPDATE "{GetSchema(storeOptions)}"."QueuedTasks"
+                                                                 SET "ExecutionTimeMs" = @execTime,
+                                                                     "NextRunUtc"      = @nextRun,
+                                                                     "CurrentRunCount" = CASE WHEN COALESCE("CurrentRunCount", 0) >= 2147483647
+                                                                                                THEN 2147483647 ELSE COALESCE("CurrentRunCount", 0) + 1 END
+                                                                 WHERE "Id" = @taskId AND "ScheduleVersion" = @expectedVersion
+                                                                 RETURNING "Status", "Exception"
+                                                             ),
+                                                             audited AS (
+                                                                 INSERT INTO "{GetSchema(storeOptions)}"."RunsAudit" ("QueuedTaskId", "ExecutedAt", "ExecutionTimeMs", "Status", "Exception")
+                                                                 SELECT @taskId, now(), @execTime, u."Status", u."Exception"
+                                                                 FROM updated u
+                                                                 -- An unknown level audits like Full, matching AuditPolicy: only ErrorsOnly (2) and None (3) skip.
+                                                             WHERE (@auditLevel NOT IN (2, 3))
+                                                                    OR (@auditLevel = 2 AND (u."Status" = 'Failed' OR (u."Exception" IS NOT NULL AND u."Exception" <> '')))
+                                                                 RETURNING "Id"
+                                                             )
+                                                             SELECT count(*) FROM updated;
+                                                             """;
+    private readonly string _completeRecurringRunCasSql = $"""
+
+                                                                 WITH updated AS (
+                                                                     UPDATE "{GetSchema(storeOptions)}"."QueuedTasks"
+                                                                     SET "Status"           = 'Completed',
+                                                                         "Exception"        = NULL,
+                                                                         "LastExecutionUtc" = now(),
+                                                                         "ExecutionTimeMs"  = @execTime,
+                                                                         "NextRunUtc"       = @nextRun,
+                                                                         "CurrentRunCount"  = CASE WHEN COALESCE("CurrentRunCount", 0) >= 2147483647
+                                                                                                     THEN 2147483647 ELSE COALESCE("CurrentRunCount", 0) + 1 END
+                                                                     WHERE "Id" = @taskId AND "ScheduleVersion" = @expectedVersion
+                                                                     RETURNING "Id"
+                                                                 ),
+                                                                 ins_status AS (
+                                                                     INSERT INTO "{GetSchema(storeOptions)}"."StatusAudit" ("QueuedTaskId", "UpdatedAtUtc", "NewStatus", "Exception")
+                                                                     SELECT @taskId, now(), 'Completed', NULL FROM updated WHERE @statusAudit
+                                                                     RETURNING "Id"
+                                                                 ),
+                                                                 ins_runs AS (
+                                                                     INSERT INTO "{GetSchema(storeOptions)}"."RunsAudit" ("QueuedTaskId", "ExecutedAt", "ExecutionTimeMs", "Status", "Exception")
+                                                                     SELECT @taskId, now(), @execTime, 'Completed', NULL FROM updated WHERE @runsAudit
+                                                                     RETURNING "Id"
+                                                                 )
+                                                                 SELECT count(*) FROM updated;
+                                                                 """;
+
+    private static string GetSchema(IOptions<ITaskStoreOptions> options) =>
+        string.IsNullOrEmpty(options.Value.SchemaName) ? "public" : options.Value.SchemaName!;
 
     /// <summary>
     /// Sets task status via a single data-modifying CTE: the conditional StatusAudit insert and the row
@@ -54,24 +222,9 @@ public class PostgresTaskStorage(
                         && status != QueuedTaskStatus.Cancelled
                         && status != QueuedTaskStatus.Pending;
 
-        var sql = $"""
-
-                   WITH updated AS (
-                       UPDATE "{_schema}"."QueuedTasks"
-                       SET "Status"           = @status,
-                           "Exception"        = @exception,
-                           "LastExecutionUtc" = CASE WHEN @stampLast THEN now() ELSE "LastExecutionUtc" END,
-                           "ExecutionTimeMs"  = CASE WHEN @hasExecTime THEN @execTime ELSE "ExecutionTimeMs" END
-                       WHERE "Id" = @taskId
-                       RETURNING "Id"
-                   )
-                   INSERT INTO "{_schema}"."StatusAudit" ("QueuedTaskId", "UpdatedAtUtc", "NewStatus", "Exception")
-                   SELECT @taskId, now(), @status, @exception FROM updated WHERE @createAudit;
-                   """;
-
         try
         {
-            await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(sql, [
+            await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(_setStatusSql, [
                 new NpgsqlParameter("taskId", taskId),
                 new NpgsqlParameter("status", status.ToString()),
                 new NpgsqlParameter("exception", (object?)exString ?? DBNull.Value),
@@ -104,27 +257,9 @@ public class PostgresTaskStorage(
 
         await using var dbContext = await _contextFactory.CreateDbContextAsync().ConfigureAwait(false);
 
-        var sql = $"""
-
-                   WITH updated AS (
-                       UPDATE "{_schema}"."QueuedTasks"
-                       SET "ExecutionTimeMs" = @execTime,
-                           "NextRunUtc"      = @nextRun,
-                           "CurrentRunCount" = CASE WHEN COALESCE("CurrentRunCount", 0) >= 2147483647 THEN 2147483647 ELSE COALESCE("CurrentRunCount", 0) + 1 END
-                       WHERE "Id" = @taskId
-                       RETURNING "Status", "Exception"
-                   )
-                   INSERT INTO "{_schema}"."RunsAudit" ("QueuedTaskId", "ExecutedAt", "ExecutionTimeMs", "Status", "Exception")
-                   SELECT @taskId, now(), @execTime, u."Status", u."Exception"
-                   FROM updated u
-                   -- An unknown level audits like Full, matching AuditPolicy: only ErrorsOnly (2) and None (3) skip.
-                   WHERE (@auditLevel NOT IN (2, 3))
-                      OR (@auditLevel = 2 AND (u."Status" = 'Failed' OR (u."Exception" IS NOT NULL AND u."Exception" <> '')));
-                   """;
-
         try
         {
-            await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(sql,
+            await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(_updateCurrentRunSql,
                 new NpgsqlParameter("taskId", taskId),
                 new NpgsqlParameter("execTime", executionTimeMs),
                 new NpgsqlParameter("nextRun", (object?)nextRun?.ToUniversalTime() ?? DBNull.Value),
@@ -161,31 +296,9 @@ public class PostgresTaskStorage(
         // NextRunUtc is assigned UNCONDITIONALLY (a NULL makes the series terminal/non-recoverable; preserving
         // the old value would resurrect a finished series). ins_status runs even though the final query does
         // not reference it (Postgres executes every data-modifying CTE exactly once).
-        var sql = $"""
-
-                   WITH updated AS (
-                       UPDATE "{_schema}"."QueuedTasks"
-                       SET "Status"           = 'Completed',
-                           "Exception"        = NULL,
-                           "LastExecutionUtc" = now(),
-                           "ExecutionTimeMs"  = @execTime,
-                           "NextRunUtc"       = @nextRun,
-                           "CurrentRunCount"  = CASE WHEN COALESCE("CurrentRunCount", 0) >= 2147483647 THEN 2147483647 ELSE COALESCE("CurrentRunCount", 0) + 1 END
-                       WHERE "Id" = @taskId
-                       RETURNING "Id"
-                   ),
-                   ins_status AS (
-                       INSERT INTO "{_schema}"."StatusAudit" ("QueuedTaskId", "UpdatedAtUtc", "NewStatus", "Exception")
-                       SELECT @taskId, now(), 'Completed', NULL FROM updated WHERE @statusAudit
-                       RETURNING "Id"
-                   )
-                   INSERT INTO "{_schema}"."RunsAudit" ("QueuedTaskId", "ExecutedAt", "ExecutionTimeMs", "Status", "Exception")
-                   SELECT @taskId, now(), @execTime, 'Completed', NULL FROM updated WHERE @runsAudit;
-                   """;
-
         try
         {
-            await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(sql,
+            await ((DbContext)dbContext).Database.ExecuteSqlRawAsync(_completeRecurringRunSql,
                 new NpgsqlParameter("taskId", taskId),
                 new NpgsqlParameter("execTime", executionTimeMs),
                 new NpgsqlParameter("nextRun", NpgsqlDbType.TimestampTz)
@@ -232,60 +345,7 @@ public class PostgresTaskStorage(
         var finalizeAudit = AuditPolicy.ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Completed, null);
 
         // Outcome codes mirror OccurrenceMaterializationOutcome.
-        var sql = $"""
-
-                   WITH parent AS (
-                       SELECT "Id", "ScheduleVersion", "NextRunUtc", "Status"
-                       FROM "{_schema}"."QueuedTasks"
-                       WHERE "Id" = @parentId
-                       FOR UPDATE
-                   ),
-                   decision AS (
-                       SELECT CASE
-                           WHEN NOT EXISTS (SELECT 1 FROM parent)                                   THEN 4
-                           WHEN (SELECT "Status" FROM parent) = 'Cancelled'                       THEN 4
-                           WHEN (SELECT "NextRunUtc" FROM parent) IS NULL                         THEN 4
-                           WHEN (SELECT "ScheduleVersion" FROM parent) <> @expectedVersion        THEN 3
-                           WHEN @expectedCursor IS NULL
-                                OR (SELECT "NextRunUtc" FROM parent) <> @expectedCursor           THEN 2
-                           WHEN EXISTS (SELECT 1 FROM "{_schema}"."QueuedTasks"
-                                        WHERE "ParentTaskId" = @parentId
-                                          AND "ScheduledExecutionUtc" = @slotUtc)                 THEN 1
-                           ELSE 0
-                       END AS outcome
-                   ),
-                   inserted AS (
-                       INSERT INTO "{_schema}"."QueuedTasks"
-                           ("Id", "CreatedAtUtc", "ExecutionTimeMs", "ScheduledExecutionUtc", "Type", "Request",
-                            "Handler", "IsRecurring", "CurrentRunCount", "QueueName", "AuditLevel", "Status",
-                            "ParentTaskId", "RuntimeInfo", "ScheduleVersion")
-                       SELECT @occurrenceId, @createdAtUtc, 0, @slotUtc, @type, @request,
-                              @handler, false, 0, @queueName, @occurrenceAuditLevel, 'WaitingQueue',
-                              @parentId, @runtimeInfo, @expectedVersion
-                       FROM decision WHERE outcome = 0
-                       RETURNING "Id"
-                   ),
-                   advanced AS (
-                       UPDATE "{_schema}"."QueuedTasks"
-                       SET "NextRunUtc"       = @newCursor,
-                           "CurrentRunCount"  = CASE WHEN COALESCE("CurrentRunCount", 0) >= 2147483647
-                                                       THEN 2147483647 ELSE COALESCE("CurrentRunCount", 0) + 1 END,
-                           "Status"           = CASE WHEN @newCursor IS NULL THEN 'Completed' ELSE "Status" END,
-                           "Exception"        = CASE WHEN @newCursor IS NULL THEN NULL ELSE "Exception" END,
-                           "LastExecutionUtc" = CASE WHEN @newCursor IS NULL THEN now() ELSE "LastExecutionUtc" END
-                       WHERE "Id" = @parentId AND (SELECT outcome FROM decision) = 0
-                       RETURNING "Id"
-                   ),
-                   audited AS (
-                       INSERT INTO "{_schema}"."StatusAudit" ("QueuedTaskId", "UpdatedAtUtc", "NewStatus", "Exception")
-                       SELECT @parentId, now(), 'Completed', NULL
-                       FROM decision WHERE outcome = 0 AND @newCursor IS NULL AND @finalizeAudit
-                       RETURNING "Id"
-                   )
-                   SELECT outcome FROM decision;
-                   """;
-
-        var outcome = await ExecuteScalarAsync(dbContext, sql,
+        var outcome = await ExecuteScalarAsync(dbContext, _materializeOccurrenceSql,
         [
             new NpgsqlParameter("parentId", parentId),
             new NpgsqlParameter("expectedVersion", expectedScheduleVersion),
@@ -337,25 +397,11 @@ public class PostgresTaskStorage(
         await using var transaction = await database.BeginTransactionAsync(ct).ConfigureAwait(false);
 
         await ExecuteScalarAsync(dbContext,
-            $"""SELECT "Id" FROM "{_schema}"."QueuedTasks" WHERE "Id" = @parentId FOR UPDATE""",
+            _cancelScheduleLockSql,
             [new NpgsqlParameter("parentId", parentId)], ct).ConfigureAwait(false);
 
         // Occurrences already InProgress own a live delivery and are left to finish on their own.
-        var sql = $"""
-
-                   WITH cancelled AS (
-                       UPDATE "{_schema}"."QueuedTasks"
-                       SET "Status" = 'Cancelled'
-                       WHERE "Id" = @parentId
-                          OR ("ParentTaskId" = @parentId
-                              AND "Status" IN ('WaitingQueue', 'Queued', 'Pending', 'ServiceStopped'))
-                       RETURNING "Id"
-                   )
-                   INSERT INTO "{_schema}"."StatusAudit" ("QueuedTaskId", "UpdatedAtUtc", "NewStatus", "Exception")
-                   SELECT "Id", now(), 'Cancelled', NULL FROM cancelled WHERE @createAudit;
-                   """;
-
-        await database.ExecuteSqlRawAsync(sql, [
+        await database.ExecuteSqlRawAsync(_cancelScheduleSql, [
             new NpgsqlParameter("parentId", parentId),
             new NpgsqlParameter("createAudit", createAudit)
         ], ct).ConfigureAwait(false);
@@ -372,34 +418,11 @@ public class PostgresTaskStorage(
 
         await using var dbContext = await _contextFactory.CreateDbContextAsync().ConfigureAwait(false);
 
-        // Same CTE as the unversioned overload with the schedule version added to the WHERE, and a final
-        // count so the caller can tell "applied" from "someone rescheduled under me".
-        var sql = $"""
-
-                   WITH updated AS (
-                       UPDATE "{_schema}"."QueuedTasks"
-                       SET "ExecutionTimeMs" = @execTime,
-                           "NextRunUtc"      = @nextRun,
-                           "CurrentRunCount" = CASE WHEN COALESCE("CurrentRunCount", 0) >= 2147483647
-                                                      THEN 2147483647 ELSE COALESCE("CurrentRunCount", 0) + 1 END
-                       WHERE "Id" = @taskId AND "ScheduleVersion" = @expectedVersion
-                       RETURNING "Status", "Exception"
-                   ),
-                   audited AS (
-                       INSERT INTO "{_schema}"."RunsAudit" ("QueuedTaskId", "ExecutedAt", "ExecutionTimeMs", "Status", "Exception")
-                       SELECT @taskId, now(), @execTime, u."Status", u."Exception"
-                       FROM updated u
-                       -- An unknown level audits like Full, matching AuditPolicy: only ErrorsOnly (2) and None (3) skip.
-                   WHERE (@auditLevel NOT IN (2, 3))
-                          OR (@auditLevel = 2 AND (u."Status" = 'Failed' OR (u."Exception" IS NOT NULL AND u."Exception" <> '')))
-                       RETURNING "Id"
-                   )
-                   SELECT count(*) FROM updated;
-                   """;
-
         try
         {
-            var applied = await ExecuteScalarAsync(dbContext, sql,
+            // Same CTE as the unversioned overload with the schedule version added to the WHERE, and a final
+            // count so the caller can tell "applied" from "someone rescheduled under me".
+            var applied = await ExecuteScalarAsync(dbContext, _updateCurrentRunCasSql,
             [
                 new NpgsqlParameter("taskId", taskId),
                 new NpgsqlParameter("execTime", executionTimeMs),
@@ -433,36 +456,9 @@ public class PostgresTaskStorage(
         var statusAudit = AuditPolicy.ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Completed, null);
         var runsAudit   = AuditPolicy.ShouldCreateRunsAudit(auditLevel, QueuedTaskStatus.Completed, null);
 
-        var sql = $"""
-
-                   WITH updated AS (
-                       UPDATE "{_schema}"."QueuedTasks"
-                       SET "Status"           = 'Completed',
-                           "Exception"        = NULL,
-                           "LastExecutionUtc" = now(),
-                           "ExecutionTimeMs"  = @execTime,
-                           "NextRunUtc"       = @nextRun,
-                           "CurrentRunCount"  = CASE WHEN COALESCE("CurrentRunCount", 0) >= 2147483647
-                                                       THEN 2147483647 ELSE COALESCE("CurrentRunCount", 0) + 1 END
-                       WHERE "Id" = @taskId AND "ScheduleVersion" = @expectedVersion
-                       RETURNING "Id"
-                   ),
-                   ins_status AS (
-                       INSERT INTO "{_schema}"."StatusAudit" ("QueuedTaskId", "UpdatedAtUtc", "NewStatus", "Exception")
-                       SELECT @taskId, now(), 'Completed', NULL FROM updated WHERE @statusAudit
-                       RETURNING "Id"
-                   ),
-                   ins_runs AS (
-                       INSERT INTO "{_schema}"."RunsAudit" ("QueuedTaskId", "ExecutedAt", "ExecutionTimeMs", "Status", "Exception")
-                       SELECT @taskId, now(), @execTime, 'Completed', NULL FROM updated WHERE @runsAudit
-                       RETURNING "Id"
-                   )
-                   SELECT count(*) FROM updated;
-                   """;
-
         try
         {
-            var applied = await ExecuteScalarAsync(dbContext, sql,
+            var applied = await ExecuteScalarAsync(dbContext, _completeRecurringRunCasSql,
             [
                 new NpgsqlParameter("taskId", taskId),
                 new NpgsqlParameter("execTime", executionTimeMs),

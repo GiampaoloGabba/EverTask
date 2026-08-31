@@ -237,10 +237,12 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             return transitionedClientSide;
         }
 
-        // Relational: the conditional UPDATE and its Queued audit must commit TOGETHER, so a recovery
-        // transition is never persisted without its audit and a refused one leaves no trace. The condition
-        // is what stops recovery resurrecting a task that terminally finished after its page was read.
-        await using var transaction = await efContext.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        // Relational: when requested, the Queued audit must commit with the conditional UPDATE. Without an
+        // audit the single UPDATE is already atomic and needs no explicit transaction.
+        var createAudit = AuditPolicy.ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Queued, null);
+        await using var transaction = createAudit
+                                          ? await efContext.Database.BeginTransactionAsync(ct).ConfigureAwait(false)
+                                          : null;
 
         var rowsAffected = await dbContext.QueuedTasks
             .Where(t => t.Id == taskId)
@@ -250,12 +252,14 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
         if (rowsAffected == 0)
         {
-            await transaction.RollbackAsync(ct).ConfigureAwait(false);
+            if (transaction != null)
+                await transaction.RollbackAsync(ct).ConfigureAwait(false);
             logger.TaskNoLongerRecoverable(taskId);
             return false;
         }
 
-        await CommitQueuedTransitionAsync(dbContext, transaction, taskId, auditLevel, ct).ConfigureAwait(false);
+        if (transaction != null)
+            await CommitQueuedTransitionAsync(dbContext, transaction, taskId, auditLevel, ct).ConfigureAwait(false);
         return true;
     }
 
@@ -350,10 +354,11 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             return;
         }
 
-        // Relational: the StatusAudit insert and the row UPDATE must commit TOGETHER, so a failure in
-        // between never leaves an audit without the row update, or the reverse — matching the transactional
-        // usp_SetTaskStatus stored procedure.
-        await using var transaction = await efContext.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        // Relational: when requested, the StatusAudit insert and row UPDATE must commit together. Without an
+        // audit the single UPDATE is already atomic and needs no explicit transaction.
+        await using var transaction = createAudit
+                                          ? await efContext.Database.BeginTransactionAsync(ct).ConfigureAwait(false)
+                                          : null;
         try
         {
             if (createAudit)
@@ -373,14 +378,16 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             if (createAudit)
                 await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
 
-            await transaction.CommitAsync(ct).ConfigureAwait(false);
+            if (transaction != null)
+                await transaction.CommitAsync(ct).ConfigureAwait(false);
 
             if (rowsAffected == 0)
                 logger.TaskNotFoundForStatusUpdate(taskId, status);
         }
         catch (Exception e)
         {
-            await transaction.RollbackAsync(ct).ConfigureAwait(false);
+            if (transaction != null)
+                await transaction.RollbackAsync(ct).ConfigureAwait(false);
             logger.StatusUpdateFailed(e, status, taskId);
         }
     }
@@ -1565,6 +1572,20 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
             query = query.Where(NonTerminalOccurrence);
 
         return await query.ToArrayAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public virtual async Task<Guid[]> GetOccurrenceIds(Guid parentId, bool nonTerminalOnly = false,
+                                                       CancellationToken ct = default)
+    {
+        await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+
+        var query = dbContext.QueuedTasks.AsNoTracking().Where(t => t.ParentTaskId == parentId);
+
+        if (nonTerminalOnly)
+            query = query.Where(NonTerminalOccurrence);
+
+        return await query.Select(t => t.Id).ToArrayAsync(ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
