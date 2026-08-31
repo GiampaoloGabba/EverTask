@@ -330,10 +330,10 @@ real I/O. Its two new questions are `NextGridOccurrenceAfterAsync` (the natural 
   key check but returns before the `SkipOldest` determinism probe when `isRecovery`, since neither that probe's
   `InvalidOperationException` nor an unreachable database is an `OccurrenceProviderException` and both would
   sail into the poison counter.
-- **A re-park that FAILED is an error EVENT, not only a log line**, since nothing polls behind it; three sites
+- **A re-park that FAILED is an error EVENT, not only a log line**, since nothing polls behind it; four sites
   say it identically — `Dispatcher.ParkProviderRetryAsync`, `OccurrenceMaterializer.ReParkAfterFailureAsync`
   (whose `ProviderRetryParkOutcome` keeps `DeferForProviderAsync` from publishing a success sentence over it),
-  `WorkerExecutor.DeferScheduleForProvider`.
+  `WorkerExecutor.DeferScheduleForProvider` and `WorkerExecutor.DeferScheduleForExclusionAsync` (#36).
 - **"Parked to ask again" is said only once the registration is IN**, on all three: `TrySchedule` also ANSWERS
   false, and reading that as a park announced a schedule parked nowhere. A refusal reports itself instead
   (`ProviderRetryParkRefused` 1021, `ScheduleReparkRefused` 1822) and says nothing else.
