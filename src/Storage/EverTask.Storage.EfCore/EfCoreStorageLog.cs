@@ -105,4 +105,8 @@ internal static partial class EfCoreStorageLog
         Level = LogLevel.Warning,
         Message = "Read {Operation} was chosen as deadlock victim, rerunning it (attempt {Attempt})")]
     public static partial void RereadAfterDeadlock(this ILogger logger, string operation, int attempt);
+
+    [LoggerMessage(EventId = 2026, Level = LogLevel.Debug,
+        Message = "Persist raw insert unavailable, using tracked path: {Reason}")]
+    public static partial void PersistInsertFallback(this ILogger logger, string reason);
 }

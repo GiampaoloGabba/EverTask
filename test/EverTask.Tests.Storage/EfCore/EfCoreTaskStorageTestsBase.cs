@@ -137,6 +137,90 @@ public abstract class EfCoreTaskStorageTestsBase
     }
 
     [Fact]
+    public async Task Should_round_trip_every_mapped_property_when_persisting_full_and_nullable_empty_rows()
+    {
+        var now = FloorToMicroseconds(DateTimeOffset.UtcNow);
+        var parent = new QueuedTask
+        {
+            Id           = GetGuidForProvider(),
+            CreatedAtUtc = now,
+            Type         = "RoundTripParent",
+            Request      = "{}",
+            Handler      = "RoundTripHandler",
+            Status       = QueuedTaskStatus.Queued
+        };
+        var full = new QueuedTask
+        {
+            Id                           = GetGuidForProvider(),
+            CreatedAtUtc                 = now.AddMinutes(1),
+            LastExecutionUtc             = now.AddMinutes(2),
+            ExecutionTimeMs              = 123.5,
+            ScheduledExecutionUtc        = now.AddMinutes(3),
+            Type                         = "RoundTripFull",
+            Request                      = """{"value":42}""",
+            Handler                      = "RoundTripHandler",
+            Exception                    = "round-trip exception",
+            Status                       = QueuedTaskStatus.ServiceStopped,
+            IsRecurring                  = true,
+            RecurringTask                = "recurring-task",
+            RecurringInfo                = "recurring-info",
+            CurrentRunCount              = 4,
+            MaxRuns                      = 9,
+            RunUntil                     = now.AddDays(1),
+            NextRunUtc                   = now.AddMinutes(4),
+            QueueName                    = "round-trip",
+            TaskKey                      = "round-trip-full-" + Guid.NewGuid(),
+            AuditLevel                   = (int)AuditLevel.ErrorsOnly,
+            RecoveryDispatchFailureCount = 2,
+            ParentTaskId                 = parent.Id,
+            RuntimeInfo                  = """{"runNumber":5}""",
+            ScheduleVersion              = 7
+        };
+        var nullableEmpty = new QueuedTask
+        {
+            Id                           = GetGuidForProvider(),
+            CreatedAtUtc                 = now.AddMinutes(5),
+            LastExecutionUtc             = null,
+            ExecutionTimeMs              = 0,
+            ScheduledExecutionUtc        = null,
+            Type                         = "RoundTripNull",
+            Request                      = "{}",
+            Handler                      = "RoundTripHandler",
+            Exception                    = null,
+            Status                       = QueuedTaskStatus.WaitingQueue,
+            IsRecurring                  = false,
+            RecurringTask                = null,
+            RecurringInfo                = null,
+            CurrentRunCount              = null,
+            MaxRuns                      = null,
+            RunUntil                     = null,
+            NextRunUtc                   = null,
+            QueueName                    = null,
+            TaskKey                      = null,
+            AuditLevel                   = null,
+            RecoveryDispatchFailureCount = null,
+            ParentTaskId                 = null,
+            RuntimeInfo                  = null,
+            ScheduleVersion              = 0
+        };
+
+        await _storage.Persist(parent);
+        await _storage.Persist(full);
+        await _storage.Persist(nullableEmpty);
+
+        var actual = await _mockedDbContext.QueuedTasks
+                                                  .AsNoTracking()
+                                                  .Where(t => t.Id == full.Id || t.Id == nullableEmpty.Id)
+                                                  .ToDictionaryAsync(t => t.Id);
+        var properties = ((DbContext)_mockedDbContext).Model.FindEntityType(typeof(QueuedTask))!.GetProperties();
+
+        foreach (var expected in new[] { full, nullableEmpty })
+        foreach (var property in properties)
+            property.GetGetter().GetClrValue(actual[expected.Id]).ShouldBe(
+                property.GetGetter().GetClrValue(expected), $"property {property.Name} must round-trip");
+    }
+
+    [Fact]
     public async Task Should_RetrivePendingTasks()
     {
         var queued = QueuedTasks[0];

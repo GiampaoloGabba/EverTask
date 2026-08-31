@@ -11,6 +11,20 @@ namespace EverTask.Storage.EfCore;
 public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverTaskLogger<EfCoreTaskStorage> logger)
     : ITaskStorage, ITaskStorageStatistics
 {
+    private readonly Lazy<(QueuedTaskInsert? Insert, string? Reason)> _queuedTaskInsert = new(() =>
+    {
+        using var dbContext = contextFactory.CreateDbContext();
+        try
+        {
+            return (new QueuedTaskInsert((DbContext)dbContext), null);
+        }
+        catch (QueuedTaskInsertUnavailableException e)
+        {
+            logger.PersistInsertFallback(e.Message);
+            return (null, e.Message);
+        }
+    });
+
     /// <summary>Current UTC time with an explicit +00:00 offset, whatever the server timezone is.</summary>
     private static DateTimeOffset UtcNowNormalized => new(DateTime.UtcNow, TimeSpan.Zero);
 
@@ -118,9 +132,19 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
 
         await using var dbContext = await contextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
-        dbContext.QueuedTasks.Add(taskEntity);
-
-        await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
+        if (dbContext is DbContext efContext
+            && efContext.Database.IsRelational()
+            && _queuedTaskInsert.Value.Insert is { } insert)
+        {
+            await efContext.Database.ExecuteSqlRawAsync(
+                    insert.Sql, (IEnumerable<object>)insert.Parameters(efContext, taskEntity), ct)
+                .ConfigureAwait(false);
+        }
+        else
+        {
+            dbContext.QueuedTasks.Add(taskEntity);
+            await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
+        }
 
         logger.TaskPersisted(taskEntity.Type);
     }
