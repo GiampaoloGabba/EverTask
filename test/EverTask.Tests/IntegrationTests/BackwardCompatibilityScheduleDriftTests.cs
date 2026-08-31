@@ -38,14 +38,12 @@ public class BackwardCompatibilityScheduleDriftTests : IsolatedIntegrationTestBa
 
         await Storage.UpdateTask(queuedTask);
 
-        // Act: wait for the RUN to be recorded on the row, not for the handler's counter. The handler
-        // bumps its counter from inside Handle, while CurrentRunCount is written after it returns
-        // (QueueNextOccourrence -> CompleteRecurringRun, a storage round trip further on): a read taken
-        // on the counter alone lands between the two and sees CurrentRunCount still at 0.
-        var updatedTask = await WaitForRecurringRunsAsync(taskId, expectedRuns: 1, timeoutMs: 10000);
+        // Act: wait for the task to be picked up, executed AND rescheduled. The handler counter only
+        // proves the handler returned; CurrentRunCount and the new NextRunUtc asserted below are
+        // written afterwards, by the WorkerExecutor's post-execution advance of the series.
+        var updatedTask = await WaitForRecurringRunsAsync(taskId, expectedRuns: 1, timeoutMs: 5000);
 
         // Assert: Task should have been deserialized and rescheduled correctly
-        updatedTask.ShouldNotBeNull();
         updatedTask.IsRecurring.ShouldBeTrue();
         updatedTask.CurrentRunCount?.ShouldBeGreaterThanOrEqualTo(1);
 
@@ -76,12 +74,11 @@ public class BackwardCompatibilityScheduleDriftTests : IsolatedIntegrationTestBa
 
         await Storage.UpdateTask(queuedTask);
 
-        // Act: wait for the run to be recorded on the row (the handler's counter is bumped before
-        // CurrentRunCount is written — see the first test in this class)
-        var updatedTask = await WaitForRecurringRunsAsync(taskId, expectedRuns: 1, timeoutMs: 10000);
+        // Act: wait for the execution AND the reschedule - same race as above, the handler counter is
+        // raised before the row carries CurrentRunCount and the new NextRunUtc.
+        var updatedTask = await WaitForRecurringRunsAsync(taskId, expectedRuns: 1, timeoutMs: 5000);
 
         // Assert: Task should still execute and reschedule
-        updatedTask.ShouldNotBeNull();
         updatedTask.CurrentRunCount?.ShouldBeGreaterThanOrEqualTo(1);
         updatedTask.NextRunUtc.ShouldNotBeNull();
     }
@@ -133,10 +130,14 @@ public class BackwardCompatibilityScheduleDriftTests : IsolatedIntegrationTestBa
             channelCapacity: 10,
             maxDegreeOfParallelism: 5);
 
-        // ✅ Create recurring task from the start
+        // ✅ Create recurring task from the start, capped at the 2 runs the grid assertion reads: the
+        // cap ends the series before the assertions instead of leaving it firing into host teardown,
+        // and it is what makes the run audits below safe to enumerate off the live storage instance.
+        // (The two tests above cannot be capped the same way - they overwrite the persisted schedule
+        // with legacy JSON, which carries no MaxRuns.)
         var taskId = await Dispatcher.Dispatch(
             new TestTaskRecurringSeconds(),
-            recurring => recurring.Schedule().Every(2).Seconds());
+            recurring => recurring.Schedule().Every(2).Seconds().MaxRuns(2));
 
         // Simulate old behavior: NextRunUtc was calculated from UtcNow (not ExecutionTime)
         var tasks = await Storage.Get(t => t.Id == taskId);
@@ -147,13 +148,12 @@ public class BackwardCompatibilityScheduleDriftTests : IsolatedIntegrationTestBa
 
         await Storage.UpdateTask(queuedTask);
 
-        // Act: let the task execute with new logic, and wait for the two runs to be RECORDED — the
-        // handler's counter reaches 2 before the second CurrentRunCount write lands (see the first
-        // test in this class)
-        var updatedTask = await WaitForRecurringRunsAsync(taskId, expectedRuns: 2, timeoutMs: 15000);
+        // Act: let the task execute with the new logic. Waiting on the handler counter is off by one
+        // run here: it reaches 2 when the SECOND handler ENTERS, while CurrentRunCount and the second
+        // runs audit are written only after that handler returns - so the row could still say 1.
+        var updatedTask = await WaitForRecurringRunsAsync(taskId, expectedRuns: 2, timeoutMs: 8000);
 
         // Assert: New logic should take over after first execution
-        updatedTask.ShouldNotBeNull();
         updatedTask.CurrentRunCount?.ShouldBeGreaterThanOrEqualTo(2);
 
         // Subsequent runs should use ExecutionTime-based calculation
@@ -163,14 +163,13 @@ public class BackwardCompatibilityScheduleDriftTests : IsolatedIntegrationTestBa
             .Take(2)
             .ToList();
 
-        // The wait above already demanded two completed runs on the row, so this is never skipped
         completedRuns.Count.ShouldBe(2);
 
-        var interval = (completedRuns[1].ExecutedAt - completedRuns[0].ExecutedAt).TotalSeconds;
-
-        // Should maintain 2-second interval
-        interval.ShouldBeGreaterThan(1.5);
-        interval.ShouldBeLessThan(3);
+        // The gap must stay on the 2s occurrence grid. It used to be pinned to 1.5s-3s, i.e. 1s of
+        // slack on the difference between two completion stamps: a single lost slot realigns the
+        // series to the next occurrence, an exact 4s away, with no drift at all.
+        (completedRuns[1].ExecutedAt - completedRuns[0].ExecutedAt)
+            .ShouldBeOnOccurrenceGrid(TimeSpan.FromSeconds(2));
     }
 
     [Fact]

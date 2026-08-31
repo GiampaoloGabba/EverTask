@@ -422,6 +422,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   labelled a wall time that was not its own. Both are now read on the schedule's own zone, or in UTC, named,
   when it has none.
 
+### Changed (license — Apache 2.0 → MIT)
+
+- **EverTask is now MIT-licensed.** The one piece of Apache-sourced code (the MediatR-derived
+  `HandlerRegistrar`) was rewritten from scratch, so no third-party notice is needed anymore:
+  `LICENSE` carries the MIT text, `PackageLicenseExpression` is `MIT`, `ATTRIBUTION.md` is gone.
+  The task/handler pattern is still MediatR's idea, and the README says so. Packages already
+  published under 3.x remain Apache-2.0.
+
+### Changed (handler registration rewritten)
+
+- **`HandlerRegistrar` was rewritten as a single-pass scanner** that groups handlers by the exact
+  closed `IEverTaskHandler<TTask>` interface. It never matches by assignability: the interface is
+  contravariant (`in TTask`), so `IsAssignableFrom` would accept a base-task handler as a candidate
+  for every derived task. Observable behavior is unchanged (apart from the startup crash documented
+  under Fixed below): transient `TryAdd` registrations
+  (interface binding plus concrete self-binding, losing duplicates included so persisted rows keep
+  resolving), first-wins by assembly/`DefinedTypes` order, the G1/G2 startup warnings. The G2
+  duplicate warning now identifies task and handlers with namespace-qualified names, and each
+  handler carries its assembly (`scanner selected 'App.Orders.OrderHandler (App.Modules)' and
+  ignored […]`); generic names are expanded at the level that declares them (`ImportTask<CsvRow>`
+  instead of ``ImportTask`1``, `Outer<Int32>.InnerTask` for nested tasks). Consumers matching the
+  full text must adjust. On the test assembly (193 descriptors, identical output from both implementations)
+  the new scanner takes 74 µs instead of 1064 µs (-93%) and allocates 80 KB instead of 700 KB
+  (-88.5%).
+
+### Fixed (handler registration)
+
+- **Startup crash with multi-interface handlers.** A handler implementing two closed
+  `IEverTaskHandler<>` interfaces, plus a second handler for one of those tasks, crashed
+  `AddEverTask` with `AmbiguousMatchException`: the old duplicate filter looked interfaces up by
+  name (``Type.GetInterface("IEverTaskHandler`1")``), and that lookup is ambiguous when a type
+  implements two closed forms. The new grouping works on `Type` identity and never resolves a name.
+- **Null assemblies fail at configuration time.** `RegisterTasksFromAssembly(null)` used to be
+  accepted and blow up later, as a `NullReferenceException` inside the assembly scan. Both
+  registration methods now throw `ArgumentNullException` (or `ArgumentException` for a null
+  element in the array) the moment they are called.
+
+### Added (registration analyzers ET0011 and ET0012)
+
+- **Two analyzer rules mirror the registration startup warnings at compile time.** ET0011 flags a
+  concrete open-generic handler: the assembly scan can never activate one, so its tasks would reach
+  dispatch with no handler and the only signal was a line in the host log. ET0012 flags two
+  handlers for the same closed task contract in the same compilation, where only the first one
+  discovered gets registered. Duplicates split across different assemblies are still reported at
+  startup only. ET0010 is reserved for the durable-occurrences work (#34).
+
 ### Changed (breaking — retry policies moved to the `EverTask.Abstractions` namespace)
 
 - **`LinearRetryPolicy` now lives in `EverTask.Abstractions`** (together with the new

@@ -170,6 +170,11 @@ public class RateLimitingIntegrationTests : IsolatedIntegrationTestBase
         var v1Id = await Dispatcher.Dispatch(new RateLimitedPayloadTask("payload-key", "v1"), taskKey: "pk-latest");
         await deferrals.WaitForTaskAsync(v1Id, timeoutMs: 10000);
 
+        // The deferral event is raised inside the delivery, which unregisters only after it; a
+        // re-dispatch of the key in that window is discarded by the dispatcher's in-flight guard —
+        // v1's payload would never be replaced (see WaitForDeliveryToEndAsync).
+        await WaitForDeliveryToEndAsync(v1Id);
+
         // ...and v2 re-dispatches the SAME taskKey while v1 is parked: same persistence id,
         // latest payload must win and execute exactly once
         var v2Id = await Dispatcher.Dispatch(new RateLimitedPayloadTask("payload-key", "v2"), taskKey: "pk-latest");

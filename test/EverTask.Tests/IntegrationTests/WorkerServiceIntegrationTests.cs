@@ -633,11 +633,7 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
     {
         await CreateIsolatedHostAsync();
 
-        var task = new TestTaskLifecycleWithAsyncDispose();
-        TestTaskLifecycleWithAsyncDispose.CallbackOrder = new List<string>();
-        TestTaskLifecycleWithAsyncDispose.WasDisposed = false;
-
-        var taskId = await Dispatcher.Dispatch(task);
+        var taskId = await Dispatcher.Dispatch(new TestTaskLifecycleWithAsyncDispose());
 
         // Wait for task to complete
         await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed);
@@ -645,15 +641,18 @@ public class WorkerServiceIntegrationTests : IsolatedIntegrationTestBase
         // Give disposal a moment to complete
         await Task.Delay(200);
 
+        // The callback log lives in THIS host's state manager: LazyModeIntegrationTests dispatches the
+        // same task in parallel, and as a static the log was cleared by whichever class reset it first.
+        var callbackOrder = StateManager.GetCallbacks(nameof(TestTaskLifecycleWithAsyncDispose));
+
         // Verify disposal was called
-        TestTaskLifecycleWithAsyncDispose.WasDisposed.ShouldBeTrue();
-        TestTaskLifecycleWithAsyncDispose.CallbackOrder.ShouldContain("DisposeAsyncCore");
+        callbackOrder.ShouldContain("DisposeAsyncCore");
 
         // Verify callback order: the EXECUTING instance is disposed after Handle.
         // (Immediate dispatches are lazy: the dispatch-time metadata instance adds a
         // DisposeAsyncCore entry before Handle, so compare against the LAST dispose.)
-        var handleIndex = TestTaskLifecycleWithAsyncDispose.CallbackOrder.IndexOf("Handle");
-        var disposeIndex = TestTaskLifecycleWithAsyncDispose.CallbackOrder.LastIndexOf("DisposeAsyncCore");
+        var handleIndex = callbackOrder.IndexOf("Handle");
+        var disposeIndex = callbackOrder.LastIndexOf("DisposeAsyncCore");
 
         handleIndex.ShouldBeGreaterThanOrEqualTo(0);
         disposeIndex.ShouldBeGreaterThanOrEqualTo(0);

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using EverTask.Tests.TestHelpers;
 using IRetryPolicy = EverTask.Abstractions.IRetryPolicy;
 
 namespace EverTask.Tests.Monitoring.SignalR;
@@ -52,17 +53,11 @@ public class ExecutionLogsEventPropagationTests
             // Wait for task completion
             await WaitForTaskStatusAsync(storage, taskId, QueuedTaskStatus.Completed);
 
-            // Wait a bit for event propagation
-            await Task.Delay(200);
+            // Assert - wait for the completion event to reach the subscriber, then read its logs
+            var completionEvent = await WaitForEventAsync(capturedEvents,
+                e => e.Severity == "Information" && e.Message.Contains("completed"),
+                "task completion");
 
-            // Assert
-            capturedEvents.ShouldNotBeEmpty();
-
-            // Find completion event
-            var completionEvent = capturedEvents.FirstOrDefault(e =>
-                e.Severity == "Information" && e.Message.Contains("completed"));
-
-            completionEvent.ShouldNotBeNull();
             completionEvent.ExecutionLogs.ShouldNotBeNull();
             completionEvent.ExecutionLogs.Count.ShouldBeGreaterThanOrEqualTo(2);
 
@@ -124,24 +119,11 @@ public class ExecutionLogsEventPropagationTests
             // Wait for task failure (may take longer without retries)
             await WaitForTaskStatusAsync(storage, taskId, QueuedTaskStatus.Failed, timeoutMs: 10000);
 
-            // Wait longer for event propagation
-            await Task.Delay(500);
+            // Assert - wait for the error event to reach the subscriber, then read its logs
+            var errorEvent = await WaitForEventAsync(capturedEvents,
+                e => e.Severity == "Error" && e.Message.Contains("Error occurred"),
+                "task failure");
 
-            // Debug: Print all captured events
-            Console.WriteLine($"Captured {capturedEvents.Count} events:");
-            foreach (var evt in capturedEvents)
-            {
-                Console.WriteLine($"  - Severity: {evt.Severity}, Message: {evt.Message}");
-            }
-
-            // Assert
-            capturedEvents.ShouldNotBeEmpty($"Expected to capture events but got none. Task ID: {taskId}");
-
-            // Find error event
-            var errorEvent = capturedEvents.FirstOrDefault(e =>
-                e.Severity == "Error" && e.Message.Contains("Error occurred"));
-
-            errorEvent.ShouldNotBeNull($"Expected error event in {capturedEvents.Count} captured events");
             errorEvent.ExecutionLogs.ShouldNotBeNull();
             errorEvent.ExecutionLogs.Count.ShouldBeGreaterThanOrEqualTo(2);
 
@@ -196,15 +178,13 @@ public class ExecutionLogsEventPropagationTests
             // Act
             var taskId = await dispatcher.Dispatch(new TestTaskWithExecutionLogs());
             await WaitForTaskStatusAsync(storage, taskId, QueuedTaskStatus.Completed);
-            await Task.Delay(200);
 
-            // Assert
-            capturedEvents.ShouldNotBeEmpty();
+            // Assert - the completion event is the only one carrying "completed", and its logs are fixed
+            // when it is built: once it arrives there is nothing left to wait for.
+            var completionEvent = await WaitForEventAsync(capturedEvents,
+                e => e.Severity == "Information" && e.Message.Contains("completed"),
+                "task completion");
 
-            var completionEvent = capturedEvents.FirstOrDefault(e =>
-                e.Severity == "Information" && e.Message.Contains("completed"));
-
-            completionEvent.ShouldNotBeNull();
             // When log capture is disabled, GetPersistedLogs() returns empty array, not null
             (completionEvent.ExecutionLogs == null || completionEvent.ExecutionLogs.Count == 0).ShouldBeTrue();
         }
@@ -259,20 +239,19 @@ public class ExecutionLogsEventPropagationTests
             // Act
             var taskId = await dispatcher.Dispatch(new TestTaskWithExecutionLogs());
             await WaitForTaskStatusAsync(storage, taskId, QueuedTaskStatus.Completed);
-            await Task.Delay(200);
 
-            // Assert
-            capturedSignalREvents.ShouldNotBeEmpty();
-
-            // Verify logs were captured in storage (persistence enabled)
-            var storedLogs = await storage.GetExecutionLogsAsync(taskId, CancellationToken.None);
-            storedLogs.ShouldNotBeEmpty();
+            // Assert - logs are saved to storage AFTER the completion event is published, so poll for
+            // them instead of reading the row as soon as the status flips
+            await TaskWaitHelper.WaitUntilAsync(
+                async () => await storage.GetExecutionLogsAsync(taskId, CancellationToken.None),
+                logs => logs.Count > 0,
+                timeoutMs: TestEnvironment.GetTimeout(5000, 30000));
 
             // Verify completion event has logs (in-memory events always include logs)
-            var completionEvent = capturedSignalREvents.FirstOrDefault(e =>
-                e.Severity == "Information" && e.Message.Contains("completed"));
+            var completionEvent = await WaitForEventAsync(capturedSignalREvents,
+                e => e.Severity == "Information" && e.Message.Contains("completed"),
+                "task completion");
 
-            completionEvent.ShouldNotBeNull();
             // The TestMonitor receives the full event with logs
             // In real SignalR scenario, SignalRTaskMonitor would strip them before sending
             completionEvent.ExecutionLogs.ShouldNotBeNull();
@@ -283,6 +262,33 @@ public class ExecutionLogsEventPropagationTests
             cts.CancelAfter(2000);
             await host.StopAsync(cts.Token);
         }
+    }
+
+    /// <summary>
+    /// Waits for the monitoring event matching <paramref name="predicate"/> to reach the subscriber.
+    /// The persisted status is written BEFORE the event is registered, and PublishEvent hands the event to
+    /// the subscriber through a fire-and-forget Task.Run: under contention that continuation is scheduled
+    /// well after the status the tests wait on is observable, so the arrival has to be polled.
+    /// </summary>
+    private static async Task<EverTaskEventData> WaitForEventAsync(
+        ConcurrentBag<EverTaskEventData> capturedEvents,
+        Func<EverTaskEventData, bool> predicate,
+        string description)
+    {
+        try
+        {
+            await TaskWaitHelper.WaitForConditionAsync(
+                () => capturedEvents.Any(predicate),
+                timeoutMs: TestEnvironment.GetTimeout(5000, 30000));
+        }
+        catch (TimeoutException)
+        {
+            var seen = capturedEvents.Select(e => $"[{e.Severity}] {e.Message}").ToArray();
+            throw new TimeoutException(
+                $"No {description} event received. Captured {seen.Length} event(s): {string.Join(" | ", seen)}");
+        }
+
+        return capturedEvents.First(predicate);
     }
 
     /// <summary>

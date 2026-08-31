@@ -3,10 +3,6 @@ using System.Linq.Expressions;
 
 namespace EverTask.Handler;
 
-// This code was adapted from MediatR by Jimmy Bogard.
-// Specific inspiration was taken from the NotificationHandlerExecutor.cs file.
-// Source: https://github.com/jbogard/MediatR/blob/master/src/MediatR/NotificationHandlerExecutor.cs
-
 /// <summary>
 /// Represents a task execution context with handler and metadata.
 /// Supports both eager mode (handler instance present) and lazy mode (handler type stored for later resolution).

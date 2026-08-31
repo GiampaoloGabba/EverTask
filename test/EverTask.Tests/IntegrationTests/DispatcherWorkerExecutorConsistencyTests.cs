@@ -45,7 +45,9 @@ public class DispatcherWorkerExecutorConsistencyTests : IsolatedIntegrationTestB
         // the Dispatcher's still-unmodified one.
         var taskAfterExecution = await WaitForRecurringRunsAsync(taskId, expectedRuns: 1, timeoutMs: 8000);
 
-        var firstRun = taskAfterExecution.RunsAudits
+        // The series has no MaxRuns - the NextRunUtc asserted below only exists while it is alive - so
+        // its audits keep growing under the storage lock while this runs: snapshot before enumerating.
+        var firstRun = taskAfterExecution.SnapshotRunsAudits()
             .Where(a => a.Status == QueuedTaskStatus.Completed)
             .OrderBy(a => a.ExecutedAt)
             .First();
@@ -145,8 +147,9 @@ public class DispatcherWorkerExecutorConsistencyTests : IsolatedIntegrationTestB
         // to a slot the Dispatcher realigned to (>= pastTime + 6s): a catching-up implementation
         // would execute the missed occurrences right after dispatch (~pastTime + 5s), and the
         // scheduler only dequeues a slot once it is due, so a delayed assertion can only make this
-        // more true, never less.
-        var completedRuns = task.RunsAudits
+        // more true, never less. Snapshot first: this series has no MaxRuns (the NextRunUtc asserted
+        // above only exists while it is alive) and appends to the live list while these lines run.
+        var completedRuns = task.SnapshotRunsAudits()
             .Where(a => a.Status == QueuedTaskStatus.Completed)
             .ToList();
 
@@ -162,10 +165,12 @@ public class DispatcherWorkerExecutorConsistencyTests : IsolatedIntegrationTestB
         // Arrange
         await CreateIsolatedHostAsync(channelCapacity: 10, maxDegreeOfParallelism: 5);
 
-        // Dispatch recurring task every 3 seconds
+        // Dispatch recurring task every 3 seconds, capped at the 2 runs the interval assertion reads:
+        // nothing here needs the series alive, and the cap keeps it from firing into host teardown
+        // (and from appending to the run audits while they are enumerated).
         var taskId = await Dispatcher.Dispatch(
             new TestTaskRecurringSeconds(),
-            recurring => recurring.Schedule().Every(3).Seconds());
+            recurring => recurring.Schedule().Every(3).Seconds().MaxRuns(2));
 
         // Wait for 2 executions
         await WaitForRecurringRunsAsync(taskId, expectedRuns: 2, timeoutMs: 10000);
@@ -203,10 +208,10 @@ public class DispatcherWorkerExecutorConsistencyTests : IsolatedIntegrationTestB
         await CreateIsolatedHostAsync(channelCapacity: 10, maxDegreeOfParallelism: 5);
 
         // Dispatch recurring task every hour (testing with seconds for speed)
-        // Using SecondInterval but verifying calculation consistency
+        // Using SecondInterval but verifying calculation consistency, capped at the 3 runs asserted
         var taskId = await Dispatcher.Dispatch(
             new TestTaskRecurringSeconds(),
-            recurring => recurring.Schedule().Every(2).Seconds());
+            recurring => recurring.Schedule().Every(2).Seconds().MaxRuns(3));
 
         // Wait for 3 executions
         await WaitForRecurringRunsAsync(taskId, expectedRuns: 3, timeoutMs: 10000);
@@ -281,10 +286,10 @@ public class DispatcherWorkerExecutorConsistencyTests : IsolatedIntegrationTestB
         await CreateIsolatedHostAsync(channelCapacity: 10, maxDegreeOfParallelism: 5);
 
         // Dispatch recurring task with cron expression (every 5 seconds for testing)
-        // Cron: "*/5 * * * * *" (6-field format with seconds)
+        // Cron: "*/5 * * * * *" (6-field format with seconds), capped at the 2 runs asserted
         var taskId = await Dispatcher.Dispatch(
             new TestTaskRecurringSeconds(),
-            recurring => recurring.Schedule().UseCron("*/5 * * * * *"));
+            recurring => recurring.Schedule().UseCron("*/5 * * * * *").MaxRuns(2));
 
         // Wait for 2 executions (cron */5 * * * * * = every 5 seconds)
         await WaitForRecurringRunsAsync(taskId, expectedRuns: 2, timeoutMs: 12000);

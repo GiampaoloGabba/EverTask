@@ -71,13 +71,13 @@ public class AssemblyResolutionTests
     }
 
     [Fact]
-    public void Should_resolve_RequestHandler()
+    public void Should_resolve_handler_when_closed_handler_is_discovered()
     {
         _provider.GetService<IEverTaskHandler<TestTaskRequest>>().ShouldNotBeNull();
     }
 
     [Fact]
-    public void Should_resolve_internal_Handler()
+    public void Should_resolve_handler_when_handler_type_is_internal()
     {
         _provider.GetService<IEverTaskHandler<InternalTestTaskRequest>>().ShouldNotBeNull();
     }
@@ -91,7 +91,27 @@ public class AssemblyResolutionTests
     }
 
     [Fact]
-    public void Should_resolve_first_duplicate_Handler()
+    public void Should_throw_when_registered_assembly_is_null()
+    {
+        // Config-boundary validation: without it a null only surfaces later as a
+        // NullReferenceException inside the assembly scan. ParamName is asserted so a LINQ-thrown
+        // ArgumentNullException ("source") could never pass for the boundary check.
+        var config = new EverTaskServiceConfiguration();
+
+        Should.Throw<ArgumentNullException>(() => config.RegisterTasksFromAssembly(null!))
+              .ParamName.ShouldBe("assembly");
+        Should.Throw<ArgumentNullException>(() => config.RegisterTasksFromAssemblies(null!))
+              .ParamName.ShouldBe("assemblies");
+        Should.Throw<ArgumentException>(
+                  () => config.RegisterTasksFromAssemblies(typeof(TestTaskRequest).Assembly, null!))
+              .ParamName.ShouldBe("assemblies");
+
+        // The mixed valid/null call is atomic: nothing was registered.
+        config.AssembliesToRegister.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Should_resolve_first_handler_when_duplicate_closed_handlers_are_discovered()
     {
         var handlers = _provider.GetServices<IEverTaskHandler<TestTaskRequest>>().ToArray();
         handlers.Length.ShouldBe(1);
@@ -99,7 +119,7 @@ public class AssemblyResolutionTests
     }
 
     [Fact]
-    public void Should_warn_or_throw_on_duplicate_closed_handler()
+    public void Should_warn_when_duplicate_closed_handlers_are_discovered()
     {
         // G2: TestTaskRequest has two handlers (TestTaskHanlder + TestTaskHanlderDuplicate). First-wins
         // registration stays, but the ambiguity must no longer be silent — a warning is recorded.
@@ -111,42 +131,14 @@ public class AssemblyResolutionTests
     }
 
     [Fact]
-    public void Should_register_or_warn_for_open_generic_handler()
+    public void Should_warn_and_not_register_when_handler_type_is_open_generic()
     {
         // G1: open-generic handlers were silently dropped (the closing path was dead code). They must
-        // be surfaced with a warning instead of vanishing without trace.
+        // be surfaced with a warning instead of vanishing without trace — and never auto-closed.
         var config   = _provider.GetRequiredService<EverTaskServiceConfiguration>();
         var warnings = config.HandlerRegistrationWarnings;
 
         warnings.ShouldContain(w => w.Contains(nameof(OpenGenericRegistrationHandler<object>)));
-    }
-
-
-    [Fact]
-    public void CouldCloseTo_Should_ReturnFalse_ForIncompatibleTypes()
-    {
-        var openType            = typeof(OpenGenericClass<>);
-        var closedInterfaceType = typeof(ITestInterface<string>); // Incompatibile con OpenGenericClass<T>
-
-        var result = openType.CouldCloseTo(closedInterfaceType);
-
-        Assert.False(result);
-    }
-
-    [Fact]
-    public void CouldCloseTo_Should_ReturnFalse_ForNonGenericTypes()
-    {
-        var nonGenericType      = typeof(ClosedGenericClass);
-        var closedInterfaceType = typeof(ITestInterface<int>);
-
-        var result = nonGenericType.CouldCloseTo(closedInterfaceType);
-
-        Assert.False(result);
+        _provider.GetService<IEverTaskHandler<OpenGenericRegistrationTask<int>>>().ShouldBeNull();
     }
 }
-
-
-public interface ITestInterface<T> { }
-
-public class OpenGenericClass<T> : ITestInterface<T> { }
-public class ClosedGenericClass : ITestInterface<int> { }

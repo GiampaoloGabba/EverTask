@@ -48,6 +48,8 @@ their serialized members (closure walk, visited-set + depth bound).
 | ET0008 | Warning | net8.0 compilation sets `EnableOpenApiDocument = true` or calls `AddMonitoringApiScalar()` — both no-ops there; separate `MonitoringOpenApiAnalyzer`, category `EverTask.Monitoring` | — |
 | ET0009 | Warning | Compile-time-constant retry delay, timeout or audit cleanup interval above the maximum timer duration (`uint.MaxValue - 1` ms, ~49.7 days); separate `TimerDelayLimitAnalyzer`, category `EverTask.Resilience` | — |
 | ET0010 | Warning | `InTimeZone` on a fluent chain that is provably Elapsed-only, which `RecurringTask.Validate()` refuses; separate `ScheduleTimeZoneAnalyzer`, category `EverTask.Scheduling` | — |
+| ET0011 | Warning | Concrete open-generic type implementing `IEverTaskHandler<>` — the assembly scan skips it, so it is never registered (compile-time mirror of the G1 startup warning); `HandlerRegistrationAnalyzer`, category `EverTask.Registration` | — |
+| ET0012 | Warning | ≥2 concrete handlers for the same closed `IEverTaskHandler<TTask>` in one compilation — only the first discovered is registered (mirror of G2; compilation-end, so the IDE shows it with full-solution analysis; cross-assembly duplicates stay a startup warning) | — |
 
 Each rule is suppressible/promotable per-member via `dotnet_diagnostic.ETxxxx.severity` in `.editorconfig`.
 - **ET0010 stays silent on a chain carrying `Except`/`ExceptWeekends` anywhere** (either side of

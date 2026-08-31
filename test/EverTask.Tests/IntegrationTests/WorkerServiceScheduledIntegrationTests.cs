@@ -17,9 +17,12 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
         // Wait for task to be in waiting queue
         await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.WaitingQueue, timeoutMs: 2000);
 
+        // Re-read of a TRANSIENT state: the wait above already proved the row was parked, but the
+        // 1.2s delay can elapse between it and this read, and the scheduler then legitimately flips
+        // the row to Queued. What matters here is that it was not executed on dispatch.
         var pt = await Storage.GetAll();
         pt.Length.ShouldBe(1);
-        pt[0].Status.ShouldBe(QueuedTaskStatus.WaitingQueue);
+        pt[0].Status.ShouldBeOneOf(QueuedTaskStatus.WaitingQueue, QueuedTaskStatus.Queued);
 
         // Wait for task to complete after delay
         await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed, timeoutMs: 2000);
@@ -46,9 +49,11 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
         // Wait for task to be in waiting queue
         await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.WaitingQueue, timeoutMs: 2000);
 
+        // Transient re-read, same as Should_execute_delayed_task: the 1.2s window can elapse between
+        // the wait and this read, after which the row is legitimately Queued.
         var pt = await Storage.GetAll();
         pt.Length.ShouldBe(1);
-        pt[0].Status.ShouldBe(QueuedTaskStatus.WaitingQueue);
+        pt[0].Status.ShouldBeOneOf(QueuedTaskStatus.WaitingQueue, QueuedTaskStatus.Queued);
 
         // Wait for task to complete after scheduled time
         await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.Completed, timeoutMs: 2000);
@@ -87,9 +92,11 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
         // Wait for task to be scheduled
         await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.WaitingQueue, timeoutMs: 2000);
 
+        // Transient re-read: the RunDelayed(1500ms) window can elapse before this line, and the first
+        // occurrence is then legitimately Queued.
         var pt = await Storage.GetAll();
         pt.Length.ShouldBe(1);
-        pt[0].Status.ShouldBe(QueuedTaskStatus.WaitingQueue);
+        pt[0].Status.ShouldBeOneOf(QueuedTaskStatus.WaitingQueue, QueuedTaskStatus.Queued);
 
         // Wait for recurring task to complete all runs
         var completedTask = await WaitForRecurringRunsAsync(taskId, expectedRuns: maxRuns, timeoutMs: timeout);
@@ -121,9 +128,11 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
         // for that whole window (timeout sized on the window, not on a 1s default)
         await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.WaitingQueue, timeoutMs: 2000);
 
+        // Transient re-read: the 2s window to the first occurrence can elapse before this line, and the
+        // scheduler then legitimately flips the row to Queued.
         var pt = await Storage.GetAll();
         pt.Length.ShouldBe(1);
-        pt[0].Status.ShouldBe(QueuedTaskStatus.WaitingQueue);
+        pt[0].Status.ShouldBeOneOf(QueuedTaskStatus.WaitingQueue, QueuedTaskStatus.Queued);
         pt[0].IsRecurring.ShouldBeTrue();
 
         // Wait for recurring task to complete 3 runs
@@ -153,12 +162,16 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
                    .Every(2).Seconds()
                    .MaxRuns(3));
 
-        // Wait for task to be scheduled
-        await WaitForTaskStatusAsync(taskId, QueuedTaskStatus.WaitingQueue, timeoutMs: 1000);
+        // RunDelayed(500ms): WaitingQueue is observable only for that 500ms window, and the row never
+        // returns to it once the occurrence is delivered - a first poll landing after the window made
+        // the wait run out its whole timeout with nothing left to observe. Wait for the row to be
+        // accepted by the pipeline instead.
+        await WaitForTaskAcceptedAsync(taskId, timeoutMs: 2000);
 
         var pt = await Storage.GetAll();
         pt.Length.ShouldBe(1);
-        pt[0].Status.ShouldBe(QueuedTaskStatus.WaitingQueue);
+        pt[0].Status.ShouldBeOneOf(QueuedTaskStatus.WaitingQueue, QueuedTaskStatus.Queued,
+                                   QueuedTaskStatus.InProgress, QueuedTaskStatus.Completed);
         pt[0].IsRecurring.ShouldBeTrue();
 
         // Wait for recurring task to complete 3 runs
@@ -212,9 +225,8 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
     {
         await CreateIsolatedHostAsync();
 
-        TestTaskRecurringWithFailure.Counter = 0; // Reset static counter
-        TestTaskRecurringWithFailure.FailUntilCount = 2; // Fail first 2 attempts, succeed on 3rd
-        var task = new TestTaskRecurringWithFailure();
+        // Fail the first 2 attempts, succeed on the 3rd
+        var task = new TestTaskRecurringWithFailure(FailUntilCount: 2);
 
         // Every 2 seconds, max 3 runs - first run will retry internally due to LinearRetryPolicy(3, 50ms)
         var taskId = await Dispatcher.Dispatch(task, builder => builder.Schedule().Every(2).Seconds().MaxRuns(3));
@@ -235,8 +247,6 @@ public class WorkerServiceScheduledIntegrationTests : IsolatedIntegrationTestBas
 
         // Verify all 3 recurring runs completed successfully (retries are internal to each run)
         pt[0].RunsAudits.All(r => r != null && r.Status == QueuedTaskStatus.Completed).ShouldBeTrue();
-
-        // Counter should be > 3 due to retries during first run
     }
 
     [Fact]

@@ -29,7 +29,12 @@ public class CancelPipelineIntegrationTests : IsolatedIntegrationTestBase
         WorkerBlacklist.Add(id);   // the user cancel's blacklist
         await StopHostAsync();      // shutdown cancels the service token → the handler's OCE
 
-        await Task.Delay(500);
+        // Wait for the delivery to END rather than for a fixed margin: the classification is written
+        // while the handler's OCE unwinds, and the registry's End is the LAST act of DoWork, so once
+        // the id is gone the outcome is final. Asserting the status separately keeps a wrong
+        // classification (the F17 bug wrote ServiceStopped) a failed assertion, not a timeout.
+        await WaitForDeliveryToEndAsync(id);
+
         var status = (await Storage.GetAll()).Single(t => t.Id == id).Status;
         status.ShouldBe(QueuedTaskStatus.Cancelled);
     }
@@ -51,7 +56,12 @@ public class CancelPipelineIntegrationTests : IsolatedIntegrationTestBase
         await Storage.SetCancelledByUser(id, AuditLevel.ErrorsOnly);          // user cancel's persisted status
         _state.Gate.Release(10);                                              // handler completes (token uncancelled)
 
-        await Task.Delay(800);
+        // The assertion is negative - nothing must overwrite the status - so it cannot be polled for
+        // directly. Wait instead for the observable that CLOSES the window: the delivery ending. The
+        // outcome the bug would write (Completed over Cancelled) is written inside the delivery, and
+        // the registry's End is the last act of DoWork, so once the id is gone nothing can still
+        // clobber the row. The old fixed 800ms only hoped the handler had got that far.
+        await WaitForDeliveryToEndAsync(id);
 
         var status = (await Storage.GetAll()).Single(t => t.Id == id).Status;
         status.ShouldBe(QueuedTaskStatus.Cancelled,
@@ -96,7 +106,12 @@ public class CancelPipelineIntegrationTests : IsolatedIntegrationTestBase
         _state.Gate.Release(10);
 
         await WaitForTaskStatusAsync(id, QueuedTaskStatus.Cancelled, timeoutMs: 5000);
-        await Task.Delay(500); // let the worker's finally (QueueNextOccourrence) run
+
+        // The assertion is negative - no next occurrence - so wait for the observable that closes the
+        // window instead of a fixed margin: QueueNextOccourrence is the last statement of the worker's
+        // finally and the registry's End is the last act of DoWork, so an id no longer in flight means
+        // that finally has already run.
+        await WaitForDeliveryToEndAsync(id);
 
         // The next occurrence must NOT be scheduled: QueueNextOccourrence must not advance the run
         // counter for a cancelled series (deterministic, unlike the racy scheduler registration).

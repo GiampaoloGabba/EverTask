@@ -11,19 +11,19 @@ public class TestTaskStateManager
     private readonly ConcurrentDictionary<string, TaskExecutionState> _states = new();
 
     /// <summary>
-    /// Records that a task has started execution
+    /// Records that a task has started execution. The counter advances under the state's lock, like
+    /// <see cref="IncrementCounter"/>: AddOrUpdate's factory can run concurrently for the same key, and
+    /// a bare ++ on the shared state loses increments when two occurrences overlap.
     /// </summary>
     public void RecordStart(string taskKey)
     {
-        _states.AddOrUpdate(
-            taskKey,
-            _ => new TaskExecutionState { StartTime = DateTimeOffset.UtcNow, ExecutionCount = 1 },
-            (_, state) =>
-            {
-                state.StartTime = DateTimeOffset.UtcNow;
-                state.ExecutionCount++;
-                return state;
-            });
+        var state = _states.GetOrAdd(taskKey, _ => new TaskExecutionState());
+
+        lock (state)
+        {
+            state.StartTime = DateTimeOffset.UtcNow;
+            state.ExecutionCount++;
+        }
     }
 
     /// <summary>
@@ -42,18 +42,48 @@ public class TestTaskStateManager
     }
 
     /// <summary>
-    /// Increments the execution counter for a task
+    /// Increments the execution counter for a task and returns the new value. The increment is atomic,
+    /// so a handler can drive its own behaviour from the returned attempt number (e.g. fail the first N
+    /// invocations) even when two occurrences of the same task overlap.
     /// </summary>
-    public void IncrementCounter(string taskKey)
+    public int IncrementCounter(string taskKey)
     {
-        _states.AddOrUpdate(
-            taskKey,
-            _ => new TaskExecutionState { ExecutionCount = 1 },
-            (_, state) =>
-            {
-                state.ExecutionCount++;
-                return state;
-            });
+        var state = _states.GetOrAdd(taskKey, _ => new TaskExecutionState());
+
+        lock (state)
+        {
+            return ++state.ExecutionCount;
+        }
+    }
+
+    /// <summary>
+    /// Appends a lifecycle callback to the task's ordered log. Taken under the state's lock like the
+    /// counters: a handler's callbacks can fire from the worker's scope and from a dispatch-time
+    /// metadata instance at the same time.
+    /// </summary>
+    public void RecordCallback(string taskKey, string callback)
+    {
+        var state = _states.GetOrAdd(taskKey, _ => new TaskExecutionState());
+
+        lock (state)
+        {
+            state.Callbacks.Add(callback);
+        }
+    }
+
+    /// <summary>
+    /// Ordered SNAPSHOT of the callbacks recorded for the task (empty when the task never ran). A copy,
+    /// so an assertion never enumerates the live list while a disposal is still appending to it.
+    /// </summary>
+    public List<string> GetCallbacks(string taskKey)
+    {
+        if (!_states.TryGetValue(taskKey, out var state))
+            return [];
+
+        lock (state)
+        {
+            return [..state.Callbacks];
+        }
     }
 
     /// <summary>
@@ -131,5 +161,6 @@ public class TaskExecutionState
     public DateTimeOffset? StartTime { get; set; }
     public DateTimeOffset? EndTime { get; set; }
     public int ExecutionCount { get; set; }
+    public List<string> Callbacks { get; } = [];
     public Dictionary<string, object> CustomData { get; set; } = new();
 }

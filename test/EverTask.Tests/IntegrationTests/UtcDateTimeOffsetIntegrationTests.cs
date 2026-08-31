@@ -84,13 +84,10 @@ public class UtcDateTimeOffsetIntegrationTests : IsolatedIntegrationTestBase
             recurring => recurring.Schedule().Every(1).Hours(),
             taskKey: "nextrun-offset-test");
 
-        await Task.Delay(100);
-
-        // Assert
-        var tasks = await Storage.Get(t => t.Id == taskId);
-        var task = tasks.FirstOrDefault();
-        task.ShouldNotBeNull();
-        task!.NextRunUtc.ShouldNotBeNull();
+        // Assert. The row is persisted before Dispatch returns and the first occurrence is an hour
+        // away, so this reads the slot the Dispatcher picked - no delay to wait out.
+        var task = await TaskWaitHelper.WaitForTaskExistsAsync(Storage, taskId);
+        task.NextRunUtc.ShouldNotBeNull();
 
         // NextRunUtc should have +00:00 offset
         task.NextRunUtc!.Value.Offset.ShouldBe(TimeSpan.Zero,
@@ -109,37 +106,29 @@ public class UtcDateTimeOffsetIntegrationTests : IsolatedIntegrationTestBase
             recurring => recurring.Schedule().Every(10).Seconds(),
             taskKey: "recurring-offset-test");
 
-        // Wait for first execution
-        await TaskWaitHelper.WaitForConditionAsync(
-            () => StateManager.GetCounter(nameof(TestTaskRecurringSeconds)) >= 1,
-            timeoutMs: 12000);
+        // Wait for the first run to be PERSISTED, not just for the handler to have run: the counter is
+        // raised inside Handle, while CompleteRecurringRun writes LastExecutionUtc and the new
+        // NextRunUtc only after it returns. Waiting on the counter left those two legitimately unset,
+        // and the HasValue guards then skipped the very assertions this test exists for.
+        var task = await WaitForRecurringRunsAsync(taskId, expectedRuns: 1, timeoutMs: 12000);
 
-        // Assert
-        var tasks = await Storage.Get(t => t.Id == taskId);
-        var task = tasks.FirstOrDefault();
-        task.ShouldNotBeNull();
-
-        // All DateTimeOffset fields should have +00:00 offset
-        task!.CreatedAtUtc.Offset.ShouldBe(TimeSpan.Zero,
+        // All four fields are written by then, so none of them is asserted conditionally: the
+        // Dispatcher stamps CreatedAtUtc and ScheduledExecutionUtc when it persists the row, and the
+        // first CompleteRecurringRun stamps LastExecutionUtc and the next occurrence together.
+        task.CreatedAtUtc.Offset.ShouldBe(TimeSpan.Zero,
             $"CreatedAtUtc offset mismatch: {task.CreatedAtUtc.Offset}");
 
-        if (task.ScheduledExecutionUtc.HasValue)
-        {
-            task.ScheduledExecutionUtc.Value.Offset.ShouldBe(TimeSpan.Zero,
-                $"ScheduledExecutionUtc offset mismatch: {task.ScheduledExecutionUtc.Value.Offset}");
-        }
+        task.ScheduledExecutionUtc.ShouldNotBeNull();
+        task.ScheduledExecutionUtc.Value.Offset.ShouldBe(TimeSpan.Zero,
+            $"ScheduledExecutionUtc offset mismatch: {task.ScheduledExecutionUtc.Value.Offset}");
 
-        if (task.LastExecutionUtc.HasValue)
-        {
-            task.LastExecutionUtc.Value.Offset.ShouldBe(TimeSpan.Zero,
-                $"LastExecutionUtc offset mismatch: {task.LastExecutionUtc.Value.Offset}");
-        }
+        task.LastExecutionUtc.ShouldNotBeNull();
+        task.LastExecutionUtc.Value.Offset.ShouldBe(TimeSpan.Zero,
+            $"LastExecutionUtc offset mismatch: {task.LastExecutionUtc.Value.Offset}");
 
-        if (task.NextRunUtc.HasValue)
-        {
-            task.NextRunUtc.Value.Offset.ShouldBe(TimeSpan.Zero,
-                $"NextRunUtc offset mismatch: {task.NextRunUtc.Value.Offset}");
-        }
+        task.NextRunUtc.ShouldNotBeNull();
+        task.NextRunUtc.Value.Offset.ShouldBe(TimeSpan.Zero,
+            $"NextRunUtc offset mismatch: {task.NextRunUtc.Value.Offset}");
     }
 
     [Fact]

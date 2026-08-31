@@ -6,8 +6,9 @@ namespace EverTask.Analyzers;
 /// The EverTask diagnostics: the payload-contract rules (ET0001-ET0007), which mirror at compile time the
 /// System.Text.Json round-trip contract enforced at runtime by <c>EverTask.Serialization.EverTaskJson</c>
 /// (see <c>src/EverTask.Abstractions/CLAUDE.md</c> §Serialization Guidelines), plus the monitoring rule
-/// ET0008, the resilience rule ET0009 (delays above the maximum timer duration) and the scheduling rule
-/// ET0010 (a time zone on a plain cadence).
+/// ET0008, the resilience rule ET0009 (delays above the maximum timer duration), the scheduling rule
+/// ET0010 (a time zone on a plain cadence) and the registration rules ET0011/ET0012, which mirror the
+/// G1/G2 startup warnings of <c>HandlerRegistrar</c>.
 /// Keep this list in lockstep with <c>AnalyzerReleases.Unshipped.md</c> (RS2002).
 /// </summary>
 internal static class DiagnosticDescriptors
@@ -107,6 +108,27 @@ internal static class DiagnosticDescriptors
         isEnabledByDefault: true,
         description: "A time zone governs calendar-anchored schedules and day/date exclusions only. On a cadence in seconds, minutes or hours with no calendar exclusion EverTask refuses it with an InvalidOperationException when the schedule is built, rather than accepting a call it could not honor. Reported only for a completed chain whose shape is provable in place; a chain split across variables or methods is left to the runtime check.",
         helpLinkUri: "https://github.com/GiampaoloGabba/EverTask/blob/master/docs/recurring-tasks/time-zones.md");
+
+    public static readonly DiagnosticDescriptor OpenGenericHandler = new(
+        id: "ET0011",
+        title: "Open-generic handler is never registered",
+        messageFormat: "Open-generic handler '{0}' is never registered by EverTask's assembly scan; register a closed handler for each concrete task type",
+        category: "EverTask.Registration",
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "EverTask's assembly scan cannot activate a handler type that still has open type parameters: the type is skipped with a startup warning and its tasks resolve to no handler at dispatch. This rule surfaces the problem in the editor instead of at host startup.",
+        helpLinkUri: "https://github.com/GiampaoloGabba/EverTask/blob/master/README.md");
+
+    public static readonly DiagnosticDescriptor DuplicateHandler = new(
+        id: "ET0012",
+        title: "Multiple handlers for the same task type",
+        messageFormat: "Task '{0}' has multiple handlers in this compilation ('{1}' and {2}); only the first one discovered is registered — keep one handler per task type",
+        category: "EverTask.Registration",
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "EverTask registers exactly one handler per closed IEverTaskHandler<TTask> interface, first-wins by assembly and metadata order. A second handler for the same task type is silently ignored at runtime (with a startup warning); this rule surfaces the ambiguity at compile time. Duplicates split across different assemblies are only detected at startup.",
+        helpLinkUri: "https://github.com/GiampaoloGabba/EverTask/blob/master/README.md",
+        customTags: WellKnownDiagnosticTags.CompilationEnd);
 
     public static readonly DiagnosticDescriptor UnresolvableConstructor = new(
         id: "ET0007",

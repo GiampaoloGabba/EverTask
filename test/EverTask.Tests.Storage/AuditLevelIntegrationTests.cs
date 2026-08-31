@@ -276,17 +276,19 @@ public class AuditLevelIntegrationTests : IsolatedIntegrationTestBase, IAsyncLif
             cfg.SetDefaultAuditLevel(AuditLevel.Minimal);
         });
 
-        // Act - Recurring task (wait for exactly 2 runs to avoid timing issues)
+        // Act - Recurring task. MaxRuns(2) makes the count below exact BY CONSTRUCTION: the series
+        // stops itself after two real executions (SetRecurringSeriesCompleted adds no run and no
+        // audit), so a slow poll can no longer observe a third run of a 1s cadence.
         var taskId = await Dispatcher.Dispatch(
             new TestTaskRequest("Recurring"),
-            recurring: r => r.Schedule().Every(1).Seconds().MaxRuns(5)
+            recurring: r => r.Schedule().Every(1).Seconds().MaxRuns(2)
         );
 
-        // Wait until CurrentRunCount reaches exactly 2 (more reliable than waiting for RunsAudit)
+        // Wait until CurrentRunCount reaches 2 (more reliable than waiting for RunsAudit)
         var task = await TaskWaitHelper.WaitUntilAsync(
             async () => (await Storage.Get(t => t.Id == taskId)).FirstOrDefault(),
             task => task?.CurrentRunCount >= 2,
-            timeoutMs: 5000
+            timeoutMs: 10000
         );
 
         task.ShouldNotBeNull();
@@ -311,18 +313,19 @@ public class AuditLevelIntegrationTests : IsolatedIntegrationTestBase, IAsyncLif
         // Arrange
         await CreateHostWithSqlServerAsync();
 
-        // Act - Recurring task with ErrorsOnly
+        // Act - Recurring task with ErrorsOnly. MaxRuns(2) makes the count below exact by construction
+        // (see Should_apply_minimal_to_recurring_...).
         var taskId = await Dispatcher.Dispatch(
             new TestTaskRequest("Recurring"),
-            recurring: r => r.Schedule().Every(1).Seconds().MaxRuns(5),
+            recurring: r => r.Schedule().Every(1).Seconds().MaxRuns(2),
             auditLevel: AuditLevel.ErrorsOnly
         );
 
-        // Wait until CurrentRunCount reaches exactly 2
+        // Wait until CurrentRunCount reaches 2
         var task = await TaskWaitHelper.WaitUntilAsync(
             async () => (await Storage.Get(t => t.Id == taskId)).FirstOrDefault(),
             task => task?.CurrentRunCount >= 2,
-            timeoutMs: 5000
+            timeoutMs: 10000
         );
 
         task.ShouldNotBeNull();
@@ -340,18 +343,19 @@ public class AuditLevelIntegrationTests : IsolatedIntegrationTestBase, IAsyncLif
         // Arrange
         await CreateHostWithSqlServerAsync();
 
-        // Act - Recurring task with None audit level
+        // Act - Recurring task with None audit level. MaxRuns(2) makes the count below exact by
+        // construction (see Should_apply_minimal_to_recurring_...).
         var taskId = await Dispatcher.Dispatch(
             new TestTaskRequest("Recurring"),
-            recurring: r => r.Schedule().Every(1).Seconds().MaxRuns(5),
+            recurring: r => r.Schedule().Every(1).Seconds().MaxRuns(2),
             auditLevel: AuditLevel.None
         );
 
-        // Wait until CurrentRunCount reaches exactly 2
+        // Wait until CurrentRunCount reaches 2
         var task = await TaskWaitHelper.WaitUntilAsync(
             async () => (await Storage.Get(t => t.Id == taskId)).FirstOrDefault(),
             task => task?.CurrentRunCount >= 2,
-            timeoutMs: 5000
+            timeoutMs: 10000
         );
 
         task.ShouldNotBeNull();
@@ -428,18 +432,16 @@ public class AuditLevelIntegrationTests : IsolatedIntegrationTestBase, IAsyncLif
     public async Task Should_audit_only_failures_in_recurring_task_with_minimal()
     {
         // Arrange
-        TestTaskRecurringWithFailure.Counter = 0; // Reset static counter
-        // With retry policy of 3 attempts (4 total calls per execution), we need FailUntilCount high enough
-        // to ensure first 2 recurring executions fail completely: 2 executions * 4 calls = 8
-        TestTaskRecurringWithFailure.FailUntilCount = 8; // First 2 executions will fail all retries
         await CreateHostWithSqlServerAsync(configureEverTask: cfg =>
         {
             cfg.SetDefaultAuditLevel(AuditLevel.Minimal);
         });
 
-        // Act - Recurring task where first 2 executions fail (with retries), then subsequent executions succeed
+        // Act - Recurring task where first 2 executions fail (with retries), then subsequent executions
+        // succeed. With a retry policy of 3 attempts (4 total calls per execution), FailUntilCount has to
+        // be high enough to make the first 2 recurring executions fail completely: 2 executions * 4 calls = 8
         var taskId = await Dispatcher.Dispatch(
-            new TestTaskRecurringWithFailure(),
+            new TestTaskRecurringWithFailure(FailUntilCount: 8),
             recurring: r => r.Schedule().Every(1).Seconds().MaxRuns(7) // 2 failed + 5 successful = 7 total
         );
 
@@ -473,18 +475,16 @@ public class AuditLevelIntegrationTests : IsolatedIntegrationTestBase, IAsyncLif
     public async Task Should_audit_no_successes_in_recurring_task_with_errors_only()
     {
         // Arrange
-        TestTaskRecurringWithFailure.Counter = 0; // Reset static counter
-        // With retry policy of 3 attempts (4 total calls per execution), we need FailUntilCount high enough
-        // to ensure first 2 recurring executions fail completely: 2 executions * 4 calls = 8
-        TestTaskRecurringWithFailure.FailUntilCount = 8; // First 2 executions will fail all retries
         await CreateHostWithSqlServerAsync(configureEverTask: cfg =>
         {
             cfg.SetDefaultAuditLevel(AuditLevel.ErrorsOnly);
         });
 
-        // Act - Recurring task where first 2 executions fail (with retries), then subsequent executions succeed
+        // Act - Recurring task where first 2 executions fail (with retries), then subsequent executions
+        // succeed. With a retry policy of 3 attempts (4 total calls per execution), FailUntilCount has to
+        // be high enough to make the first 2 recurring executions fail completely: 2 executions * 4 calls = 8
         var taskId = await Dispatcher.Dispatch(
-            new TestTaskRecurringWithFailure(),
+            new TestTaskRecurringWithFailure(FailUntilCount: 8),
             recurring: r => r.Schedule().Every(1).Seconds().MaxRuns(7) // 2 failed + 5 successful = 7 total
         );
 

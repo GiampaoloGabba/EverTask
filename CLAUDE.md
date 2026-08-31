@@ -69,15 +69,15 @@ them before touching the dispatcher, the worker or a recovery filter.
 - **Central Package Management**: versions go in `Directory.Packages.props`, never in a `.csproj`
 - **Version**: `Directory.Build.props`, lockstep across all packages (current 4.0.0, unreleased — bumped early
   so the consumer-compatibility fixture really loads a 3.11-compiled assembly against a 4.0 one)
-- **MediatR attribution**: `Dispatcher.cs`, `TaskHandlerExecutor.cs`, `TaskHandlerWrapper.cs`,
-  `HandlerRegistrar.cs` are adapted from MediatR (Apache 2.0) — keep the attribution comments
+- **License**: MIT since the clean-room relicense — the MediatR-derived files were rewritten; credit lives in
+  the README's License section, never as per-file attribution comments
 
 ## Module-Specific Guidance
 
 | Module | Local CLAUDE.md |
 |--------|-----------------|
 | Core (dispatcher, worker, queue/recovery invariants) | `src/EverTask/CLAUDE.md` |
-| Abstractions (payload contract, retry, analyzers ET0001–ET0010) | `src/EverTask.Abstractions/CLAUDE.md` |
+| Abstractions (payload contract, retry, analyzers ET0001–ET0012) | `src/EverTask.Abstractions/CLAUDE.md` |
 | Rate limiting (hard invariants) | `src/EverTask/RateLimiting/CLAUDE.md` |
 | Recurring (cron, builder, skip-forward) | `src/EverTask/Scheduler/Recurring/CLAUDE.md` |
 | EF Core base + the four providers | `src/Storage/EverTask.Storage.{EfCore,SqlServer,Postgres,MySql,Sqlite}/CLAUDE.md` |

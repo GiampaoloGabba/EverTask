@@ -65,8 +65,8 @@ Tasks can be CPU-bound or I/O-bound, long- or short-running. Works with ASP.NET 
 - **Extensible**: custom storage, retry policies, and schedulers
 - **Serilog integration**: structured logging
 - **Async throughout**
-- **Compile-time analyzer**: a Roslyn analyzer (ET0001–ET0010) bundled in `EverTask.Abstractions`
-  catches System.Text.Json contract violations and configuration mistakes in the IDE/build, with code fixes (see below)
+- **Compile-time analyzer**: a Roslyn analyzer (ET0001–ET0012) bundled in `EverTask.Abstractions`
+  catches System.Text.Json contract violations, configuration mistakes and handler-registration problems (open-generic or duplicate handlers) in the IDE/build, with code fixes (see below)
 
 
 <img src="assets/screenshots/4.png" style="width:100%;max-width:900px;display: block; margin:20px auto;" alt="Task Details" />
@@ -422,10 +422,10 @@ surface only at runtime, on recovery: a silently dropped member, or a deserializ
 bundled in `EverTask.Abstractions` (no extra package, no runtime dependency) catches it the moment you reference
 `IEverTask`, in the IDE and in the build — with code fixes for the common cases.
 
-Ten rules (ET0001–ET0010) cover the payload serialization contract (public fields, unreachable setters,
+Twelve rules (ET0001–ET0012) cover the payload serialization contract (public fields, unreachable setters,
 Newtonsoft attributes, polymorphism without `[JsonPolymorphic]`, ambiguous constructors, …), delays beyond
-what a .NET timer can arm, monitoring API misconfiguration, and `.InTimeZone(...)` on a schedule that cannot
-honor it. Every rule is configurable via `.editorconfig` (e.g. `dotnet_diagnostic.ET0001.severity = error`).
+what a .NET timer can arm, monitoring API misconfiguration, `.InTimeZone(...)` on a schedule that cannot
+honor it, and handler-registration mistakes (open-generic or duplicate handlers). Every rule is configurable via `.editorconfig` (e.g. `dotnet_diagnostic.ET0001.severity = error`).
 Full rule list: [serialization analyzers](https://GiampaoloGabba.github.io/EverTask/storage/serialization.html#catching-mistakes-at-build-time).
 
 > Note: the payload serializer is reflection-based and isolated: a consumer's own STJ source generators don't
@@ -434,7 +434,6 @@ Full rule list: [serialization analyzers](https://GiampaoloGabba.github.io/EverT
 ## Resources
 
 - [Changelog](CHANGELOG.md) - Version history and release notes
-- [Attribution](ATTRIBUTION.md) - Acknowledgements and license information
 - [GitHub Repository](https://github.com/GiampaoloGabba/EverTask) - Source code and issues
 - [Examples](samples/) - Sample applications (ASP.NET Core, Console)
 
@@ -452,7 +451,9 @@ Contributions are welcome. Bug reports, feature requests, and pull requests all 
 
 ## License
 
-EverTask is licensed under the [Apache License 2.0](LICENSE).
+EverTask is licensed under the [MIT License](LICENSE).
+
+The task/handler pattern is inspired by Jimmy Bogard's [MediatR](https://github.com/jbogard/MediatR) — thanks for years of great ideas in the .NET space.
 
 See [ATTRIBUTION.md](ATTRIBUTION.md) for acknowledgements and attributions.
 

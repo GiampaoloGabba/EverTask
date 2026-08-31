@@ -4,24 +4,17 @@ namespace EverTask.Tests;
 
 // Test tasks for recurring execution scenarios with various interval types
 
-public class TestTaskRecurringSeconds() : IEverTask
-{
-    // Legacy static property for backward compatibility
-    public static int Counter { get; set; } = 0;
-}
+public class TestTaskRecurringSeconds : IEverTask;
 
-public class TestTaskRecurringMinutes() : IEverTask
-{
-    // Legacy static property for backward compatibility
-    public static int Counter { get; set; } = 0;
-}
+public class TestTaskRecurringMinutes : IEverTask;
 
-public class TestTaskRecurringWithFailure() : IEverTask
-{
-    // Legacy static property for backward compatibility
-    public static int Counter { get; set; } = 0;
-    public static int FailUntilCount { get; set; } = 2; // Fail first N attempts
-}
+/// <summary>
+/// Recurring task whose handler throws on its first <paramref name="FailUntilCount"/> invocations
+/// (retry attempts included). The threshold travels with the payload and the attempt count lives in the
+/// per-host <see cref="TestTaskStateManager"/>: as process-wide statics they made the failure condition
+/// of one test's series depend on another class resetting them concurrently.
+/// </summary>
+public record TestTaskRecurringWithFailure(int FailUntilCount = 2) : IEverTask;
 
 public record TestTaskDelayedRecurring(int delayMs) : IEverTask;
 
@@ -38,8 +31,6 @@ public class TestTaskRecurringSecondsHandler : EverTaskHandler<TestTaskRecurring
     {
         await Task.Delay(100, cancellationToken);
 
-        // Update both static (legacy) and state manager (new approach)
-        TestTaskRecurringSeconds.Counter++;
         _stateManager?.IncrementCounter(nameof(TestTaskRecurringSeconds));
     }
 }
@@ -57,39 +48,30 @@ public class TestTaskRecurringMinutesHandler : EverTaskHandler<TestTaskRecurring
     {
         await Task.Delay(100, cancellationToken);
 
-        // Update both static (legacy) and state manager (new approach)
-        TestTaskRecurringMinutes.Counter++;
         _stateManager?.IncrementCounter(nameof(TestTaskRecurringMinutes));
     }
 }
 
-public class TestTaskRecurringWithFailureHandler : EverTaskHandler<TestTaskRecurringWithFailure>
+// The state manager is REQUIRED here (not the optional injection the other handlers use): the attempt
+// count drives the failure condition, so a host that forgot to register it must fail loudly instead of
+// silently turning this into a task that never fails.
+public class TestTaskRecurringWithFailureHandler(TestTaskStateManager stateManager)
+    : EverTaskHandler<TestTaskRecurringWithFailure>
 {
-    private readonly TestTaskStateManager? _stateManager;
-
     // Use linear retry policy with 3 attempts and short delays for testing
     public override IRetryPolicy? RetryPolicy => new LinearRetryPolicy(3, TimeSpan.FromMilliseconds(50));
-
-    public TestTaskRecurringWithFailureHandler(TestTaskStateManager? stateManager = null)
-    {
-        _stateManager = stateManager;
-    }
 
     public override async Task Handle(TestTaskRecurringWithFailure backgroundTask, CancellationToken cancellationToken)
     {
         await Task.Delay(100, cancellationToken);
 
-        // Update counter
-        TestTaskRecurringWithFailure.Counter++;
-        _stateManager?.IncrementCounter(nameof(TestTaskRecurringWithFailure));
+        var attempt = stateManager.IncrementCounter(nameof(TestTaskRecurringWithFailure));
 
-        // Fail until we reach the threshold
-        if (TestTaskRecurringWithFailure.Counter <= TestTaskRecurringWithFailure.FailUntilCount)
+        // Fail until we reach the threshold, then succeed
+        if (attempt <= backgroundTask.FailUntilCount)
         {
-            throw new InvalidOperationException($"Simulated failure (attempt {TestTaskRecurringWithFailure.Counter})");
+            throw new InvalidOperationException($"Simulated failure (attempt {attempt})");
         }
-
-        // After threshold, succeed
     }
 }
 
@@ -112,15 +94,9 @@ public class TestTaskDelayedRecurringHandler : EverTaskHandler<TestTaskDelayedRe
 
 
 // Test tasks for queue sharding - each task has its handler with specific QueueName
-public class TestTaskRecurringQueueShard1() : IEverTask
-{
-    public static int Counter { get; set; } = 0;
-}
+public class TestTaskRecurringQueueShard1 : IEverTask;
 
-public class TestTaskRecurringQueueShard2() : IEverTask
-{
-    public static int Counter { get; set; } = 0;
-}
+public class TestTaskRecurringQueueShard2 : IEverTask;
 
 public class TestTaskRecurringQueueShard1Handler : EverTaskHandler<TestTaskRecurringQueueShard1>
 {
@@ -138,7 +114,6 @@ public class TestTaskRecurringQueueShard1Handler : EverTaskHandler<TestTaskRecur
                                           cancellationToken)
     {
         await Task.Delay(100, cancellationToken);
-        TestTaskRecurringQueueShard1.Counter++;
         _stateManager?.IncrementCounter(nameof(TestTaskRecurringQueueShard1));
     }
 }
@@ -159,7 +134,6 @@ public class TestTaskRecurringQueueShard2Handler : EverTaskHandler<TestTaskRecur
                                           cancellationToken)
     {
         await Task.Delay(100, cancellationToken);
-        TestTaskRecurringQueueShard2.Counter++;
         _stateManager?.IncrementCounter(nameof(TestTaskRecurringQueueShard2));
     }
 }

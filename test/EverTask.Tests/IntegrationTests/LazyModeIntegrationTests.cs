@@ -286,10 +286,6 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
             cfg.UseLazyHandlerResolution = true;
         });
 
-        // Reset static properties
-        TestTaskLifecycleWithAsyncDispose.CallbackOrder = [];
-        TestTaskLifecycleWithAsyncDispose.WasDisposed = false;
-
         var task = new TestTaskLifecycleWithAsyncDispose();
         var taskId = await Dispatcher.Dispatch(task); // Immediate dispatch = lazy mode (MEM-2)
 
@@ -299,17 +295,20 @@ public class LazyModeIntegrationTests : IsolatedIntegrationTestBase
         // Give disposal a moment to complete
         await Task.Delay(200);
 
-        // Verify disposal was called
-        TestTaskLifecycleWithAsyncDispose.WasDisposed.ShouldBeTrue(
-            "Executing handler should be disposed after execution");
+        // The callback log lives in THIS host's state manager: WorkerServiceIntegrationTests dispatches
+        // the same task in parallel, and as a static the log was cleared by whichever class reset it
+        // first.
+        var callbackOrder = StateManager.GetCallbacks(nameof(TestTaskLifecycleWithAsyncDispose));
 
-        TestTaskLifecycleWithAsyncDispose.CallbackOrder.ShouldContain("DisposeAsyncCore");
+        // Verify disposal was called
+        callbackOrder.ShouldContain("DisposeAsyncCore",
+            "Executing handler should be disposed after execution");
 
         // Verify callback order: the EXECUTING instance is disposed after Handle.
         // (The dispatch-time metadata instance may add a DisposeAsyncCore entry before Handle,
         // so compare against the LAST dispose.)
-        var handleIndex = TestTaskLifecycleWithAsyncDispose.CallbackOrder.IndexOf("Handle");
-        var lastDisposeIndex = TestTaskLifecycleWithAsyncDispose.CallbackOrder.LastIndexOf("DisposeAsyncCore");
+        var handleIndex = callbackOrder.IndexOf("Handle");
+        var lastDisposeIndex = callbackOrder.LastIndexOf("DisposeAsyncCore");
 
         handleIndex.ShouldBeGreaterThanOrEqualTo(0);
         lastDisposeIndex.ShouldBeGreaterThanOrEqualTo(0);

@@ -4,6 +4,9 @@ using EverTask.Scheduler.Occurrences;
 using EverTask.Scheduler.Recurring;
 using EverTask.Scheduler.Recurring.Builder;
 
+// EverTask's DI wiring lives in Microsoft.Extensions.DependencyInjection so it surfaces without
+// extra usings, per the .NET hosting-extensions convention.
+// ReSharper disable once CheckNamespace
 namespace Microsoft.Extensions.DependencyInjection;
 
 public class EverTaskServiceConfiguration
@@ -16,7 +19,7 @@ public class EverTaskServiceConfiguration
     internal int MaxDegreeOfParallelism = GetDefaultParallelism();
 
     internal bool ThrowIfUnableToPersist = true;
-    internal List<Assembly> AssembliesToRegister { get; } = new();
+    internal List<Assembly> AssembliesToRegister { get; } = [];
 
     internal IRetryPolicy DefaultRetryPolicy { get; set; } = new LinearRetryPolicy(3, TimeSpan.FromMilliseconds(500));
 
@@ -34,7 +37,7 @@ public class EverTaskServiceConfiguration
     /// Diagnostics collected during handler assembly scanning (duplicate closed handlers,
     /// unsupported open-generic handlers). Logged once at startup by <c>WorkerService</c>.
     /// </summary>
-    internal List<string> HandlerRegistrationWarnings { get; } = new();
+    internal List<string> HandlerRegistrationWarnings { get; } = [];
 
     /// <summary>
     /// Enable adaptive lazy handler resolution.
@@ -252,6 +255,10 @@ public class EverTaskServiceConfiguration
     /// <returns>This</returns>
     public EverTaskServiceConfiguration RegisterTasksFromAssembly(Assembly assembly)
     {
+        // Fail at the configuration boundary: a null slipping into AssembliesToRegister would only
+        // surface later as a NullReferenceException inside the assembly scan.
+        ArgumentNullException.ThrowIfNull(assembly);
+
         AssembliesToRegister.Add(assembly);
         return this;
     }
@@ -264,6 +271,12 @@ public class EverTaskServiceConfiguration
     public EverTaskServiceConfiguration RegisterTasksFromAssemblies(
         params Assembly[] assemblies)
     {
+        ArgumentNullException.ThrowIfNull(assemblies);
+        // NRT annotations are not enforced at runtime: a caller can still pass a null element.
+        // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
+        if (assemblies.Any(assembly => assembly is null))
+            throw new ArgumentException("The assemblies array contains a null element.", nameof(assemblies));
+
         AssembliesToRegister.AddRange(assemblies);
         return this;
     }

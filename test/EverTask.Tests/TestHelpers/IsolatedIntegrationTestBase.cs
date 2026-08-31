@@ -17,6 +17,7 @@ public abstract class IsolatedIntegrationTestBase : IAsyncDisposable
     protected ICancellationSourceProvider CancellationSourceProvider { get; private set; } = null!;
     protected TestTaskStateManager StateManager { get; private set; } = null!;
     protected IGuidGenerator GuidGenerator { get; private set; } = null!;
+    protected TaskDeliveryRegistry DeliveryRegistry { get; private set; } = null!;
 
     /// <summary>
     /// The scheduling clock of the host built by this test: whatever was passed as <c>clock</c>, or
@@ -100,6 +101,7 @@ public abstract class IsolatedIntegrationTestBase : IAsyncDisposable
         CancellationSourceProvider = Host.Services.GetRequiredService<ICancellationSourceProvider>();
         StateManager = Host.Services.GetRequiredService<TestTaskStateManager>();
         GuidGenerator = Host.Services.GetRequiredService<IGuidGenerator>();
+        DeliveryRegistry = Host.Services.GetRequiredService<TaskDeliveryRegistry>();
 
         // Start the host
         await Host.StartAsync();
@@ -157,6 +159,7 @@ public abstract class IsolatedIntegrationTestBase : IAsyncDisposable
         CancellationSourceProvider = Host.Services.GetRequiredService<ICancellationSourceProvider>();
         StateManager = Host.Services.GetRequiredService<TestTaskStateManager>();
         GuidGenerator = Host.Services.GetRequiredService<IGuidGenerator>();
+        DeliveryRegistry = Host.Services.GetRequiredService<TaskDeliveryRegistry>();
 
         if (startHost)
         {
@@ -207,6 +210,22 @@ public abstract class IsolatedIntegrationTestBase : IAsyncDisposable
     {
         return await TaskWaitHelper.WaitForTaskAcceptedAsync(Storage, taskId, timeoutMs);
     }
+
+    /// <summary>
+    /// Helper: Waits until the delivery of <paramref name="taskId"/> is no longer in flight.
+    /// <para>
+    /// <c>TaskDeliveryRegistry.End</c> is the LAST act of <c>WorkerExecutor.DoWork</c>, after the
+    /// outcome is persisted and after the finally's QueueNextOccourrence. That makes it the boundary
+    /// two kinds of test need and cannot get from a status. A negative assertion (nothing overwrites
+    /// the status, no next occurrence is scheduled) has no event of its own to poll: what CAN be
+    /// waited for is the end of the window in which the forbidden write would happen. And an
+    /// immediate one-shot re-dispatch of the same taskKey is DISCARDED by the dispatcher while the
+    /// previous delivery is registered (it returns the existing id instead of replacing the row), so
+    /// a test that re-dispatches a key after a terminal status must wait this window out first.
+    /// </para>
+    /// </summary>
+    protected Task WaitForDeliveryToEndAsync(Guid taskId, int timeoutMs = 10000) =>
+        TaskWaitHelper.WaitForConditionAsync(() => !DeliveryRegistry.IsDelivering(taskId), timeoutMs);
 
     /// <summary>
     /// Helper: Waits for a specific number of tasks in storage
