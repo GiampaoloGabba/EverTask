@@ -195,13 +195,12 @@ public class RecurringTask
     public void Validate() => Validate(null);
 
     /// <inheritdoc cref="Validate()"/>
-    /// <param name="providers">
-    /// The registered occurrence providers, when the caller can reach them: the key a provider-driven schedule
-    /// names is then checked here too, so a dispatch is refused with the key in the message and a persisted row
-    /// naming a key this build no longer registers takes the terminal poison route instead of failing at every
-    /// next-run for ever. Null skips that one check — the grid itself refuses the key when it is asked.
+    /// <param name="context">
+    /// The host's provider and exclusion-calendar registries, when the caller can reach them. Persisted names
+    /// are then resolved here so ingress can refuse an unknown name before writing anything. Null preserves
+    /// registry-free validation for definitions inspected outside a configured host.
     /// </param>
-    internal void Validate(Occurrences.OccurrenceProviderRegistry? providers)
+    internal void Validate(ScheduleValidationContext? context)
     {
         // The tolerant enum converter maps an unknown numeric value through verbatim, so enforcing the
         // defined set is this method's job: an out-of-range mode is not Durable, and the row would silently
@@ -219,80 +218,25 @@ public class RecurringTask
         WeekInterval?.Validate();
         MonthInterval?.Validate();
 
-        ValidateExclusions();
-        ValidateProvider(providers);
+        ValidateExclusions(context?.Calendars);
+        ValidateProvider(context?.Providers);
         ValidateTimeZone();
         ValidateMisfire();
     }
 
-    private void ValidateExclusions()
+    private void ValidateExclusions(ScheduleCalendarRegistry? calendars)
     {
         if (Exclusions is not { } exclusions)
             return;
 
-        exclusions.Days ??= [];
-        exclusions.Dates ??= [];
-        exclusions.Ranges ??= [];
-
-        if (exclusions.Days.Any(day => !Enum.IsDefined(day)))
-            throw new ArgumentException("An exclusion day is outside the defined DayOfWeek values.", nameof(Exclusions));
-
-        exclusions.Days = exclusions.Days.Distinct().Order().ToArray();
-        exclusions.Dates = exclusions.Dates.Distinct().Order().ToArray();
-
-        var ranges = new List<ExclusionRange>(exclusions.Ranges.Length);
-        foreach (var range in exclusions.Ranges)
+        if (ScheduleExclusionNormalizer.Normalize(exclusions))
         {
-            if (range is null)
-                throw new ArgumentException("An exclusion range cannot be null.", nameof(Exclusions));
-
-            var normalized = new ExclusionRange
-            {
-                FromUtc = range.FromUtc.ToUniversalTime(),
-                ToUtc   = range.ToUtc.ToUniversalTime()
-            };
-
-            if (normalized.FromUtc >= normalized.ToUtc)
-            {
-                throw new ArgumentException(
-                    "An exclusion range start must be earlier than its end.", nameof(Exclusions));
-            }
-
-            ranges.Add(normalized);
-        }
-
-        ranges.Sort(static (left, right) =>
-        {
-            var fromComparison = left.FromUtc.CompareTo(right.FromUtc);
-            return fromComparison != 0 ? fromComparison : left.ToUtc.CompareTo(right.ToUtc);
-        });
-
-        var merged = new List<ExclusionRange>(ranges.Count);
-        foreach (var range in ranges)
-        {
-            if (merged.Count == 0 || range.FromUtc > merged[^1].ToUtc)
-            {
-                merged.Add(range);
-                continue;
-            }
-
-            if (range.ToUtc > merged[^1].ToUtc)
-                merged[^1].ToUtc = range.ToUtc;
-        }
-
-        exclusions.Ranges = merged.ToArray();
-
-        if (exclusions.Dates.Length + exclusions.Ranges.Length > 1000)
-        {
-            throw new InvalidOperationException(
-                "A schedule may carry at most 1000 exclusion dates and windows after normalization.");
-        }
-
-        if (exclusions.Days.Length == 7)
-            throw new InvalidOperationException("Excluding every day of the week leaves no recurring occurrence.");
-
-        if (exclusions.Days.Length == 0 && exclusions.Dates.Length == 0 && exclusions.Ranges.Length == 0)
             Exclusions = null;
+            return;
+        }
+
+        if (exclusions.Calendars.Length > 0 && calendars != null)
+            _ = calendars.Resolve(exclusions);
     }
 
     /// <summary>
@@ -399,7 +343,8 @@ public class RecurringTask
 
     internal bool HasCalendarExclusions() =>
         Exclusions is { } exclusions &&
-        ((exclusions.Days?.Length ?? 0) > 0 || (exclusions.Dates?.Length ?? 0) > 0);
+        ((exclusions.Days?.Length ?? 0) > 0 || (exclusions.Dates?.Length ?? 0) > 0 ||
+         (exclusions.Calendars?.Length ?? 0) > 0);
 
 
     /// <summary>

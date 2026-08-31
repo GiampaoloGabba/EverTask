@@ -74,4 +74,10 @@ public class MinuteSchedulerBuilder(RecurringTask task, TimeProvider? timeProvid
         ScheduleModifiers.ExceptWeekends(task);
         return this;
     }
+
+    public IMinuteSchedulerBuilder ExceptCalendar(params string[] names)
+    {
+        ScheduleModifiers.ExceptCalendar(task, names);
+        return this;
+    }
 }

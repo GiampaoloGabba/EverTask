@@ -112,6 +112,12 @@ public class IntervalSchedulerBuilder(RecurringTask task, TimeProvider? timeProv
         return this;
     }
 
+    public IIntervalSchedulerBuilder ExceptCalendar(params string[] names)
+    {
+        ScheduleModifiers.ExceptCalendar(task, names);
+        return this;
+    }
+
     public IBuildableSchedulerBuilder UseOccurrenceProvider(string key, string? config = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);

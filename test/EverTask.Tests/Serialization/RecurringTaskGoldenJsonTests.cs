@@ -134,8 +134,10 @@ public class RecurringTaskGoldenJsonTests
 
         var json = EverTaskJson.Serialize(task);
 
+        // Tranche 1 never shipped separately: both exclusion shapes debut in 4.0.0, so its golden may adopt
+        // the canonical Calendars member in place without rewriting any released persisted row.
         json.ShouldBe(
-            """{"RunNow":false,"InitialDelay":null,"SpecificRunTime":null,"CronInterval":null,"SecondInterval":{"Interval":30},"MinuteInterval":null,"HourInterval":null,"DayInterval":null,"WeekInterval":null,"MonthInterval":null,"MaxRuns":null,"RunUntil":null,"Exclusions":{"Days":[0,6],"Dates":["2026-01-01","2026-12-25"],"Ranges":[{"FromUtc":"2026-06-01T08:00:00+00:00","ToUtc":"2026-06-01T11:00:00+00:00"}]}}""");
+            """{"RunNow":false,"InitialDelay":null,"SpecificRunTime":null,"CronInterval":null,"SecondInterval":{"Interval":30},"MinuteInterval":null,"HourInterval":null,"DayInterval":null,"WeekInterval":null,"MonthInterval":null,"MaxRuns":null,"RunUntil":null,"Exclusions":{"Days":[0,6],"Dates":["2026-01-01","2026-12-25"],"Ranges":[{"FromUtc":"2026-06-01T08:00:00+00:00","ToUtc":"2026-06-01T11:00:00+00:00"}],"Calendars":[]}}""");
 
         var restored = EverTaskJson.Deserialize<RecurringTask>(json).ShouldNotBeNull();
         restored.Validate();
@@ -143,10 +145,43 @@ public class RecurringTaskGoldenJsonTests
     }
 
     [Fact]
+    public void A_tranche_one_exclusion_shape_reads_and_rewrites_with_the_new_canonical_member()
+    {
+        const string trancheOneJson =
+            """{"RunNow":false,"InitialDelay":null,"SpecificRunTime":null,"CronInterval":null,"SecondInterval":{"Interval":30},"MinuteInterval":null,"HourInterval":null,"DayInterval":null,"WeekInterval":null,"MonthInterval":null,"MaxRuns":null,"RunUntil":null,"Exclusions":{"Days":[6],"Dates":["2026-12-25"],"Ranges":[]}}""";
+        const string canonicalJson =
+            """{"RunNow":false,"InitialDelay":null,"SpecificRunTime":null,"CronInterval":null,"SecondInterval":{"Interval":30},"MinuteInterval":null,"HourInterval":null,"DayInterval":null,"WeekInterval":null,"MonthInterval":null,"MaxRuns":null,"RunUntil":null,"Exclusions":{"Days":[6],"Dates":["2026-12-25"],"Ranges":[],"Calendars":[]}}""";
+
+        var restored = EverTaskJson.Deserialize<RecurringTask>(trancheOneJson).ShouldNotBeNull();
+        restored.Validate();
+
+        restored.Exclusions.ShouldNotBeNull().Calendars.ShouldBeEmpty();
+        EverTaskJson.Serialize(restored).ShouldBe(canonicalJson);
+    }
+
+    [Fact]
+    public void Calendar_only_exclusions_round_trip_without_normalizing_to_null()
+    {
+        var task = new RecurringTask
+        {
+            SecondInterval = new SecondInterval(30),
+            Exclusions = new ScheduleExclusions { Calendars = [" holidays "] }
+        };
+        task.Validate();
+
+        var json = EverTaskJson.Serialize(task);
+        var restored = EverTaskJson.Deserialize<RecurringTask>(json).ShouldNotBeNull();
+        restored.Validate();
+
+        restored.Exclusions.ShouldNotBeNull().Calendars.ShouldBe(["holidays"]);
+        EverTaskJson.Serialize(restored).ShouldBe(json);
+    }
+
+    [Fact]
     public void Deserialized_null_arrays_are_lenient_but_a_null_range_is_poison()
     {
         var lenient = EverTaskJson.Deserialize<RecurringTask>(
-            """{"SecondInterval":{"Interval":30},"Exclusions":{"Days":null,"Dates":null,"Ranges":null}}""")
+            """{"SecondInterval":{"Interval":30},"Exclusions":{"Days":null,"Dates":null,"Ranges":null,"Calendars":null}}""")
             .ShouldNotBeNull();
         var corrupt = EverTaskJson.Deserialize<RecurringTask>(
             """{"SecondInterval":{"Interval":30},"Exclusions":{"Ranges":[null]}}""")

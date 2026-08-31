@@ -1,6 +1,7 @@
 using EverTask.Configuration;
 using EverTask.RateLimiting;
 using EverTask.Scheduler.Occurrences;
+using EverTask.Scheduler.Recurring;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -40,6 +41,11 @@ public static class ServiceCollectionExtensions
     {
         var options = new EverTaskServiceConfiguration();
         configure?.Invoke(options);
+
+        // Singleton factories are lazy, so freezing at resolution time would let later mutations of the
+        // configuration object change this host's calendar meanings.
+        var scheduleCalendars = ScheduleCalendarRegistry.Create(options.ScheduleCalendars);
+        services.TryAddSingleton(scheduleCalendars);
 
         if (options.AssembliesToRegister.Count == 0)
         {
@@ -190,6 +196,7 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<TimeProvider>(),
                 sp.GetService<ITaskStorage>(),
                 sp.GetService<OccurrenceProviderRegistry>(),
+                sp.GetService<ScheduleCalendarRegistry>(),
                 sp.GetService<OccurrenceMaterializer>(),
                 sp.GetService<IGateInvalidationRegistry>(),
                 sp.GetService<IEverTaskWorkerExecutor>(),

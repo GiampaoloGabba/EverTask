@@ -217,6 +217,25 @@ public class ScheduleManagementValidationTests : IsolatedIntegrationTestBase
     }
 
     [Fact]
+    public async Task A_reschedule_onto_an_unknown_exclusion_calendar_is_refused_before_the_write()
+    {
+        var blind = Blind(versioning: true, durable: true);
+        await StartHostAsync(blind);
+
+        var id = await Dispatcher.Dispatch(new RescheduleProbeTask("unknown-calendar"),
+            r => r.Schedule().Every(1).Hours(), taskKey: "validation-unknown-calendar");
+
+        var refusal = await Should.ThrowAsync<ArgumentException>(() =>
+            Manager.Reschedule("validation-unknown-calendar",
+                r => r.Schedule().Every(1).Hours().ExceptCalendar("nobody-registers-this")));
+
+        refusal.Message.ShouldContain("nobody-registers-this");
+        var row = (await blind.Get(t => t.Id == id))[0];
+        row.ScheduleVersion.ShouldBe(0, "the contextual refusal precedes the compare-and-swap");
+        row.RecurringTask!.ShouldNotContain("Calendars", Case.Sensitive);
+    }
+
+    [Fact]
     public async Task A_reschedule_keeping_only_the_newest_slots_needs_a_provider_that_answers_the_same_way_twice()
     {
         // The other half of the gate, and the one a dispatch pins on its own side: SkipOldest finds where the

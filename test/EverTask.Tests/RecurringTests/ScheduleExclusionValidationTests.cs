@@ -36,11 +36,63 @@ public class ScheduleExclusionValidationTests
     [Fact]
     public void Should_normalize_null_or_empty_arrays_to_no_exclusions()
     {
-        var task = NewTask(new ScheduleExclusions { Days = null!, Dates = null!, Ranges = null! });
+        var task = NewTask(new ScheduleExclusions
+        {
+            Days = null!, Dates = null!, Ranges = null!, Calendars = null!
+        });
 
         task.Validate();
 
         task.Exclusions.ShouldBeNull();
+    }
+
+    [Fact]
+    public void Should_keep_and_canonicalize_calendar_only_exclusions()
+    {
+        var task = NewTask(new ScheduleExclusions
+        {
+            Calendars = [" holidays ", "maintenance", "holidays"]
+        });
+
+        task.Validate();
+
+        task.Exclusions.ShouldNotBeNull().Calendars.ShouldBe(["holidays", "maintenance"]);
+    }
+
+    [Fact]
+    public void Should_refuse_corrupt_or_oversized_calendar_references()
+    {
+        var nullName = NewTask(new ScheduleExclusions { Calendars = [null!] });
+        var blankName = NewTask(new ScheduleExclusions { Calendars = [" "] });
+        var longName = NewTask(new ScheduleExclusions { Calendars = [new string('x', 101)] });
+        var tooMany = NewTask(new ScheduleExclusions
+        {
+            Calendars = Enumerable.Range(0, 17).Select(index => $"calendar-{index}").ToArray()
+        });
+
+        Should.Throw<ArgumentException>(() => nullName.Validate());
+        Should.Throw<ArgumentException>(() => blankName.Validate());
+        Should.Throw<ArgumentException>(() => longName.Validate());
+        Should.Throw<InvalidOperationException>(() => tooMany.Validate());
+    }
+
+    [Fact]
+    public void Should_resolve_named_calendars_when_a_validation_context_is_available()
+    {
+        var services = new ServiceCollection();
+        services.AddEverTask(options => options
+            .RegisterTasksFromAssembly(typeof(ScheduleExclusionValidationTests).Assembly)
+            .AddScheduleCalendar("holidays", calendar => calendar.OnDates(new DateOnly(2026, 12, 25))));
+        using var provider = services.BuildServiceProvider();
+        var registry = provider.GetRequiredService<ScheduleCalendarRegistry>();
+        var known = NewTask(new ScheduleExclusions { Calendars = ["holidays"] });
+        var unknown = NewTask(new ScheduleExclusions { Calendars = ["missing"] });
+
+        Should.NotThrow(() => known.Validate(new ScheduleValidationContext(null, registry)));
+        known.Exclusions.ShouldNotBeNull().Calendars.ShouldBe(["holidays"]);
+        known.Exclusions.ShouldNotBeNull().Dates.ShouldBeEmpty("validation judges the resolved union but persists names");
+        Should.Throw<ArgumentException>(() => unknown.Validate(new ScheduleValidationContext(null, registry)))
+            .Message.ShouldContain("missing");
     }
 
     [Fact]

@@ -51,6 +51,10 @@ public interface IIntervalSchedulerBuilder
     /// <inheritdoc cref="IBuildableSchedulerBuilder.ExceptWeekends"/>
     IIntervalSchedulerBuilder ExceptWeekends() => throw SchedulerBuilderDefaults.NotImplemented();
 
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.ExceptCalendar"/>
+    IIntervalSchedulerBuilder ExceptCalendar(params string[] names) =>
+        throw SchedulerBuilderDefaults.NotImplemented();
+
     /// <summary>
     /// Takes this schedule's occurrences from a registered <see cref="INextOccurrenceProvider"/> instead of
     /// from a cron expression or an interval — for the calendars the fluent API cannot express (business days,
@@ -135,6 +139,10 @@ public interface IHourSchedulerBuilder
 
     /// <inheritdoc cref="IBuildableSchedulerBuilder.ExceptWeekends"/>
     IHourSchedulerBuilder ExceptWeekends() => throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.ExceptCalendar"/>
+    IHourSchedulerBuilder ExceptCalendar(params string[] names) =>
+        throw SchedulerBuilderDefaults.NotImplemented();
 }
 
 public interface IMinuteSchedulerBuilder
@@ -165,6 +173,10 @@ public interface IMinuteSchedulerBuilder
 
     /// <inheritdoc cref="IBuildableSchedulerBuilder.ExceptWeekends"/>
     IMinuteSchedulerBuilder ExceptWeekends() => throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.ExceptCalendar"/>
+    IMinuteSchedulerBuilder ExceptCalendar(params string[] names) =>
+        throw SchedulerBuilderDefaults.NotImplemented();
 }
 
 public interface IDailyTimeSchedulerBuilder : IBuildableSchedulerBuilder
@@ -204,6 +216,10 @@ public interface IDailyTimeSchedulerBuilder : IBuildableSchedulerBuilder
 
     /// <inheritdoc cref="IBuildableSchedulerBuilder.ExceptWeekends"/>
     new IDailyTimeSchedulerBuilder ExceptWeekends() => throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.ExceptCalendar"/>
+    new IDailyTimeSchedulerBuilder ExceptCalendar(params string[] names) =>
+        throw SchedulerBuilderDefaults.NotImplemented();
 }
 
 /// <summary>
@@ -246,6 +262,10 @@ public interface IWeeklySchedulerBuilder : IBuildableSchedulerBuilder
 
     /// <inheritdoc cref="IBuildableSchedulerBuilder.ExceptWeekends"/>
     new IWeeklySchedulerBuilder ExceptWeekends() => throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.ExceptCalendar"/>
+    new IWeeklySchedulerBuilder ExceptCalendar(params string[] names) =>
+        throw SchedulerBuilderDefaults.NotImplemented();
 }
 
 public interface IMonthlySchedulerBuilder : IBuildableSchedulerBuilder
@@ -279,6 +299,10 @@ public interface IMonthlySchedulerBuilder : IBuildableSchedulerBuilder
 
     /// <inheritdoc cref="IBuildableSchedulerBuilder.ExceptWeekends"/>
     new IMonthlySchedulerBuilder ExceptWeekends() => throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <inheritdoc cref="IBuildableSchedulerBuilder.ExceptCalendar"/>
+    new IMonthlySchedulerBuilder ExceptCalendar(params string[] names) =>
+        throw SchedulerBuilderDefaults.NotImplemented();
 }
 
 public interface IThenableSchedulerBuilder
@@ -387,4 +411,11 @@ public interface IBuildableSchedulerBuilder
     /// <summary>Excludes Saturday and Sunday on the schedule's exclusion clock.</summary>
     /// <returns>The builder, for chaining.</returns>
     IBuildableSchedulerBuilder ExceptWeekends() => throw SchedulerBuilderDefaults.NotImplemented();
+
+    /// <summary>Adds host-registered exclusion calendars by their persisted names.</summary>
+    /// <param name="names">One or more case-sensitive calendar names. Calls are additive.</param>
+    /// <returns>The builder, for chaining.</returns>
+    /// <exception cref="ArgumentException">No name is supplied, or a name is empty.</exception>
+    IBuildableSchedulerBuilder ExceptCalendar(params string[] names) =>
+        throw SchedulerBuilderDefaults.NotImplemented();
 }

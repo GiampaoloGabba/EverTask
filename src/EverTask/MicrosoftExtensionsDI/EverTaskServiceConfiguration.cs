@@ -2,6 +2,7 @@
 using EverTask.RateLimiting;
 using EverTask.Scheduler.Occurrences;
 using EverTask.Scheduler.Recurring;
+using EverTask.Scheduler.Recurring.Builder;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -90,6 +91,8 @@ public class EverTaskServiceConfiguration
     /// provider its author did not name.
     /// </remarks>
     internal Dictionary<string, Type> OccurrenceProviders { get; } = new(StringComparer.Ordinal);
+
+    internal Dictionary<string, ScheduleExclusions> ScheduleCalendars { get; } = new(StringComparer.Ordinal);
 
     /// <summary>How long a schedule waits before asking a failed occurrence provider again (V4).</summary>
     internal OccurrenceProviderRetryOptions OccurrenceProviderRetry { get; } = new();
@@ -480,6 +483,41 @@ public class EverTaskServiceConfiguration
         ArgumentNullException.ThrowIfNull(configure);
 
         configure(OccurrenceProviderRetry);
+        return this;
+    }
+
+    /// <summary>Registers a reusable set of recurring-schedule exclusions under a persisted name.</summary>
+    /// <param name="name">Case-sensitive name used by <c>ExceptCalendar(name)</c>.</param>
+    /// <param name="configure">Adds the calendar's days, dates and absolute windows.</param>
+    /// <returns>The configuration instance for chaining.</returns>
+    /// <exception cref="ArgumentException">The trimmed name is empty or longer than 100 characters.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="configure"/> is null.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// The name is already registered, the callback adds nothing, or the calendar exceeds exclusion limits.
+    /// </exception>
+    public EverTaskServiceConfiguration AddScheduleCalendar(string name, Action<IExclusionBuilder> configure)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(configure);
+
+        name = name.Trim();
+        if (name.Length > ScheduleExclusionNormalizer.MaxCalendarNameLength)
+        {
+            throw new ArgumentException(
+                $"A schedule calendar name cannot exceed {ScheduleExclusionNormalizer.MaxCalendarNameLength} characters.",
+                nameof(name));
+        }
+
+        if (ScheduleCalendars.ContainsKey(name))
+            throw new InvalidOperationException($"A schedule calendar named '{name}' is already registered.");
+
+        var builder = new ExclusionBuilder();
+        configure(builder);
+        var calendar = builder.Build(null);
+        if (ScheduleExclusionNormalizer.Normalize(calendar))
+            throw new InvalidOperationException($"The schedule calendar '{name}' adds no exclusion.");
+
+        ScheduleCalendars.Add(name, calendar);
         return this;
     }
 

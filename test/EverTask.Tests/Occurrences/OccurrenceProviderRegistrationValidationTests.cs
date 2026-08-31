@@ -1,4 +1,5 @@
 using EverTask.Scheduler.Occurrences;
+using EverTask.Scheduler.Recurring;
 using EverTask.Scheduler.Recurring.Builder;
 
 namespace EverTask.Tests.Occurrences;
@@ -76,7 +77,8 @@ public class OccurrenceProviderRegistrationValidationTests
         builtByHand.Schedule().UseOccurrenceProvider(Key);
 
         Should.NotThrow(() => builtByHand.RecurringTask
-                                         .Validate(provider.GetRequiredService<OccurrenceProviderRegistry>()));
+                                         .Validate(new ScheduleValidationContext(
+                                             provider.GetRequiredService<OccurrenceProviderRegistry>(), null)));
     }
 
     // ---- The key the builder is given -------------------------------------------------------------

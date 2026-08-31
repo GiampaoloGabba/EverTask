@@ -2,7 +2,7 @@ using System.Text.Json.Serialization;
 
 namespace EverTask.Scheduler.Recurring;
 
-/// <summary>The fixed days, dates and absolute windows removed from a recurring schedule's grid.</summary>
+/// <summary>The fixed and named exclusions removed from a recurring schedule's grid.</summary>
 public sealed class ScheduleExclusions
 {
     /// <summary>Public and parameterless for the persisted schedule serializer.</summary>
@@ -17,6 +17,9 @@ public sealed class ScheduleExclusions
 
     /// <summary>Absolute half-open windows.</summary>
     public ExclusionRange[] Ranges { get; set; } = [];
+
+    /// <summary>Names of host-registered exclusion calendars.</summary>
+    public string[] Calendars { get; set; } = [];
 }
 
 /// <summary>An absolute half-open exclusion window <c>[FromUtc, ToUtc)</c>.</summary>

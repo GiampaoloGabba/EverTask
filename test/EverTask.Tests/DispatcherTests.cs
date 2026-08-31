@@ -59,6 +59,10 @@ public class DispatcherTests
         serviceProviderMock.Setup(s => s.GetService(typeof(IGateInvalidationRegistry)))
                            .Returns(_gateInvalidationRegistry);
 
+        serviceProviderMock.Setup(s => s.GetService(typeof(ScheduleCalendarRegistry)))
+                           .Returns(ScheduleCalendarRegistry.Create(
+                               new Dictionary<string, ScheduleExclusions>(StringComparer.Ordinal)));
+
         // Setup the queue manager to return the default queue
         _workerQueueManagerMock.Setup(x => x.GetQueue("default")).Returns(_workerQueueMock.Object);
 
@@ -125,6 +129,23 @@ public class DispatcherTests
 
         await Should.ThrowAsync<Exception>(() =>
             _dispatcher.ExecuteDispatch(new TestTaskRequest2(), null, recurring));
+    }
+
+    [Fact]
+    public async Task Should_reject_an_unknown_exclusion_calendar_at_dispatch()
+    {
+        var recurring = new RecurringTask
+        {
+            SecondInterval = new SecondInterval(30),
+            Exclusions = new ScheduleExclusions { Calendars = ["missing"] }
+        };
+
+        var refusal = await Should.ThrowAsync<ArgumentException>(() =>
+            _dispatcher.ExecuteDispatch(new TestTaskRequest2(), null, recurring));
+
+        refusal.Message.ShouldContain("missing");
+        _workerQueueMock.Verify(q => q.Queue(It.IsAny<TaskHandlerExecutor>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Fact]

@@ -20,6 +20,13 @@ namespace EverTask.Tests.Serialization;
 /// </remarks>
 public class ConsumerCompatibilityTests : IsolatedIntegrationTestBase
 {
+    private sealed class LegacyBuildableSchedulerBuilder : IBuildableSchedulerBuilder
+    {
+        public IBuildableSchedulerBuilder RunUntil(DateTimeOffset dateTimeOffset) => this;
+
+        public void MaxRuns(int maxRuns) { }
+    }
+
     /// <summary>
     /// A storage implementing ONLY what the version before durable occurrences required. It exists to be
     /// COMPILED: the day one of the new operations stops being a default member, this class fails to build
@@ -90,6 +97,14 @@ public class ConsumerCompatibilityTests : IsolatedIntegrationTestBase
             Task.FromResult<IReadOnlyList<TaskExecutionLog>>([]);
 
         private QueuedTask Find(Guid id) => Rows.First(r => r.Id == id);
+    }
+
+    [Fact]
+    public void Should_keep_ExceptCalendar_as_a_default_interface_member_for_a_legacy_custom_builder()
+    {
+        IBuildableSchedulerBuilder builder = new LegacyBuildableSchedulerBuilder();
+
+        Should.Throw<NotSupportedException>(() => builder.ExceptCalendar("holidays"));
     }
 
     private static QueuedTask NewRow() => new()

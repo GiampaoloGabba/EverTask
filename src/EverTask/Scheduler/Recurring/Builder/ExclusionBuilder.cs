@@ -42,7 +42,8 @@ internal sealed class ExclusionBuilder : IExclusionBuilder
         {
             Days = (existing?.Days ?? []).Concat(_days).Distinct().ToArray(),
             Dates = (existing?.Dates ?? []).Concat(_dates).Distinct().ToArray(),
-            Ranges = (existing?.Ranges ?? []).Concat(_ranges).ToArray()
+            Ranges = (existing?.Ranges ?? []).Concat(_ranges).ToArray(),
+            Calendars = (existing?.Calendars ?? []).ToArray()
         };
     }
 }

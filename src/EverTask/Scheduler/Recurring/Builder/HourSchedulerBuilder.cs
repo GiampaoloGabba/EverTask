@@ -69,4 +69,10 @@ public class HourSchedulerBuilder(RecurringTask task, TimeProvider? timeProvider
         ScheduleModifiers.ExceptWeekends(task);
         return this;
     }
+
+    public IHourSchedulerBuilder ExceptCalendar(params string[] names)
+    {
+        ScheduleModifiers.ExceptCalendar(task, names);
+        return this;
+    }
 }

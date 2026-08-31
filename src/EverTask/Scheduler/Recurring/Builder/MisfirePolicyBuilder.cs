@@ -97,4 +97,29 @@ internal static class ScheduleModifiers
 
     internal static void ExceptWeekends(RecurringTask task) =>
         Except(task, exclusions => exclusions.OnDays(DayOfWeek.Saturday, DayOfWeek.Sunday));
+
+    internal static void ExceptCalendar(RecurringTask task, params string[] names)
+    {
+        ArgumentNullException.ThrowIfNull(names);
+        if (names.Length == 0)
+            throw new ArgumentException("At least one exclusion calendar name is required.", nameof(names));
+
+        var normalized = new string[names.Length];
+        for (var index = 0; index < names.Length; index++)
+        {
+            if (string.IsNullOrWhiteSpace(names[index]))
+                throw new ArgumentException("An exclusion calendar name cannot be empty.", nameof(names));
+
+            normalized[index] = names[index].Trim();
+        }
+
+        var existing = task.Exclusions;
+        task.Exclusions = new ScheduleExclusions
+        {
+            Days = (existing?.Days ?? []).ToArray(),
+            Dates = (existing?.Dates ?? []).ToArray(),
+            Ranges = (existing?.Ranges ?? []).ToArray(),
+            Calendars = (existing?.Calendars ?? []).Concat(normalized).ToArray()
+        };
+    }
 }

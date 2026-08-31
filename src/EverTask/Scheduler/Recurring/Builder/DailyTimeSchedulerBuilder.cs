@@ -113,6 +113,12 @@ public class DailyTimeSchedulerBuilder(RecurringTask task, TimeProvider? timePro
         return this;
     }
 
+    public IDailyTimeSchedulerBuilder ExceptCalendar(params string[] names)
+    {
+        ScheduleModifiers.ExceptCalendar(task, names);
+        return this;
+    }
+
     IBuildableSchedulerBuilder IBuildableSchedulerBuilder.OnMisfire(Action<IMisfirePolicyBuilder> configure) =>
         OnMisfire(configure);
 
@@ -125,4 +131,7 @@ public class DailyTimeSchedulerBuilder(RecurringTask task, TimeProvider? timePro
         Except(configure);
 
     IBuildableSchedulerBuilder IBuildableSchedulerBuilder.ExceptWeekends() => ExceptWeekends();
+
+    IBuildableSchedulerBuilder IBuildableSchedulerBuilder.ExceptCalendar(params string[] names) =>
+        ExceptCalendar(names);
 }

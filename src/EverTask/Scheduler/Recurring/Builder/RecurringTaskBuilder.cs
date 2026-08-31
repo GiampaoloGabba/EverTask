@@ -94,4 +94,10 @@ public class BuildableSchedulerBuilder(RecurringTask task, TimeProvider? timePro
         ScheduleModifiers.ExceptWeekends(task);
         return new BuildableSchedulerBuilder(task, timeProvider);
     }
+
+    public IBuildableSchedulerBuilder ExceptCalendar(params string[] names)
+    {
+        ScheduleModifiers.ExceptCalendar(task, names);
+        return new BuildableSchedulerBuilder(task, timeProvider);
+    }
 }

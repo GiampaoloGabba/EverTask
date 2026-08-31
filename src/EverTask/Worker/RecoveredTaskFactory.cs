@@ -90,7 +90,7 @@ internal static class RecoveredTaskFactory
                 // OnDays/OnHours/OnMonths, a negative Interval) must be treated like un-deserializable
                 // metadata — validated HERE so the caller's poison guard sees it, instead of throwing later at
                 // next-run (a bounded per-restart failure) or scheduling a wrong/never-firing occurrence.
-                recurring?.Validate(providers);
+                recurring?.Validate(new ScheduleValidationContext(providers, null));
             }
         }
         catch (Exception e)

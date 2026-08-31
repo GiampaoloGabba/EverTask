@@ -47,6 +47,8 @@ public class Dispatcher(
     private bool _scheduleVersionsResolved;
     private OccurrenceProviderRegistry? _providers;
     private bool _providersResolved;
+    private ScheduleCalendarRegistry? _calendars;
+    private bool _calendarsResolved;
     private OccurrenceProviderRetryRegistry? _providerRetries;
     private bool _providerRetriesResolved;
 
@@ -124,6 +126,20 @@ public class Dispatcher(
             }
 
             return _providers;
+        }
+    }
+
+    private ScheduleCalendarRegistry? Calendars
+    {
+        get
+        {
+            if (!_calendarsResolved)
+            {
+                _calendars = serviceProvider.GetService<ScheduleCalendarRegistry>();
+                _calendarsResolved = true;
+            }
+
+            return _calendars;
         }
     }
 
@@ -294,7 +310,7 @@ public class Dispatcher(
     /// does not support. Shared with the runtime schedule manager, which accepts a definition the same way.
     /// </summary>
     /// <remarks>
-    /// The key check is also in <see cref="RecurringTask.Validate(OccurrenceProviderRegistry)"/>, which poisons
+    /// The key check is also in the contextual schedule validation, which poisons
     /// a persisted row naming a key this build no longer registers; here it refuses the dispatch while the
     /// caller is still holding it. The determinism check is a DISPATCH-time gate and nothing else: it resolves
     /// the provider to ask it, and neither of the two things it can throw is an
@@ -390,7 +406,7 @@ public class Dispatcher(
         // interval, or an OccurrenceMode outside the defined values, is read as valid all the way down to
         // IsScheduleOnly, which only ever compares against Durable. The registry is handed over so an
         // unregistered provider key is refused here too, with the key in the message.
-        recurring?.Validate(Providers);
+        recurring?.Validate(new ScheduleValidationContext(Providers, Calendars));
 
         // A durable schedule needs the atomic occurrence operations, and there is no half-atomic emulation to
         // degrade to: a storage without them would leave occurrences without their cursor advance, or the

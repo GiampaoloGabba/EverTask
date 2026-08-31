@@ -35,6 +35,7 @@ internal sealed class TaskScheduleManager(
     TimeProvider timeProvider,
     ITaskStorage? storage = null,
     OccurrenceProviderRegistry? providers = null,
+    ScheduleCalendarRegistry? calendars = null,
     OccurrenceMaterializer? materializer = null,
     IGateInvalidationRegistry? gateInvalidation = null,
     IEverTaskWorkerExecutor? workerExecutor = null,
@@ -364,7 +365,7 @@ internal sealed class TaskScheduleManager(
         var definition = builder.RecurringTask;
 
         ScheduleTimeZone.ApplyDefault(definition, options.DefaultScheduleTimeZoneId);
-        definition.Validate(providers);
+        definition.Validate(new ScheduleValidationContext(providers, calendars));
 
         // Refused here, where the caller is still holding the call, for the same reason a dispatch refuses it:
         // there is no half-atomic emulation of the occurrence operations to degrade to.
