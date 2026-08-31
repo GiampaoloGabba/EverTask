@@ -19,7 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `INextOccurrenceProvider` and `RebaseFromCursor` are deliberately refused with exclusions.
 - **Search exhaustion is a failure, never a false end-of-series.** New definitions surface it before any
   write; startup recovery uses its bounded poison counter; materialization re-parks; a live advance records
-  the completed run with its cursor retained and retries under doubling backoff.
+  the completed run with its cursor retained and retries under doubling backoff. The retained run survives a
+  restart through a marker written beside the run in the schedule row's `RuntimeInfo`, so the slot that
+  already executed is never delivered twice; the deferral and a failed park are announced by monitoring
+  events beside their log lines.
+- **`ITaskStorage` grew `RecordRecurringRunForExclusionRetry`**: one commit recording a real run with its
+  cursor retained plus the retry marker. It arrives as a default member composed of existing operations, so
+  custom stores keep compiling; the built-in stores override it atomically, and a custom store can do the
+  same to close the two-write crash window the default keeps.
 
 ### Added (monitoring the durable side, #30)
 

@@ -110,8 +110,13 @@ Fluent builder (`Builder/RecurringTaskBuilder.cs`) + occurrence math (`Recurring
     ingress only, never at evaluation). Spending the 200k-candidate budget throws
     `ExclusionSearchBudgetExceededException`, NEVER null — "no occurrence" is mathematics, a spent budget is
     not: ingress refuses, recovery takes the bounded-attempt poison route, the live advance records the run
-    FIRST (cursor retained; `ScheduleRunAlreadyRecorded` stops a storage-less retry double-counting; a lost
-    versioned advance goes to `ReparkFromRowAsync`). A stored cursor is normalized via `NormalizeCursorAsync`
+    FIRST — cursor retained, in ONE commit with the retry marker (`RecordRecurringRunForExclusionRetry`,
+    `ScheduleRuntimeInfo.ExclusionAdvanceRetry`, keyed on cursor+runCount so it self-invalidates) — and the
+    retry/restart RESUMES THE ADVANCE from that cursor, never re-deciding it as pending work
+    (`ScheduleRunAlreadyRecorded` in-process, the marker across restarts; a lost versioned advance goes to
+    `ReparkFromRowAsync`). `FirstOccurrenceOnOrAfter` throws the same typed failure on its probe cap when
+    exclusions are present — a cap-hit `null` read as "grid over" silently finalized a live series. A stored
+    cursor is normalized via `NormalizeCursorAsync`
     (inclusive; a pending first-run override is exempt by PROVENANCE — `SpecificRunTime` only on cursor
     equality); the durable planner persists the normalized cursor through the cursor-only CAS, inline
     recovery re-derives and never writes. `ScheduleRebase` refuses exclusions on either side.

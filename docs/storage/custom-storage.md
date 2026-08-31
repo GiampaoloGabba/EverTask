@@ -178,6 +178,7 @@ ending a schedule on purpose. Its schedules just cannot be changed while they ru
 | `TryHaltSchedule` | Write the halted marker, guarded by version + cursor + status |
 | `TryReviveCancelledSchedule` | Take a `Cancelled` schedule back to `WaitingQueue` and bump its version, guarded by status + version. The one member here whose default works; see the obligation above |
 | `TrySetTerminalOutcome` | Write the terminal status of a delivery that ended, only while the row still carries the version that delivery ran and — unless the outcome is itself a cancellation — is not `Cancelled` |
+| `RecordRecurringRunForExclusionRetry` | Record one real run with its cursor RETAINED and write the exclusion-retry marker into `RuntimeInfo`, in one commit (version-guarded when a version is passed). The default composes the run update and the marker write in two commits, which reopens a small crash window between them — override it atomically if your store can |
 | `UpdateCurrentRun` / `CompleteRecurringRun` (version overloads) | Advance only while the schedule version matches |
 
 `MaterializeOccurrence` must also classify what it finds the way every built-in store does, in this order:

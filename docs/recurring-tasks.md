@@ -81,7 +81,8 @@ Exclusions compose with cron and every built-in interval. They automatically app
 filtered grid. They cannot be combined with `INextOccurrenceProvider`, whose implementation owns its own
 calendar. `RescheduleMode.RebaseFromCursor` is also refused when either definition has exclusions; use
 `RecalculateFromNow`. A search that cannot find a usable slot within the fixed evaluation budget fails
-explicitly—it is never treated as the end of the series.
+explicitly, and the schedule retries under a doubling backoff announced by monitoring events; it is never
+treated as the end of the series.
 
 ## Topics
 

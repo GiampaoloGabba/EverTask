@@ -182,6 +182,31 @@ await dispatcher.Dispatch(
     builder => builder.Schedule().EveryWeek().OnDays(days).AtTime(new TimeOnly(9, 0)).RunUntil(DateTimeOffset.UtcNow.AddDays(30)));
 ```
 
+### Excluding weekends, holidays and maintenance windows
+
+Any built-in interval or cron grid can subtract fixed moments — the slots simply never exist, so they
+consume no run, no misfire count and no durable row:
+
+```csharp
+// Daily report at 8:00, but never on weekends, Christmas, or during the maintenance window
+await dispatcher.Dispatch(
+    new DailyReportTask(),
+    builder => builder.Schedule().EveryDay().AtTime(new TimeOnly(8, 0))
+        .Except(e => e
+            .OnDays(DayOfWeek.Saturday, DayOfWeek.Sunday)
+            .OnDates(new DateOnly(2026, 12, 25))
+            .Between(maintenanceStart, maintenanceEnd)));
+
+// Metrics every 4 hours, weekdays only - the zone decides what "weekend" means
+await dispatcher.Dispatch(
+    new MetricsRollupTask(),
+    builder => builder.Schedule().Every(4).Hours()
+        .InTimeZone("Europe/Rome").ExceptWeekends());
+```
+
+Exclusions are part of the persisted definition and compose with misfire policies, catch-up, backfill and
+durable occurrences. Details: [Recurring Tasks](docs/recurring-tasks.md#excluding-moments).
+
 ### Time Zones and Durable Occurrences
 
 A calendar schedule can name the zone its hours are read on, and a downtime no longer has to lose the slots it
