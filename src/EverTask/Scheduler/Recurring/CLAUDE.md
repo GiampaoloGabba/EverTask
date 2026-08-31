@@ -119,7 +119,16 @@ Fluent builder (`Builder/RecurringTaskBuilder.cs`) + occurrence math (`Recurring
     cursor is normalized via `NormalizeCursorAsync`
     (inclusive; a pending first-run override is exempt by PROVENANCE — `SpecificRunTime` only on cursor
     equality); the durable planner persists the normalized cursor through the cursor-only CAS, inline
-    recovery re-derives and never writes. `ScheduleRebase` refuses exclusions on either side.
+    recovery re-derives and never writes. `ScheduleRebase` refuses exclusions on either side. NAMED
+    CALENDARS (`ExceptCalendar`, `ScheduleExclusions.Calendars`) resolve through the frozen
+    `ScheduleCalendarRegistry` snapshot AddEverTask creates right after the configuration callback (never
+    lazily): the EVALUATOR installs the flattened union on a transient clone (`WithExclusions`,
+    `Calendars` emptied) and the door REFUSES an unresolved definition — an unknown or unresolved name
+    never evaluates as "no exclusions". `ScheduleValidationContext` (providers + calendars) travels every
+    row-rebuild path; an unknown name is refused at ingress and poisoned at recovery. Calendar edits are
+    FORWARD-ONLY (never rewind a cursor, revoke a materialized occurrence, or clear a halt; an edit that
+    invalidates the resolved union poisons at recovery). Caps: 16 names per schedule pre-lookup, 1000
+    dates+ranges and the all-7-days refusal judged on the RESOLVED union.
 
 Tests (`test/EverTask.Tests/`): `RecurringTests/` — `Builders/`, `Intervals/`, `TimeZones/` (mapping, DST,
 `CronOracleTests`, id normalization), `RecurringTaskScheduleDriftTests`, `RecurringCalendarSkipForwardTests`,

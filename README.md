@@ -87,7 +87,6 @@ dotnet add package EverTask.Storage.SqlServer  # Or EverTask.Storage.Postgres / 
 builder.Services.AddEverTask(opt =>
 {
     opt.RegisterTasksFromAssembly(typeof(Program).Assembly);
-    opt.AddScheduleCalendar("it-holidays", cal => cal.OnDates(new DateOnly(2026, 12, 25)));
 })
 .AddSqlServerStorage(builder.Configuration.GetConnectionString("EverTaskDb"));
 ```
@@ -204,6 +203,16 @@ await dispatcher.Dispatch(
     new MetricsRollupTask(),
     builder => builder.Schedule().Every(4).Hours()
         .InTimeZone("Europe/Rome").ExceptWeekends());
+
+// Or define the holidays ONCE at the host and reuse them by name
+services.AddEverTask(opt => opt
+    .AddScheduleCalendar("it-holidays", cal => cal
+        .OnDates(new DateOnly(2026, 1, 1), new DateOnly(2026, 12, 25), new DateOnly(2026, 12, 26))));
+
+await dispatcher.Dispatch(
+    new DailyReportTask(),
+    builder => builder.Schedule().EveryDay().AtTime(new TimeOnly(8, 0))
+        .ExceptCalendar("it-holidays"));
 ```
 
 Exclusions are part of the persisted definition and compose with misfire policies, catch-up, backfill and
