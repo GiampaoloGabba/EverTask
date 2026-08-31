@@ -7,732 +7,209 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [4.0.0] - 2026-08-31
 
-### Changed (storage and dispatch performance, #15)
+A major release built around the durable-occurrences epic ([#23]). A recurring schedule can now
+materialize every due slot as its own task row, handle downtime through explicit misfire policies, run on
+a real time zone, take its grid from a custom calendar ([#29]), skip holidays and blackout windows
+([#36]), and be rescheduled, resumed or cancelled while the application runs; the dashboard and the REST
+API cover all of it. Beyond scheduling: handlers gain an execution context ([#25]), the storage write
+path is measurably faster (+68% throughput, -40% allocations per task), logging and the monitoring API
+each got a dedicated pass, and the license is now MIT. Entries here are deliberately short, the linked
+issues and docs pages carry the detail, and the breaking changes are collected first.
 
-The four storage writes of a durable task's lifecycle were 94.7% of its allocation. This batch attacks all
-four; the measured pass lives in `benchmarks/RESULTS.md` (P-L, P-M, P-N). Clean A/B on Postgres at
-parallelism 16: **2,792 to 4,694 tasks/s (+68%), median latency down 22%, 80 to 48 KB allocated per task
-(-40%)**. The p99 is higher in absolute terms (3.0 to 5.7 ms) because 68% more tasks are in flight on the
-same pool; at matched load the tail is expected at or below the old one, and the pre-release soak measures
-exactly that. None of it changes a public contract; one audit-trail detail changed deliberately, noted below.
+### Breaking changes
 
-- **An immediate dispatch is born `Queued` (#16).** The row used to be persisted as `WaitingQueue`, handed
-  to the channel, then transitioned with a second storage write. It is now persisted `Queued` directly and
-  that write is gone: one round-trip instead of two before a task can run. A full queue reverts the row to
-  `WaitingQueue` through the existing dropped-delivery path, so recovery semantics are unchanged, and a
-  rate-limit deferral still transitions back through `Queued` when its slot fires. The one visible change:
-  at `AuditLevel.Full` an immediate task no longer writes a separate `WaitingQueue` to `Queued` audit pair,
-  because it never passes through `WaitingQueue` at all. Scheduled, delayed and recurring dispatches keep
-  their current statuses and audits.
-- **`Persist` writes through a parameterized INSERT generated from the EF model (#17).** The tracked
-  `Add` + `SaveChanges` path built an entity snapshot and a command batch for a ~20-column row on every
-  task: 37-40 KB per call. The statement is now generated once per storage instance from the model itself
-  (column list, identifier quoting, value converters), so every provider shares one code path and a mapped
-  column missing from the statement is a startup exception, not a wrong row. A consumer-supplied
-  `ITaskStoreDbContext` whose model the generator cannot handle (shadow, owned or store-generated
-  properties) keeps the tracked path unchanged.
-- **The base relational `SetStatus` skips its transaction when no audit row is staged (#19).** A single
-  conditional UPDATE is atomic on its own; the `BEGIN`/`COMMIT` around it was pure overhead, and on SQLite
-  it held the write lock across three round-trips, so every concurrent writer landed in busy backoff. The
-  no-audit arm went from 16 to 433 tasks/s and its median write from 155 ms to 3.9 ms. Audited transitions
-  keep the transaction; SQL Server, PostgreSQL and MySQL run their procedures and CTEs exactly as before.
-- **The occurrence reconcile pass reads ids, not rows (#50).** Every kick of a durable schedule loaded all
-  non-terminal children whole, payload included, to check which were still alive. `ITaskStorage` grew
-  `GetOccurrenceIds` (a default member, so custom stores keep compiling; the built-in stores project over
-  the `(ParentTaskId, Status)` index) and the full row is fetched only for the stale minority that needs
-  rescuing.
-- **Provider SQL is built once per storage instance (#18).** PostgreSQL re-interpolated a ~700-character
-  CTE on every status write, SQL Server its `EXEC` strings. Both are now cached at construction; the
-  statements are byte-identical. The measured remainder of #18 (raw ADO commands instead of the pooled
-  context) was deliberately declined to leave connection handling untouched.
-- **An occurrence parses its `RuntimeInfo` once per executor (#53).** The JSON was re-parsed on every
-  access from the slot, run-number and monitoring reads of one delivery.
-
-### Added (recurring exclusions, #36)
-
-- **Named exclusion calendars reuse one frozen holiday or blackout set across schedules.** Register with
-  `AddScheduleCalendar(name, ...)` and reference it additively with `ExceptCalendar(names)`. Only names are
-  persisted; evaluation resolves the inline-and-named union once against the immutable host snapshot. Calendar
-  edits apply after restart and only forward from the standing cursor; unknown or newly invalid unions are
-  refused at ingress and poison rebuilt schedules instead of running without exclusions.
-- **Built-in recurring grids can exclude fixed moments.** `.Except(...)` unions whole weekdays, dates and
-  absolute half-open windows; `.ExceptWeekends()` is the Saturday/Sunday shortcut. Exclusions are serialized
-  with the definition and apply inside the occurrence grid, so excluded slots consume no run, misfire count,
-  durable row, audit or event. First-run overrides remain explicit and unfiltered.
-- **The filtered grid works throughout the pipeline:** cron and every built-in interval, time-zone/DST date
-  semantics, skip-forward and recovery grace, CatchUp/FireOnce/Skip, SkipOldest, backfill, durable
-  materialization, cursor normalization after definition drift, and runtime `RecalculateFromNow`.
-  `INextOccurrenceProvider` and `RebaseFromCursor` are deliberately refused with exclusions.
-- **Search exhaustion is a failure, never a false end-of-series.** New definitions surface it before any
-  write; startup recovery uses its bounded poison counter; materialization re-parks; a live advance records
-  the completed run with its cursor retained and retries under doubling backoff. The retained run survives a
-  restart through a marker written beside the run in the schedule row's `RuntimeInfo`, so the slot that
-  already executed is never delivered twice; the deferral and a failed park are announced by monitoring
-  events beside their log lines.
-- **`ITaskStorage` grew `RecordRecurringRunForExclusionRetry`**: one commit recording a real run with its
-  cursor retained plus the retry marker. It arrives as a default member composed of existing operations, so
-  custom stores keep compiling; the built-in stores override it atomically, and a custom store can do the
-  same to close the two-write crash window the default keeps.
-
-### Added (monitoring the durable side, #30)
-
-- **The dashboard and the REST API report occurrences.** A task's detail says which schedule it belongs to,
-  the nominal slot it stands for, the run of the series it is, and the run of missed slots it was created out
-  of; a schedule row says how it produces its occurrences, which misfire policy it carries, the zone its
-  calendar is read on, and the version its definition is at. `GET /tasks/{id}/occurrences` lists what a
-  durable schedule materialized, newest slot first; `GET /tasks` filters on `parentTaskId`,
-  `onlyOccurrences` and `onlyCatchUp`; `GET /tasks/counts` counts the occurrences apart from the rows that
-  are not one. Every field is added as an `init` property, never as an appended constructor parameter, so
-  the DTO signatures a consumer already builds are unchanged.
-- **The overview answers "what does this host still owe".** `catchUpBacklog` reports the occurrences of every
-  durable schedule by state (pending, active, failed, skipped, completed), plus the oldest slot that has not
-  started, how far behind it already is, and how many schedules have halted their own catch-up. The dashboard
-  shows the same as a card, and the schedule detail grows an Occurrences tab with catch-up and lateness badges
-  and its own paging, so a schedule with hundreds of occurrences is readable past its most recent page.
-  Slots a schedule DROPPED are deliberately absent: they never became rows, and they are reported when they
-  happen, by the `OccurrenceSkipped` event.
-- **The API stays read-only by default.** Everything #30 added reports; changing a schedule at runtime goes
-  through `ITaskScheduleManager` in your own code, behind your own authorization. The three write endpoints
-  the same release later added are opt-in and carry a credential of their own. See
-  *Added (opt-in management endpoints, #42)* below.
-- **Task DTOs carry `startedAtUtc`**, the instant a row's last (or current) run began. It is the term to
-  measure lateness with: `lastExecutionUtc` is written on terminal transitions and so says when a run ENDED,
-  which reported a punctual occurrence with a slow handler as late by its whole execution time. The instant
-  comes from the row's own `InProgress` transition in the audit trail, so a run STILL RUNNING answers for
-  itself; a run that finished is derived from its end less its measured duration when nothing recorded that
-  transition, and everything with no measured start reports nothing instead of an invented instant: a row
-  that never ran, a failure or a finalization (neither records a duration), a row waiting for its next
-  delivery. The schedule fields (`scheduleVersion` included, now nullable) are absent together on a task
-  that belongs to no schedule, instead of one of them reading 0 on every row in the store.
-- **Four new reads on `ITaskStorage`**: `GetOccurrencesPage`, `GetLastRunStarts`, `GetStatusAuditsPage` and
-  `GetRunsAuditsPage` (default members, so a custom storage keeps working). The occurrence and audit lists are
-  ordered, counted and sliced by the storage over the indexes their contracts already need, rather than read
-  whole and paged in memory. The other three read the audit trail, which nothing else can: no query
-  materializes `QueuedTask.StatusAudits` or `QueuedTask.RunsAudits`, so the recorded start of a page of rows,
-  the status-history tab and the runs-history tab answered over the in-memory store alone and handed back
-  nothing on SQL Server, PostgreSQL, MySQL and SQLite. Each is one indexed query over the audit table.
-- **`avgExecutionTimeMs` on the overview** is the mean of the durations the worker measured around the runs,
-  the same column `executionTimeMs` reports per task and the same average the queue metrics already used. It
-  was computed from the status audit trail, which made the tile read `0.0` on every relational store and at
-  every audit level below `Full`. Runs nobody measured are left out rather than counted as zero.
-- **A catch-up says where a replay begins and when it is over**: `Catch-up of schedule … started from slot …`
-  and `… completed: N occurrence(s) materialized …`, one pair per episode. Everything between them is
-  reported per occurrence, which cannot say how big a backlog was or that it has drained. `docs/monitoring-events.md`
-  now also lists the three `Error` events the durable side publishes for a row this build cannot rebuild and
-  for a provider re-park that found nowhere to park.
-
-### Added (opt-in management endpoints, #42)
-
-- **Three write endpoints, off by default and behind a credential of their own.**
-  `POST /api/management/tasks/{id}/requeue`, `/resume` and `/cancel` call `ITaskScheduleManager` for you:
-  requeue a failed occurrence, release a halted catch-up, cancel a schedule. They exist only when
-  `EnableManagementEndpoints` is `true`. While it is false the whole prefix answers `404` and the routes are
-  absent from the OpenAPI document, so an existing deployment is unchanged and reads exactly as it did.
-- **Reading and operating are two different credentials.** The dashboard username/password and the magic link
-  keep granting read; only the new `ManagementUsername` / `ManagementPassword` pair grants operate, and the
-  role travels on the same JWT (`LoginResponse.CanManage`, `TokenValidationResponse.CanManage` say which one
-  a token holds). `ManagementAuthorization` replaces the role check entirely when a host wants to decide for
-  itself. Turning monitoring authentication off does NOT open the write surface: without a host hook the
-  endpoints answer `403`. Credentials are compared in fixed time. The built-in surface is Bearer-only; a
-  host hook may use ambient credentials, which the request-provenance check below protects.
-- **A standalone monitoring host has no scheduler to command**, so the endpoints answer `501` there rather
-  than pretending.
-
-### Security (monitoring API)
-
-- **Management POSTs reject cross-site browser requests.** `Sec-Fetch-Site` accepts only same-origin,
-  same-site and none; when fetch metadata is absent, `Origin` must match the request origin. Requests with
-  neither header remain available to non-browser clients. This closes the CSRF path when a host's
-  `ManagementAuthorization` hook relies on an ambient cookie principal; the built-in Bearer flow is
-  unchanged.
-- **IP whitelist parsing is fail-closed.** CIDR prefixes outside `0..32` for IPv4 or `0..128` for IPv6 no
-  longer produce a match, and IPv4-mapped IPv6 client addresses now match equivalent IPv4 exact and CIDR
-  entries. The client address remains `Connection.RemoteIpAddress`; forwarded headers are still ignored
-  unless the host's trusted-proxy middleware rewrites that address.
-- **Paged audit, occurrence and execution-log reads cap `take` at 500**, preventing one request from asking
-  for an unbounded response.
-- **Authenticated SignalR monitoring connections end when their JWT expires.** The validated expiry is
-  carried from the endpoint guard into a hub-specific filter, which aborts that connection at the expiry
-  instant. Non-expiring tokens and monitoring hosts with authentication disabled keep their existing
-  behavior.
-
-### Changed (breaking: the two audit endpoints are paged, #44)
-
-- **`GET /tasks/{id}/status-audit` and `GET /tasks/{id}/runs-audit` return an object, not an array.** Both
-  now take `skip` / `take` like `/execution-logs` and answer `{ audits, totalCount, skip, take }`. A client
-  deserializing the body as a list (`JsonSerializer.Deserialize<List<StatusAuditDto>>(...)`) throws at
-  runtime after the upgrade and has to read `audits` instead. The reason is a long-lived recurring row: it
-  accumulates one transition per state per run, and the tab that shows the first twenty of them was
-  transferring the whole series to do it.
-- **`ITaskQueryService.GetStatusAuditAsync` / `GetRunsAuditAsync` change return type** from
-  `List<StatusAuditDto>` / `List<RunsAuditDto>` to `StatusAuditsResponse` / `RunsAuditsResponse`. A host that
-  implements or decorates that interface has to follow the signature.
-- **`TaskDetailDto.StatusAudits` / `RunsAudits` now carry the FIRST PAGE** (100 entries) rather than the whole
-  trail, with `StatusAuditsTotalCount` / `RunsAuditsTotalCount` beside them and the two endpoints for the
-  rest. The dashboard's detail grows Previous/Next on both tabs.
-- Two new `ITaskStorage` reads, `GetStatusAuditsPage` and `GetRunsAuditsPage`, as default members that read
-  the row's audit data directly, so a custom storage keeps working; the EF base, the in-memory store and the
-  SQL Server deadlock re-read override them with an indexed count and slice.
-
-### Added (occurrence providers, #29)
-
-- **A schedule can take its grid from your own calendar.** Implement `INextOccurrenceProvider` (one method
-  answering "which occurrence comes after this instant"), register it with
-  `AddOccurrenceProvider<T>("key")`, and select it with `.UseOccurrenceProvider("key", config?)`. Business
-  days, a holiday table, opening hours: the schedules no interval and no cron expression can express. The row
-  persists the KEY and an opaque config string, never a type name a rename would orphan.
-- **Everything else keeps working over it**: misfire policies, durable occurrences, `InTimeZone` (whose id the
-  provider is handed), `MaxRuns` / `RunUntil`, skip-forward after a downtime, and
-  `ITaskScheduleManager.ReevaluateSchedule`. The two exceptions are stated rather than discovered:
-  `CatchUpOverflowPolicy.SkipOldest` needs a provider that declares `IsDeterministic`, and
-  `RescheduleMode.RebaseFromCursor` has no nominal period to carry.
-- **A provider that cannot answer is treated as an outage, not as a corrupt schedule.** Nothing is written,
-  the cursor stays exactly where it was, the schedule is parked to ask again after a backoff that doubles per
-  consecutive failure (`SetOccurrenceProviderRetry`, 1 minute to 15 minutes by default), and a warning event
-  carries the key and the failure count. The recovery poison counter is not touched: a calendar that is down
-  for an hour cannot mark a schedule as poison. An unknown key IS a configuration error: `ArgumentException`
-  at dispatch, terminal poison at recovery.
-- **A replay over a provider grid asks it once per slot, not once per occurrence.** The measurement that
-  decides the catch-up cap is taken once per episode and continued by the runs that follow it, so a backlog
-  of 360 slots costs hundreds of questions instead of tens of thousands. Counts that stop at the walk a
-  provider can afford say so (`MissedCountIsExact`, `NextRunResult.SkippedCountIsExact`) rather than passing a
-  lower bound off as a total.
-
-### Added (runtime schedule management, #28)
-
-- **`ITaskScheduleManager`** is registered next to `ITaskDispatcher` and changes a schedule while the
-  application runs, addressing it by task key: `Reschedule` (a new definition), `ReevaluateSchedule` (the same
-  definition, cursor recomputed), `ResumeSchedule` (release a halted catch-up and keep its backlog),
-  `RequeueFailedOccurrence` (a failed or cancelled occurrence back into the queue, same id and same history)
-  and `CancelSchedule` (the full cancel pipeline by key, pending occurrences included). `ITaskDispatcher` is
-  untouched.
-- **`RescheduleMode`** decides what happens to the schedule's position. `RecalculateFromNow` puts the cursor
-  at the new definition's first occurrence after now, discarding a durable backlog and reporting exactly how
-  much of it was discarded. `RebaseFromCursor` keeps the schedule inside the day, week or month the old cursor
-  was in, at the same POSITION inside that period, which is what stops a period holding several slots from
-  rewinding onto one that has already run. Only the time of day, the zone, the bounds and the misfire settings
-  may change that way; a different cadence, a cron schedule, or a period with no valid slot is refused and
-  writes nothing.
-- **Every advance of a managed schedule is a compare-and-swap.** A run completing while a reschedule commits
-  loses the swap, re-reads the row and applies the new definition instead of overwriting it, and the same
-  guard covers the cancel that lands in the middle. A delivery already handed to a worker queue may finish
-  under the old definition; one that has not fired is invalidated immediately. `ScheduleRescheduled` reports
-  the whole change: both versions, both cursors, the mode, the backlog discarded and whether a halt was
-  released.
-
-### Added (durable occurrences and misfire policies, #27)
-
-- **A recurring schedule can give every due slot its own row.** `WithDurableOccurrences()` turns the schedule
-  row into a definition plus a cursor and materializes each due slot as its own one-shot task: its own status,
-  its own retries, its own audit trail, its own execution logs, its own rate-limit budget. The schedule row
-  itself stops running the handler, and stops spending the handler's rate-limit budget with it. The insert of
-  the row and the advance of the cursor are ONE transaction guarded by a compare-and-swap, and a unique index
-  on (schedule, slot) is what makes a slot exist exactly once.
-- **`OnMisfire` says what a downtime does to the slots it covered.** `Skip()` is the default and what every
-  existing schedule keeps doing: the missed slots are dropped and the series moves on. `FireOnce(options?)`
-  collapses the whole run of missed slots into ONE occurrence, which tells the handler the range it stands for.
-  `CatchUp(options)` replays them, oldest first, one row each. Both replaying policies imply durable
-  occurrences, because a replayed slot needs a durable identity to be replayed exactly once.
-- **A catch-up is bounded, and the bounds are mandatory.** `CatchUpOptions(maxAge, maxOccurrences)` has no
-  defaults on purpose: how far back a replay may reach and how much work one episode may create are different
-  questions, and a per-second grid left behind by a three-month downtime owes eight million slots.
-  `MaxPendingOccurrences` (default 1, meaning strictly serial) bounds how many occurrences of the schedule may
-  be alive at once. When the backlog exceeds the cap, `OverflowPolicy` either keeps the most recent slots
-  (`SkipOldest`) or (the default) writes a durable `Halt` marker and replays nothing. A halt does not release
-  itself: not by the backlog ageing out of its own window, not by a restart. `ResumeSchedule` or `Reschedule`
-  is what releases it, which is the point.
-- **No slot is ever lost silently.** Every dropped slot is reported with the rule that dropped it, because the
-  three have different fixes: the age window, the overflow cap under `SkipOldest`, and the skip policy itself.
-  A count that had to stop at a cap says "at least", never a total it did not reach.
-- **`BackfillFrom(startUtc)`** starts a new durable registration's cursor in the past, so a schedule can own
-  the slots that came before it existed. It has no effect on any schedule that does not ask for it.
-- **New host knobs**: `SetMaterializationConcurrency` (how many schedules may materialize at once; defaults to
-  the worker parallelism) and `SetBacklogRetryInterval` (how long a schedule that could not make progress waits
-  before trying again; 1 minute, bounded to a day). `AuditRetentionPolicy.OccurrenceRetentionDays` prunes the
-  finished occurrences of durable schedules in EVERY terminal state (completed, failed and cancelled),
-  while keeping any occurrence that still owns execution logs.
-- **A handler learns what its delivery stands for** through `Context.Misfire`: the kind of missed work, the
-  range of slots it covers, how many they are, whether that count is exact, and how late the delivery actually
-  started.
-- **Storage grew three columns and a family of atomic operations.** `ParentTaskId` (with a self-referencing
-  foreign key, a unique index on (parent, slot) and a check constraint), `RuntimeInfo` and `ScheduleVersion`,
-  plus `MaterializeOccurrence`, `CancelSchedule`, `TryRequeueStaleOccurrence`, `TryHaltSchedule`,
-  `TrySetRecurringSeriesCompleted`, `TrySetTerminalOutcome`, `UpdateSchedule`, `RequeueTerminal` and the
-  compare-and-swap overloads of the advance operations. `TrySetTerminalOutcome` is required when a custom
-  storage advertises `SupportsScheduleVersioning`: it returns false if the row moved version or is already
-  `Cancelled`, unless the outcome is itself `Cancelled`. Every operation is written at the tier of its
-  provider (stored procedures on SQL Server and MySQL, a writable CTE on PostgreSQL, a single `SaveChanges`
-  on the EF Core base), and two
-  capability flags (`SupportsDurableOccurrences`, `SupportsScheduleVersioning`) let a custom storage say it
-  does not implement them instead of half-implementing them. One migration per provider.
-
-### Added (time zones, #26)
-
-- **A recurring schedule can be read on a real time zone.** `InTimeZone(zone)` / `InTimeZone(id)` on the
-  fluent builder makes 09:00 mean 09:00 there, all year and across every daylight-saving change, instead
-  of 09:00 UTC. It applies to schedules anchored to a calendar: a time of day, a day of the week, a
-  month selector, a cron expression, and the day, week and month cadences, which land on midnight when
-  no time was named. A plain cadence in seconds, minutes or hours is refused instead of quietly
-  accepted: it is a constant step in elapsed time and falls on the same instants in every zone, so a
-  zone on one only hides a mistake. The call can sit anywhere in the chain, the middle included, and
-  the schedule keeps refining afterwards.
-- **What the row stores is the IANA id**, whichever spelling was given: `W. Europe Standard Time`
-  becomes `Europe/Berlin`, so a schedule written on Windows resolves on a Linux replica of the same
-  deployment. An id this host cannot resolve is refused before anything is persisted, and one that stops
-  resolving later is treated as corrupt schedule metadata, exactly like an unparseable cron: the row is
-  poisoned instead of running an hour off. Custom zones built in the process have no id that could bring
-  their rules back and are refused too.
-- **A daylight-saving transition neither drops an occurrence nor doubles one.** A time of day the
-  spring gap removes fires at the first local time that does exist, and several slots inside one gap
-  become a single occurrence rather than a burst; a repeated hour in autumn fires once, on its first
-  pass. The slots a transition folded away are reported for logging on
-  `NextRunResult.CollapsedSlotCount` and written to the log by the worker: they are one occurrence, so
-  they spend one run of the budget, not one each. Cron keeps its own rules: the expression is handed to Cronos with the zone, which is also
-  what the fluent grid is tested against.
-- **`SetDefaultScheduleTimeZone(zone)`** names the zone every calendar-anchored schedule is read on when
-  it does not name one itself. It is stamped into the definition when the schedule is built, so a row
-  keeps meaning what it was dispatched with: changing the default later moves nothing already stored,
-  and a row that named no zone stays on UTC even on a host that has a default. Plain cadences are left
-  alone, and an explicit `InTimeZone` wins.
-- **The compiler says it first.** The bundled analyzer reports **ET0010** on an `InTimeZone` call sitting on a
-  chain it can prove is a plain cadence, so the mistake shows up in the IDE instead of at the first startup.
-  It reports only what the chain in front of it spells out. A chain split over a variable or a helper method,
-  or one whose shape it does not recognize, is left to the runtime exception, which stays the guard. Severity
-  is warning, tunable per project with `dotnet_diagnostic.ET0010.severity`.
-- **A handler is told which zone its delivery belongs to.** `Context.TimeZoneId` and
-  `Context.ScheduledAtLocal` carry the schedule's zone and its slot read on that clock, offset included,
-  which is what tells the two passes of a repeated hour apart. The zone also appears in the row's
-  human-readable `RecurringInfo`, and therefore in the dashboard.
-
-### Changed (times of day keep their precision, #26)
-
-- **`AtTime` / `AtTimes` store the `TimeOnly` they were given verbatim**, and the grid lands on it. Both
-  used to run it through `TimeOnly.ToUniversalTime()`, and the two places that applied it to a date
-  rebuilt the instant to the second, so a sub-second component was dropped twice over. Nothing the
-  builder could express before carried one, so every schedule written until now produces the same
-  instants; a definition written by hand with a sub-second time now fires at the time it declares.
-- **BREAKING: `TimeOnly.ToUniversalTime()` has been removed.** Pass the local time to `AtTime` and name the
-  zone with `InTimeZone`; converting a time of day freezes one offset into the schedule and is wrong across
-  daylight-saving changes.
-
-### Changed (storage API cleanup)
-
-- **BREAKING: `ITaskStorage.GetCurrentRunCount` has been removed.** The worker reads `CurrentRunCount` from
-  the queued row it already owns, so the separate storage round trip had no library caller.
-- **4.0 is an upgrade boundary for durable schedules: do not roll a store back to 3.x while durable
-  occurrences exist.** A 3.x reader ignores `OccurrenceMode`, `Misfire` and `Provider` on the parent and
-  knows nothing about occurrence child rows: a provider-backed schedule silently degrades to an inline one,
-  and during an overlapping rollout an old host can run the slot a 4.0 child row already represents. The
-  migration's `Down` deletes the child rows precisely so a rollback cannot execute them as standalone
-  tasks: pending occurrences are LOST on downgrade by design. Disable durable occurrences and drain the
-  children before any planned rollback.
-- **A custom `IScheduler` that does not implement `TrySchedule` keeps unconditional registration.** The
-  default interface body forwards to `Schedule`, so runtime rescheduling over such a scheduler cannot
-  refuse a stale in-flight registration: an old delivery can replace the newly parked one until the next
-  restart. Implement `TrySchedule` (compare the offered version against the parked one) to take part in
-  versioned re-registration; the built-in schedulers both do.
-
-### Added (execution context, #25)
-
-- **A handler can now ask which delivery it is running.** `ITaskExecutionContext` says which row is
-  executing and, for an occurrence, which schedule owns it; the task key; the slot the delivery stands
-  for, in UTC and in the schedule's own zone; when it started; the 1-based attempt and the run number
-  within a recurring series; the schedule version; and how late the delivery is, when it is late at all.
-  Handlers deriving from `EverTaskHandler<TTask>` read it from the new `protected` `Context` property.
-  It is injected before `OnStarted`, so `Handle` and every lifecycle callback can read it, the terminal
-  rate-limit rejection included: that one reaches `OnError` without ever entering the execution core.
-  Reading it from a constructor throws rather than handing back an empty context.
-- **Everything that is not the handler reads the same instance** through `ITaskExecutionContextAccessor`,
-  registered by `AddEverTask`. It is a singleton whose `Current` follows the delivery's asynchronous
-  flow and is null outside one, so a repository or a log enricher deep in the graph reaches it without
-  the handler passing it down. A scoped accessor could not: an eagerly resolved handler and its
-  dependencies are built in the dispatcher's scope, before the delivery exists.
-- **`SetMisfireThreshold(TimeSpan)`** (default 5 seconds) decides how late a delivery may start before
-  `Context.Misfire` reports it, with the real lateness, and how old a due slot must be before the durable
-  planner stamps a materialized row with `CatchUp` / `FireOnce` misfire metadata. It is a classification
-  threshold, not an execution gate: a late task runs exactly as it did before, a backlog of multiple due slots
-  is always classified as missed work, and the one-second tolerance of the recurring skip-forward path is a
-  separate rule, untouched.
-- `IEverTaskHandler<TTask>` gained `SetExecutionContext` as a default interface member with an empty
-  body, so a handler that implements the interface directly keeps compiling and running unchanged.
-  The worker reaches it, and `SetLogCapture`, through delegates compiled once per handler type instead
-  of the per-execution reflection it used before.
-
-### Fixed (eagerly resolved handlers, #25)
-
-- **A delivery that is dropped before it executes no longer strands the scope its handler was built in.**
-  An eagerly resolved handler travels inside an EverTask-owned DI scope, and the delivery that consumes
-  it is that scope's last owner. Only a delivery that reached the execution core released it, so every
-  earlier exit leaked the handler and every scoped dependency built with it, a `DbContext` and its
-  pooled connection included, once per dropped delivery. Those exits are a cancellation applied by the
-  worker, a rate-limit deferral, the re-park of a redelivery racing the in-flight original, a skipped
-  duplicate, a gate wait ended by shutdown, and the terminal rate-limit rejection. The release now
-  covers all of them, and where the order matters it still happens before the next occurrence of a
-  recurring series is scheduled.
-
-### Added (durable-occurrence foundations, #24)
-
-- **A deterministic scheduling clock.** One `TimeProvider` now governs every scheduling decision:
-  dispatcher, schedule evaluator, builders, both schedulers, startup recovery and the rate limiter,
-  gate and parking lot. Register a `TimeProvider` before `AddEverTask` and the whole pipeline follows
-  it, which makes an end-to-end schedule test deterministic instead of a race against the wall clock.
-  Retry policies, audit and logging deliberately stay on the real clock. Storage no longer resolves
-  "now" on its own either: `RetrievePending` and `TrySetQueuedIfRecoverable` gained `nowUtc` overloads
-  that the core always calls, with defaults delegating to the intact legacy signatures so a custom
-  storage keeps working (and keeps its own atomicity). A provider that inherits `EfCoreTaskStorage` and
-  overrides only the older signatures keeps its own implementation too: the base hands the
-  clock-carrying calls back to it instead of answering with its own query.
-- **`QueuedTasks` gained `ParentTaskId`, `RuntimeInfo` and `ScheduleVersion`** (one migration per
-  provider), with a restrict self-referencing foreign key, the unique index
-  `UX_QueuedTasks_Occurrence` on `(ParentTaskId, ScheduledExecutionUtc)` and the check constraint
-  `CK_QueuedTasks_OccurrenceSlot`. `ITaskStorage` gained the atomic operations a durable schedule
-  needs, as default members that throw `NotSupportedException`, behind the capabilities
-  `SupportsDurableOccurrences` and `SupportsScheduleVersioning`. The built-in providers implement
-  them at their own optimization tier: stored procedures on SQL Server and MySQL, writable CTEs on
-  PostgreSQL, one conditional UPDATE inside one transaction on the EF Core base. That base answers
-  both capabilities from the EF provider it was given: a conditional UPDATE inside a transaction
-  needs a relational one, so on EF Core InMemory it reports false and the feature is refused at
-  dispatch instead of failing later, when an occurrence is materialized. `ScheduleVersion`
-  carries its `DEFAULT 0` in the shared model, so it survives the table rebuild SQLite performs to
-  add the foreign key and the check constraint.
-- **`QueuedTask.ApplyOccurrenceContract(scheduleId, scheduleVersion)`** is the one shape a
-  materialized occurrence has on every backend: a fresh one-shot at that version, with the
-  definition, the cursor, the bounds and the task key cleared. The providers that build the `INSERT`
-  by hand write exactly those columns; the ones that persist the entity apply the method first.
-- **`AuditRetentionPolicy.OccurrenceRetentionDays`** prunes the finished occurrences of a durable
-  schedule in any terminal state, Completed, Failed and Cancelled alike, which
-  `DeleteCompletedTasksAfterRetention` does not do. It honours the same execution-log guard: with a
-  log-retention window or cap active, an occurrence that still owns logs is kept, so a short
-  occurrence window never cascade-deletes logs a longer log window meant to keep. Each audit trail gets a
-  guard of its own: with `StatusAuditRetentionDays` set, an occurrence whose status rows are still inside
-  that window is kept, and `RunsAuditRetentionDays` guards the runs trail the same way, because deleting the
-  row cascades both. A 7-day occurrence window against a 90-day error window would otherwise erase a failure
-  on day eight.
-- `EverTaskEventData` and `TaskHandlerExecutor` carry the schedule/occurrence context in new `init`
-  properties. Their primary constructors and `Deconstruct` are unchanged, so existing code that
-  builds or deconstructs them keeps compiling.
-
-### Fixed (startup recovery, #24)
-
-- **A recurring series whose `RunUntil` elapsed during a downtime no longer stays `Queued` forever.**
-  Once the boundary passed, such a row matched no recovery predicate at all: it was never executed
-  and never finalized. Recovery now separates rows that still have work to execute from series that
-  only need finalizing, and ends the latter (Completed, cursor cleared, no run counted).
-- **The occurrence a series had already scheduled before that boundary is no longer lost.** The
-  temporal term of the recovery filter is grouped so a pending slot that precedes an elapsed
-  `RunUntil` still recovers and runs.
-- **A months-old slot can no longer be executed at restart.** The recovery grace window used to read
-  "no successor before `RunUntil`" as "still the current slot"; it now asks the natural successor,
-  computed while ignoring the termination bounds, so the window is exactly one period.
-- **Ending a series never overwrites a cancellation.** Both finalization sites compare-and-swap on the
-  cursor, status and version of the row the decision was computed from, so a `Cancel` (or a reschedule)
-  that linearized in between wins and the finalization reports the loss. A storage without that
-  compare-and-swap keeps the historical unconditional write instead of being refused a normal end of
-  series.
-- **Neither does re-queueing one on SQLite.** `TrySetQueuedIfRecoverable` read the row and then saved it
-  back, so a `Cancel` that landed between the two was replaced with `Queued` and the cancelled task ran at
-  the next restart. Only the term SQLite cannot translate is still decided in memory; the write itself is a
-  conditional UPDATE that re-asserts the status, the run budget and the two temporal columns the decision
-  was made from, so the recovery loses that race instead of silently winning it. The other three providers
-  were already compare-and-swapping.
-
-### Fixed (schedule descriptions, and restarting a cancelled schedule)
-
-- **A cancelled schedule really restarts when it is dispatched again under its task key**, which is what the
-  documentation has always said is the way back from `Cancel` / `CancelSchedule`. A recurring
-  re-registration REUSES the row, so both halves of the cancellation followed it: the blacklist entry lives
-  about an hour and made the worker queue drop every delivery the new registration produced, and the row
-  stayed `Cancelled`, a status no recovery predicate selects, so a restart before the first slot lost the
-  series for good. The dispatch now drops that entry and puts the row back where a brand new dispatch would
-  have left it, after the new definition is written and with the transition audited. A one-shot was never
-  affected: a terminal row is removed and recreated under a new id.
-  - That entry is also the only thing covering the occurrences the cancel had already terminalized while
-    their delivery was past the queue boundary (sitting in a channel, or waiting at the rate-limit gate,
-    where nothing re-reads the row). Each of them gets an entry of its own before the schedule's is dropped,
-    so an occurrence the cancel confirmed terminal cannot run the old series' payload after the restart. One
-    the cancel found running is left alone and still finishes.
-  - A schedule that was HALTED when it was cancelled comes back released. The halt belonged to the series the
-    cancel ended, and a revived series that keeps it materializes nothing until someone resumes it by hand.
-    An ordinary re-registration under the same task key still leaves a standing halt exactly where it is:
-    re-declaring your schedules at startup is not a request to replay the backlog the halt stopped.
-- **A schedule's description no longer renders its bounds on the host's clock.**
-  `RecurringTask.ToString()` (persisted as `QueuedTask.RecurringInfo` and shown by the dashboard) formatted
-  `RunUntil` and a `SpecificRunTime` with `ToLocalTime()`, so the same definition wrote a different sentence
-  from a UTC container and from a developer machine, and the time zone printed at the end of the sentence
-  labelled a wall time that was not its own. Both are now read on the schedule's own zone, or in UTC, named,
-  when it has none.
-
-### Changed (license: Apache 2.0 → MIT)
-
-- **EverTask is now MIT-licensed.** The one piece of Apache-sourced code (the MediatR-derived
-  `HandlerRegistrar`) was rewritten from scratch, so no third-party notice is needed anymore:
-  `LICENSE` carries the MIT text, `PackageLicenseExpression` is `MIT`, `ATTRIBUTION.md` is gone.
-  The task/handler pattern is still MediatR's idea, and the README says so. Packages already
-  published under 3.x remain Apache-2.0.
-
-### Changed (handler registration rewritten)
-
-- **`HandlerRegistrar` was rewritten as a single-pass scanner** that groups handlers by the exact
-  closed `IEverTaskHandler<TTask>` interface. It never matches by assignability: the interface is
-  contravariant (`in TTask`), so `IsAssignableFrom` would accept a base-task handler as a candidate
-  for every derived task. Observable behavior is unchanged (apart from the startup crash documented
-  under Fixed below): transient `TryAdd` registrations
-  (interface binding plus concrete self-binding, losing duplicates included so persisted rows keep
-  resolving), first-wins by assembly/`DefinedTypes` order, the G1/G2 startup warnings. The G2
-  duplicate warning now identifies task and handlers with namespace-qualified names, and each
-  handler carries its assembly (`scanner selected 'App.Orders.OrderHandler (App.Modules)' and
-  ignored […]`); generic names are expanded at the level that declares them (`ImportTask<CsvRow>`
-  instead of ``ImportTask`1``, `Outer<Int32>.InnerTask` for nested tasks). Consumers matching the
-  full text must adjust. On the test assembly (193 descriptors, identical output from both implementations)
-  the new scanner takes 74 µs instead of 1064 µs (-93%) and allocates 80 KB instead of 700 KB
-  (-88.5%).
-
-### Fixed (handler registration)
-
-- **Startup crash with multi-interface handlers.** A handler implementing two closed
-  `IEverTaskHandler<>` interfaces, plus a second handler for one of those tasks, crashed
-  `AddEverTask` with `AmbiguousMatchException`: the old duplicate filter looked interfaces up by
-  name (``Type.GetInterface("IEverTaskHandler`1")``), and that lookup is ambiguous when a type
-  implements two closed forms. The new grouping works on `Type` identity and never resolves a name.
-- **Null assemblies fail at configuration time.** `RegisterTasksFromAssembly(null)` used to be
-  accepted and blow up later, as a `NullReferenceException` inside the assembly scan. Both
-  registration methods now throw `ArgumentNullException` (or `ArgumentException` for a null
-  element in the array) the moment they are called.
-
-### Added (registration analyzers ET0011 and ET0012)
-
-- **Two analyzer rules mirror the registration startup warnings at compile time.** ET0011 flags a
-  concrete open-generic handler: the assembly scan can never activate one, so its tasks would reach
-  dispatch with no handler and the only signal was a line in the host log. ET0012 flags two
-  handlers for the same closed task contract in the same compilation, where only the first one
-  discovered gets registered. Duplicates split across different assemblies are still reported at
-  startup only. ET0010 is reserved for the durable-occurrences work (#34).
-
-### Changed (breaking: retry policies moved to the `EverTask.Abstractions` namespace)
-
-- **`LinearRetryPolicy` now lives in `EverTask.Abstractions`** (together with the new
-  `ExponentialRetryPolicy` and `RetryPolicyBase<TPolicy>`), next to `IRetryPolicy` and the
-  `HandleTransient*` extensions, instead of the two-file `EverTask.Resilience` namespace the
-  interface never shared. Migration: remove any `using EverTask.Resilience;`. Most files already
-  import `EverTask.Abstractions` for the handler base and need nothing else. Assemblies compiled
-  against 3.11.0 need a recompile.
-
-### Changed (breaking: Monitor.Api OpenAPI integration rebuilt, #20)
-
-- **`EverTask.Monitor.Api` no longer depends on Swashbuckle.** The hard dependency crashed .NET 10
-  hosts using the built-in OpenAPI stack (`Microsoft.AspNetCore.OpenApi` → `Microsoft.OpenApi` 2.x)
-  at startup with a `ReflectionTypeLoadException` inside `MapControllers()`, even with
-  `EnableSwagger = false`. The monitoring OpenAPI document is now generated by the built-in
-  ASP.NET Core generator (net9.0+) and served at
-  `/evertask-monitoring/openapi/evertask-monitoring.json` via the new
-  `EnableOpenApiDocument` option. `EnableSwagger` is an `[Obsolete]` no-op. On net8.0 the feature
-  is a no-op (the built-in generator does not exist there); the bundled analyzer reports **ET0008**
-  when a net8.0 compilation opts in.
-- **Monitoring endpoints are now fully isolated from the host's OpenAPI setup.** The controllers
-  carry the `evertask-monitoring` ApiExplorer group, so they stay out of the host's
-  OpenAPI/Swagger/Scalar documents by default (and the monitoring document excludes host
-  endpoints); the UI static-file endpoints are excluded from API descriptions entirely. The old
-  `ConfigureOptions<SwaggerGenOptions>` hook into the host's SwaggerGen is gone.
-- **`RoutePrefixConvention` no longer touches host controllers.** Up to 3.11.0 it prepended
-  `/evertask-monitoring` to every controller in the host application; it now applies only to the
-  package's own controllers. Host routes relying on the accidental prefix move back to their
-  natural paths.
-
-### Changed (logging, #32)
-
-- **Per-task lifecycle and storage status-transition logs moved from `Information` to `Debug`.**
-  With `Information` enabled (the default in most hosts) every executed task produced three or more
-  lines per storage provider (`Set Task … with Status …` on each `Queued`, `InProgress` and
-  `Completed` transition, `Update the current run counter`, `Complete recurring run`,
-  `Task … persisted`, `Updating task … with key …`, `Removing task …`), plus the worker's
-  `Starting task with id …` and `Task with id … was completed in … ms`, the dispatcher's task-key
-  re-dispatch lines and the scheduler's `Next run …`. All of these now log at `Debug`, and the
-  in-memory storage emits the same volume as the EF Core providers. Hosts that want one line per
-  task at the default level must set the `EverTask` category to `Debug`. Recovery summaries, series
-  finalization, poisoning, startup and shutdown lines, and every `Warning`, `Error` and `Critical`
-  keep their level. Monitoring events are not affected: `TaskEventOccurredAsync`, SignalR and the
-  dashboard still receive the task-started and task-completed events with
-  `Severity = "Information"`. The log level no longer follows the event severity.
-- **Internal logs are source-generated (`[LoggerMessage]`) with stable, named, non-zero `EventId`s
-  and PascalCase structured properties.** Every logging call in the library goes through a
-  per-component `<Component>Log` class: no `object[]`, no boxing, and the `IsEnabled` check runs
-  before any rendering (the few sites whose arguments are themselves expensive are guarded
-  explicitly). Placeholders that were camelCase (`{taskId}`, `{status}`, `{taskKey}`, `{name}`) are
-  now `{TaskId}`, `{Status}`, `{TaskKey}`, `{TaskType}`. A structured sink treats the two casings as
-  different properties, so saved queries on the old names need updating. The dispatcher's
-  recurring-recovery lines now carry `{TaskId}` as well. EventIds are allocated in disjoint
-  per-component ranges (core 1000-1999, EF Core storage 2000-2199, monitoring 3000-3299) and tests
-  assert uniqueness within each family; before this change every internal log had `EventId = 0`.
-- **Worker lifecycle events reach the log as real templates.** `WorkerExecutor` used to render
-  the monitoring message with `string.Format` and then log the rendered string as if it were the
-  template, so a structured sink saw a different "template" for every task and no `TaskId`
-  property. The log now carries the properties (`{TaskId}`, `{ElapsedMs}`, `{Key}`, `{SlotUtc}`, …).
-  The monitoring event `Message` is still the rendered sentence, but it is rendered only when at
-  least one subscriber exists, and with `CultureInfo.InvariantCulture` (it used the current culture,
-  so an Italian host got `12,5 ms`).
-- **Log and event message texts.** Consumers matching on the full text must adjust; these fragments
-  are unchanged: `Rate limit deferred task <id>: key=… slotUtc=… policy=… deferredCount=…`,
-  `fail OPEN`, `retry attempt`, `was completed in`, `Error occurred`, `marked as Failed`,
-  `cancelled`.
-  - No message ends with a period any more (19 worker/dispatcher templates and every monitoring
-    event message, e.g. `Task with id … was completed in 12.5 ms`).
-  - The storage providers no longer append `using SQL Server stored procedure`, `using PostgreSQL
-    writable CTE` or `using MySQL stored procedure`; the logger category already names the provider.
-  - `Update the current run counter for Task for taskId …`, a Critical that read like a progress
-    line, is now `Unable to update the current run counter for taskId {TaskId}`. The base
-    `… atomically` suffix on the status-update Critical is gone.
-  - `Error occurred executing while executing the callback override …` is now `Error occurred
-    executing the callback override {CallbackName} for task with id {TaskId}`.
-  - A task cancelled by the user no longer reports `was cancelled by service while stopping`. The
-    two cases read `Task with id {TaskId} was cancelled by the user` and `… by service while
-    stopping`.
-  - The SignalR monitor logs `message received for task {TaskId} ({Severity})` at `Debug` instead
-    of destructuring the whole event (payload JSON and execution logs included) at `Information`.
-  - `JwtTokenService` debug lines use `{Reason}` instead of `{Message}`, which collides with the
-    rendered-message property in structured sinks.
-- **`EverTask.Logging.Serilog` routes through `Serilog.Extensions.Logging`** (already in the
-  package's dependency closure) instead of a hand-written adapter that passed the rendered string
-  to Serilog as the message template. `MessageTemplate` is the real template again; named
-  properties, `@` destructuring, the `EventId` property and `SourceContext` reach the sinks.
-  `IsEnabled(LogLevel.None)` is `false` (it was `true` whenever Verbose was enabled). Scopes opened
-  with `BeginScope` are attached per logger instead of being pushed into the process-global
-  `LogContext`, so `Enrich.FromLogContext()` is no longer needed for EverTask scopes and an EverTask
-  scope no longer leaks into the host's own Serilog loggers. The public
-  `EverTaskSerilogLogger<T>(Serilog.ILogger)` constructor and the `AddSerilog` overloads are
-  unchanged.
-- The handler-facing `ITaskLogCapture` (the logger that also persists to the database) is
-  unchanged: consumer templates are still forwarded with their own placeholders and persisted as
-  before.
-- `CA1848`, `CA1873`, `CA2254` and `CA1727` are now build errors in `src/`.
-
-### Performance (logging, #32)
-
-- **11-21% fewer allocated bytes per task on the worker path.** LoadHarness `A4W` (worker-only,
-  500k tasks, 7 measured iterations, base and patched alternated on the same machine): 3.06-3.33
-  kB/task down to 2.73-2.75 kB/task with the `EverTask` category at `Warning` (the call-site
-  `object[]` and boxing that happened before the level check are gone), 3.43-3.73 kB/task down to
-  2.72-2.98 kB/task at `Information` with a rendering sink. Throughput is equal or better:
-  steady-state runs went from 0.96-1.05M tasks/s to 1.13-1.35M tasks/s (the harness has a bimodal
-  slow mode that shows up on both trees, so treat single runs with care). `A4S --storage postgres`
-  (3 storage writes per task) stays DB-bound at about 4.8k tasks/s, with 0.1-0.8 kB/task less. The
-  harness gained `--log <level>` and `--sink none|render|enumerate` so this kind of A/B can be
-  repeated (`benchmarks/EverTask.LoadHarness/README.md`).
+- **The two audit endpoints are paged** ([#44]). `GET /tasks/{id}/status-audit` and `.../runs-audit` take
+  `skip`/`take` and answer `{ audits, totalCount, skip, take }` instead of a bare array.
+  `ITaskQueryService.GetStatusAuditAsync`/`GetRunsAuditAsync` change return type accordingly, and
+  `TaskDetailDto.StatusAudits`/`RunsAudits` carry the first 100 entries plus a total count.
+- **Retry policies moved to the `EverTask.Abstractions` namespace.** Remove `using EverTask.Resilience;`.
+  Assemblies compiled against 3.11.0 need a recompile.
+- **`TimeOnly.ToUniversalTime()` has been removed** ([#26]). Pass the local time to `AtTime` and name the
+  zone with `InTimeZone`; converting a time of day freezes one UTC offset into the schedule.
+- **`ITaskStorage.GetCurrentRunCount` has been removed.** The worker reads the count from the row it
+  already owns; the extra round trip had no caller.
+- **`EverTask.Monitor.Api` no longer depends on Swashbuckle** ([#20]). The hard dependency crashed .NET 10
+  hosts at startup. The monitoring OpenAPI document now comes from the built-in ASP.NET Core generator
+  (net9.0+, `EnableOpenApiDocument`); `EnableSwagger` is an `[Obsolete]` no-op, and
+  `RoutePrefixConvention` no longer prefixes host controllers.
+- **The monitoring IP whitelist no longer honors `X-Forwarded-For`** ([#47]). A host behind a reverse
+  proxy must let ASP.NET Core rewrite the client address: `ForwardedHeadersOptions` with
+  `KnownProxies`/`KnownNetworks`, then `UseForwardedHeaders()` before `UseRouting()`. See the Security
+  section and [AllowedIpAddresses](docs/configuration-reference.md#allowedipaddresses).
+- **Log levels, templates and message texts changed** ([#32]). Per-task lifecycle lines moved from
+  `Information` to `Debug`, structured placeholders are PascalCase (`{TaskId}`, not `{taskId}`), and many
+  messages were reworded. Saved queries and text matchers on the old forms need updating; details under
+  *Changed*.
+- **4.0 is an upgrade boundary for durable schedules**: do not roll a store back to 3.x while durable
+  occurrences exist. The migration's `Down` deletes occurrence child rows on purpose, so pending
+  occurrences are lost on downgrade; disable durable occurrences and drain them before a planned rollback.
 
 ### Added
 
-- **`ExponentialRetryPolicy`**: built-in exponential backoff next to `LinearRetryPolicy`:
-  `new ExponentialRetryPolicy(retryCount, initialDelay, backoffFactor = 2.0, maxDelay = null,
-  useJitter = false)`. The delay before retry `n` is `initialDelay × backoffFactor^(n-1)`, capped at
-  `maxDelay` when set and always clamped at the largest delay `Task.Delay` accepts (about 49.7 days);
-  `useJitter` spreads each delay by ±20% at execution time (still capped) so concurrent tasks do not
-  retry in lockstep. Same fluent filtering (`Handle`, `DoNotHandle`, `HandleWhen`, the
-  `HandleTransient*` extensions) and the same `OnRetry` contract as the linear policy.
-- **`RetryPolicyBase<TPolicy>`**: the execution loop, the exception filtering and the `OnRetry`
-  callback handling now live in a self-referencing generic base shared by both built-in policies.
-  `LinearRetryPolicy` keeps its public surface and behavior (`Handle`, `DoNotHandle`, `HandleWhen`,
-  `ShouldRetry` and `Execute` now resolve on the base, which the CLR binds up the hierarchy), and the
-  `HandleTransient*` extensions gained generic overloads that keep the concrete policy type for
-  chaining; the original `(this LinearRetryPolicy)` overloads stay, so assemblies compiled against
-  3.11.0 and subclasses of `LinearRetryPolicy` keep binding. Aside from the namespace move noted
-  under the breaking changes, source- and binary-compatible.
-- **Analyzer rule ET0009** (`EverTask.Resilience` category): warns when a constant retry delay, timeout
-  or cleanup interval exceeds what .NET timers support (about 49.7 days). At runtime the built-in
-  policies now reject explicit over-limit delays at construction, while the worker timeout and the
-  audit cleanup intervals are clamped to that ceiling (the cleanup service logs a warning) instead of
-  crashing on `Task.Delay`/`CancelAfter`.
-- **`EverTask.Monitor.Api.Scalar`**: optional package serving a [Scalar](https://scalar.com) API
-  reference at `/evertask-monitoring/scalar`. `.AddMonitoringApiScalar()` (chained after
-  `AddMonitoringApi()`) enables the OpenAPI document automatically; net9.0+ (no-op with a startup
-  warning on net8.0). Plugs in through the new `IMonitoringApiEndpointExtension` extension point
-  resolved by `MapEverTaskApi()`.
-- **Analyzer rule ET0008** (`EverTask.Monitoring` category): warns when a net8.0 compilation sets
-  `EnableOpenApiDocument = true` or calls `AddMonitoringApiScalar()`, both no-ops there.
-- **`ITaskStoreDbContextFactory.CreateDbContext()`** (#33): synchronous creation path with a default
-  interface implementation (existing implementors keep compiling; it waits on `CreateDbContextAsync()`
-  as a `Task`). The in-box SqlServer/Postgres/MySql/Sqlite adapters override it with the pooled
-  factory's synchronous `CreateDbContext`, so no wait happens at all.
+- **Durable occurrences and misfire policies** ([#27], foundations in [#24]). `WithDurableOccurrences()`
+  gives every due slot its own one-shot row, with its own status, retries, audit trail, logs and
+  rate-limit budget. `OnMisfire` says what a downtime does to the slots it covered: `Skip` (the default),
+  `FireOnce` (one occurrence for the whole missed range) or `CatchUp` (a bounded replay, oldest first,
+  with overflow and halt semantics). `BackfillFrom` starts a new cursor in the past;
+  `AuditRetentionPolicy.OccurrenceRetentionDays` prunes finished occurrences. Docs:
+  [durable occurrences](docs/recurring-tasks/durable-occurrences.md).
+- **Time zones** ([#26]). `InTimeZone(zone)` makes a calendar-anchored schedule mean local time all year:
+  IANA ids are what gets persisted, DST gaps and repeated hours neither drop nor double an occurrence, and
+  `SetDefaultScheduleTimeZone` sets a host-wide default. Analyzer **ET0010** flags a zone placed on a
+  plain cadence. Docs: [time zones](docs/recurring-tasks/time-zones.md).
+- **Execution context** ([#25]). A handler reads `Context` (`ITaskExecutionContext`): which row is
+  executing, its schedule, slot, attempt, run number and lateness. Everything else on the delivery's
+  async flow reaches the same instance through `ITaskExecutionContextAccessor`. `SetMisfireThreshold`
+  decides how late a delivery may start before it is reported as a misfire.
+- **Runtime schedule management** ([#28]). `ITaskScheduleManager` changes a schedule while the
+  application runs: `Reschedule`, `ReevaluateSchedule`, `ResumeSchedule`, `RequeueFailedOccurrence` and
+  `CancelSchedule`, addressed by task key, with `RescheduleMode` deciding what happens to the cursor.
+  Every advance is a compare-and-swap, so a concurrent run or cancel never gets overwritten. Docs:
+  [managing tasks](docs/recurring-tasks/managing-tasks.md).
+- **Occurrence providers** ([#29]). Implement `INextOccurrenceProvider`, register it with
+  `AddOccurrenceProvider<T>("key")` and select it with `.UseOccurrenceProvider("key")` to drive a
+  schedule from your own calendar: business days, holiday tables, opening hours. A provider outage parks
+  the schedule with doubling backoff instead of poisoning it. Docs:
+  [occurrence providers](docs/recurring-tasks/occurrence-providers.md).
+- **Recurring exclusions** ([#36]). `.Except(...)` and `.ExceptWeekends()` remove weekdays, dates and
+  time windows from any built-in grid; `AddScheduleCalendar(name, ...)` plus `ExceptCalendar(names)`
+  share a frozen holiday or blackout set across schedules. Excluded slots consume no run, row, audit or
+  event, and search exhaustion is a reported failure, never a silent end of series. Docs:
+  [fluent API](docs/recurring-tasks/fluent-api.md).
+- **Monitoring covers the durable side** ([#30]). Occurrence fields on the task DTOs, `startedAtUtc`,
+  `GET /tasks/{id}/occurrences`, occurrence filters and counts, a `catchUpBacklog` block on the overview
+  and an Occurrences tab in the dashboard. `avgExecutionTimeMs` now averages the measured durations
+  (it read `0.0` on every relational store).
+- **Opt-in management endpoints** ([#42]). `POST .../requeue`, `.../resume` and `.../cancel` under
+  `/api/management`, off by default (`EnableManagementEndpoints`) and guarded by a separate
+  `ManagementUsername`/`ManagementPassword` credential or a host `ManagementAuthorization` hook; the JWT
+  says which role it carries (`CanManage`).
+- **`ExponentialRetryPolicy`**, with optional jitter and delay cap, sharing the new
+  `RetryPolicyBase<TPolicy>` with `LinearRetryPolicy`; analyzer **ET0009** warns on delays beyond what
+  .NET timers support. Docs: [retry policies](docs/resilience/retry-policies.md).
+- **Registration analyzers ET0011 and ET0012**: a concrete open-generic handler and duplicate handlers
+  for the same task now show up at compile time instead of only as startup warnings.
+- **`EverTask.Monitor.Api.Scalar`**: optional [Scalar](https://scalar.com) API reference at
+  `/evertask-monitoring/scalar` (net9.0+); analyzer **ET0008** flags the net8.0 no-op.
+- **A deterministic scheduling clock** ([#24]). One `TimeProvider` governs every scheduling decision, so
+  an end-to-end schedule test stops racing the wall clock. Retry policies, audit and logging stay on the
+  real clock.
+- **`ITaskStorage` grew what the features above need**: the atomic durable-occurrence operations behind
+  the `SupportsDurableOccurrences`/`SupportsScheduleVersioning` capability flags ([#24]), four monitoring
+  reads ([#30]), the paged audit reads ([#44]), `GetOccurrenceIds` ([#50]) and
+  `RecordRecurringRunForExclusionRetry` ([#36]). All are default members, so a custom storage keeps
+  compiling; one migration per provider. Docs: [custom storage](docs/storage/custom-storage.md).
+- **`ITaskStoreDbContextFactory.CreateDbContext()`** ([#33]): synchronous creation path as a default
+  interface member.
 
-### Fixed (Monitor.Api host isolation, #21)
+### Changed
 
-- **The monitoring JSON contract no longer touches the host's MVC `JsonOptions`.** camelCase,
-  null-omission and string enums are applied per-controller through a scoped output formatter
-  (`MonitoringJsonResultFilter`), so the wire format of the host's own controllers stays whatever
-  the host configured.
-- **The SPA fallback is constrained to `/evertask-monitoring/{**path}`.** The old unconstrained
-  `MapFallback` collided with a host SPA fallback (`AmbiguousMatchException` on every unmatched
-  path) and took over the host's 404 handling.
-- **The login rate-limit policy now exists and has a namespaced name.**
-  `[EnableRateLimiting]` on the login endpoint pointed at a `login` policy the package never
-  registered (startup crash on hosts calling `UseRateLimiter()`). The package now registers
-  `evertask-monitoring-login` (5 attempts / 15 min per client IP, 429 on rejection); enforcement
-  still requires the host to run `UseRateLimiter()`.
-- **`EnableCors` now actually does something**: the `EverTaskMonitoringApi` policy is applied to
-  requests under `/evertask-monitoring` (and only there) via a scoped pipeline branch. Before,
-  the policy was registered and never applied anywhere.
-- Removed dead code (`JwtAuthenticationMiddleware.IsReadOnlyRequest`,
-  `ServiceCollectionExtensions.GenerateRandomSecret`).
+- **License: Apache 2.0 → MIT.** The one MediatR-derived file was rewritten from scratch, so
+  `LICENSE` carries the MIT text, `PackageLicenseExpression` is `MIT` and `ATTRIBUTION.md` is gone.
+  Packages already published under 3.x remain Apache-2.0.
+- **Handler registration was rewritten** as a single-pass scanner that groups by closed interface
+  identity. Identical registrations, 74 µs instead of 1064 µs and -88% allocations on the test assembly;
+  the G2 duplicate warning now prints namespace-qualified names with their assemblies.
+- **Logging overhaul** ([#32]). Every internal log is a source-generated `[LoggerMessage]` with a stable
+  `EventId`; per-task lifecycle and status-transition lines log at `Debug` (set the `EverTask` category
+  to `Debug` to keep one line per task); `WorkerExecutor` logs real templates instead of pre-rendered
+  strings; `EverTask.Logging.Serilog` routes through `Serilog.Extensions.Logging`, so templates,
+  `EventId` and scopes reach the sinks. Monitoring events keep their severities. The consumer-visible
+  renames are listed under *Breaking changes*.
+- **`AtTime`/`AtTimes` store the `TimeOnly` they were given** ([#26]): no more silent UTC conversion or
+  sub-second truncation. Every schedule expressible before produces the same instants.
+- **A custom `IScheduler` should implement `TrySchedule`** to take part in versioned re-registration;
+  the default body forwards to `Schedule` and cannot refuse a stale in-flight registration.
 
-### Fixed (monitoring behind a path base, #46)
+### Performance
 
-- **Monitoring authentication (IP whitelist, JWT, SignalR hub) now holds when the application is hosted
-  under a path base** (`app.UsePathBase(...)`). The checks are evaluated inside routing, on the path routing
-  resolved. The defect pre-dates 4.0.0, so hosts serving the dashboard under a path base on 3.x should
-  upgrade. The monitoring CORS policy is still keyed off the path before the base is applied, which is a
-  functional limitation and not a protection.
+- **The storage and dispatch batch** ([#15]): clean A/B on Postgres at parallelism 16, 2,792 to 4,694
+  tasks/s (+68%), median latency -22%, 80 to 48 KB allocated per task (-40%). Measured in
+  `benchmarks/RESULTS.md` (P-L to P-N). The pieces:
+  - An immediate dispatch is persisted `Queued` directly; the second status write is gone ([#16]). At
+    `AuditLevel.Full` an immediate task no longer writes the `WaitingQueue`→`Queued` audit pair.
+  - `Persist` writes through a parameterized INSERT generated from the EF model instead of the tracked
+    `Add`+`SaveChanges` path ([#17]); a consumer context the generator cannot handle keeps the tracked
+    path.
+  - Provider SQL is built once per storage instance instead of re-interpolated on every write ([#18]).
+  - The relational `SetStatus` skips its transaction when no audit row is staged ([#19]); on SQLite the
+    no-audit arm went from 16 to 433 tasks/s.
+  - The occurrence reconcile pass reads ids, not whole rows ([#50]), and an occurrence parses its
+    `RuntimeInfo` once per executor ([#53]).
+- **Logging** ([#32]): 11-21% fewer allocated bytes per task on the worker path, throughput equal or
+  better (LoadHarness `A4W`).
 
-### Fixed (`ValueTask` contract on two public extension points, #33)
+### Fixed
 
-- **The scoped `ITaskStoreDbContext` registration no longer blocks on a `ValueTask`.** Every provider's
-  `AddXStorage` resolved it with `CreateDbContextAsync().GetAwaiter().GetResult()`, which is only defined
-  on an already-completed `ValueTask` (harmless with the in-box pooled adapters, a hang or an
-  `InvalidOperationException` with a genuinely asynchronous third-party `ITaskStoreDbContextFactory`).
-  It now calls the new synchronous `CreateDbContext()`.
-- **`RateLimitGate` consumes the `ValueTask` of `IKeyedRateLimiter.ReleaseAsync` exactly once.** The
-  best-effort release on the Discard, past-`RunUntil` and invalidation paths discarded it: a distributed
-  limiter failing after its first suspension went unobserved, and an `IValueTaskSource`-backed
-  `ValueTask` was never consumed. The gate now awaits it off the decision path and logs a warning on
-  failure; the decision and the fail-open contract are unchanged, and the in-box limiter (synchronous
-  release) allocates nothing.
-- `CA2012` is now enforced by the build (`warning` in `.editorconfig`).
+- **A delivery dropped before it executes no longer leaks the DI scope** its eagerly resolved handler was
+  built in: a `DbContext` and its pooled connection per dropped delivery ([#25]).
+- **Startup recovery** ([#24]): a series whose `RunUntil` elapsed during a downtime is finalized instead
+  of staying `Queued` forever, and its already-scheduled occurrence still runs; the recovery grace window
+  is exactly one period, so a months-old slot can no longer execute at restart; series finalization and
+  SQLite re-queueing are compare-and-swaps, so neither can overwrite a concurrent `Cancel`.
+- **A cancelled schedule really restarts when dispatched again under its task key.** The worker-queue
+  blacklist entry is dropped and the row leaves `Cancelled`, so a restart before the first slot no longer
+  loses the series. `RecurringInfo` descriptions no longer render bounds on the host's clock.
+- **Handler registration**: a handler implementing two closed handler interfaces no longer crashes
+  `AddEverTask` with `AmbiguousMatchException`; null assemblies fail at configuration time.
+- **Monitor.Api host isolation** ([#21]): the monitoring JSON contract no longer touches the host's MVC
+  `JsonOptions`, the SPA fallback is constrained to `/evertask-monitoring`, the login rate-limit policy
+  actually exists (`evertask-monitoring-login`), and `EnableCors` is applied to the monitoring branch.
+- **Monitoring auth holds under a path base** ([#46]): IP whitelist, JWT and the SignalR hub are checked
+  on the routed path. The defect predates 4.0.0, so 3.x hosts using `UsePathBase` should upgrade.
+- **`ValueTask` misuse on two extension points** ([#33]): storage registration no longer blocks on
+  `CreateDbContextAsync`, and `RateLimitGate` consumes `ReleaseAsync` exactly once. `CA2012` is now
+  enforced by the build.
 
 ### Security
 
-- **BREAKING: the monitoring IP whitelist no longer honors `X-Forwarded-For` (#47).**
-  `AllowedIpAddresses` was compared against the address in that header whenever one was present, and the
-  header was believed unconditionally: any direct caller could send a whitelisted address and walk through
-  the whitelist, on the API, on the SignalR hub and on the dashboard files alike, which no JWT covers. The
-  whitelist was advisory, not a boundary. The client address is now `Connection.RemoteIpAddress` and nothing
-  else.
-  **What to do:** a host that is NOT behind a reverse proxy needs no change. A host that IS must let ASP.NET
-  Core rewrite the address before the request is routed: `Configure<ForwardedHeadersOptions>` with
-  `ForwardedHeaders.XForwardedFor` and `KnownProxies` / `KnownNetworks`, then `app.UseForwardedHeaders()`
-  before `UseRouting()`. Naming the trusted peers is the whole point: that is what decides whether the header
-  may be believed, and it is a decision only the host can make. See
-  [AllowedIpAddresses](docs/configuration-reference.md#allowedipaddresses).
-- **Magic-link token no longer travels in the URL (#22).** New `POST /api/auth/magic` takes the
-  token in the request body; the dashboard reads it from the URL fragment
-  (`/evertask-monitoring/magic#token=...`, never sent to the server), scrubs it from the address
-  bar and calls the POST endpoint. The `?token=` query form was written verbatim into anything
-  that logs request URLs (Serilog `UseSerilogRequestLogging()` via `RawTarget`, reverse proxies,
-  Azure HTTP logs, browser history), so a year-old log file still held a working credential.
-- Both magic-link endpoints now carry the `evertask-monitoring-login` rate-limit policy (they had
-  no throttling), compare the token with `CryptographicOperations.FixedTimeEquals` and answer
-  with `Cache-Control: no-store`.
-- Bump `System.Security.Cryptography.Xml` pins to 8.0.4 / 9.0.19 / 10.0.11 (five new high-severity GHSAs).
-- Pin `SSH.NET` to 2026.0.0 in Testcontainers consumers (GHSA-q939-rpr3-3284, high).
-- Pin `Microsoft.OpenApi` to 2.12.2 on net10 (transitive 2.0.0 flagged by GHSA-v5pm-xwqc-g5wc).
-- Clear all 11 open Dependabot alerts in the dashboard UI bundled with `EverTask.Monitor.Api`: bump
-  `react-router-dom` to 7.18.2 (CSRF bypass, DoS, open redirect, XSS) and `postcss` to 8.5.23 (path
-  traversal), pin transitive `brace-expansion` / `js-yaml` via `pnpm.overrides`.
+- **The monitoring IP whitelist no longer honors `X-Forwarded-For`** ([#47]). The header was believed
+  unconditionally, so any direct caller could impersonate a whitelisted address; the client address is
+  now `Connection.RemoteIpAddress`. The reverse-proxy migration is under *Breaking changes*.
+- **The magic-link token moved out of the URL** ([#22]). New `POST /api/auth/magic` takes it in the
+  request body; the dashboard carries it in the URL fragment and scrubs the address bar. The old
+  `?token=` form was written verbatim into anything that logs request URLs. Both magic endpoints are now
+  rate-limited, compare tokens in fixed time and answer `Cache-Control: no-store`.
+- **Management POSTs reject cross-site browser requests** (`Sec-Fetch-Site`, with an `Origin` fallback).
+  This closes the CSRF path when a host authorization hook relies on an ambient cookie principal.
+- **IP whitelist parsing is fail-closed**: out-of-range CIDR prefixes no longer match, and IPv4-mapped
+  IPv6 addresses match their IPv4 entries.
+- **Paged reads cap `take` at 500**, and authenticated SignalR connections end when their JWT expires.
+- **Dependency updates for open GHSAs**: `System.Security.Cryptography.Xml`, `SSH.NET` and
+  `Microsoft.OpenApi` pins; all 11 dashboard-UI Dependabot alerts cleared (`react-router-dom` 7.18.2,
+  `postcss` 8.5.23, transitive pins).
 
 ### Deprecated
 
-- `GET /api/auth/magic?token=...` and the `/evertask-monitoring/magic?token=...` dashboard URL
-  (#22). Both keep working for existing links; the GET is `[Obsolete]` and flagged `deprecated`
-  in the OpenAPI document. Use the fragment URL and the POST exchange instead. Docs
-  (`monitoring-dashboard.md`, `monitoring-api-reference.md`, configuration reference/cheatsheet)
-  explain the log exposure and the host-side Serilog mitigation; the `integrate-evertask` plugin
-  skill now hands out the fragment URL (plugin 1.1.1).
+- **`GET /api/auth/magic?token=...` and the `?token=` dashboard URL** ([#22]): both keep working for
+  existing links, the GET is `[Obsolete]` and flagged `deprecated` in the OpenAPI document. Use the
+  fragment URL and the POST exchange instead.
+
+[#15]: https://github.com/GiampaoloGabba/EverTask/issues/15
+[#16]: https://github.com/GiampaoloGabba/EverTask/issues/16
+[#17]: https://github.com/GiampaoloGabba/EverTask/issues/17
+[#18]: https://github.com/GiampaoloGabba/EverTask/issues/18
+[#19]: https://github.com/GiampaoloGabba/EverTask/issues/19
+[#20]: https://github.com/GiampaoloGabba/EverTask/issues/20
+[#21]: https://github.com/GiampaoloGabba/EverTask/issues/21
+[#22]: https://github.com/GiampaoloGabba/EverTask/issues/22
+[#23]: https://github.com/GiampaoloGabba/EverTask/issues/23
+[#24]: https://github.com/GiampaoloGabba/EverTask/issues/24
+[#25]: https://github.com/GiampaoloGabba/EverTask/issues/25
+[#26]: https://github.com/GiampaoloGabba/EverTask/issues/26
+[#27]: https://github.com/GiampaoloGabba/EverTask/issues/27
+[#28]: https://github.com/GiampaoloGabba/EverTask/issues/28
+[#29]: https://github.com/GiampaoloGabba/EverTask/issues/29
+[#30]: https://github.com/GiampaoloGabba/EverTask/issues/30
+[#32]: https://github.com/GiampaoloGabba/EverTask/issues/32
+[#33]: https://github.com/GiampaoloGabba/EverTask/issues/33
+[#36]: https://github.com/GiampaoloGabba/EverTask/issues/36
+[#42]: https://github.com/GiampaoloGabba/EverTask/issues/42
+[#44]: https://github.com/GiampaoloGabba/EverTask/issues/44
+[#46]: https://github.com/GiampaoloGabba/EverTask/issues/46
+[#47]: https://github.com/GiampaoloGabba/EverTask/issues/47
+[#50]: https://github.com/GiampaoloGabba/EverTask/issues/50
+[#53]: https://github.com/GiampaoloGabba/EverTask/issues/53
 
 ## [3.11.0] - 2026-06-30
 
