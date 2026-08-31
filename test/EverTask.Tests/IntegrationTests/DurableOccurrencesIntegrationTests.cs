@@ -35,11 +35,15 @@ public class DurableOccurrencesIntegrationTests : IsolatedIntegrationTestBase
 
     private Task<IHost> StartHostAsync(bool startHost = true,
                                        Action<EverTaskServiceConfiguration>? configure = null,
-                                       TimeProvider? clock = null) =>
+                                       TimeProvider? clock = null,
+                                       RecordingLogger<OccurrenceMaterializer>? materializerLog = null) =>
         CreateIsolatedHostWithBuilderAsync(b =>
             {
                 b.Services.AddSingleton<ITaskStorage>(_shared);
                 b.Services.AddSingleton(_recorder);
+
+                if (materializerLog != null)
+                    b.Services.AddSingleton<IEverTaskLogger<OccurrenceMaterializer>>(materializerLog);
             },
             startHost,
             configure,
@@ -119,7 +123,7 @@ public class DurableOccurrencesIntegrationTests : IsolatedIntegrationTestBase
     /// </summary>
     private async Task<TaskHandlerExecutor> BuildExecutorAsync(QueuedTask row)
     {
-        var recovered = RecoveredTaskFactory.FromRow(row);
+        var recovered = RecoveredTaskFactory.FromRowWithoutRegistries(row);
 
         using var scope = Host!.Services.CreateScope();
 
@@ -165,6 +169,25 @@ public class DurableOccurrencesIntegrationTests : IsolatedIntegrationTestBase
                 new DateTimeOffset(2026, 12, 26, 8, 0, 0, TimeSpan.Zero),
                 new DateTimeOffset(2026, 12, 27, 8, 0, 0, TimeSpan.Zero)
             ]);
+    }
+
+    [Fact]
+    public async Task Should_materialize_nothing_when_schedule_row_names_an_unknown_calendar()
+    {
+        var log = new RecordingLogger<OccurrenceMaterializer>();
+        await StartHostAsync(startHost: false, materializerLog: log);
+        var definition = new RecurringTask
+        {
+            HourInterval = new HourInterval(1),
+            OccurrenceMode = OccurrenceMode.Durable,
+            Exclusions = new ScheduleExclusions { Calendars = ["removed-holidays"] }
+        };
+        var id = await SeedScheduleAsync(definition, Clock.GetUtcNow());
+
+        await Host!.Services.GetRequiredService<OccurrenceMaterializer>().RunAsync(id, null);
+
+        (await OccurrencesOfAsync(id)).ShouldBeEmpty();
+        log.Count(1816).ShouldBe(1, "the materializer refuses the row at its rebuild boundary");
     }
 
     [Fact]
@@ -821,7 +844,7 @@ public class DurableOccurrencesIntegrationTests : IsolatedIntegrationTestBase
         };
         await _shared.Persist(handlerless);
 
-        RecoveredTaskFactory.FromRow(handlerless).Task.ShouldNotBeNull(
+        RecoveredTaskFactory.FromRowWithoutRegistries(handlerless).Task.ShouldNotBeNull(
             "the premise: the row rebuilds its payload — what is missing is a handler to run it");
 
         await Host!.Services.GetRequiredService<OccurrenceMaterializer>().RunAsync(scheduleId, null);

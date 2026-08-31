@@ -49,7 +49,8 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
     private async Task StartHostAsync(bool startHost = true, bool faultyScheduler = false,
                                              bool watchRegistrations = false, ITaskStorage? storage = null,
                                              TimeProvider? clock = null,
-                                             Action<EverTaskServiceConfiguration>? configureEverTask = null)
+                                             Action<EverTaskServiceConfiguration>? configureEverTask = null,
+                                             RecordingLogger<WorkerExecutor>? workerLog = null)
     {
         var recovery = new StartupRecoveryWatch();
 
@@ -58,6 +59,9 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
             b.Services.AddSingleton<IEverTaskLogger<WorkerService>>(recovery);
             b.Services.AddSingleton(storage ?? _shared);
             b.Services.AddSingleton(_recorder);
+
+            if (workerLog != null)
+                b.Services.AddSingleton<IEverTaskLogger<WorkerExecutor>>(workerLog);
 
             if (faultyScheduler)
             {
@@ -145,7 +149,7 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
     /// </summary>
     private async Task<TaskHandlerExecutor> BuildExecutorAsync(QueuedTask row)
     {
-        var recovered = RecoveredTaskFactory.FromRow(row);
+        var recovered = RecoveredTaskFactory.FromRowWithoutRegistries(row);
 
         using var scope = Host!.Services.CreateScope();
 
@@ -1264,6 +1268,70 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
             .ShouldBeGreaterThanOrEqualTo(2,
                 "the manager parks its definition, then the losing advance reparks from that same row");
         _registrations.AcceptedAStaleRegistration(id).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Should_refuse_repark_when_winning_row_names_an_unknown_calendar()
+    {
+        var faulty = new FaultInjectingTaskStorage(_shared);
+        var log    = new RecordingLogger<WorkerExecutor>();
+
+        await StartHostAsync(startHost: false, storage: faulty, watchRegistrations: true, workerLog: log);
+
+        var id = await SeedDurableScheduleAsync(
+            new RecurringTask { HourInterval = new HourInterval(1), MaxRuns = 2 },
+            Clock.GetUtcNow(), $"unknown-calendar-repark-{Guid.NewGuid():N}");
+        var delivery = await BuildExecutorAsync(await RowAsync(id));
+
+        faulty.RunBefore(nameof(ITaskStorage.CompleteRecurringRun), () =>
+        {
+            var row = _shared.Get(task => task.Id == id).GetAwaiter().GetResult().ShouldHaveSingleItem();
+            var replacement = new RecurringTask
+            {
+                HourInterval = new HourInterval(1),
+                MaxRuns      = 2,
+                Exclusions   = new ScheduleExclusions { Calendars = ["removed-holidays"] }
+            };
+
+            row.RecurringTask = EverTaskJson.Serialize(replacement);
+            row.RecurringInfo = replacement.ToString();
+            row.ScheduleVersion++;
+            _shared.UpdateTask(row).GetAwaiter().GetResult();
+        });
+
+        await WorkerExecutor.DoWork(delivery, CancellationToken.None);
+
+        _registrations.Registrations.ShouldNotContain(registration => registration.Id == id,
+            "a row naming an unknown calendar must not be handed back to the scheduler");
+        log.Count(1234).ShouldBe(1, "the failed row rebuild is reported by the repark path");
+    }
+
+    [Fact]
+    public async Task Should_abandon_schedule_retry_when_row_names_an_unknown_calendar()
+    {
+        var log = new RecordingLogger<WorkerExecutor>();
+        await StartHostAsync(startHost: false, watchRegistrations: true, workerLog: log);
+
+        var definition = new RecurringTask
+        {
+            HourInterval = new HourInterval(1),
+            MaxRuns      = 2,
+            Exclusions   = new ScheduleExclusions { Calendars = ["removed-holidays"] }
+        };
+        var id = await SeedDurableScheduleAsync(definition, Clock.GetUtcNow(),
+            $"unknown-calendar-retry-{Guid.NewGuid():N}");
+        var retry = (await BuildExecutorAsync(await RowAsync(id))) with
+        {
+            ExecutionTime        = Clock.GetUtcNow(),
+            IsScheduleRetry      = true,
+            ScheduleRetryFromUtc = Clock.GetUtcNow()
+        };
+
+        await WorkerExecutor.DoWork(retry, CancellationToken.None);
+
+        _registrations.Registrations.ShouldNotContain(registration => registration.Id == id,
+            "an invalid retry row must not reach the scheduler");
+        log.Count(1238).ShouldBe(1, "the retry is abandoned at the row-rebuild guard");
     }
 
     [Theory]

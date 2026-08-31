@@ -39,7 +39,7 @@ public class RecoveredTaskFactoryTests
         var slot   = new DateTimeOffset(2026, 7, 1, 10, 0, 0, TimeSpan.Zero);
         var parent = Guid.NewGuid();
 
-        var recovered = RecoveredTaskFactory.FromRow(Row(r =>
+        var recovered = RecoveredTaskFactory.FromRowWithoutRegistries(Row(r =>
         {
             r.NextRunUtc      = slot;
             r.AuditLevel      = (int)AuditLevel.Minimal;
@@ -79,7 +79,7 @@ public class RecoveredTaskFactoryTests
         // the test says WHICH source was read, not just that the numbers look plausible.
         var slot = new DateTimeOffset(2026, 7, 1, 10, 0, 0, TimeSpan.Zero);
 
-        var recovered = RecoveredTaskFactory.FromRow(Row(r =>
+        var recovered = RecoveredTaskFactory.FromRowWithoutRegistries(Row(r =>
         {
             r.ParentTaskId          = Guid.NewGuid();
             r.ScheduledExecutionUtc = slot.AddHours(1);
@@ -103,7 +103,7 @@ public class RecoveredTaskFactoryTests
     {
         // Unreadable or foreign metadata must not cost a delivery: the caller keeps the column-derived
         // answer, which is what every row written before the metadata existed gets anyway.
-        var recovered = RecoveredTaskFactory.FromRow(Row(r =>
+        var recovered = RecoveredTaskFactory.FromRowWithoutRegistries(Row(r =>
         {
             r.ParentTaskId          = Guid.NewGuid();
             r.ScheduledExecutionUtc = new DateTimeOffset(2026, 7, 1, 10, 0, 0, TimeSpan.Zero);
@@ -121,7 +121,7 @@ public class RecoveredTaskFactoryTests
     {
         // The same column holds the runtime state of a durable SCHEDULE. A schedule is not an occurrence of
         // anything, so nothing there may end up stamped on its delivery.
-        var recovered = RecoveredTaskFactory.FromRow(Row(r =>
+        var recovered = RecoveredTaskFactory.FromRowWithoutRegistries(Row(r =>
         {
             r.IsRecurring   = true;
             r.RecurringTask = EverTaskJson.Serialize(new RecurringTask { SecondInterval = new SecondInterval(30) });
@@ -136,7 +136,8 @@ public class RecoveredTaskFactoryTests
     [Fact]
     public void A_row_written_before_per_task_audit_levels_recovers_as_Full()
     {
-        RecoveredTaskFactory.FromRow(Row(r => r.AuditLevel = null)).AuditLevel.ShouldBe(AuditLevel.Full);
+        RecoveredTaskFactory.FromRowWithoutRegistries(Row(r => r.AuditLevel = null)).AuditLevel
+                            .ShouldBe(AuditLevel.Full);
     }
 
     [Fact]
@@ -145,10 +146,10 @@ public class RecoveredTaskFactoryTests
         var scheduled = new DateTimeOffset(2026, 7, 1, 10, 0, 0, TimeSpan.Zero);
         var cursor    = scheduled.AddHours(5);
 
-        RecoveredTaskFactory.FromRow(Row(r => r.ScheduledExecutionUtc = scheduled)).ExecutionTime
+        RecoveredTaskFactory.FromRowWithoutRegistries(Row(r => r.ScheduledExecutionUtc = scheduled)).ExecutionTime
                             .ShouldBe(scheduled);
 
-        RecoveredTaskFactory.FromRow(Row(r =>
+        RecoveredTaskFactory.FromRowWithoutRegistries(Row(r =>
         {
             r.ScheduledExecutionUtc = scheduled;
             r.NextRunUtc            = cursor;
@@ -160,7 +161,8 @@ public class RecoveredTaskFactoryTests
     {
         // The type loads, the payload does not: that may heal in a later build, so it must not be confused
         // with a type that is simply gone.
-        var recovered = RecoveredTaskFactory.FromRow(Row(r => r.Request = "{ this is not json"));
+        var recovered = RecoveredTaskFactory.FromRowWithoutRegistries(Row(r =>
+            r.Request = "{ this is not json"));
 
         recovered.TypeWasLoadable.ShouldBeTrue();
         recovered.Task.ShouldBeNull();
@@ -171,7 +173,8 @@ public class RecoveredTaskFactoryTests
     [Fact]
     public void A_type_that_no_longer_exists_is_reported_as_not_loadable()
     {
-        var recovered = RecoveredTaskFactory.FromRow(Row(r => r.Type = "Gone.Type, Gone.Assembly"));
+        var recovered = RecoveredTaskFactory.FromRowWithoutRegistries(Row(r =>
+            r.Type = "Gone.Type, Gone.Assembly"));
 
         recovered.TypeWasLoadable.ShouldBeFalse();
         recovered.Task.ShouldBeNull();
@@ -184,7 +187,7 @@ public class RecoveredTaskFactoryTests
         // bounded per-restart failure instead of a terminal poison — so it is validated here.
         var corrupt = EverTaskJson.Serialize(new RecurringTask { CronInterval = new CronInterval("not a cron") });
 
-        var recovered = RecoveredTaskFactory.FromRow(Row(r =>
+        var recovered = RecoveredTaskFactory.FromRowWithoutRegistries(Row(r =>
         {
             r.IsRecurring   = true;
             r.RecurringTask = corrupt;
@@ -232,7 +235,7 @@ public class RecoveredTaskFactoryTests
 
         corrupt.ShouldContain("\"OccurrenceMode\":2");
 
-        var recovered = RecoveredTaskFactory.FromRow(Row(r =>
+        var recovered = RecoveredTaskFactory.FromRowWithoutRegistries(Row(r =>
         {
             r.IsRecurring   = true;
             r.RecurringTask = corrupt;
@@ -254,7 +257,7 @@ public class RecoveredTaskFactoryTests
             OccurrenceMode = mode
         });
 
-        var recovered = RecoveredTaskFactory.FromRow(Row(r =>
+        var recovered = RecoveredTaskFactory.FromRowWithoutRegistries(Row(r =>
         {
             r.IsRecurring   = true;
             r.RecurringTask = schedule;

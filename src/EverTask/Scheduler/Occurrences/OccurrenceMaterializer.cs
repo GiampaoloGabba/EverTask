@@ -987,7 +987,7 @@ internal sealed class OccurrenceMaterializer
     private static async Task<OccurrenceRebuild> BuildOccurrenceFromRowAsync(IServiceProvider provider,
                                                                             QueuedTask child)
     {
-        var recovered = RecoveredTaskFactory.FromRow(child);
+        var recovered = RecoveredTaskFactory.FromRowWithoutRegistries(child);
 
         if (recovered.Task is null)
         {

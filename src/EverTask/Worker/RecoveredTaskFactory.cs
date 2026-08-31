@@ -51,11 +51,17 @@ internal static class RecoveredTaskFactory
 {
     /// <param name="row">The persisted row.</param>
     /// <param name="validationContext">
-    /// The registered occurrence providers and exclusion calendars, when the caller can reach them. A row
-    /// naming a definition this build no longer registers is then corrupt schedule metadata like an
-    /// unparseable cron, and takes the same terminal poison route instead of failing at every next-run.
+    /// The registered occurrence providers and exclusion calendars. A row naming a definition this build no
+    /// longer registers is corrupt schedule metadata like an unparseable cron, and takes the same terminal
+    /// poison route instead of failing at every next-run.
     /// </param>
-    public static RecoveredTask FromRow(QueuedTask row, ScheduleValidationContext? validationContext = null)
+    public static RecoveredTask FromRow(QueuedTask row, ScheduleValidationContext validationContext) =>
+        FromRowCore(row, validationContext);
+
+    /// <summary>Rebuilds a row on a surface that deliberately has no schedule registries.</summary>
+    public static RecoveredTask FromRowWithoutRegistries(QueuedTask row) => FromRowCore(row, null);
+
+    private static RecoveredTask FromRowCore(QueuedTask row, ScheduleValidationContext? validationContext)
     {
         IEverTask? task            = null;
         var        typeWasLoadable = false;

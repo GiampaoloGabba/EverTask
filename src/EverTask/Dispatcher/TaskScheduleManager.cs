@@ -601,7 +601,7 @@ internal sealed class TaskScheduleManager(
     private static async Task<TaskHandlerExecutor> BuildOccurrenceExecutorAsync(IServiceProvider provider,
                                                                                 QueuedTask row)
     {
-        var recovered = RecoveredTaskFactory.FromRow(row);
+        var recovered = RecoveredTaskFactory.FromRowWithoutRegistries(row);
 
         if (recovered.Task is null)
         {
