@@ -5,7 +5,48 @@ All notable changes to EverTask will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [4.0.0] - 2026-08-26
+## [4.0.0] - 2026-08-31
+
+### Changed (storage and dispatch performance, #15)
+
+The four storage writes of a durable task's lifecycle were 94.7% of its allocation. This batch attacks all
+four; the measured pass lives in `benchmarks/RESULTS.md` (P-L, P-M, P-N). Clean A/B on Postgres at
+parallelism 16: **2,792 to 4,694 tasks/s (+68%), median latency down 22%, 80 to 48 KB allocated per task
+(-40%)**. The p99 is higher in absolute terms (3.0 to 5.7 ms) because 68% more tasks are in flight on the
+same pool; at matched load the tail is expected at or below the old one, and the pre-release soak measures
+exactly that. None of it changes a public contract; one audit-trail detail changed deliberately, noted below.
+
+- **An immediate dispatch is born `Queued` (#16).** The row used to be persisted as `WaitingQueue`, handed
+  to the channel, then transitioned with a second storage write. It is now persisted `Queued` directly and
+  that write is gone: one round-trip instead of two before a task can run. A full queue reverts the row to
+  `WaitingQueue` through the existing dropped-delivery path, so recovery semantics are unchanged, and a
+  rate-limit deferral still transitions back through `Queued` when its slot fires. The one visible change:
+  at `AuditLevel.Full` an immediate task no longer writes a separate `WaitingQueue` to `Queued` audit pair,
+  because it never passes through `WaitingQueue` at all. Scheduled, delayed and recurring dispatches keep
+  their current statuses and audits.
+- **`Persist` writes through a parameterized INSERT generated from the EF model (#17).** The tracked
+  `Add` + `SaveChanges` path built an entity snapshot and a command batch for a ~20-column row on every
+  task: 37-40 KB per call. The statement is now generated once per storage instance from the model itself
+  (column list, identifier quoting, value converters), so every provider shares one code path and a mapped
+  column missing from the statement is a startup exception, not a wrong row. A consumer-supplied
+  `ITaskStoreDbContext` whose model the generator cannot handle (shadow, owned or store-generated
+  properties) keeps the tracked path unchanged.
+- **The base relational `SetStatus` skips its transaction when no audit row is staged (#19).** A single
+  conditional UPDATE is atomic on its own; the `BEGIN`/`COMMIT` around it was pure overhead, and on SQLite
+  it held the write lock across three round-trips, so every concurrent writer landed in busy backoff. The
+  no-audit arm went from 16 to 433 tasks/s and its median write from 155 ms to 3.9 ms. Audited transitions
+  keep the transaction; SQL Server, PostgreSQL and MySQL run their procedures and CTEs exactly as before.
+- **The occurrence reconcile pass reads ids, not rows (#50).** Every kick of a durable schedule loaded all
+  non-terminal children whole, payload included, to check which were still alive. `ITaskStorage` grew
+  `GetOccurrenceIds` (a default member, so custom stores keep compiling; the built-in stores project over
+  the `(ParentTaskId, Status)` index) and the full row is fetched only for the stale minority that needs
+  rescuing.
+- **Provider SQL is built once per storage instance (#18).** PostgreSQL re-interpolated a ~700-character
+  CTE on every status write, SQL Server its `EXEC` strings. Both are now cached at construction; the
+  statements are byte-identical. The measured remainder of #18 (raw ADO commands instead of the pooled
+  context) was deliberately declined to leave connection handling untouched.
+- **An occurrence parses its `RuntimeInfo` once per executor (#53).** The JSON was re-parsed on every
+  access from the slot, run-number and monitoring reads of one delivery.
 
 ### Added (recurring exclusions, #36)
 
