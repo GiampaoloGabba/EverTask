@@ -242,7 +242,6 @@ public class WorkerQueueRecoveryGuardTests
                 await OnSetStatus(taskId, status).ConfigureAwait(false);
         }
 
-        public Task<int> GetCurrentRunCount(Guid taskId) => Task.FromResult(0);
         public Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel) => Task.CompletedTask;
         public Task<QueuedTask?> GetByTaskKey(string taskKey, CancellationToken ct = default) => Task.FromResult<QueuedTask?>(null);
         public Task UpdateTask(QueuedTask task, CancellationToken ct = default) => Task.CompletedTask;

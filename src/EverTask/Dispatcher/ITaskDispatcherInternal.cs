@@ -50,6 +50,12 @@ public interface ITaskDispatcherInternal : ITaskDispatcher
     /// (3) skip the storage definition rewrite (UpdateTask), since the definition came from storage
     /// unchanged and rewriting could overwrite a concurrent live re-registration (lost update).
     /// </param>
+    /// <param name="rowMetadata">
+    /// Optional. The slice of a persisted row this dispatch must work from: the identity the executor carries
+    /// back verbatim instead of re-deriving it (parent, occurrence metadata, schedule version, stored queue),
+    /// plus the status and version an exhausted-series finalization compare-and-swaps on — see
+    /// <see cref="DispatchRowMetadata"/>. Default for a dispatch that has no row behind it yet.
+    /// </param>
     /// <returns>A task that represents the queue operation.</returns>
-    internal Task<Guid> ExecuteDispatch(IEverTask task, DateTimeOffset? executionTime = null, RecurringTask? recurring = null, int? currentRun = null, CancellationToken ct = default, Guid? existingTaskId = null, string? taskKey = null, AuditLevel? auditLevel = null, bool isRecovery = false);
+    internal Task<Guid> ExecuteDispatch(IEverTask task, DateTimeOffset? executionTime = null, RecurringTask? recurring = null, int? currentRun = null, CancellationToken ct = default, Guid? existingTaskId = null, string? taskKey = null, AuditLevel? auditLevel = null, bool isRecovery = false, DispatchRowMetadata rowMetadata = default);
 }

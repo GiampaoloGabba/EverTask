@@ -7,7 +7,7 @@ nav_order: 7
 
 # SQLite Storage
 
-SQLite provides lightweight, file-based storage that works well for single-server deployments.
+SQLite is lightweight, file-based storage that works well for single-server deployments.
 
 ## Installation
 
@@ -58,12 +58,12 @@ var dbPath = Path.Combine(
 
 - Simple setup - single file
 - No server required
-- Perfect for small-scale production
+- Suitable for small-scale production
 - Easy backups (copy file)
 - Lower infrastructure cost
 - Limited concurrent writes
 - Single server only (no clustering)
-- Provider limitation: EF Core cannot translate `DateTimeOffset` comparison operators for SQLite. EverTask falls back to in-memory keyset filtering during recovery (`ProcessPendingAsync`), so avoid very large backlogs on SQLite or switch to SQL Server for heavy workloads.
+- Provider limitation: EF Core cannot translate `DateTimeOffset` comparison operators for SQLite. EverTask falls back to in-memory filtering during recovery, so avoid very large backlogs on SQLite or switch to SQL Server for heavy workloads.
 
 ## Use Cases
 
@@ -138,9 +138,9 @@ Use SQLite storage when:
 
 Consider alternatives when:
 - High concurrency requirements (use SQL Server)
-- Multi-server clustering (use SQL Server)
+- High-write-concurrency database deployments (use SQL Server or PostgreSQL, with one active EverTask host per store)
 - Very large backlogs (> 10,000 pending tasks)
-- Need stored procedures and advanced features
+- Need advanced database features
 
 ## Next Steps
 

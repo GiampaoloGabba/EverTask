@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using EverTask.Configuration;
+using EverTask.Dispatcher;
 
 namespace EverTask.Handler;
 
@@ -8,7 +9,8 @@ internal abstract class TaskHandlerWrapper
     public abstract ValueTask<TaskHandlerExecutor> Handle(IEverTask task, DateTimeOffset? executionTime,
                                                           RecurringTask? recurring, IServiceProvider serviceFactory,
                                                           AuditLevel auditLevel, Guid? existingTaskId = null,
-                                                          string? taskKey = null, bool useLazyExecutor = false);
+                                                          string? taskKey = null, bool useLazyExecutor = false,
+                                                          DispatchRowMetadata rowMetadata = default);
 }
 
 internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TTask : IEverTask
@@ -25,7 +27,8 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
                                                                 RecurringTask? recurring,
                                                                 IServiceProvider serviceFactory,
                                                                 AuditLevel auditLevel, Guid? existingTaskId = null,
-                                                                string? taskKey = null, bool useLazyExecutor = false)
+                                                                string? taskKey = null, bool useLazyExecutor = false,
+                                                                DispatchRowMetadata rowMetadata = default)
     {
         var guidGenerator = serviceFactory.GetRequiredService<IGuidGenerator>();
 
@@ -36,9 +39,8 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
             // Lazy executor: the handler is resolved only to extract per-type metadata (queue name,
             // handler type name, rate-limit policy) plus the per-dispatch rate-limit key, and is
             // released with this short-lived scope. Resolving it from the root provider would pin
-            // disposable transient handlers in the root container's disposables list until
-            // shutdown (MEM-2). The executing instance is resolved fresh by the worker in its own
-            // per-task scope.
+            // disposable transient handlers in the root container's disposables list until shutdown.
+            // The executing instance is resolved fresh by the worker in its own per-task scope.
             var scopeFactory = serviceFactory.GetRequiredService<IServiceScopeFactory>();
             await using var scope = scopeFactory.CreateAsyncScope();
 
@@ -58,19 +60,28 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
                 HandlerStartedCallback: null,
                 HandlerCompletedCallback: null,
                 existingTaskId ?? guidGenerator.NewDatabaseFriendly(),
-                ResolveQueueName(scopedHandler, recurring),
+                // A stored queue wins over the handler attribute: the row was routed there once and the
+                // recovery loop still groups it by that value.
+                rowMetadata.QueueName ?? ResolveQueueName(scopedHandler, recurring),
                 taskKey,
                 auditLevel,
                 policy,
                 rateLimitKey
-            );
+            )
+            {
+                ParentTaskId    = rowMetadata.ParentTaskId,
+                RuntimeInfo     = rowMetadata.RuntimeInfo,
+                ScheduleVersion = rowMetadata.ScheduleVersion,
+                RunNumber       = rowMetadata.RunNumber,
+                NominalSlotUtc  = rowMetadata.NominalSlotUtc
+            };
         }
 
         // Eager executor: the handler instance is carried to execution time inside an EverTask-OWNED
         // scope (NOT the singleton dispatcher's root provider). Resolving from the root would pin the
         // IAsyncDisposable transient handler in the root container's disposables list until shutdown
-        // (L27 root-pinning leak) and have it disposed twice (worker + root). The worker disposes this
-        // scope right after execution, releasing the handler deterministically; recurring continuations
+        // and have it disposed twice (worker + root). The worker disposes this scope right after
+        // execution, releasing the handler deterministically; recurring continuations
         // go lazy (WorkerExecutor.QueueNextOccourrence) so the carried scope is always single-use.
         var handlerScopeFactory = serviceFactory.GetRequiredService<IServiceScopeFactory>();
         var handlerScope        = handlerScopeFactory.CreateAsyncScope();
@@ -83,7 +94,7 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
             // Resolve via the concrete type (registered transient by HandlerRegistrar), like the lazy
             // path does, so a manual singleton registration of IEverTaskHandler<TTask> cannot hand the
             // SAME mutable instance to concurrent dispatches: the worker sets per-execution state (log
-            // capture) on the carried handler, so a shared instance corrupts concurrent executions (G3).
+            // capture) on the carried handler, so a shared instance corrupts concurrent executions.
             if (handlerScope.ServiceProvider.GetService(handlerService.GetType()) is IEverTaskHandler<TTask> concreteHandler)
             {
                 handlerService = concreteHandler;
@@ -102,13 +113,20 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
                 persistenceId => handlerService.OnStarted(persistenceId),
                 persistenceId => handlerService.OnCompleted(persistenceId),
                 existingTaskId ?? guidGenerator.NewDatabaseFriendly(),
-                ResolveQueueName(handlerService, recurring),
+                rowMetadata.QueueName ?? ResolveQueueName(handlerService, recurring),
                 taskKey,
                 auditLevel,
                 eagerPolicy,
                 eagerKey,
                 handlerScope
-            );
+            )
+            {
+                ParentTaskId    = rowMetadata.ParentTaskId,
+                RuntimeInfo     = rowMetadata.RuntimeInfo,
+                ScheduleVersion = rowMetadata.ScheduleVersion,
+                RunNumber       = rowMetadata.RunNumber,
+                NominalSlotUtc  = rowMetadata.NominalSlotUtc
+            };
         }
         catch
         {
@@ -126,6 +144,13 @@ internal sealed class TaskHandlerWrapperImp<TTask> : TaskHandlerWrapper where TT
     private static (RateLimitPolicy? Policy, string? Key) ExtractRateLimit(
         IEverTaskHandler<TTask> handler, TTask task, RecurringTask? recurring, IServiceProvider serviceFactory)
     {
+        // A DURABLE schedule row never runs the handler: it must not carry the handler's policy (it would
+        // spend the key's budget on a row that executes nothing, and starve the occurrences it produces), and
+        // the "recurrence faster than the limiter" warning does not apply to it either — that one is about the
+        // occurrences, which are gated one by one.
+        if (recurring is { OccurrenceMode: OccurrenceMode.Durable })
+            return (null, null);
+
         var handlerType = handler.GetType();
 
         var policy = RateLimitPolicyCache.GetOrAdd(

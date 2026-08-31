@@ -41,4 +41,20 @@ public class TaskFilter
     /// Search term (searches in Type, Handler, TaskKey)
     /// </summary>
     public string? SearchTerm { get; set; }
+
+    /// <summary>
+    /// Keep only the occurrences of this durable schedule.
+    /// </summary>
+    public Guid? ParentTaskId { get; set; }
+
+    /// <summary>
+    /// When true, keep only materialized occurrences; when false, keep only rows that are not occurrences.
+    /// </summary>
+    public bool? OnlyOccurrences { get; set; }
+
+    /// <summary>
+    /// When true, keep only the occurrences that stand for missed work — a replayed slot or a run of missed
+    /// slots collapsed into one. When false, keep only the rows that stand for none.
+    /// </summary>
+    public bool? OnlyCatchUp { get; set; }
 }

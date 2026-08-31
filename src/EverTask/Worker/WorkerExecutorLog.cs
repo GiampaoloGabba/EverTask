@@ -29,6 +29,11 @@ internal static partial class WorkerExecutorLog
         Message = "Failed to resolve handler for task {TaskId}")]
     public static partial void HandlerResolutionFailed(this ILogger logger, Exception exception, Guid taskId);
 
+    [LoggerMessage(EventId = 1230, Level = LogLevel.Error,
+        Message = "The epilogue of task {TaskId} failed after the delivery itself had ended; the delivery is " +
+                  "released anyway")]
+    public static partial void DeliveryEpilogueFailed(this ILogger logger, Exception exception, Guid taskId);
+
     [LoggerMessage(EventId = 1203, Level = LogLevel.Error,
         Message = "Failed to persist execution logs for task {TaskId}")]
     public static partial void ExecutionLogsPersistFailed(this ILogger logger, Exception exception, Guid taskId);
@@ -50,8 +55,66 @@ internal static partial class WorkerExecutorLog
     public static partial void RecurringSeriesCancelled(this ILogger logger, Guid taskId);
 
     [LoggerMessage(EventId = 1210, Level = LogLevel.Information,
-        Message = "Task {TaskId} skipped {SkippedCount} missed occurrence(s) to maintain schedule")]
-    public static partial void MissedOccurrencesSkipped(this ILogger logger, Guid taskId, int skippedCount);
+        Message = "Task {TaskId} skipped {SkippedCount} missed occurrence(s) (exact count: {IsExact}) to maintain schedule")]
+    public static partial void MissedOccurrencesSkipped(this ILogger logger, Guid taskId, int skippedCount,
+                                                        bool isExact);
+
+    [LoggerMessage(EventId = 1232, Level = LogLevel.Warning,
+        Message = "The run of recurring task {TaskId} was recorded without its compare-and-swap: the schedule " +
+                  "was rewritten under it {Attempts} times in a row, so the guard was given up rather than the " +
+                  "run. The cursor written is the one the last read carried, and the schedule is parked from " +
+                  "that row")]
+    public static partial void ScheduleAdvanceLost(this ILogger logger, Guid taskId, int attempts);
+
+    [LoggerMessage(EventId = 1233, Level = LogLevel.Debug,
+        Message = "Recurring task {TaskId} was parked at {NextRun} from its own row, because the run that just " +
+                  "ended belonged to a definition that has since been replaced")]
+    public static partial void ScheduleReparkedFromRow(this ILogger logger, Guid taskId, DateTimeOffset nextRun);
+
+    [LoggerMessage(EventId = 1234, Level = LogLevel.Error,
+        Message = "Recurring task {TaskId} carries a definition that replaced the one that just ran, and it " +
+                  "could not be parked from its own row: the series stops until startup recovery finds it")]
+    public static partial void ScheduleReparkFromRowFailed(this ILogger logger, Exception? exception, Guid taskId);
+
+    [LoggerMessage(EventId = 1235, Level = LogLevel.Information,
+        Message = "The next occurrence of recurring task {TaskId} was computed at schedule version {Version} " +
+                  "and not parked: a newer version of the schedule is already registered")]
+    public static partial void NextOccurrenceRefusedBySuccessor(this ILogger logger, Guid taskId, int version);
+
+    [LoggerMessage(EventId = 1236, Level = LogLevel.Information,
+        Message = "A rate-limit skip of recurring task {TaskId} ended the series at schedule version {Version} " +
+                  "and did not finalize it: the schedule was rewritten while the skip was decided")]
+    public static partial void SkippedSeriesFinalizationSuperseded(this ILogger logger, Guid taskId, int version);
+
+    /// <summary>
+    /// T6's "compressed slots" counter. A daylight-saving transition can make several nominal wall-clock slots
+    /// of the same schedule stand for one instant; EverTask fires once, and this is the line that says how many
+    /// slots that one occurrence answered for. Only a zoned calendar schedule can produce it, and only around a
+    /// transition, so it stays silent the rest of the year.
+    /// </summary>
+    [LoggerMessage(EventId = 1226, Level = LogLevel.Information,
+        Message = "Task {TaskId} collapsed {CollapsedCount} nominal slot(s) into the occurrence at {NextRun}: " +
+                  "a daylight-saving transition maps them to the same instant")]
+    public static partial void DstSlotsCollapsed(this ILogger logger, Guid taskId, int collapsedCount,
+                                                 DateTimeOffset? nextRun);
+
+    [LoggerMessage(EventId = 1227, Level = LogLevel.Error,
+        Message = "Durable schedule {TaskId} fired but no occurrence materializer is registered: no occurrence " +
+                  "will be created. Register EverTask through AddEverTask")]
+    public static partial void DurableScheduleWithoutMaterializer(this ILogger logger, Guid taskId);
+
+    [LoggerMessage(EventId = 1228, Level = LogLevel.Error,
+        Message = "Materialization of durable schedule {TaskId} failed; the schedule is re-parked for a retry")]
+    public static partial void ScheduleMaterializationFailed(this ILogger logger, Exception exception, Guid taskId);
+
+    [LoggerMessage(EventId = 1238, Level = LogLevel.Debug,
+        Message = "Schedule {TaskId} was asked to retry its occurrence provider, but {Reason}")]
+    public static partial void ScheduleRetryAbandoned(this ILogger logger, Guid taskId, string reason);
+
+    [LoggerMessage(EventId = 1239, Level = LogLevel.Error,
+        Message = "The occurrence provider retry of schedule {TaskId} failed; the series waits for the next " +
+                  "startup recovery")]
+    public static partial void ScheduleRetryFailed(this ILogger logger, Exception exception, Guid taskId);
 
     [LoggerMessage(EventId = 1211, Level = LogLevel.Error, Message = "Unable to publish event {Message}")]
     public static partial void EventPublishFailed(this ILogger logger, Exception exception, string message);
@@ -112,6 +175,16 @@ internal static partial class WorkerExecutorLog
         Message = "Task with id {TaskId} is signaled to be cancelled and will not be executed")]
     public static partial void TaskCancellationSignaled(this ILogger logger, Guid taskId);
 
+    [LoggerMessage(EventId = 1229, Level = LogLevel.Information, SkipEnabledCheck = true,
+        Message = "Occurrence {OccurrenceId} belongs to cancelled schedule {ScheduleId} and will not be executed")]
+    public static partial void OccurrenceOfCancelledSchedule(this ILogger logger, Guid occurrenceId, Guid scheduleId);
+
+    [LoggerMessage(EventId = 1231, Level = LogLevel.Information, SkipEnabledCheck = true,
+        Message = "Task with id {TaskId} carries schedule version {DeliveredVersion} and was superseded by " +
+                  "version {PublishedVersion}: the delivery is discarded")]
+    public static partial void SupersededScheduleDelivery(this ILogger logger, Guid taskId, int deliveredVersion,
+                                                          int publishedVersion);
+
     [LoggerMessage(EventId = 1221, Level = LogLevel.Error, SkipEnabledCheck = true,
         Message = "Error occurred executing the callback override {CallbackName} for task with id {TaskId}")]
     public static partial void CallbackOverrideFailed(this ILogger logger, Exception? exception, string callbackName,
@@ -133,4 +206,59 @@ internal static partial class WorkerExecutorLog
     [LoggerMessage(EventId = 1225, Level = LogLevel.Error, SkipEnabledCheck = true,
         Message = "Error occurred executing task with id {TaskId}")]
     public static partial void TaskExecutionFailed(this ILogger logger, Exception? exception, Guid taskId);
+
+    [LoggerMessage(EventId = 1237, Level = LogLevel.Warning, SkipEnabledCheck = true,
+        Message = "Occurrence provider '{ProviderKey}' could not answer for schedule {TaskId} ({Failures} " +
+                  "consecutive failure(s)): nothing was written and the schedule is parked to ask again at " +
+                  "{RetryAtUtc:O}")]
+    public static partial void ScheduleAdvanceDeferredByProvider(this ILogger logger, Exception? exception,
+                                                                 string providerKey, Guid taskId, int failures,
+                                                                 DateTimeOffset retryAtUtc);
+
+    [LoggerMessage(EventId = 1240, Level = LogLevel.Debug,
+        Message = "Next occurrence of schedule {TaskId} was not computed: the host is stopping. Nothing was " +
+                  "written and startup recovery asks the grid again")]
+    public static partial void ScheduleAdvanceAbandonedOnShutdown(this ILogger logger, Guid taskId);
+
+    [LoggerMessage(EventId = 1241, Level = LogLevel.Error,
+        Message = "Schedule {TaskId} could not be parked to ask the occurrence provider '{ProviderKey}' " +
+                  "again: nothing was written and the series stays where it is until the next startup " +
+                  "recovery")]
+    public static partial void ProviderRetryParkFailed(this ILogger logger, Exception? exception, Guid taskId,
+                                                       string providerKey);
+
+    [LoggerMessage(EventId = 1242, Level = LogLevel.Warning,
+        Message = "The run of task {TaskId} ended without a persisted outcome: it carries schedule version " +
+                  "{DeliveredVersion} and version {PublishedVersion} owns the row now, so a terminal status " +
+                  "written here would end the series that replaced it")]
+    public static partial void SupersededScheduleOutcomeNotPersisted(this ILogger logger, Guid taskId,
+                                                                     int deliveredVersion, int publishedVersion);
+
+    [LoggerMessage(EventId = 1243, Level = LogLevel.Warning,
+        Message = "The terminal status {Status} of task {TaskId} was not persisted: the row no longer stands " +
+                  "at the schedule version {DeliveredVersion} this run was delivered for, or it carries a " +
+                  "cancellation this ending must not erase")]
+    public static partial void EndingOutcomeNotPersisted(this ILogger logger, Guid taskId, QueuedTaskStatus status,
+                                                         int deliveredVersion);
+
+    [LoggerMessage(EventId = 1244, Level = LogLevel.Warning,
+        Message = "Exclusion search for schedule {TaskId} exhausted at {StandingInstant:O} " +
+                  "({Failures} consecutive failure(s)); the cursor was retained and the schedule is parked " +
+                  "to retry at {RetryAtUtc:O}")]
+    public static partial void ExclusionSearchDeferred(this ILogger logger, Exception exception, Guid taskId,
+                                                       DateTimeOffset standingInstant, int failures,
+                                                       DateTimeOffset retryAtUtc);
+
+    [LoggerMessage(EventId = 1245, Level = LogLevel.Error,
+        Message = "Schedule {TaskId} could not be parked after its exclusion search exhausted at " +
+                  "{StandingInstant:O}; the retained cursor waits for startup recovery")]
+    public static partial void ExclusionSearchRetryParkFailed(this ILogger logger, Exception exception, Guid taskId,
+                                                              DateTimeOffset standingInstant);
+
+    [LoggerMessage(EventId = 1246, Level = LogLevel.Warning,
+        Message = "Exclusion-search retry for schedule {TaskId} at {StandingInstant:O} was refused for " +
+                  "{RetryAtUtc:O}; another schedule version or shutdown owns the registration")]
+    public static partial void ExclusionSearchRetryParkRefused(this ILogger logger, Guid taskId,
+                                                               DateTimeOffset standingInstant,
+                                                               DateTimeOffset retryAtUtc);
 }

@@ -20,9 +20,12 @@ Scenarios available today (**Tier 0 — anchors**):
 | `A4W` | worker-only: engine over `NullTaskStorage` | no | isolates engine cost (no persistence) |
 | `L8` | full lifecycle throughput through the engine | yes | **production primary**: Persist+InProgress+handler+Completed per `--storage` |
 | `LDP` | dispatch-call latency on the caller thread | yes | perceived latency: `await Dispatch()` incl. the sync write |
+| `LRA` | recurring advance: next-occurrence + `UpdateCurrentRun` | yes | the schedule-advance axis, driven directly (a live grid is paced at 1 s and would measure the clock) |
+| `LDM` | durable materialization: `MaterializeOccurrence` | yes | the occurrence axis: one commit that inserts the occurrence row and advances the cursor. `--parallelism` is the global materialization budget — one schedule per lane |
 | `tier0` | A1, A2, A4W (no DB) | no | quick run, no Docker |
 | `anchors` | the five Tier-0 anchors (A4S/A3 honour `--storage`) | mixed | full Tier-0 |
 | `tier1` | L8, LDP (honour `--storage` + `--audit`) | yes | production headline pair |
+| `recurring` | LRA, LDM (honour `--storage`) | yes | the two schedule axes of the D7 gate |
 
 Common knobs (defaults in `Infra/RunConfig.cs`):
 
@@ -31,7 +34,7 @@ Common knobs (defaults in `Infra/RunConfig.cs`):
 --parallelism 16    consumer/worker count (default = logical cores)
 --producers 4       producer count for A1/A4W (multi-writer like EverTask; 1 = single-producer ref)
 --capacity 2000     bounded channel capacity
---storage inmemory  inmemory | sqlite | sqlserver | postgres   (A3/A4S/L8/LDP; sqlserver/postgres need Docker)
+--storage inmemory  inmemory | sqlite | sqlserver | postgres   (A3/A4S/L8/LDP/LRA/LDM; sqlserver/postgres need Docker)
 --poll-interval 1000   A3 polling period in ms
 --audit full        L8/LDP audit level: none | minimal | errorsonly | full (full = engine default, heavy)
 --payload none      task body size for L8/A4W: none (tiny/primitives) | 1k | 64k | <n>[k] (sizes the

@@ -13,6 +13,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { TaskStatusBadge } from '@/components/common/TaskStatusBadge';
 import { EmptyState } from '@/components/common/EmptyState';
 import { TaskListDto } from '@/types/task.types';
+import { LateBadge, MisfireBadge } from '@/components/tasks/OccurrenceBadges';
 import { format } from 'date-fns';
 import { ChevronLeft, ChevronRight, ListX, Clock, Hourglass } from 'lucide-react';
 
@@ -40,7 +41,7 @@ export function TasksTable({
     return parts[parts.length - 1] || type;
   };
 
-  const formatDate = (dateStr: string | null) => {
+  const formatDate = (dateStr: string | null | undefined) => {
     if (!dateStr) return '-';
     try {
       return format(new Date(dateStr), 'MMM d, yyyy HH:mm');
@@ -151,6 +152,23 @@ export function TasksTable({
                       <Badge variant="outline" className="text-xs">
                         {task.currentRunCount} / {task.maxRuns}
                       </Badge>
+                    )}
+                    {task.parentTaskId && (
+                      <Badge
+                        variant="outline"
+                        className="text-xs bg-indigo-50 text-indigo-700 border-indigo-200"
+                        title={`Occurrence of schedule ${task.parentTaskId}`}
+                      >
+                        Occurrence
+                      </Badge>
+                    )}
+                    <MisfireBadge kind={task.misfireKind} />
+                    {task.parentTaskId && (
+                      <LateBadge
+                        slotUtc={task.nominalSlotUtc}
+                        startedAtUtc={task.startedAtUtc}
+                        status={task.status}
+                      />
                     )}
                     {task.throttledUntil && (
                       <Badge

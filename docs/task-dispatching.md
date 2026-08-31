@@ -7,7 +7,7 @@ nav_order: 2
 
 # Task Dispatching
 
-EverTask provides several ways to dispatch tasks for immediate, delayed, or scheduled execution. This guide covers all dispatching patterns.
+Tasks can be dispatched for immediate, delayed, or scheduled execution. This guide covers all the dispatching patterns.
 
 ## Table of Contents
 
@@ -151,19 +151,28 @@ await _dispatcher.Dispatch(
 
 ### Time Zone Considerations
 
+A one-shot dispatch takes an absolute instant, so build the `DateTimeOffset` from the offset in force **on
+that date**:
+
 ```csharp
-// Schedule in user's local time zone
+// Schedule in the user's local time zone
 var userTimeZone = TimeZoneInfo.FindSystemTimeZoneById(user.TimeZoneId);
-var localTime = new DateTimeOffset(2024, 12, 25, 10, 0, 0, userTimeZone.BaseUtcOffset);
+var localTime    = new DateTime(2024, 12, 25, 10, 0, 0);
 
 await _dispatcher.Dispatch(
     new SendBirthdayGreetingTask(user.Id),
-    localTime);
+    new DateTimeOffset(localTime, userTimeZone.GetUtcOffset(localTime)));
 ```
+
+`GetUtcOffset(localTime)` answers for that specific date. `BaseUtcOffset` is the zone's *standard* offset
+whatever the date, so a summer appointment built with it lands an hour off.
+
+Recurring schedules do not need this at all: they take the zone itself and resolve the offset at every
+occurrence. See [Time Zones](recurring-tasks/time-zones.md).
 
 ### Scheduled Task Behavior
 
-A few things to keep in mind: if the scheduled time is already in the past when you dispatch, the task will execute immediately. Scheduled tasks persist across application restarts, so they'll still run even if your app goes down. For time zones, use UTC when you want absolute time regardless of location, or use specific offsets when you need local time behavior.
+A few things to keep in mind: if the scheduled time is already in the past when you dispatch, the task will execute immediately. Scheduled tasks persist across application restarts, so they'll still run even if your app goes down. A `DateTimeOffset` is an absolute instant: use UTC when that is what you mean, and resolve the offset from the zone when you mean a local wall-clock time.
 
 ## Capturing Task IDs
 

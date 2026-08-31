@@ -18,8 +18,11 @@ namespace EverTask.RateLimiting;
 /// task) so an adversarial interleaving (channel full of fresh dispatches while the lot is at
 /// cap) degrades to slow progress instead of wedging the pipeline.
 /// </remarks>
-internal sealed class RateLimitParkingLot(RateLimiterOptions options)
+internal sealed class RateLimitParkingLot(RateLimiterOptions options, TimeProvider? timeProvider = null)
 {
+    // Same clock as the schedulers and the limiter: the pause deadline is a scheduling decision.
+    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+
     internal readonly record struct ParkedTaskInfo(string QueueName, string Key, DateTimeOffset SlotUtc);
 
     private readonly ConcurrentDictionary<Guid, ParkedTaskInfo> _parked = new();
@@ -94,13 +97,13 @@ internal sealed class RateLimitParkingLot(RateLimiterOptions options)
         if (Count < MaxParkedTasks)
             return;
 
-        var deadline = DateTimeOffset.UtcNow + MaxOverflowPause;
+        var deadline = _timeProvider.GetUtcNow() + MaxOverflowPause;
 
         while (Count >= MaxParkedTasks
                && _perQueueCounts.TryGetValue(queueName, out var queueCount) && queueCount > 0
-               && DateTimeOffset.UtcNow < deadline)
+               && _timeProvider.GetUtcNow() < deadline)
         {
-            await Task.Delay(OverflowPollInterval, ct).ConfigureAwait(false);
+            await Task.Delay(OverflowPollInterval, _timeProvider, ct).ConfigureAwait(false);
         }
     }
 

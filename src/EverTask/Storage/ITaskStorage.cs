@@ -1,4 +1,5 @@
-﻿using System.Linq.Expressions;
+﻿using System.Collections.ObjectModel;
+using System.Linq.Expressions;
 
 namespace EverTask.Storage;
 
@@ -7,6 +8,25 @@ namespace EverTask.Storage;
 /// </summary>
 public interface ITaskStorage
 {
+    /// <summary>
+    /// True when this storage implements the atomic durable-occurrence operations
+    /// (<see cref="MaterializeOccurrence"/> and friends). Dispatching a durable schedule against a storage
+    /// that returns false fails fast instead of degrading to a non-atomic emulation.
+    /// </summary>
+    /// <remarks>
+    /// Capability and implementation are inseparable: overriding the operations without flipping this flag
+    /// (or the reverse) is what a "quasi-atomic" fallback would look like, and that is exactly what would
+    /// leave an occurrence inserted without its cursor advance — or a cursor advanced with no occurrence.
+    /// </remarks>
+    bool SupportsDurableOccurrences => false;
+
+    /// <summary>
+    /// True when this storage implements the compare-and-swap overloads guarded by
+    /// <see cref="QueuedTask.ScheduleVersion"/>. Runtime schedule management requires it: without a real CAS
+    /// a reschedule could report success while a completion in flight silently overwrote it.
+    /// </summary>
+    bool SupportsScheduleVersioning => false;
+
     /// <summary>
     /// Retrieves an array of queued tasks based on a specified condition.
     /// </summary>
@@ -25,6 +45,12 @@ public interface ITaskStorage
     /// <summary>
     /// Persists a task in the queue.
     /// </summary>
+    /// <remarks>
+    /// An implementation MUST store the row's timestamps at offset zero
+    /// (<see cref="QueuedTask.NormalizeTimestampsToUtc"/>): a store that compares them as text, as SQLite
+    /// does, otherwise reads the same instant written at a different offset as a different value, and every
+    /// cursor compare-and-swap against that row loses.
+    /// </remarks>
     /// <param name="executor">The queued task to be persisted.</param>
     /// <param name="ct">Optional cancellation token.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
@@ -43,6 +69,22 @@ public interface ITaskStorage
     /// <param name="ct">Optional cancellation token.</param>
     /// <returns>An array of pending tasks (up to <paramref name="take"/> count).</returns>
     Task<QueuedTask[]> RetrievePending(DateTimeOffset? lastCreatedAt, Guid? lastId, int take, CancellationToken ct = default);
+
+    /// <summary>
+    /// Same as <see cref="RetrievePending(DateTimeOffset?,Guid?,int,CancellationToken)"/>, but evaluated
+    /// against the caller's clock instead of the storage's own. This is the overload the core always calls.
+    /// </summary>
+    /// <remarks>
+    /// Scheduling decisions must all resolve "now" from one <see cref="TimeProvider"/>, so a test can drive
+    /// the whole pipeline deterministically and a clock skew between the host and the database cannot make
+    /// recovery disagree with the scheduler. The default here simply delegates to the legacy signature: a
+    /// custom storage that overrode that one keeps its own implementation (and its own atomicity) instead of
+    /// being bypassed — at the cost of resolving the clock itself, which is documented. The built-in
+    /// providers override this overload and honour <paramref name="nowUtc"/>.
+    /// </remarks>
+    Task<QueuedTask[]> RetrievePending(DateTimeOffset nowUtc, DateTimeOffset? lastCreatedAt, Guid? lastId, int take,
+                                       CancellationToken ct = default) =>
+        RetrievePending(lastCreatedAt, lastId, take, ct);
 
     /// <summary>
     /// Sets a task's status to queued.
@@ -80,6 +122,16 @@ public interface ITaskStorage
         await SetQueued(taskId, auditLevel, ct).ConfigureAwait(false);
         return true;
     }
+
+    /// <summary>
+    /// Same as <see cref="TrySetQueuedIfRecoverable(Guid,AuditLevel,CancellationToken)"/>, evaluated against
+    /// the caller's clock. This is the overload the core always calls; see the
+    /// <see cref="RetrievePending(DateTimeOffset,DateTimeOffset?,Guid?,int,CancellationToken)"/> remarks for
+    /// why the legacy signature stays intact and is what this default delegates to.
+    /// </summary>
+    Task<bool> TrySetQueuedIfRecoverable(DateTimeOffset nowUtc, Guid taskId, AuditLevel auditLevel,
+                                         CancellationToken ct = default) =>
+        TrySetQueuedIfRecoverable(taskId, auditLevel, ct);
 
     /// <summary>
     /// Sets a task's status to in progress.
@@ -130,13 +182,6 @@ public interface ITaskStorage
                        double? executionTimeMs = null, CancellationToken ct = default);
 
     /// <summary>
-    /// Get the current run counter for this task.
-    /// </summary>
-    /// <param name="taskId">The ID of the task.</param>
-    /// <returns>The current run count for this task.</returns>
-    Task<int> GetCurrentRunCount(Guid taskId);
-
-    /// <summary>
     /// Advances the run counter by exactly one real execution and updates the next run / execution time.
     /// Occurrences skipped to realign the schedule after a downtime do NOT count toward the counter:
     /// <c>CurrentRunCount</c> tracks real executions only (== <see cref="QueuedTask.RunsAudits"/> rows),
@@ -151,10 +196,10 @@ public interface ITaskStorage
 
     /// <summary>
     /// Marks a recurring occurrence <see cref="QueuedTaskStatus.Completed"/> AND advances the run
-    /// counter / next run in a SINGLE atomic operation. The two used to be separate writes
-    /// (<see cref="SetCompleted"/> then <see cref="UpdateCurrentRun(Guid,double,DateTimeOffset?,AuditLevel)"/>),
-    /// so a crash between them left the row Completed but not advanced — recovery then re-dispatched the
-    /// already-finished occurrence and a MaxRuns-bounded series ran one extra time (CU14/L29).
+    /// counter / next run in a SINGLE atomic operation. As two separate writes
+    /// (<see cref="SetCompleted"/> then <see cref="UpdateCurrentRun(Guid,double,DateTimeOffset?,AuditLevel)"/>)
+    /// a crash between them leaves the row Completed but not advanced, and recovery re-dispatches the
+    /// already-finished occurrence: a MaxRuns-bounded series runs one extra time.
     /// </summary>
     /// <remarks>
     /// Default interface member: the non-atomic two-write fallback, for custom storages that have not
@@ -173,10 +218,60 @@ public interface ITaskStorage
     }
 
     /// <summary>
+    /// Records one real recurring run while retaining its executed cursor and atomically marks that the next
+    /// occurrence still has to be decided. The marker prevents startup recovery from delivering the retained
+    /// cursor as pending work.
+    /// </summary>
+    /// <remarks>
+    /// Built-in stores override this atomically. The default preserves compatibility for custom stores but
+    /// writes the runtime marker after the run update, leaving their historical crash window between writes.
+    /// </remarks>
+    async Task<ScheduleCasResult> RecordRecurringRunForExclusionRetry(
+        Guid taskId, double executionTimeMs, DateTimeOffset retainedCursorUtc, AuditLevel auditLevel,
+        bool markCompleted, string runtimeInfo, int? expectedScheduleVersion = null)
+    {
+        ScheduleCasResult outcome;
+
+        if (expectedScheduleVersion.HasValue)
+        {
+            outcome = markCompleted
+                          ? await CompleteRecurringRun(taskId, executionTimeMs, retainedCursorUtc, auditLevel,
+                                  expectedScheduleVersion.Value)
+                              .ConfigureAwait(false)
+                          : await UpdateCurrentRun(taskId, executionTimeMs, retainedCursorUtc, auditLevel,
+                                  expectedScheduleVersion.Value)
+                              .ConfigureAwait(false);
+        }
+        else
+        {
+            if (markCompleted)
+                await CompleteRecurringRun(taskId, executionTimeMs, retainedCursorUtc, auditLevel)
+                    .ConfigureAwait(false);
+            else
+                await UpdateCurrentRun(taskId, executionTimeMs, retainedCursorUtc, auditLevel)
+                    .ConfigureAwait(false);
+
+            outcome = ScheduleCasResult.Applied;
+        }
+
+        if (outcome != ScheduleCasResult.Applied)
+            return outcome;
+
+        var rows = await Get(t => t.Id == taskId).ConfigureAwait(false);
+        if (rows.FirstOrDefault() is { } row)
+        {
+            row.RuntimeInfo = runtimeInfo;
+            await UpdateTask(row).ConfigureAwait(false);
+        }
+
+        return outcome;
+    }
+
+    /// <summary>
     /// Finalizes a recurring series that ENDED on a skipped occurrence (its next slot fell past
     /// <see cref="QueuedTask.RunUntil"/>): sets <see cref="QueuedTaskStatus.Completed"/> AND clears
     /// <see cref="QueuedTask.NextRunUtc"/> in ONE atomic write, WITHOUT advancing the run counter and
-    /// WITHOUT writing a runs-audit row (the skipped occurrence never executed — Option B).
+    /// WITHOUT writing a runs-audit row (the skipped occurrence never executed).
     /// </summary>
     /// <remarks>
     /// A Completed recurring row left with a non-null <see cref="QueuedTask.NextRunUtc"/> stays
@@ -208,7 +303,7 @@ public interface ITaskStorage
     /// <summary>
     /// Poisons a RECURRING task TERMINALLY during startup recovery: sets <see cref="QueuedTaskStatus.Failed"/>
     /// AND clears <see cref="QueuedTask.NextRunUtc"/> in ONE atomic write, so the row stops satisfying
-    /// <see cref="QueuedTask.IsRecoverable"/> and is never resurrected by recovery (P0-1).
+    /// <see cref="QueuedTask.IsRecoverable"/> and is never resurrected by recovery.
     /// </summary>
     /// <remarks>
     /// A plain <see cref="SetStatus"/>(Failed) leaves <see cref="QueuedTask.NextRunUtc"/> set, and a recurring
@@ -226,6 +321,12 @@ public interface ITaskStorage
     /// <see cref="QueuedTask.NextRunUtc"/> via <see cref="UpdateTask"/>) for custom storages that have not
     /// overridden it. Built-in providers (Memory/EfCore and the relational providers by inheritance) override
     /// it with a single transactional write — mirroring <see cref="SetRecurringSeriesCompleted"/>.
+    /// </para>
+    /// <para>
+    /// The relational override is BEST EFFORT, like <see cref="SetStatus"/>: it logs its own failed write and
+    /// returns, so a failed poison never breaks the recovery of sibling rows. Returning normally therefore
+    /// says nothing about the row, and the recovery confirms the outcome by re-reading it before it reports a
+    /// terminalization.
     /// </para>
     /// </remarks>
     /// <param name="taskId">The ID of the recurring task to poison.</param>
@@ -248,7 +349,7 @@ public interface ITaskStorage
 
     /// <summary>
     /// Increments and returns the persistent count of failed startup-recovery re-dispatch attempts for
-    /// a task (L18). The caller poisons the task (marks it <see cref="QueuedTaskStatus.Failed"/>) once the
+    /// a task. The caller poisons the task (marks it <see cref="QueuedTaskStatus.Failed"/>) once the
     /// returned count reaches its configured limit, so a persistently failing re-dispatch is not retried
     /// at every restart forever (and the failure is no longer masked by a success summary log).
     /// </summary>
@@ -261,7 +362,7 @@ public interface ITaskStorage
 
     /// <summary>
     /// Clears the recovery-failure counter after a successful re-dispatch, so transient failures do not
-    /// accumulate across restarts toward the poison limit (L18). Default interface member: no-op.
+    /// accumulate across restarts toward the poison limit. Default interface member: no-op.
     /// </summary>
     Task ClearRecoveryFailure(Guid taskId, CancellationToken ct = default) => Task.CompletedTask;
 
@@ -276,6 +377,18 @@ public interface ITaskStorage
     /// <summary>
     /// Updates an existing task in storage.
     /// </summary>
+    /// <remarks>
+    /// Carries the same UTC-normalization obligation as <see cref="Persist"/>, and for a sharper reason:
+    /// this is the entry point that rewrites the schedule cursor itself.
+    /// <para>
+    /// <see cref="QueuedTask.RuntimeInfo"/> is one of the columns it writes. The caller re-registering a
+    /// schedule reads the row first and hands the runtime state back verbatim, so an ordinary re-registration
+    /// leaves a durable catch-up halt exactly where it was — nothing but an explicit resume or reschedule
+    /// releases one. What the caller does NOT hand back is the halt of a series a cancel had ended and this
+    /// dispatch is bringing back: an implementation that skips the column revives that series still halted,
+    /// so it materializes nothing until someone resumes it by hand.
+    /// </para>
+    /// </remarks>
     /// <param name="task">The task to update with new values.</param>
     /// <param name="ct">Optional cancellation token.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
@@ -288,6 +401,434 @@ public interface ITaskStorage
     /// <param name="ct">Optional cancellation token.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
     Task Remove(Guid taskId, CancellationToken ct = default);
+
+    // ---- Durable occurrences and schedule versioning ----------------------------------------------
+    // Every operation below is ATOMIC by contract: it either applies completely or leaves the store
+    // untouched, and the compare-and-swap ones report the loss instead of forcing a stale write. The
+    // defaults throw NotSupportedException on purpose — a "best effort" emulation on top of two separate
+    // writes is precisely the crash window these operations exist to close, so a storage either implements
+    // them (and advertises SupportsDurableOccurrences / SupportsScheduleVersioning) or refuses the feature.
+
+    /// <summary>
+    /// Inserts one occurrence of a durable schedule AND advances that schedule's cursor in a single
+    /// transaction, guarded by a compare-and-swap on <paramref name="expectedScheduleVersion"/> and
+    /// <paramref name="expectedCursorUtc"/>.
+    /// </summary>
+    /// <remarks>
+    /// The outcome is decided in this order, and every implementation owes callers the same one: a schedule
+    /// row that is gone, <c>Cancelled</c> or already cursorless is
+    /// <see cref="OccurrenceMaterializationOutcome.ParentInactive"/>; a different version is
+    /// <see cref="OccurrenceMaterializationOutcome.VersionMismatch"/>; a cursor that differs from
+    /// <paramref name="expectedCursorUtc"/> — a <c>null</c> expected cursor INCLUDED, since a live schedule
+    /// always has one — is <see cref="OccurrenceMaterializationOutcome.CursorMoved"/>; a slot already taken
+    /// is <see cref="OccurrenceMaterializationOutcome.AlreadyExists"/>. None of the four writes anything;
+    /// only <see cref="OccurrenceMaterializationOutcome.Created"/> does.
+    /// <para>
+    /// The row written is <see cref="QueuedTask.ApplyOccurrenceContract"/> applied to
+    /// <paramref name="occurrence"/>, on EVERY backend: a fresh one-shot at
+    /// <paramref name="expectedScheduleVersion"/>, with the definition, the cursor, the bounds and the task
+    /// key cleared. An implementation that inserts the caller's entity as it stands must stamp that shape
+    /// first, or the same call would persist a materially different row than the providers that spell it out
+    /// in their INSERT column list.
+    /// </para>
+    /// </remarks>
+    /// <param name="parentId">The schedule row that owns the occurrence.</param>
+    /// <param name="expectedScheduleVersion">Schedule version the decision was computed against.</param>
+    /// <param name="expectedCursorUtc">Cursor (<c>NextRunUtc</c>) the decision was computed against.</param>
+    /// <param name="occurrence">The child row to insert; its slot must be set and its parent must match.</param>
+    /// <param name="newCursorUtc">
+    /// The cursor to leave behind. <c>null</c> ends the series: the schedule row is marked Completed with a
+    /// cleared cursor IN THE SAME COMMIT, so no crash can leave a finished series recoverable.
+    /// </param>
+    /// <param name="auditLevel">Audit level of the schedule.</param>
+    /// <param name="ct">Cancellation token.</param>
+    Task<OccurrenceMaterializationOutcome> MaterializeOccurrence(
+        Guid parentId, int expectedScheduleVersion, DateTimeOffset? expectedCursorUtc, QueuedTask occurrence,
+        DateTimeOffset? newCursorUtc, AuditLevel auditLevel, CancellationToken ct = default) =>
+        throw new NotSupportedException(
+            "This storage does not implement durable occurrences. Use a built-in provider, or implement " +
+            $"{nameof(MaterializeOccurrence)} atomically and set {nameof(SupportsDurableOccurrences)} to true.");
+
+    /// <summary>
+    /// Conditional counterpart of <see cref="SetRecurringSeriesCompleted"/>: finalizes the series only while
+    /// it still carries the expected cursor, status and schedule version.
+    /// </summary>
+    /// <remarks>
+    /// The unconditional variant overwrites whatever it finds, so a <c>Cancel</c> or a reschedule that
+    /// linearized just before it would be silently replaced by <c>Completed</c>. Recovery finalization uses
+    /// this one and simply gives up when it loses.
+    /// <para>
+    /// A null <paramref name="expectedCursorUtc"/> always loses: a schedule with no cursor is already over, so
+    /// there is no live series such an expectation could describe. Read literally it would match precisely the
+    /// finalized and poisoned rows, which is why every implementation refuses it up front.
+    /// </para>
+    /// </remarks>
+    /// <returns>True when the series was finalized; false when the compare-and-swap lost.</returns>
+    Task<bool> TrySetRecurringSeriesCompleted(
+        Guid taskId, DateTimeOffset? expectedCursorUtc, QueuedTaskStatus expectedStatus,
+        int expectedScheduleVersion, double executionTimeMs, AuditLevel auditLevel,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException(
+            "This storage does not implement conditional series finalization. Use a built-in provider, or " +
+            $"implement {nameof(TrySetRecurringSeriesCompleted)} atomically.");
+
+    /// <summary>
+    /// Moves a durable schedule's cursor forward WITHOUT creating an occurrence, guarded by a compare-and-swap
+    /// on the version and the current cursor.
+    /// </summary>
+    /// <remarks>
+    /// This is how slots are SKIPPED. Every kept slot advances the cursor inside
+    /// <see cref="MaterializeOccurrence"/>, which is what makes a skip free: the occurrence is written at the
+    /// slot that survives while the cursor jumps from the one that did not. When nothing survives at all — a
+    /// whole backlog older than the age window, or a stale slot under the skip policy — there is no
+    /// materialization to carry the jump, and this is that jump on its own.
+    /// <para>
+    /// It counts no run and writes no audit: nothing executed. A cursor that would move to <c>null</c> is the
+    /// end of the series and goes through <see cref="TrySetRecurringSeriesCompleted"/> instead, which is why
+    /// the new cursor here is not nullable.
+    /// </para>
+    /// </remarks>
+    /// <returns>True when the cursor was moved; false when the compare-and-swap lost.</returns>
+    Task<bool> TryAdvanceScheduleCursor(Guid parentId, int expectedScheduleVersion, DateTimeOffset expectedCursorUtc,
+                                        DateTimeOffset newCursorUtc, CancellationToken ct = default) =>
+        throw new NotSupportedException(
+            "This storage does not implement durable occurrences. Use a built-in provider, or implement " +
+            $"{nameof(TryAdvanceScheduleCursor)} atomically and set {nameof(SupportsDurableOccurrences)} to true.");
+
+    /// <summary>
+    /// Cancels a durable schedule AND every occurrence of it still pending, in one transaction, so a
+    /// materializer racing the cancel can only observe the schedule as already inactive. Occurrences already
+    /// executing are left alone and run to their own end.
+    /// </summary>
+    /// <remarks>
+    /// The set it cancels is the exact complement of the set startup recovery puts back in a queue —
+    /// <c>WaitingQueue</c>, <c>Queued</c>, <c>Pending</c> and <c>ServiceStopped</c>. Leaving any of them out
+    /// means an occurrence of a cancelled schedule comes back at the next restart and runs.
+    /// <para>
+    /// Audits only the rows it really changed. A schedule a concurrent <c>Remove</c> already deleted is a
+    /// silent no-op — never an error, and never a status audit for a task that no longer exists.
+    /// </para>
+    /// <para>
+    /// CONTRACT for an implementation whose backend admits CONCURRENT WRITERS: the audited set must come
+    /// from the cancelling statement itself — SQL Server's <c>OUTPUT</c>, PostgreSQL's <c>RETURNING</c>, or the
+    /// equivalent — never from a second read. Under READ COMMITTED a re-read can attribute to this call an
+    /// occurrence another writer cancelled, so the audit trail would claim a transition this transaction never
+    /// made. The three optimized providers derive it from the statement; the base implementation here re-reads
+    /// inside the transaction, which is exact only while writers are serialized (as SQLite serializes them).
+    /// </para>
+    /// </remarks>
+    Task CancelSchedule(Guid parentId, AuditLevel auditLevel, CancellationToken ct = default) =>
+        throw new NotSupportedException(
+            "This storage does not implement durable occurrences. Use a built-in provider, or implement " +
+            $"{nameof(CancelSchedule)} atomically and set {nameof(SupportsDurableOccurrences)} to true.");
+
+    /// <summary>
+    /// Puts a terminal row (<c>Failed</c> or <c>Cancelled</c>) back into <c>Queued</c>, clearing its error and
+    /// its <see cref="QueuedTask.RecoveryDispatchFailureCount"/> while keeping its identity, history and audit
+    /// trail. Refuses anything that is not terminal.
+    /// </summary>
+    /// <remarks>
+    /// The failure counter is cleared with the error because this call is the way back from a poison: a row
+    /// requeued still carrying the attempts that ended it would be poisoned again by its first failure,
+    /// without one of the retries the attempt ceiling exists to grant.
+    /// </remarks>
+    /// <returns>True when the row was requeued.</returns>
+    Task<bool> RequeueTerminal(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default) =>
+        throw new NotSupportedException(
+            "This storage does not implement durable occurrences. Use a built-in provider, or implement " +
+            $"{nameof(RequeueTerminal)} atomically and set {nameof(SupportsDurableOccurrences)} to true.");
+
+    /// <summary>
+    /// Compare-and-swap requeue of an occurrence found stranded in a non-terminal status with no live
+    /// delivery behind it: it returns to <c>Queued</c> only while it still holds
+    /// <paramref name="expectedStatus"/>, so a concurrent cancel or a delivery that just picked it up wins.
+    /// </summary>
+    /// <returns>True when this caller won the compare-and-swap and now owns the redelivery.</returns>
+    Task<bool> TryRequeueStaleOccurrence(Guid childId, QueuedTaskStatus expectedStatus, AuditLevel auditLevel,
+                                         CancellationToken ct = default) =>
+        throw new NotSupportedException(
+            "This storage does not implement durable occurrences. Use a built-in provider, or implement " +
+            $"{nameof(TryRequeueStaleOccurrence)} atomically and set {nameof(SupportsDurableOccurrences)} to true.");
+
+    /// <summary>
+    /// Replaces a schedule's definition, cursor and bounds and bumps its
+    /// <see cref="QueuedTask.ScheduleVersion"/>, only while it still carries
+    /// <paramref name="expectedScheduleVersion"/> AND stands at <paramref name="expectedCursorUtc"/> AND has
+    /// not been cancelled. Two concurrent reschedules cannot both win.
+    /// </summary>
+    /// <remarks>
+    /// A <see cref="QueuedTaskStatus.Cancelled"/> row is never updated. The version and the cursor do not
+    /// answer for it — a cancel writes the status and leaves both untouched — so a reschedule that read the
+    /// row before the cancellation committed would match on both and write a live definition over a series an
+    /// operator has ended, then report success to its caller. Every other status is a legitimate target,
+    /// <see cref="QueuedTaskStatus.InProgress"/> included: a schedule that happens to be running is
+    /// rescheduled, never refused.
+    /// </remarks>
+    /// <param name="expectedCursorUtc">
+    /// The <see cref="QueuedTask.NextRunUtc"/> the caller computed its new definition against — including
+    /// <c>null</c>, which expects a series that has already ended. Part of the compare-and-swap because a
+    /// successful advance moves the cursor and the run counter WITHOUT touching the version: keying on the
+    /// version alone lets a reschedule decided on a run count and a cursor that a completion has since
+    /// superseded commit over it, and a rebase computed from that stale reading runs one occurrence past the
+    /// budget it was given.
+    /// </param>
+    /// <returns>True when the new definition was written.</returns>
+    Task<bool> UpdateSchedule(Guid taskId, int expectedScheduleVersion, DateTimeOffset? expectedCursorUtc,
+                              string recurringTaskJson, string? recurringInfo, DateTimeOffset? nextRunUtc,
+                              int? maxRuns, DateTimeOffset? runUntil, string? runtimeInfo,
+                              CancellationToken ct = default) =>
+        throw new NotSupportedException(
+            "This storage does not implement schedule versioning. Use a built-in provider, or implement " +
+            $"{nameof(UpdateSchedule)} atomically and set {nameof(SupportsScheduleVersioning)} to true.");
+
+    /// <summary>
+    /// Takes a cancelled schedule back to <see cref="QueuedTaskStatus.WaitingQueue"/> and bumps its
+    /// <see cref="QueuedTask.ScheduleVersion"/>, only while the row still stands <c>Cancelled</c> at
+    /// <paramref name="expectedScheduleVersion"/>. This is the write a re-dispatch under the schedule's own
+    /// task key makes: the documented way to restart a cancelled series.
+    /// </summary>
+    /// <remarks>
+    /// The version moves because a revival REPLACES the definition on a row that keeps its id, so every
+    /// delivery of the series the cancel ended is still addressed by that id and none of them can be told
+    /// apart by it: the version is the only thing that distinguishes them, and it is what
+    /// <c>IsSupersededSchedule</c>, the compare-and-swap advance and <see cref="IScheduler.TrySchedule"/>
+    /// each read to leave the revived series alone.
+    /// <para>
+    /// It also has to ANSWER, unlike <see cref="SetStatus"/>, which every relational provider implements as
+    /// best effort — it logs its own failed write and hands the caller a completed task. The un-cancel is the
+    /// one write the whole restart depends on: a swallowed failure leaves the row terminally <c>Cancelled</c>
+    /// behind a dispatch that reported success, in a state no recovery predicate ever selects again.
+    /// </para>
+    /// <para>
+    /// The default is the non-atomic two-write fallback a storage without the compare-and-swap can offer: the
+    /// status write, then a read that confirms the row really left <c>Cancelled</c>. It does NOT move the
+    /// version, so a storage that advertises <see cref="SupportsScheduleVersioning"/> must override it —
+    /// capability and implementation are inseparable, and a revival that answered success without bumping
+    /// would hand the new registration a version the row does not carry.
+    /// </para>
+    /// </remarks>
+    /// <returns>True when the row was revived.</returns>
+    async Task<bool> TryReviveCancelledSchedule(Guid taskId, int expectedScheduleVersion, AuditLevel auditLevel,
+                                                CancellationToken ct = default)
+    {
+        await SetStatus(taskId, QueuedTaskStatus.WaitingQueue, null, auditLevel, null, ct).ConfigureAwait(false);
+
+        var rows = await Get(t => t.Id == taskId, ct).ConfigureAwait(false);
+
+        return rows.Length > 0 && rows[0].Status != QueuedTaskStatus.Cancelled;
+    }
+
+    /// <summary>
+    /// Writes the TERMINAL outcome of a delivery that ended — <see cref="QueuedTaskStatus.Failed"/>,
+    /// <see cref="QueuedTaskStatus.Cancelled"/> or <see cref="QueuedTaskStatus.ServiceStopped"/> — only while
+    /// the row is still the one that delivery ran: at <paramref name="expectedScheduleVersion"/>, and, unless
+    /// the outcome IS a cancellation, not already <see cref="QueuedTaskStatus.Cancelled"/>.
+    /// </summary>
+    /// <remarks>
+    /// The two guards answer for the two writes that can take a row away from a run while it unwinds, and
+    /// neither of them can be seen from the process. The VERSION answers for the generation: a re-dispatch
+    /// under the schedule's own task key revives the row through
+    /// <see cref="TryReviveCancelledSchedule"/>, and an unconditional terminal status landing after it ends the
+    /// series that has just taken the row over — behind a dispatch that answered with an id. The STATUS
+    /// answers for the plain cancel no version can speak for: a cancel moves neither the version nor the
+    /// cursor, so a late <c>Failed</c> erased it, and a recurring row that reads <c>Failed</c> with a live
+    /// cursor is recoverable — the series an operator ended comes back at the next restart.
+    /// <para>
+    /// A cancellation IS allowed over a cancellation: that is the historical write of the very run the cancel
+    /// could not stop in time, and it says what the row already says.
+    /// </para>
+    /// <para>
+    /// Best effort like <see cref="SetStatus"/> — a relational provider logs its own failed write — but unlike
+    /// it, this one ANSWERS, so the caller can report an ending it did not persist instead of assuming it did.
+    /// </para>
+    /// </remarks>
+    /// <returns>True when the outcome was written.</returns>
+    Task<bool> TrySetTerminalOutcome(Guid taskId, QueuedTaskStatus status, Exception? exception,
+                                     int expectedScheduleVersion, AuditLevel auditLevel,
+                                     CancellationToken ct = default) =>
+        throw new NotSupportedException(
+            "This storage does not implement schedule versioning. Use a built-in provider, or implement " +
+            $"{nameof(TrySetTerminalOutcome)} atomically and set {nameof(SupportsScheduleVersioning)} to true.");
+
+    /// <summary>
+    /// Persists a durable "halted" marker in <see cref="QueuedTask.RuntimeInfo"/>, guarded by a full
+    /// compare-and-swap on version, cursor and status.
+    /// </summary>
+    /// <remarks>
+    /// The full CAS is the point: a halt decided against a cursor another writer has since advanced describes
+    /// a state that no longer exists and must not be written. Halting is durable so an operator, not the
+    /// passage of time, is what resumes the schedule.
+    /// <para>
+    /// A null <paramref name="expectedCursorUtc"/> always loses, for the same reason as in
+    /// <see cref="TrySetRecurringSeriesCompleted"/>: an ended series is not a schedule to halt.
+    /// </para>
+    /// </remarks>
+    /// <returns>True when the marker was written.</returns>
+    Task<bool> TryHaltSchedule(Guid parentId, int expectedScheduleVersion, DateTimeOffset? expectedCursorUtc,
+                               QueuedTaskStatus expectedStatus, string runtimeInfo,
+                               CancellationToken ct = default) =>
+        throw new NotSupportedException(
+            "This storage does not implement durable occurrences. Use a built-in provider, or implement " +
+            $"{nameof(TryHaltSchedule)} atomically and set {nameof(SupportsDurableOccurrences)} to true.");
+
+    /// <summary>
+    /// <see cref="UpdateCurrentRun(Guid,double,DateTimeOffset?,AuditLevel)"/> guarded by a compare-and-swap
+    /// on the schedule version: a run that finishes after a reschedule reports
+    /// <see cref="ScheduleCasResult.VersionMismatch"/> instead of writing its stale next run.
+    /// </summary>
+    Task<ScheduleCasResult> UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
+                                             AuditLevel auditLevel, int expectedScheduleVersion) =>
+        throw new NotSupportedException(
+            "This storage does not implement schedule versioning. Use a built-in provider, or implement the " +
+            $"compare-and-swap overload of {nameof(UpdateCurrentRun)}.");
+
+    /// <summary>
+    /// <see cref="CompleteRecurringRun"/> guarded by a compare-and-swap on the schedule version.
+    /// </summary>
+    Task<ScheduleCasResult> CompleteRecurringRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
+                                                 AuditLevel auditLevel, int expectedScheduleVersion) =>
+        throw new NotSupportedException(
+            "This storage does not implement schedule versioning. Use a built-in provider, or implement the " +
+            $"compare-and-swap overload of {nameof(CompleteRecurringRun)}.");
+
+    /// <summary>
+    /// The occurrences of a schedule, optionally only those that can still lead to an execution.
+    /// </summary>
+    /// <remarks>
+    /// Read-only, so the default is a correct (if unindexed) query over <see cref="Get"/> rather than a
+    /// refusal: a custom storage keeps working, and the built-in providers override it with an indexed one.
+    /// </remarks>
+    async Task<QueuedTask[]> GetOccurrences(Guid parentId, bool nonTerminalOnly = false,
+                                            CancellationToken ct = default)
+    {
+        var rows = await Get(t => t.ParentTaskId == parentId, ct).ConfigureAwait(false);
+        return nonTerminalOnly
+                   ? rows.Where(r => QueuedTask.IsNonTerminalStatus(r.Status)).ToArray()
+                   : rows;
+    }
+
+    /// <summary>
+    /// One page of the occurrences of a schedule, newest slot first, with the total that matches the request.
+    /// </summary>
+    /// <remarks>
+    /// The paging belongs to the storage because the reader that needs it — a dashboard listing a schedule
+    /// with a year of retention behind it — must never pull the whole series into memory to show a hundred
+    /// rows. The default composes the unpaged read so a custom storage keeps working; the built-in providers
+    /// override it and let the database order, count and slice over the
+    /// <c>(ParentTaskId, ScheduledExecutionUtc)</c> index the occurrence contract already needs.
+    /// </remarks>
+    /// <param name="parentId">The schedule row.</param>
+    /// <param name="nonTerminalOnly">Keep only the occurrences that can still lead to an execution.</param>
+    /// <param name="skip">How many occurrences to skip, from the newest slot. Never negative.</param>
+    /// <param name="take">How many occurrences to return. Never negative; 0 asks for the count alone.</param>
+    /// <param name="ct">Cancellation token.</param>
+    async Task<OccurrencePage> GetOccurrencesPage(Guid parentId, bool nonTerminalOnly, int skip, int take,
+                                                  CancellationToken ct = default)
+    {
+        var rows = await GetOccurrences(parentId, nonTerminalOnly, ct).ConfigureAwait(false);
+
+        return new OccurrencePage(
+            rows.OrderByDescending(r => r.ScheduledExecutionUtc).Skip(skip).Take(take).ToArray(),
+            rows.Length);
+    }
+
+    /// <summary>
+    /// When the last run of each of the given rows STARTED, as the status audit trail recorded it. Rows with
+    /// no recorded start are simply absent from the result.
+    /// </summary>
+    /// <remarks>
+    /// No column holds this: <see cref="QueuedTask.LastExecutionUtc"/> is written on TERMINAL transitions, so
+    /// it says when a run ENDED, and the only trace of the moment a run began is the
+    /// <see cref="QueuedTaskStatus.InProgress"/> transition in <see cref="QueuedTask.StatusAudits"/> — which
+    /// therefore has to be READ, and is the one source that can speak for a run still in flight. It is asked
+    /// for a whole page of rows at once because its reader is a dashboard listing them.
+    /// <para>
+    /// A row whose <see cref="AuditLevel"/> does not record that transition (anything below
+    /// <see cref="EverTask.Abstractions.AuditLevel.Full"/>) has no recorded start at all, and answering
+    /// nothing for it is the correct answer.
+    /// </para>
+    /// <para>
+    /// Read-only, so the default is a correct query over <see cref="Get"/> rather than a refusal: a custom
+    /// storage that materializes the audit navigation keeps working, and the built-in providers override it
+    /// with one indexed query over the audit table.
+    /// </para>
+    /// </remarks>
+    /// <param name="taskIds">The rows to answer for.</param>
+    /// <param name="ct">Cancellation token.</param>
+    async Task<IReadOnlyDictionary<Guid, DateTimeOffset>> GetLastRunStarts(IReadOnlyCollection<Guid> taskIds,
+                                                                          CancellationToken ct = default)
+    {
+        if (taskIds.Count == 0)
+            return ReadOnlyDictionary<Guid, DateTimeOffset>.Empty;
+
+        var rows   = await Get(t => taskIds.Contains(t.Id), ct).ConfigureAwait(false);
+        var starts = new Dictionary<Guid, DateTimeOffset>(rows.Length);
+
+        foreach (var row in rows)
+        {
+            foreach (var audit in row.StatusAudits)
+            {
+                if (audit.NewStatus != QueuedTaskStatus.InProgress)
+                    continue;
+
+                if (!starts.TryGetValue(row.Id, out var known) || audit.UpdatedAtUtc >= known)
+                    starts[row.Id] = audit.UpdatedAtUtc;
+            }
+        }
+
+        return starts;
+    }
+
+    /// <summary>
+    /// One page of the status transitions recorded for one row, newest first, with the total the trail holds.
+    /// </summary>
+    /// <remarks>
+    /// A long-lived recurring row accumulates one transition per state per run, so a reader that shows the
+    /// first twenty of them must not transfer the whole series to do it.
+    /// <para>
+    /// The default queries the row's materialized navigation so a custom storage keeps working; the built-in
+    /// providers override it and let the database count and slice over the <c>(QueuedTaskId)</c> index the
+    /// audit table already has.
+    /// </para>
+    /// </remarks>
+    /// <param name="taskId">The row to answer for.</param>
+    /// <param name="skip">How many entries to skip, from the newest. Never negative.</param>
+    /// <param name="take">How many entries to return. Never negative; 0 asks for the count alone.</param>
+    /// <param name="ct">Cancellation token.</param>
+    async Task<AuditPage<StatusAudit>> GetStatusAuditsPage(Guid taskId, int skip, int take,
+                                                           CancellationToken ct = default)
+    {
+        var rows = await Get(t => t.Id == taskId, ct).ConfigureAwait(false);
+
+        if (rows.Length == 0)
+            return new AuditPage<StatusAudit>([], 0);
+
+        // Reversed first, so that audits sharing an instant keep transition order under the stable sort.
+        var audits = rows[0].StatusAudits.Reverse().OrderByDescending(a => a.UpdatedAtUtc).ToArray();
+
+        return new AuditPage<StatusAudit>(audits.Skip(skip).Take(take).ToArray(), audits.Length);
+    }
+
+    /// <summary>
+    /// One page of the runs recorded for one row, newest first, with the total the trail holds.
+    /// </summary>
+    /// <remarks>The <see cref="RunsAudit"/> half of <see cref="GetStatusAuditsPage"/>.</remarks>
+    /// <param name="taskId">The row to answer for.</param>
+    /// <param name="skip">How many entries to skip, from the newest. Never negative.</param>
+    /// <param name="take">How many entries to return. Never negative; 0 asks for the count alone.</param>
+    /// <param name="ct">Cancellation token.</param>
+    async Task<AuditPage<RunsAudit>> GetRunsAuditsPage(Guid taskId, int skip, int take,
+                                                       CancellationToken ct = default)
+    {
+        var rows = await Get(t => t.Id == taskId, ct).ConfigureAwait(false);
+
+        if (rows.Length == 0)
+            return new AuditPage<RunsAudit>([], 0);
+
+        var audits = rows[0].RunsAudits.Reverse().OrderByDescending(a => a.ExecutedAt).ToArray();
+
+        return new AuditPage<RunsAudit>(audits.Skip(skip).Take(take).ToArray(), audits.Length);
+    }
 
     /// <summary>
     /// Saves execution logs for a task. Called by WorkerExecutor after task execution.

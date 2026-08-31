@@ -21,7 +21,7 @@ public class MonthlyAndDailyTimeBuilderChainTests
 
         Assert.NotNull(_builder.RecurringTask.MonthInterval);
         Assert.Equal(10, _builder.RecurringTask.MonthInterval.OnDay);
-        Assert.Contains(time.ToUniversalTime(), _builder.RecurringTask.MonthInterval.OnTimes);
+        Assert.Contains(time, _builder.RecurringTask.MonthInterval.OnTimes);
     }
 
     [Fact]
@@ -34,7 +34,7 @@ public class MonthlyAndDailyTimeBuilderChainTests
 
         Assert.NotNull(_builder.RecurringTask.MonthInterval);
         Assert.Equal(dayOfWeek, _builder.RecurringTask.MonthInterval.OnFirst);
-        Assert.Equal(times.Select(t => t.ToUniversalTime()), _builder.RecurringTask.MonthInterval.OnTimes);
+        Assert.Equal(times, _builder.RecurringTask.MonthInterval.OnTimes);
     }
 }
 

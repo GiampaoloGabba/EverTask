@@ -1,4 +1,5 @@
 #if !NET8_0
+using System.Diagnostics;
 using EverTask.Abstractions;
 using EverTask.Storage;
 using EverTask.Storage.EfCore;
@@ -51,6 +52,7 @@ public class MySqlEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsyncLif
                     .WithDatabase(Database)
                     .Build();
                 _mariaDbContainer.StartAsync().GetAwaiter().GetResult();
+                WaitUntilServerAcceptsConnections(_mariaDbContainer.GetConnectionString());
                 _containerInitialized = true;
             }
         }
@@ -81,6 +83,40 @@ public class MySqlEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsyncLif
 
         _dbContext   = serviceProvider.GetService<ITaskStoreDbContext>()!;
         _taskStorage = serviceProvider.GetRequiredService<ITaskStorage>();
+    }
+
+    /// <summary>
+    /// Blocks until the server answers on the mapped port, which is where the tests reach it.
+    /// </summary>
+    /// <remarks>
+    /// The module's wait strategy runs INSIDE the container, and the MariaDB entrypoint answers it with the
+    /// temporary server it starts to initialize the data directory — that one is replaced by a restart, and a
+    /// connection from the host landing in the restart window is refused with "Unable to connect to any of the
+    /// specified MySQL hosts". It costs the whole class one test (whichever ran first) and passes on the
+    /// re-run, so it reads as flakiness. The readiness that matters is the one the tests use.
+    /// </remarks>
+    private static void WaitUntilServerAcceptsConnections(string connectionString)
+    {
+        var elapsed = Stopwatch.StartNew();
+
+        while (true)
+        {
+            try
+            {
+                using var connection = new MySqlConnection(connectionString);
+                connection.Open();
+
+                using var command = connection.CreateCommand();
+                command.CommandText = "SELECT 1";
+                command.ExecuteScalar();
+
+                return;
+            }
+            catch (MySqlException) when (elapsed.Elapsed < TimeSpan.FromSeconds(60))
+            {
+                Thread.Sleep(250);
+            }
+        }
     }
 
     [Fact]
@@ -114,6 +150,96 @@ public class MySqlEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsyncLif
         var count = Convert.ToInt64(await command.ExecuteScalarAsync());
         count.ShouldBeGreaterThan(0, "IX_QueuedTasks_Recovery should exist on the QueuedTasks table");
     }
+
+    private async Task<T> ScalarAsync<T>(string sql)
+    {
+        await using var connection = new MySqlConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.Parameters.AddWithValue("@db", Database);
+
+        var value = await command.ExecuteScalarAsync();
+        return (T)Convert.ChangeType(value, typeof(T), System.Globalization.CultureInfo.InvariantCulture)!;
+    }
+
+    /// <summary>
+    /// The durable-occurrence schema, read from the CATALOG rather than inferred from behaviour: exercising
+    /// the operations passes just as well on a table whose unique index is missing or whose foreign key
+    /// cascades, right up to the day a real workload hits the difference.
+    /// </summary>
+    [Fact]
+    public async Task Should_have_the_durable_occurrence_schema_on_queued_tasks()
+    {
+        // information_schema.statistics has one row per index column; NON_UNIQUE = 0 is the unique flag.
+        var occurrenceColumns = await ScalarAsync<string>(
+            """
+            SELECT GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ',')
+            FROM information_schema.statistics
+            WHERE table_schema = @db AND table_name = 'QueuedTasks'
+              AND index_name = 'UX_QueuedTasks_Occurrence' AND NON_UNIQUE = 0
+            """);
+        occurrenceColumns.ShouldBe("ParentTaskId,ScheduledExecutionUtc");
+
+        var parentIndex = await ScalarAsync<long>(
+            """
+            SELECT COUNT(*) FROM information_schema.statistics
+            WHERE table_schema = @db AND table_name = 'QueuedTasks'
+              AND index_name = 'IX_QueuedTasks_ParentTaskId'
+            """);
+        parentIndex.ShouldBeGreaterThan(0);
+
+        var drainIndexColumns = await ScalarAsync<string>(
+            """
+            SELECT GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ',')
+            FROM information_schema.statistics
+            WHERE table_schema = @db AND table_name = 'QueuedTasks'
+              AND index_name = 'IX_QueuedTasks_ParentTaskId_Status'
+            """);
+        drainIndexColumns.ShouldBe("ParentTaskId,Status");
+
+        var checkConstraint = await ScalarAsync<long>(
+            """
+            SELECT COUNT(*) FROM information_schema.table_constraints
+            WHERE table_schema = @db AND table_name = 'QueuedTasks'
+              AND constraint_name = 'CK_QueuedTasks_OccurrenceSlot' AND constraint_type = 'CHECK'
+            """);
+        checkConstraint.ShouldBe(1, "an occurrence without its nominal slot must be impossible");
+
+        // NO ACTION / RESTRICT, never CASCADE: the key exists to stop a concurrent Remove of the schedule
+        // from orphaning its occurrences, and the storage deletes them explicitly in the same transaction.
+        var deleteRule = await ScalarAsync<string>(
+            """
+            SELECT DELETE_RULE FROM information_schema.referential_constraints
+            WHERE constraint_schema = @db AND table_name = 'QueuedTasks'
+              AND constraint_name = 'FK_QueuedTasks_QueuedTasks_ParentTaskId'
+            """);
+        deleteRule.ShouldBeOneOf("NO ACTION", "RESTRICT");
+    }
+
+    [Fact]
+    public async Task Should_have_the_durable_occurrence_stored_procedures()
+    {
+        var count = await ScalarAsync<long>(
+            """
+            SELECT COUNT(*) FROM information_schema.routines
+            WHERE routine_schema = @db AND routine_type = 'PROCEDURE'
+              AND routine_name IN ('usp_MaterializeOccurrence', 'usp_CancelSchedule',
+                                   'usp_UpdateCurrentRunCas', 'usp_CompleteRecurringRunCas')
+            """);
+        count.ShouldBe(4, "the four durable-occurrence procedures must exist after migrations");
+    }
+
+#if NET10_0
+    // One TFM only: EF Core renders the same migration differently across its own majors, and this
+    // repository builds against three of them. See MigrationSqlSnapshot.
+    [Fact]
+    public void Should_emit_the_expected_sql_for_the_durable_occurrences_migration() =>
+        MigrationSqlSnapshot.Verify((DbContext)_dbContext,
+            "20260629214027_AddHotWriteStoredProcedures", "20260822182836_AddDurableOccurrences",
+            "MySql.AddDurableOccurrences");
+#endif
 
     [Fact]
     public async Task TaskKey_unique_index_allows_multiple_null_keys()
@@ -355,6 +481,29 @@ public class MySqlEfCoreTaskStorageTests : EfCoreTaskStorageTestsBase, IAsyncLif
 
         await _respawner.ResetAsync(connection);
     }
+
+    protected override string InstallStatusAuditInsertFaultSql =>
+        // A single-statement trigger body, so no DELIMITER dance is needed. SIGNAL reaches the procedure's
+        // EXIT HANDLER FOR SQLEXCEPTION, which rolls back and resignals — exactly the path a real constraint
+        // violation would take.
+        """
+        CREATE TRIGGER trg_evertask_audit_fault BEFORE INSERT ON StatusAudit
+        FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'injected audit fault'
+        """;
+
+    protected override string RemoveStatusAuditInsertFaultSql =>
+        "DROP TRIGGER IF EXISTS trg_evertask_audit_fault";
+
+    protected override string InstallScheduleAdvanceFaultSql =>
+        // usp_MaterializeOccurrence inserts the occurrence and THEN advances the schedule; SIGNAL reaches the
+        // procedure's EXIT HANDLER FOR SQLEXCEPTION, which rolls back and resignals.
+        """
+        CREATE TRIGGER trg_evertask_advance_fault BEFORE UPDATE ON QueuedTasks
+        FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'injected advance fault'
+        """;
+
+    protected override string RemoveScheduleAdvanceFaultSql =>
+        "DROP TRIGGER IF EXISTS trg_evertask_advance_fault";
 
     protected override ITaskStoreDbContext CreateDbContext() => _dbContext;
 

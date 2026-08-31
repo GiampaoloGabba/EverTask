@@ -11,7 +11,6 @@ using Microsoft.Extensions.Hosting;
 using Newtonsoft.Json;
 using Respawn;
 using Shouldly;
-using Testcontainers.MsSql;
 using Xunit;
 
 namespace EverTask.Tests.Storage;
@@ -223,14 +222,14 @@ public sealed class SqliteRecurringPoisonRecoveryTests : RecurringPoisonRecovery
     }
 }
 
-/// <summary>SQL Server full-host (Testcontainers) variant of the B1 recovery-poison gate.</summary>
+/// <summary>
+/// SQL Server full-host variant of the B1 recovery-poison gate, on the assembly's shared container
+/// (<see cref="SqlServerTestContainer"/>).
+/// </summary>
 [Collection("DatabaseTests")]
 public sealed class SqlServerRecurringPoisonRecoveryTests : RecurringPoisonRecoveryIntegrationTestsBase, IAsyncLifetime
 {
-    private static MsSqlContainer? _sqlContainer;
-    private static bool _containerInitialized;
-    private static readonly object _lock = new();
-    private static string _connectionString = "";
+    private string _connectionString = "";
     private Respawner? _respawner;
 
     protected override int RecoveryTimeoutMs => 30000;
@@ -240,17 +239,7 @@ public sealed class SqlServerRecurringPoisonRecoveryTests : RecurringPoisonRecov
 
     public async Task InitializeAsync()
     {
-        lock (_lock)
-        {
-            if (!_containerInitialized)
-            {
-                _sqlContainer = new MsSqlBuilder("mcr.microsoft.com/mssql/server:2022-latest").Build();
-                _sqlContainer.StartAsync().GetAwaiter().GetResult();
-                _connectionString = _sqlContainer.GetConnectionString();
-                _containerInitialized = true;
-            }
-        }
-
+        _connectionString = await SqlServerTestContainer.GetConnectionStringAsync();
         await CleanUpDatabase();
     }
 

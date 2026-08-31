@@ -96,12 +96,13 @@ public class TasksControllerTests : MonitoringTestBase
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
 
-        var statusAudits = await DeserializeResponseAsync<List<StatusAuditDto>>(response);
+        var statusAudits = await DeserializeResponseAsync<StatusAuditsResponse>(response);
         statusAudits.ShouldNotBeNull();
-        statusAudits.Count.ShouldBeGreaterThan(0);
+        statusAudits.Audits.Count.ShouldBeGreaterThan(0);
+        statusAudits.TotalCount.ShouldBe(statusAudits.Audits.Count, "the whole trail fits in the default page");
 
         // Verify audit trail contains expected statuses
-        statusAudits.Any(a => a.NewStatus == QueuedTaskStatus.Queued).ShouldBeTrue();
+        statusAudits.Audits.Any(a => a.NewStatus == QueuedTaskStatus.Queued).ShouldBeTrue();
     }
 
     [Fact]
@@ -118,9 +119,10 @@ public class TasksControllerTests : MonitoringTestBase
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
 
-        var runsAudits = await DeserializeResponseAsync<List<RunsAuditDto>>(response);
+        var runsAudits = await DeserializeResponseAsync<RunsAuditsResponse>(response);
         runsAudits.ShouldNotBeNull();
         // Runs audit might be empty for non-recurring tasks, so we just verify the endpoint works
+        runsAudits.TotalCount.ShouldBe(runsAudits.Audits.Count);
     }
 
     [Theory]

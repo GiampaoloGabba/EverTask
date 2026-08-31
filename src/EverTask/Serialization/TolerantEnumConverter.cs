@@ -47,7 +47,7 @@ internal sealed class TolerantEnumConverter<T> : JsonConverter<T> where T : stru
                 // Newtonsoft would materialize an out-of-range/undefined numeric enum value; here it throws,
                 // which the recovery path turns into a CLEAN bounded/terminal poison (fail-safe), never silent
                 // corruption. Defined-value enforcement for recurring schedules is handled upstream by
-                // RecurringTask.Validate() (B2).
+                // RecurringTask.Validate().
                 if (underlying == typeof(int))    return (T)Enum.ToObject(typeof(T), reader.GetInt32());
                 if (underlying == typeof(uint))   return (T)Enum.ToObject(typeof(T), reader.GetUInt32());
                 if (underlying == typeof(long))   return (T)Enum.ToObject(typeof(T), reader.GetInt64());

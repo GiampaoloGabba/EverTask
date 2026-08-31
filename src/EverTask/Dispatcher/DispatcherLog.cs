@@ -60,9 +60,10 @@ internal static partial class DispatcherLog
     public static partial void RecoverySeriesExhausted(this ILogger logger, Guid? taskId);
 
     [LoggerMessage(EventId = 1012, Level = LogLevel.Information,
-        Message = "Calculated NextRunUtc {NextRun} for task {TaskId} from past NextRunUtc {PastNextRun} (skipped {SkippedCount})")]
+        Message = "Calculated NextRunUtc {NextRun} for task {TaskId} from past NextRunUtc {PastNextRun} (skipped {SkippedCount}, exact count: {IsExact})")]
     public static partial void CalculatedNextRunFromPast(this ILogger logger, DateTimeOffset? nextRun, Guid? taskId,
-                                                         DateTimeOffset? pastNextRun, int skippedCount);
+                                                         DateTimeOffset? pastNextRun, int skippedCount,
+                                                         bool isExact);
 
     [LoggerMessage(EventId = 1013, Level = LogLevel.Debug, Message = "Persisting Task: {Type}")]
     public static partial void PersistingTask(this ILogger logger, string type);
@@ -81,4 +82,63 @@ internal static partial class DispatcherLog
     [LoggerMessage(EventId = 1017, Level = LogLevel.Debug,
         Message = "Lazy handler resolution disabled globally (UseLazyHandlerResolution = false)")]
     public static partial void LazyResolutionDisabledGlobally(this ILogger logger);
+
+    [LoggerMessage(EventId = 1018, Level = LogLevel.Warning,
+        Message = "Could not read the occurrences of task {TaskId} while cancelling it: cancelling the row " +
+                  "alone. Any occurrence of it is dropped by the blacklist in this process and cancelled by " +
+                  "the next startup recovery")]
+    public static partial void OccurrenceLookupForCancelFailed(this ILogger logger, Exception exception,
+                                                               Guid taskId);
+
+    [LoggerMessage(EventId = 1019, Level = LogLevel.Warning,
+        Message = "Recovery of schedule {ScheduleId} deferred: the occurrence provider '{ProviderKey}' could " +
+                  "not answer ({Failures} consecutive failure(s)). Nothing was written and the schedule is " +
+                  "parked to ask again at {RetryAtUtc:O}")]
+    public static partial void RecoveryDeferredByProvider(this ILogger logger, Exception exception,
+                                                          string providerKey, Guid scheduleId, int failures,
+                                                          DateTimeOffset retryAtUtc);
+
+    [LoggerMessage(EventId = 1020, Level = LogLevel.Error,
+        Message = "Could not park schedule {ScheduleId} for its occurrence provider retry: the series stays " +
+                  "where it is until the next startup recovery")]
+    public static partial void ProviderRetryParkFailed(this ILogger logger, Exception exception, Guid scheduleId);
+
+    [LoggerMessage(EventId = 1021, Level = LogLevel.Debug,
+        Message = "Park of schedule {ScheduleId} at {RetryAtUtc:O} for its occurrence provider retry was " +
+                  "refused: a newer definition owns this row's parking, or the scheduler is stopping. " +
+                  "Nothing was parked by this recovery")]
+    public static partial void ProviderRetryParkRefused(this ILogger logger, Guid scheduleId,
+                                                        DateTimeOffset retryAtUtc);
+
+    [LoggerMessage(EventId = 1022, Level = LogLevel.Information,
+        Message = "Schedule {ScheduleId} was dispatched again under the task key '{TaskKey}' after being " +
+                  "cancelled: its cancellation entry is dropped and the row goes back to WaitingQueue, which " +
+                  "is where a brand new dispatch would have left it")]
+    public static partial void CancelledScheduleRedispatched(this ILogger logger, Guid scheduleId, string taskKey);
+
+    [LoggerMessage(EventId = 1023, Level = LogLevel.Information,
+        Message = "Reviving schedule {ScheduleId} moved the cancellation onto {Count} occurrence(s) of it " +
+                  "still in flight: the schedule's entry stops covering them, and each one now carries its " +
+                  "own so the cancel that ended it still holds")]
+    public static partial void OccurrencesOfRevivedScheduleCovered(this ILogger logger, Guid scheduleId, int count);
+
+    [LoggerMessage(EventId = 1024, Level = LogLevel.Warning,
+        Message = "Could not read the occurrences of schedule {ScheduleId} still in flight while reviving it: " +
+                  "all {Count} of them are treated as cancelled, because dropping the schedule's entry with " +
+                  "no answer would let an occurrence the cancel ended run")]
+    public static partial void OccurrencesOfRevivedScheduleLookupFailed(this ILogger logger, Exception exception,
+                                                                        Guid scheduleId, int count);
+
+    [LoggerMessage(EventId = 1025, Level = LogLevel.Error,
+        Message = "Schedule {ScheduleId}, dispatched again under the task key '{TaskKey}', could not be taken " +
+                  "out of Cancelled: the row keeps the new definition but no delivery of it is ever accepted, " +
+                  "and no recovery predicate selects a cancelled row")]
+    public static partial void CancelledScheduleNotRestored(this ILogger logger, Exception? exception,
+                                                            Guid scheduleId, string taskKey);
+
+    [LoggerMessage(EventId = 1026, Level = LogLevel.Information,
+        Message = "Recovered series {ScheduleId} has no occurrence left to run, and it is CANCELLED: the row " +
+                  "is left terminal instead of being rewritten to Completed, which would erase the " +
+                  "cancellation an operator asked for")]
+    public static partial void ExhaustedSeriesLeftCancelled(this ILogger logger, Guid? scheduleId);
 }

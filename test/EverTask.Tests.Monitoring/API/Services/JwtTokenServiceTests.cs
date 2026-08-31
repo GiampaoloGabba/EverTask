@@ -16,6 +16,24 @@ public class JwtTokenServiceTests
     }
 
     [Fact]
+    public void Should_preserve_the_3_11_and_management_GenerateToken_signatures()
+    {
+        typeof(IJwtTokenService).GetMethod(nameof(IJwtTokenService.GenerateToken), [typeof(string)])
+                                .ShouldNotBeNull();
+        typeof(JwtTokenService).GetMethod(nameof(JwtTokenService.GenerateToken), [typeof(string)])
+                               .ShouldNotBeNull();
+        typeof(IJwtTokenService).GetMethod(nameof(IJwtTokenService.GenerateToken), [typeof(string), typeof(bool)])
+                                .ShouldNotBeNull();
+        typeof(JwtTokenService).GetMethod(nameof(JwtTokenService.GenerateToken), [typeof(string), typeof(bool)])
+                               .ShouldNotBeNull();
+
+        IJwtTokenService service = new JwtTokenService(CreateOptions(), _loggerMock.Object);
+
+        service.GenerateToken("legacy-user").CanManage.ShouldBeFalse();
+        service.GenerateToken("operator", true).CanManage.ShouldBeTrue();
+    }
+
+    [Fact]
     public void Should_generate_valid_jwt_token()
     {
         // Arrange
@@ -82,7 +100,8 @@ public class JwtTokenServiceTests
         validationResponse.ShouldNotBeNull();
         validationResponse.IsValid.ShouldBeTrue();
         validationResponse.Username.ShouldBe(username);
-        validationResponse.ExpiresAt.ShouldNotBeNull();
+        validationResponse.ExpiresAt.ShouldNotBeNull()
+                          .ShouldBe(loginResponse.ExpiresAt, TimeSpan.FromSeconds(1));
     }
 
     [Fact]

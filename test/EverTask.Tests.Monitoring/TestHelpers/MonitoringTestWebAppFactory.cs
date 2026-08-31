@@ -12,7 +12,9 @@ public class MonitoringTestWebAppFactory(
     Action<IServiceCollection>? configureServices = null,
     Action<EverTaskApiOptions>? configureOptions = null,
     bool useRateLimiter = false,
-    Action<IEndpointRouteBuilder>? configureEndpoints = null)
+    Action<IEndpointRouteBuilder>? configureEndpoints = null,
+    string? pathBase = null,
+    Action<IApplicationBuilder>? configurePipeline = null)
     : WebApplicationFactory<TestProgram>
 {
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -43,13 +45,20 @@ public class MonitoringTestWebAppFactory(
             // SignalR tests need the worker enabled to execute tasks and receive events
             if (!enableWorker)
             {
-                var workerServiceDescriptor = services.FirstOrDefault(d =>
+                // The registration is a factory lambda, so ImplementationType is null: the worker has to be
+                // recognized by the lambda's return type too. Removing nothing is an error, not a fallback -
+                // a worker left running recovers the seeded rows and flips their statuses mid-test.
+                var workerDescriptors = services.Where(d =>
                     d.ServiceType == typeof(IHostedService) &&
-                    d.ImplementationType?.Name == "WorkerService");
-                if (workerServiceDescriptor != null)
-                {
-                    services.Remove(workerServiceDescriptor);
-                }
+                    (d.ImplementationType?.Name == "WorkerService" ||
+                     d.ImplementationFactory?.Method.ReturnType.Name == "WorkerService")).ToList();
+
+                if (workerDescriptors.Count == 0)
+                    throw new InvalidOperationException(
+                        "WorkerService registration not found: the removal filter no longer matches how AddEverTask registers it");
+
+                foreach (var descriptor in workerDescriptors)
+                    services.Remove(descriptor);
             }
 
             // Add SignalR services (required for SignalR hub)
@@ -83,7 +92,18 @@ public class MonitoringTestWebAppFactory(
                 seeder.SeedAsync().GetAwaiter().GetResult();
             }
 
+            // Before UseRouting, where a host puts it: it moves the prefix out of Request.Path, so from here
+            // on routing and the middleware registered by the startup filter see two different paths.
+            if (!string.IsNullOrEmpty(pathBase))
+            {
+                app.UsePathBase(pathBase);
+            }
+
             app.UseRouting();
+
+            // Where the host's UseAuthentication sits: what runs here decides what HttpContext.User holds
+            // by the time an MVC filter reads it.
+            configurePipeline?.Invoke(app);
 
             // Endpoint-aware rate limiting (must sit between UseRouting and UseEndpoints)
             if (useRateLimiter)

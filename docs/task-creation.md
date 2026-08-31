@@ -7,19 +7,20 @@ nav_order: 1
 
 # Task Creation
 
-This guide covers everything you need to know about creating and configuring tasks and handlers in EverTask.
+This guide covers creating and configuring tasks and handlers in EverTask.
 
 ## Table of Contents
 
 - [Creating Task Requests](#creating-task-requests)
 - [Creating Task Handlers](#creating-task-handlers)
+- [Execution Context](#execution-context)
 - [Lifecycle Hooks](#lifecycle-hooks)
 - [Handler Configuration](#handler-configuration)
 - [Best Practices](#best-practices)
 
 ## Creating Task Requests
 
-Task requests are straightforward data objects that implement `IEverTask`. Think of them as the instructions for what work needs to be done, bundled with all the necessary parameters.
+Task requests are plain data objects that implement `IEverTask`. Think of them as the instructions for what work needs to be done, bundled with the parameters that work needs.
 
 ### Basic Request
 
@@ -53,7 +54,7 @@ public record GenerateReportTask(
 - ❌ Include non-serializable types
 - ❌ Store sensitive data in plain text (consider encryption for sensitive fields)
 
-> **Why these guidelines?** Since EverTask serializes tasks to JSON for persistence, simple and flat structures will serialize reliably and deserialize correctly even after application restarts.
+> **Why these guidelines?** EverTask serializes tasks to JSON for persistence, and simple, flat structures are the ones that still deserialize correctly after an application restart.
 
 ## Creating Task Handlers
 
@@ -123,9 +124,82 @@ public class SendNotificationHandler : EverTaskHandler<SendNotificationTask>
 
 > **Note:** Each handler execution gets its own service scope, so scoped services (like DbContext) are properly isolated per task.
 
+## Execution Context
+
+The payload tells the handler what to do. The execution context tells it which run this is: the row being executed, the slot it stands for, the attempt number, and how late the delivery started. Handlers deriving from `EverTaskHandler<TTask>` read it from the `Context` property, in `Handle` and in every lifecycle callback.
+
+```csharp
+public class SendDigestHandler(IDigestService digests) : EverTaskHandler<SendDigestTask>
+{
+    public override async Task Handle(SendDigestTask task, CancellationToken cancellationToken)
+    {
+        // A run that starts long after its slot may be building a digest nobody wants anymore.
+        if (Context.Misfire is { Kind: MisfireKind.Late } misfire &&
+            misfire.Lateness > TimeSpan.FromMinutes(30))
+        {
+            Logger.LogWarning("Digest for slot {Slot} is {Late} late, sending a summary instead",
+                Context.ScheduledAtUtc, misfire.Lateness);
+        }
+
+        await digests.SendAsync(task.UserId, Context.ScheduledAtUtc ?? Context.StartedAtUtc, cancellationToken);
+    }
+}
+```
+
+### What it carries
+
+| Member | Type | Value |
+|--------|------|-------|
+| `TaskId` | `Guid` | Persistence id of the row being executed |
+| `ScheduleId` | `Guid?` | The recurring schedule this delivery is an occurrence of, `null` when it is not one |
+| `TaskKey` | `string?` | The idempotency key the task was dispatched with |
+| `ScheduledAtUtc` | `DateTimeOffset?` | The slot this delivery stands for: the scheduled time of a delayed task, the occurrence time of a recurring one, `null` for a task dispatched to run immediately |
+| `ScheduledAtLocal` | `DateTimeOffset?` | The same slot in the schedule's own time zone, offset included, `null` when the schedule carries no zone. See [Time Zones](recurring-tasks/time-zones.md) |
+| `TimeZoneId` | `string?` | IANA id of that zone, `null` when there is none |
+| `StartedAtUtc` | `DateTimeOffset` | When this delivery actually started |
+| `Attempt` | `int` | 1-based execution attempt: `1` on the first run of `Handle`, `2` on the first retry |
+| `RunNumber` | `int` | 1-based run within a recurring series (`1` for a one-shot). Survives restarts: it comes from the durable counter |
+| `ScheduleVersion` | `int` | Version of the schedule definition behind this delivery |
+| `IsRecurring` | `bool` | The delivery belongs to a recurring series |
+| `IsOccurrence` | `bool` | The delivery is an occurrence row owned by a schedule row |
+| `Misfire` | `MisfireInfo?` | `null` when the delivery ran on time; otherwise `Kind`, `Lateness`, and the missed range with the number of slots it holds (`MissedCountIsExact` says whether that number is the real total or a lower bound) |
+
+`ScheduledAtUtc` is the slot the task was scheduled for, and it does not move. A rate-limit deferral parks the task at a later slot of its own, but the context keeps reporting the original one, so `StartedAtUtc - ScheduledAtUtc` measures how late the run really is.
+
+`Attempt` changes while the delivery is alive. Read it where you need it instead of copying it into a field at the top of `Handle`. Inside `OnRetry` it is already the attempt about to start; inside `OnError`, the last one that ran.
+
+### Reading it outside the handler
+
+A repository or a logging enricher deep in the dependency graph reads the same context through `ITaskExecutionContextAccessor`, registered by `AddEverTask`:
+
+```csharp
+public class AuditingRepository(ITaskExecutionContextAccessor tasks, AppDbContext db)
+{
+    public async Task SaveAsync(Invoice invoice, CancellationToken ct)
+    {
+        invoice.ProducedByTaskId = tasks.Current?.TaskId;   // null outside a task execution
+        await db.SaveChangesAsync(ct);
+    }
+}
+```
+
+`Current` follows the asynchronous flow of the delivery, so two tasks running side by side never see each other's context, and it is `null` everywhere else: in a controller, in a hosted service, in a handler's constructor.
+
+> **Handlers that implement `IEverTaskHandler<TTask>` directly** (without the base class) have no `Context` property. Use the accessor, or implement `SetExecutionContext` yourself. It is a default interface member with an empty body, so handlers written before it existed keep compiling and running unchanged.
+
+### When a delivery counts as late
+
+A delivery is a misfire when it starts more than `SetMisfireThreshold` (default 5 seconds) after its slot. This is an observation threshold, and only that: it decides what `Context.Misfire` reports, never whether the task runs. A [durable schedule](recurring-tasks/durable-occurrences.md) applies the same threshold one step earlier, to decide whether the occurrence it is about to create stands for missed work.
+
+```csharp
+services.AddEverTask(opt => opt
+    .RegisterTasksFromAssembly(typeof(Program).Assembly)
+    .SetMisfireThreshold(TimeSpan.FromMinutes(1)));   // seconds of drift are not worth reporting here
+```
+
 ## Lifecycle Hooks
 
-EverTask gives you optional hooks to observe and react to task events throughout their lifecycle.
+EverTask gives you optional hooks to observe and react to task events as they happen.
 
 ### OnStarted
 

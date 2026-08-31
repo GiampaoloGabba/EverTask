@@ -1,0 +1,404 @@
+using System.Collections.Concurrent;
+using System.Linq.Expressions;
+using EverTask.Storage;
+
+namespace EverTask.Tests.TestHelpers;
+
+/// <summary>
+/// A REAL storage with a fault valve in front of it: every call is forwarded to <paramref name="inner"/>
+/// unchanged unless a fault has been armed for that operation, in which case it throws BEFORE the inner
+/// call and the store is left exactly as it was.
+/// </summary>
+/// <remarks>
+/// This is deliberately not a mock. A mock replaces the operation with a canned answer and hides whatever
+/// the real implementation would have done — which is precisely the behaviour these tests are about (did
+/// the transaction really roll back? did the counter really move?). A decorator keeps the real store in the
+/// loop and only chooses WHEN it is reached.
+/// <para>
+/// Every default interface member is forwarded explicitly. Leaving one out would silently run the
+/// interface's own default against this wrapper (a <c>NotSupportedException</c> for the atomic operations,
+/// an unindexed scan for the reads) instead of the inner store's real implementation.
+/// </para>
+/// </remarks>
+public sealed class FaultInjectingTaskStorage(ITaskStorage inner) : ITaskStorage
+{
+    private readonly ConcurrentDictionary<string, Func<Exception?>> _faults =
+        new(StringComparer.Ordinal);
+
+    private readonly ConcurrentDictionary<string, Action> _hooks =
+        new(StringComparer.Ordinal);
+
+    private readonly ConcurrentDictionary<string, Func<bool>> _swallowed =
+        new(StringComparer.Ordinal);
+
+    /// <summary>Number of times each operation was reached, whether or not it threw.</summary>
+    public ConcurrentDictionary<string, int> Calls { get; } =
+        new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Runs <paramref name="hook"/> on the calling thread just BEFORE <paramref name="operation"/> reaches
+    /// the inner store, so a test can land something else — a cancel, a second writer — inside the window an
+    /// operation is about to open. A hook that blocks blocks the caller, which is the point.
+    /// </summary>
+    public void RunBefore(string operation, Action hook) => _hooks[operation] = hook;
+
+    /// <summary>Makes <paramref name="operation"/> throw on its next <paramref name="times"/> calls.</summary>
+    public void FailNext(string operation, int times, Func<Exception>? error = null)
+    {
+        var remaining = times;
+        _faults[operation] = () => Interlocked.Decrement(ref remaining) >= 0
+                                       ? error?.Invoke() ?? new InvalidOperationException($"injected {operation} fault")
+                                       : null;
+    }
+
+    /// <summary>Makes <paramref name="operation"/> throw on every call until <see cref="Heal"/>.</summary>
+    public void FailAlways(string operation, Func<Exception>? error = null) =>
+        _faults[operation] = () => error?.Invoke() ?? new InvalidOperationException($"injected {operation} fault");
+
+    /// <summary>
+    /// Makes the next <paramref name="times"/> calls to <paramref name="operation"/> return normally WITHOUT
+    /// reaching the inner store — the shape of a write every relational provider swallows: it logs its own
+    /// failure and hands the caller a completed task, so "the call returned" says nothing about the row.
+    /// </summary>
+    /// <remarks>
+    /// Honoured by the best-effort writes: <see cref="SetStatus"/> and <see cref="SetRecurringTaskPoisoned"/>,
+    /// which every relational provider implements the same way. A thrown fault is a different test: the caller
+    /// sees the failure there.
+    /// </remarks>
+    public void SwallowNext(string operation, int times)
+    {
+        var remaining = times;
+        _swallowed[operation] = () => Interlocked.Decrement(ref remaining) >= 0;
+    }
+
+    /// <summary>Removes the armed fault, so the operation reaches the real store again.</summary>
+    public void Heal(string operation) => _faults.TryRemove(operation, out _);
+
+    private void Gate(string operation)
+    {
+        Calls.AddOrUpdate(operation, 1, static (_, count) => count + 1);
+
+        if (_hooks.TryGetValue(operation, out var hook))
+            hook();
+
+        if (_faults.TryGetValue(operation, out var fault) && fault() is { } error)
+            throw error;
+    }
+
+    private bool Swallows(string operation) =>
+        _swallowed.TryGetValue(operation, out var swallow) && swallow();
+
+    public bool SupportsDurableOccurrences => inner.SupportsDurableOccurrences;
+    public bool SupportsScheduleVersioning => inner.SupportsScheduleVersioning;
+
+    public Task<QueuedTask[]> Get(Expression<Func<QueuedTask, bool>> where, CancellationToken ct = default)
+    {
+        Gate(nameof(Get));
+        return inner.Get(where, ct);
+    }
+
+    public Task<QueuedTask[]> GetAll(CancellationToken ct = default)
+    {
+        Gate(nameof(GetAll));
+        return inner.GetAll(ct);
+    }
+
+    public Task Persist(QueuedTask executor, CancellationToken ct = default)
+    {
+        Gate(nameof(Persist));
+        return inner.Persist(executor, ct);
+    }
+
+    public Task<QueuedTask[]> RetrievePending(DateTimeOffset? lastCreatedAt, Guid? lastId, int take,
+                                              CancellationToken ct = default)
+    {
+        Gate(nameof(RetrievePending));
+        return inner.RetrievePending(lastCreatedAt, lastId, take, ct);
+    }
+
+    public Task<QueuedTask[]> RetrievePending(DateTimeOffset nowUtc, DateTimeOffset? lastCreatedAt, Guid? lastId,
+                                              int take, CancellationToken ct = default)
+    {
+        Gate(nameof(RetrievePending));
+        return inner.RetrievePending(nowUtc, lastCreatedAt, lastId, take, ct);
+    }
+
+    public Task SetQueued(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default)
+    {
+        Gate(nameof(SetQueued));
+        return inner.SetQueued(taskId, auditLevel, ct);
+    }
+
+    public Task<bool> TrySetQueuedIfRecoverable(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default)
+    {
+        Gate(nameof(TrySetQueuedIfRecoverable));
+        return inner.TrySetQueuedIfRecoverable(taskId, auditLevel, ct);
+    }
+
+    public Task<bool> TrySetQueuedIfRecoverable(DateTimeOffset nowUtc, Guid taskId, AuditLevel auditLevel,
+                                                CancellationToken ct = default)
+    {
+        Gate(nameof(TrySetQueuedIfRecoverable));
+        return inner.TrySetQueuedIfRecoverable(nowUtc, taskId, auditLevel, ct);
+    }
+
+    public Task SetInProgress(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default)
+    {
+        Gate(nameof(SetInProgress));
+        return inner.SetInProgress(taskId, auditLevel, ct);
+    }
+
+    public Task SetCompleted(Guid taskId, double executionTimeMs, AuditLevel auditLevel)
+    {
+        Gate(nameof(SetCompleted));
+        return inner.SetCompleted(taskId, executionTimeMs, auditLevel);
+    }
+
+    public Task SetCancelledByUser(Guid taskId, AuditLevel auditLevel)
+    {
+        Gate(nameof(SetCancelledByUser));
+        return inner.SetCancelledByUser(taskId, auditLevel);
+    }
+
+    public Task SetCancelledByService(Guid taskId, Exception exception, AuditLevel auditLevel)
+    {
+        Gate(nameof(SetCancelledByService));
+        return inner.SetCancelledByService(taskId, exception, auditLevel);
+    }
+
+    public Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception, AuditLevel auditLevel,
+                          double? executionTimeMs = null, CancellationToken ct = default)
+    {
+        Gate(nameof(SetStatus));
+
+        return Swallows(nameof(SetStatus))
+                   ? Task.CompletedTask
+                   : inner.SetStatus(taskId, status, exception, auditLevel, executionTimeMs, ct);
+    }
+
+    public Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel)
+    {
+        Gate(nameof(UpdateCurrentRun));
+        return inner.UpdateCurrentRun(taskId, executionTimeMs, nextRun, auditLevel);
+    }
+
+    public Task<ScheduleCasResult> UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
+                                                    AuditLevel auditLevel, int expectedScheduleVersion)
+    {
+        Gate(nameof(UpdateCurrentRun));
+        return inner.UpdateCurrentRun(taskId, executionTimeMs, nextRun, auditLevel, expectedScheduleVersion);
+    }
+
+    public Task CompleteRecurringRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
+                                     AuditLevel auditLevel)
+    {
+        Gate(nameof(CompleteRecurringRun));
+        return inner.CompleteRecurringRun(taskId, executionTimeMs, nextRun, auditLevel);
+    }
+
+    public Task<ScheduleCasResult> RecordRecurringRunForExclusionRetry(
+        Guid taskId, double executionTimeMs, DateTimeOffset retainedCursorUtc, AuditLevel auditLevel,
+        bool markCompleted, string runtimeInfo, int? expectedScheduleVersion = null)
+    {
+        Gate(nameof(RecordRecurringRunForExclusionRetry));
+        return inner.RecordRecurringRunForExclusionRetry(taskId, executionTimeMs, retainedCursorUtc, auditLevel,
+            markCompleted, runtimeInfo, expectedScheduleVersion);
+    }
+
+    public Task<ScheduleCasResult> CompleteRecurringRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
+                                                        AuditLevel auditLevel, int expectedScheduleVersion)
+    {
+        Gate(nameof(CompleteRecurringRun));
+        return inner.CompleteRecurringRun(taskId, executionTimeMs, nextRun, auditLevel, expectedScheduleVersion);
+    }
+
+    public Task SetRecurringSeriesCompleted(Guid taskId, double executionTimeMs, AuditLevel auditLevel)
+    {
+        Gate(nameof(SetRecurringSeriesCompleted));
+        return inner.SetRecurringSeriesCompleted(taskId, executionTimeMs, auditLevel);
+    }
+
+    public Task<bool> TrySetRecurringSeriesCompleted(Guid taskId, DateTimeOffset? expectedCursorUtc,
+                                                     QueuedTaskStatus expectedStatus, int expectedScheduleVersion,
+                                                     double executionTimeMs, AuditLevel auditLevel,
+                                                     CancellationToken ct = default)
+    {
+        Gate(nameof(TrySetRecurringSeriesCompleted));
+        return inner.TrySetRecurringSeriesCompleted(taskId, expectedCursorUtc, expectedStatus,
+            expectedScheduleVersion, executionTimeMs, auditLevel, ct);
+    }
+
+    public Task SetRecurringTaskPoisoned(Guid taskId, Exception exception, AuditLevel auditLevel,
+                                         CancellationToken ct = default)
+    {
+        Gate(nameof(SetRecurringTaskPoisoned));
+
+        return Swallows(nameof(SetRecurringTaskPoisoned))
+                   ? Task.CompletedTask
+                   : inner.SetRecurringTaskPoisoned(taskId, exception, auditLevel, ct);
+    }
+
+    public Task<int> IncrementRecoveryFailure(Guid taskId, CancellationToken ct = default)
+    {
+        Gate(nameof(IncrementRecoveryFailure));
+        return inner.IncrementRecoveryFailure(taskId, ct);
+    }
+
+    public Task ClearRecoveryFailure(Guid taskId, CancellationToken ct = default)
+    {
+        Gate(nameof(ClearRecoveryFailure));
+        return inner.ClearRecoveryFailure(taskId, ct);
+    }
+
+    public Task<QueuedTask?> GetByTaskKey(string taskKey, CancellationToken ct = default)
+    {
+        Gate(nameof(GetByTaskKey));
+        return inner.GetByTaskKey(taskKey, ct);
+    }
+
+    public Task UpdateTask(QueuedTask task, CancellationToken ct = default)
+    {
+        Gate(nameof(UpdateTask));
+        return inner.UpdateTask(task, ct);
+    }
+
+    public Task Remove(Guid taskId, CancellationToken ct = default)
+    {
+        Gate(nameof(Remove));
+        return inner.Remove(taskId, ct);
+    }
+
+    public Task<OccurrenceMaterializationOutcome> MaterializeOccurrence(
+        Guid parentId, int expectedScheduleVersion, DateTimeOffset? expectedCursorUtc, QueuedTask occurrence,
+        DateTimeOffset? newCursorUtc, AuditLevel auditLevel, CancellationToken ct = default)
+    {
+        Gate(nameof(MaterializeOccurrence));
+        return inner.MaterializeOccurrence(parentId, expectedScheduleVersion, expectedCursorUtc, occurrence,
+            newCursorUtc, auditLevel, ct);
+    }
+
+    public Task CancelSchedule(Guid parentId, AuditLevel auditLevel, CancellationToken ct = default)
+    {
+        Gate(nameof(CancelSchedule));
+        return inner.CancelSchedule(parentId, auditLevel, ct);
+    }
+
+    public Task<bool> RequeueTerminal(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default)
+    {
+        Gate(nameof(RequeueTerminal));
+        return inner.RequeueTerminal(taskId, auditLevel, ct);
+    }
+
+    public Task<bool> TryRequeueStaleOccurrence(Guid childId, QueuedTaskStatus expectedStatus, AuditLevel auditLevel,
+                                                CancellationToken ct = default)
+    {
+        Gate(nameof(TryRequeueStaleOccurrence));
+        return inner.TryRequeueStaleOccurrence(childId, expectedStatus, auditLevel, ct);
+    }
+
+    public Task<bool> UpdateSchedule(Guid taskId, int expectedScheduleVersion, DateTimeOffset? expectedCursorUtc,
+                                     string recurringTaskJson, string? recurringInfo, DateTimeOffset? nextRunUtc,
+                                     int? maxRuns, DateTimeOffset? runUntil, string? runtimeInfo,
+                                     CancellationToken ct = default)
+    {
+        Gate(nameof(UpdateSchedule));
+        return inner.UpdateSchedule(taskId, expectedScheduleVersion, expectedCursorUtc, recurringTaskJson,
+            recurringInfo, nextRunUtc, maxRuns, runUntil, runtimeInfo, ct);
+    }
+
+    /// <remarks>
+    /// <see cref="SwallowNext"/> is honoured here for a reason the best-effort writes do not have: this one
+    /// ANSWERS, and a storage that lost the write answers false. Swallowing it is the shape of a database blip
+    /// that rolled the un-cancel back — the row is untouched and the caller is told so.
+    /// </remarks>
+    public Task<bool> TryReviveCancelledSchedule(Guid taskId, int expectedScheduleVersion, AuditLevel auditLevel,
+                                                 CancellationToken ct = default)
+    {
+        Gate(nameof(TryReviveCancelledSchedule));
+
+        return Swallows(nameof(TryReviveCancelledSchedule))
+                   ? Task.FromResult(false)
+                   : inner.TryReviveCancelledSchedule(taskId, expectedScheduleVersion, auditLevel, ct);
+    }
+
+    public Task<bool> TrySetTerminalOutcome(Guid taskId, QueuedTaskStatus status, Exception? exception,
+                                            int expectedScheduleVersion, AuditLevel auditLevel,
+                                            CancellationToken ct = default)
+    {
+        Gate(nameof(TrySetTerminalOutcome));
+        return inner.TrySetTerminalOutcome(taskId, status, exception, expectedScheduleVersion, auditLevel, ct);
+    }
+
+    public Task<bool> TryHaltSchedule(Guid parentId, int expectedScheduleVersion, DateTimeOffset? expectedCursorUtc,
+                                      QueuedTaskStatus expectedStatus, string runtimeInfo,
+                                      CancellationToken ct = default)
+    {
+        Gate(nameof(TryHaltSchedule));
+        return inner.TryHaltSchedule(parentId, expectedScheduleVersion, expectedCursorUtc, expectedStatus,
+            runtimeInfo, ct);
+    }
+
+    public Task<bool> TryAdvanceScheduleCursor(Guid parentId, int expectedScheduleVersion,
+                                               DateTimeOffset expectedCursorUtc, DateTimeOffset newCursorUtc,
+                                               CancellationToken ct = default)
+    {
+        Gate(nameof(TryAdvanceScheduleCursor));
+        return inner.TryAdvanceScheduleCursor(parentId, expectedScheduleVersion, expectedCursorUtc, newCursorUtc, ct);
+    }
+
+    public Task<QueuedTask[]> GetOccurrences(Guid parentId, bool nonTerminalOnly = false,
+                                             CancellationToken ct = default)
+    {
+        Gate(nameof(GetOccurrences));
+        return inner.GetOccurrences(parentId, nonTerminalOnly, ct);
+    }
+
+    public Task<OccurrencePage> GetOccurrencesPage(Guid parentId, bool nonTerminalOnly, int skip, int take,
+                                                   CancellationToken ct = default)
+    {
+        Gate(nameof(GetOccurrencesPage));
+        return inner.GetOccurrencesPage(parentId, nonTerminalOnly, skip, take, ct);
+    }
+
+    public Task<IReadOnlyDictionary<Guid, DateTimeOffset>> GetLastRunStarts(IReadOnlyCollection<Guid> taskIds,
+                                                                           CancellationToken ct = default)
+    {
+        Gate(nameof(GetLastRunStarts));
+        return inner.GetLastRunStarts(taskIds, ct);
+    }
+
+    public Task<AuditPage<StatusAudit>> GetStatusAuditsPage(Guid taskId, int skip, int take,
+                                                            CancellationToken ct = default)
+    {
+        Gate(nameof(GetStatusAuditsPage));
+        return inner.GetStatusAuditsPage(taskId, skip, take, ct);
+    }
+
+    public Task<AuditPage<RunsAudit>> GetRunsAuditsPage(Guid taskId, int skip, int take,
+                                                        CancellationToken ct = default)
+    {
+        Gate(nameof(GetRunsAuditsPage));
+        return inner.GetRunsAuditsPage(taskId, skip, take, ct);
+    }
+
+    public Task SaveExecutionLogsAsync(Guid taskId, IReadOnlyList<TaskExecutionLog> logs,
+                                       CancellationToken cancellationToken)
+    {
+        Gate(nameof(SaveExecutionLogsAsync));
+        return inner.SaveExecutionLogsAsync(taskId, logs, cancellationToken);
+    }
+
+    public Task<IReadOnlyList<TaskExecutionLog>> GetExecutionLogsAsync(Guid taskId,
+                                                                      CancellationToken cancellationToken)
+    {
+        Gate(nameof(GetExecutionLogsAsync));
+        return inner.GetExecutionLogsAsync(taskId, cancellationToken);
+    }
+
+    public Task<IReadOnlyList<TaskExecutionLog>> GetExecutionLogsAsync(Guid taskId, int skip, int take,
+                                                                      CancellationToken cancellationToken)
+    {
+        Gate(nameof(GetExecutionLogsAsync));
+        return inner.GetExecutionLogsAsync(taskId, skip, take, cancellationToken);
+    }
+}

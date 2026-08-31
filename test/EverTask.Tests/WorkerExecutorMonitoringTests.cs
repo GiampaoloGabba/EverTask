@@ -3,6 +3,8 @@ using EverTask.Handler;
 using EverTask.Logger;
 using EverTask.Monitoring;
 using EverTask.Scheduler;
+using EverTask.Scheduler.Recurring;
+using EverTask.Scheduler.Recurring.Intervals;
 using EverTask.Tests.TestHelpers;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -141,6 +143,106 @@ public class WorkerExecutorMonitoringTests
         {
             published.ShouldHaveSingleItem().Message.ShouldBe("value = probe");
         }
+    }
+
+    [Fact]
+    public async Task Should_publish_the_occurrence_context_of_the_executor_it_reports_on()
+    {
+        // The three occurrence fields used to be mapped twice: once in EverTaskEventData.FromExecutor, which
+        // the tests call, and once in the worker's caching copy, which is the only one that ever publishes.
+        // Pin them on the PRODUCTION path — RegisterEvent is the single gate every monitoring event passes.
+        var logger = new Mock<IEverTaskLogger<WorkerExecutor>>();
+        logger.Setup(l => l.IsEnabled(It.IsAny<LogLevel>())).Returns(false);
+
+        var executor  = CreateExecutor(logger.Object);
+        var delivered = new TaskCompletionSource<EverTaskEventData>(TaskCreationOptions.RunContinuationsAsynchronously);
+        executor.TaskEventOccurredAsync += data =>
+        {
+            delivered.TrySetResult(data);
+            return Task.CompletedTask;
+        };
+
+        var parent      = Guid.NewGuid();
+        var nominalSlot = new DateTimeOffset(2026, 8, 22, 9, 0, 0, TimeSpan.Zero);
+        var occurrence = SampleExecutor() with
+        {
+            // The canonical shape of an occurrence: NO schedule definition. ApplyOccurrenceContract strips it
+            // from the child row, so an executor built from that row carries only the parent id — which is
+            // why deriving the version from the definition published null exactly here.
+            // The rate-limit gate replaces ExecutionTime with its reserved slot, so the nominal slot is the
+            // one a dashboard must show.
+            ExecutionTime   = nominalSlot.AddMinutes(3),
+            ParentTaskId    = parent,
+            NominalSlotUtc  = nominalSlot,
+            ScheduleVersion = 7
+        };
+
+        executor.RegisterEvent(LogLevel.Information, SeverityLevel.Information, occurrence, null, null,
+            new FormatProbe(), LogProbe, RenderProbe);
+
+        var data = await delivered.Task.WaitAsync(
+            TimeSpan.FromMilliseconds(TestEnvironment.GetTimeout(5000, 30000)));
+
+        data.ParentTaskId.ShouldBe(parent);
+        data.ScheduledAtUtc.ShouldBe(nominalSlot, "the nominal slot wins over the gate's reserved one");
+        data.ScheduleVersion.ShouldBe(7,
+            "an occurrence reports the version of the definition it was materialized against, and the parent " +
+            "id is the only thing that says it belongs to one");
+    }
+
+    [Fact]
+    public async Task Should_publish_the_schedule_version_of_the_schedule_row_itself()
+    {
+        // The other half of the pair: a schedule row owns the definition and has no parent.
+        var logger = new Mock<IEverTaskLogger<WorkerExecutor>>();
+        logger.Setup(l => l.IsEnabled(It.IsAny<LogLevel>())).Returns(false);
+
+        var executor  = CreateExecutor(logger.Object);
+        var delivered = new TaskCompletionSource<EverTaskEventData>(TaskCreationOptions.RunContinuationsAsynchronously);
+        executor.TaskEventOccurredAsync += data =>
+        {
+            delivered.TrySetResult(data);
+            return Task.CompletedTask;
+        };
+
+        var schedule = SampleExecutor() with
+        {
+            RecurringTask   = new RecurringTask { SecondInterval = new SecondInterval(30) },
+            ScheduleVersion = 3
+        };
+
+        executor.RegisterEvent(LogLevel.Information, SeverityLevel.Information, schedule, null, null,
+            new FormatProbe(), LogProbe, RenderProbe);
+
+        var data = await delivered.Task.WaitAsync(
+            TimeSpan.FromMilliseconds(TestEnvironment.GetTimeout(5000, 30000)));
+
+        data.ParentTaskId.ShouldBeNull();
+        data.ScheduleVersion.ShouldBe(3);
+    }
+
+    [Fact]
+    public async Task Should_publish_no_schedule_version_for_a_plain_one_shot()
+    {
+        var logger = new Mock<IEverTaskLogger<WorkerExecutor>>();
+        logger.Setup(l => l.IsEnabled(It.IsAny<LogLevel>())).Returns(false);
+
+        var executor  = CreateExecutor(logger.Object);
+        var delivered = new TaskCompletionSource<EverTaskEventData>(TaskCreationOptions.RunContinuationsAsynchronously);
+        executor.TaskEventOccurredAsync += data =>
+        {
+            delivered.TrySetResult(data);
+            return Task.CompletedTask;
+        };
+
+        executor.RegisterEvent(LogLevel.Information, SeverityLevel.Information, SampleExecutor(), null, null,
+            new FormatProbe(), LogProbe, RenderProbe);
+
+        var data = await delivered.Task.WaitAsync(
+            TimeSpan.FromMilliseconds(TestEnvironment.GetTimeout(5000, 30000)));
+
+        data.ParentTaskId.ShouldBeNull();
+        data.ScheduleVersion.ShouldBeNull("a one-shot belongs to no schedule definition");
     }
 
     // ---- F24 ----

@@ -51,7 +51,7 @@ public class BuilderChainTests
         _builder.Schedule().EveryDay().AtTimes(times);
 
         Assert.NotNull(_builder.RecurringTask.DayInterval);
-        Assert.Equal(times.Select(t => t.ToUniversalTime()), _builder.RecurringTask.DayInterval.OnTimes);
+        Assert.Equal(times, _builder.RecurringTask.DayInterval.OnTimes);
     }
 
     [Fact]
@@ -62,5 +62,157 @@ public class BuilderChainTests
         Assert.True(_builder.RecurringTask.RunNow);
         Assert.NotNull(_builder.RecurringTask.MonthInterval);
         Assert.Equal(15, _builder.RecurringTask.MonthInterval.OnDay);
+    }
+
+    [Fact]
+    public void Should_union_each_exclusion_kind_across_repeated_calls()
+    {
+        var from = new DateTimeOffset(2026, 12, 24, 22, 0, 0, TimeSpan.FromHours(1));
+        var to = from.AddHours(4);
+
+        _builder.Schedule().EveryDay()
+            .Except(exclusions => exclusions
+                .OnDays(DayOfWeek.Monday)
+                .OnDates(new DateOnly(2026, 12, 25))
+                .Between(from, to))
+            .Except(exclusions => exclusions
+                .OnDays(DayOfWeek.Friday, DayOfWeek.Monday)
+                .OnDates(new DateOnly(2026, 1, 1), new DateOnly(2026, 12, 25)));
+
+        _builder.RecurringTask.Validate();
+
+        var exclusions = _builder.RecurringTask.Exclusions.ShouldNotBeNull();
+        exclusions.Days.ShouldBe([DayOfWeek.Monday, DayOfWeek.Friday]);
+        exclusions.Dates.ShouldBe([new DateOnly(2026, 1, 1), new DateOnly(2026, 12, 25)]);
+        exclusions.Ranges.ShouldHaveSingleItem().FromUtc.ShouldBe(from.ToUniversalTime());
+        exclusions.Ranges.ShouldHaveSingleItem().ToUtc.ShouldBe(to.ToUniversalTime());
+    }
+
+    [Fact]
+    public void Should_make_ExceptWeekends_equivalent_to_the_two_days()
+    {
+        var sugar = new RecurringTaskBuilder();
+        var explicitDays = new RecurringTaskBuilder();
+
+        sugar.Schedule().EveryDay().ExceptWeekends();
+        explicitDays.Schedule().EveryDay()
+            .Except(exclusions => exclusions.OnDays(DayOfWeek.Saturday, DayOfWeek.Sunday));
+        sugar.RecurringTask.Validate();
+        explicitDays.RecurringTask.Validate();
+
+        sugar.RecurringTask.Exclusions.ShouldNotBeNull().Days
+            .ShouldBe(explicitDays.RecurringTask.Exclusions.ShouldNotBeNull().Days);
+    }
+
+    [Fact]
+    public void Should_refuse_an_empty_Except_callback()
+    {
+        Should.Throw<InvalidOperationException>(() => _builder.Schedule().EveryDay().Except(_ => { }));
+    }
+
+    [Fact]
+    public void Should_refuse_a_non_positive_exclusion_window_immediately()
+    {
+        var instant = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
+        Should.Throw<ArgumentException>(() =>
+            _builder.Schedule().EveryDay().Except(exclusions => exclusions.Between(instant, instant)));
+    }
+
+    [Fact]
+    public void Should_union_trim_and_deduplicate_calendar_names_across_repeated_calls()
+    {
+        _builder.Schedule().EveryDay()
+            .ExceptCalendar(" holidays ", "maintenance")
+            .Except(exclusions => exclusions.OnDates(new DateOnly(2026, 12, 25)))
+            .ExceptCalendar("holidays", " year-end ");
+
+        _builder.RecurringTask.Validate();
+
+        var exclusions = _builder.RecurringTask.Exclusions.ShouldNotBeNull();
+        exclusions.Calendars.ShouldBe(["holidays", "maintenance", "year-end"]);
+        exclusions.Dates.ShouldBe([new DateOnly(2026, 12, 25)]);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Should_refuse_a_blank_calendar_name_immediately(string? name)
+    {
+        Should.Throw<ArgumentException>(() =>
+            _builder.Schedule().EveryDay().ExceptCalendar(name!));
+    }
+
+    [Fact]
+    public void Should_refuse_an_empty_calendar_name_array_immediately()
+    {
+        Should.Throw<ArgumentException>(() =>
+            _builder.Schedule().EveryDay().ExceptCalendar());
+    }
+
+    public static TheoryData<string, Action<IRecurringTaskBuilder>> RefiningBuilders => new()
+    {
+        { "interval", recurring => recurring.Schedule().ExceptWeekends().EveryDay() },
+        { "hour", recurring => recurring.Schedule().EveryHour().ExceptWeekends().AtMinute(30) },
+        { "minute", recurring => recurring.Schedule().EveryMinute().ExceptWeekends().AtSecond(30) },
+        { "daily", recurring => recurring.Schedule().EveryDay().ExceptWeekends().AtTime(new TimeOnly(9, 0)) },
+        { "weekly", recurring => recurring.Schedule().EveryWeek().ExceptWeekends().OnDay(DayOfWeek.Monday) },
+        { "monthly", recurring => recurring.Schedule().EveryMonth().ExceptWeekends().OnDay(15) }
+    };
+
+    public static TheoryData<string, Action<IRecurringTaskBuilder>> CalendarRefiningBuilders => new()
+    {
+        { "interval", recurring => recurring.Schedule().ExceptCalendar("holidays").EveryDay() },
+        { "hour", recurring => recurring.Schedule().EveryHour().ExceptCalendar("holidays").AtMinute(30) },
+        { "minute", recurring => recurring.Schedule().EveryMinute().ExceptCalendar("holidays").AtSecond(30) },
+        { "daily", recurring => recurring.Schedule().EveryDay().ExceptCalendar("holidays").AtTime(new TimeOnly(9, 0)) },
+        { "weekly", recurring => recurring.Schedule().EveryWeek().ExceptCalendar("holidays").OnDay(DayOfWeek.Monday) },
+        { "monthly", recurring => recurring.Schedule().EveryMonth().ExceptCalendar("holidays").OnDay(15) }
+    };
+
+    [Theory]
+    [MemberData(nameof(RefiningBuilders))]
+    public void Should_preserve_each_refining_builder_after_an_exclusion(
+        string shape, Action<IRecurringTaskBuilder> configure)
+    {
+        configure(_builder);
+
+        _builder.RecurringTask.Exclusions.ShouldNotBeNull(
+            $"the {shape} builder must apply the exclusion without ending its refinement chain");
+    }
+
+    [Theory]
+    [MemberData(nameof(CalendarRefiningBuilders))]
+    public void Should_preserve_each_refining_builder_after_a_named_calendar(
+        string shape, Action<IRecurringTaskBuilder> configure)
+    {
+        configure(_builder);
+
+        _builder.RecurringTask.Exclusions.ShouldNotBeNull(
+            $"the {shape} builder must apply the named calendar without ending its refinement chain");
+    }
+
+    [Fact]
+    public void Should_accept_a_named_calendar_as_the_exclusion_clock_on_an_elapsed_grid()
+    {
+        _builder.Schedule().Every(4).Hours().ExceptCalendar("holidays").InTimeZone("Europe/Rome");
+
+        Should.NotThrow(() => _builder.RecurringTask.Validate());
+    }
+
+    [Fact]
+    public void Should_accept_calendar_exclusions_on_both_sides_of_InTimeZone()
+    {
+        var zoneThenExclusion = new RecurringTaskBuilder();
+        var exclusionThenZone = new RecurringTaskBuilder();
+
+        zoneThenExclusion.Schedule().Every(4).Hours().InTimeZone("Europe/Rome").ExceptWeekends();
+        exclusionThenZone.Schedule().Every(4).Hours().ExceptWeekends().InTimeZone("Europe/Rome");
+
+        Should.NotThrow(() => zoneThenExclusion.RecurringTask.Validate());
+        Should.NotThrow(() => exclusionThenZone.RecurringTask.Validate());
+        zoneThenExclusion.RecurringTask.Exclusions.ShouldNotBeNull().Days
+            .ShouldBe(exclusionThenZone.RecurringTask.Exclusions.ShouldNotBeNull().Days);
     }
 }

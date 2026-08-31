@@ -1,5 +1,7 @@
-﻿using EverTask.Configuration;
+using EverTask.Configuration;
 using EverTask.RateLimiting;
+using EverTask.Scheduler.Occurrences;
+using EverTask.Scheduler.Recurring;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -40,6 +42,11 @@ public static class ServiceCollectionExtensions
         var options = new EverTaskServiceConfiguration();
         configure?.Invoke(options);
 
+        // Singleton factories are lazy, so freezing at resolution time would let later mutations of the
+        // configuration object change this host's calendar meanings.
+        var scheduleCalendars = ScheduleCalendarRegistry.Create(options.ScheduleCalendars);
+        services.TryAddSingleton(scheduleCalendars);
+
         if (options.AssembliesToRegister.Count == 0)
         {
             throw new ArgumentException("No assemblies found to scan. Supply at least one assembly to scan for handlers.");
@@ -48,6 +55,33 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton(options);
         services.TryAddSingleton(typeof(IEverTaskLogger<>), typeof(EverTaskLogger<>));
         services.TryAddSingleton<IWorkerBlacklist, WorkerBlacklist>();
+
+        // ONE clock for the whole scheduling pipeline (dispatcher, evaluator, builders, schedulers,
+        // recovery, rate limiter/gate/parking lot). TryAddSingleton is the seam: register a
+        // TimeProvider before AddEverTask and every scheduling decision follows it, which is what makes
+        // an end-to-end schedule test deterministic. Retry policies, audit and logging stay on the real
+        // clock by design — they are not scheduling decisions.
+        services.TryAddSingleton(TimeProvider.System);
+
+        // The occurrence providers an application registers, and the per-schedule backoff of one that could
+        // not answer. Both are per host, and both are read by the evaluator below.
+        services.TryAddSingleton<OccurrenceProviderRegistry>();
+        services.TryAddSingleton<OccurrenceProviderRetryRegistry>();
+        services.TryAddSingleton<ProviderScheduleGrid>();
+
+        // The single seam every component asks about a schedule's occurrence grid. Constructed explicitly, as
+        // the components below are: its provider grid is an optional constructor parameter (the fallback
+        // instance for hand-wired components has none), and letting the container choose between the two
+        // would silently build the one that cannot answer for a provider-driven schedule.
+        services.TryAddSingleton<IScheduleEvaluator>(sp =>
+            new ScheduleEvaluator(
+                sp.GetRequiredService<ProviderScheduleGrid>(),
+                sp.GetRequiredService<ScheduleCalendarRegistry>()));
+
+        // Ambient execution context. Singleton on purpose: an eager handler's dependency graph is built
+        // in the DISPATCHER's scope, so a scoped accessor would be invisible to exactly the services that
+        // cannot reach the handler's own Context property. The value it hands out is per asynchronous flow.
+        services.TryAddSingleton<ITaskExecutionContextAccessor, AmbientTaskExecutionContextAccessor>();
 
         // Register default GUID generator (UUID v7) - can be overridden by storage providers
         services.TryAddSingleton<IGuidGenerator>(sp => new DefaultGuidGenerator(UUIDNext.Database.Other));
@@ -67,12 +101,13 @@ public static class ServiceCollectionExtensions
             options.RateLimiterOptions.ResolveDefaults(options.Queues[QueueNames.Default].ChannelOptions.Capacity);
             return new InMemoryKeyedRateLimiter(
                 options.RateLimiterOptions,
-                sp.GetRequiredService<IEverTaskLogger<InMemoryKeyedRateLimiter>>());
+                sp.GetRequiredService<IEverTaskLogger<InMemoryKeyedRateLimiter>>(),
+                sp.GetRequiredService<TimeProvider>());
         });
-        services.TryAddSingleton(_ =>
+        services.TryAddSingleton(sp =>
         {
             options.RateLimiterOptions.ResolveDefaults(options.Queues[QueueNames.Default].ChannelOptions.Capacity);
-            return new RateLimitParkingLot(options.RateLimiterOptions);
+            return new RateLimitParkingLot(options.RateLimiterOptions, sp.GetRequiredService<TimeProvider>());
         });
         services.TryAddSingleton<IRateLimitGate, RateLimitGate>();
         services.TryAddSingleton<IRateLimiterIntrospection, RateLimiterIntrospection>();
@@ -86,14 +121,25 @@ public static class ServiceCollectionExtensions
                     sp.GetRequiredService<IWorkerQueueManager>(),
                     sp.GetRequiredService<IEverTaskLogger<ShardedScheduler>>(),
                     sp.GetService<ITaskStorage>(),
-                    options.ShardedSchedulerShardCount.Value
+                    options.ShardedSchedulerShardCount.Value,
+                    sp.GetRequiredService<TimeProvider>()
                 )
             );
         }
         else
         {
-            // Default: PeriodicTimerScheduler
-            services.TryAddSingleton<IScheduler, PeriodicTimerScheduler>();
+            // Default: PeriodicTimerScheduler. Constructed explicitly rather than by type: the clock-less
+            // constructor is still there for binary compatibility, and letting the container pick between
+            // the two would silently fall back to it on a host without storage.
+            services.TryAddSingleton<IScheduler>(sp =>
+                new PeriodicTimerScheduler(
+                    sp.GetRequiredService<IWorkerQueueManager>(),
+                    sp.GetRequiredService<IEverTaskLogger<PeriodicTimerScheduler>>(),
+                    null,
+                    sp.GetService<ITaskStorage>(),
+                    sp.GetRequiredService<TimeProvider>()
+                )
+            );
         }
 
         services.TryAddSingleton<IGateInvalidationRegistry, GateInvalidationRegistry>();
@@ -101,8 +147,72 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ITaskDispatcherInternal, Dispatcher>();
         services.TryAddSingleton<ITaskDispatcher>(provider => provider.GetRequiredService<ITaskDispatcherInternal>());
         services.TryAddSingleton<ICancellationSourceProvider, CancellationSourceProvider>();
-        services.TryAddSingleton<IEverTaskWorkerExecutor, WorkerExecutor>();
-        services.AddHostedService<WorkerService>();
+        // Both are constructed explicitly rather than by type, for the same reason as the scheduler above:
+        // each keeps its clock-less constructor for binary compatibility, and letting the container choose
+        // between the two would silently drop the scheduling clock the moment one of the optional
+        // dependencies is absent.
+        services.TryAddSingleton<IEverTaskWorkerExecutor>(sp =>
+            new WorkerExecutor(
+                sp.GetRequiredService<IWorkerBlacklist>(),
+                sp.GetRequiredService<EverTaskServiceConfiguration>(),
+                sp.GetRequiredService<IServiceScopeFactory>(),
+                sp.GetRequiredService<IScheduler>(),
+                sp.GetRequiredService<ICancellationSourceProvider>(),
+                sp.GetRequiredService<IEverTaskLogger<WorkerExecutor>>(),
+                sp.GetRequiredService<ILoggerFactory>(),
+                sp.GetService<IRateLimitGate>(),
+                sp.GetService<TaskDeliveryRegistry>(),
+                sp.GetRequiredService<TimeProvider>()));
+
+        // The one place a durable schedule turns due slots into occurrence rows. Singleton: it owns the
+        // per-schedule serialization and the global materialization budget, both of which are per host.
+        services.TryAddSingleton(sp =>
+            new OccurrenceMaterializer(
+                sp.GetRequiredService<IServiceScopeFactory>(),
+                sp,
+                sp.GetRequiredService<IScheduler>(),
+                sp.GetRequiredService<EverTaskServiceConfiguration>(),
+                sp.GetRequiredService<IScheduleEvaluator>(),
+                sp.GetRequiredService<IEverTaskLogger<OccurrenceMaterializer>>(),
+                sp.GetRequiredService<TimeProvider>(),
+                sp.GetRequiredService<ScheduleVersionRegistry>(),
+                sp.GetService<TaskDeliveryRegistry>()));
+
+        // Runtime schedule management. The per-taskKey critical section is shared with the dispatcher on
+        // purpose: a reschedule and a dispatch of the same key are the same read-decide-write over the same
+        // row, and UpdateTask does not carry a version, so only one section keeps them from overwriting each
+        // other. The version registry is the in-memory lower bound a delivery already in a queue is measured
+        // against — both are per host, hence singletons.
+        services.TryAddSingleton<TaskKeyLockRegistry>();
+        services.TryAddSingleton<ScheduleVersionRegistry>();
+        services.TryAddSingleton<ITaskScheduleManager>(sp =>
+            new TaskScheduleManager(
+                sp.GetRequiredService<IServiceScopeFactory>(),
+                sp.GetRequiredService<IScheduler>(),
+                sp.GetRequiredService<IScheduleEvaluator>(),
+                sp.GetRequiredService<EverTaskServiceConfiguration>(),
+                sp.GetRequiredService<TaskKeyLockRegistry>(),
+                sp.GetRequiredService<ScheduleVersionRegistry>(),
+                sp.GetRequiredService<ITaskDispatcher>(),
+                sp.GetRequiredService<IEverTaskLogger<TaskScheduleManager>>(),
+                sp.GetRequiredService<TimeProvider>(),
+                sp.GetService<ITaskStorage>(),
+                sp.GetService<OccurrenceProviderRegistry>(),
+                sp.GetService<ScheduleCalendarRegistry>(),
+                sp.GetService<OccurrenceMaterializer>(),
+                sp.GetService<IGateInvalidationRegistry>(),
+                sp.GetService<IEverTaskWorkerExecutor>(),
+                sp.GetRequiredService<IWorkerBlacklist>()));
+
+        services.AddHostedService(sp =>
+            new WorkerService(
+                sp.GetRequiredService<IWorkerQueueManager>(),
+                sp.GetRequiredService<IServiceScopeFactory>(),
+                sp.GetRequiredService<ITaskDispatcherInternal>(),
+                sp.GetRequiredService<EverTaskServiceConfiguration>(),
+                sp.GetRequiredService<IEverTaskWorkerExecutor>(),
+                sp.GetRequiredService<IEverTaskLogger<WorkerService>>(),
+                sp.GetRequiredService<TimeProvider>()));
         services.AddEverTaskHandlers(options);
 
         return new EverTaskServiceBuilder(services, options);
@@ -156,7 +266,8 @@ public static class ServiceCollectionExtensions
             var taskStorage = provider.GetService<ITaskStorage>();
             var parkingLot = provider.GetService<RateLimitParkingLot>();
             var deliveryRegistry = provider.GetRequiredService<TaskDeliveryRegistry>();
-            return new WorkerQueueManager(options.Queues, logger, blacklist, loggerFactory, taskStorage, parkingLot, deliveryRegistry);
+            return new WorkerQueueManager(options.Queues, logger, blacklist, loggerFactory, taskStorage, parkingLot,
+                deliveryRegistry, provider.GetRequiredService<TimeProvider>());
         });
 
         // Register backward compatibility IWorkerQueue (points to default queue)

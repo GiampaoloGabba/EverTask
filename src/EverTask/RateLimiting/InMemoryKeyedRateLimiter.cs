@@ -72,7 +72,7 @@ public sealed class InMemoryKeyedRateLimiter : IKeyedRateLimiter, IDisposable
     internal int TrackedKeyCount => _keys.Count;
 
     /// <summary>
-    /// Test seam (CU20): invoked when a new key is detected, BEFORE the atomic cap-check-and-add.
+    /// Test seam: invoked when a new key is detected, BEFORE the atomic cap-check-and-add.
     /// No-op in production. Lets a test release several acquirers past new-key detection at once to
     /// exercise the cap race.
     /// </summary>

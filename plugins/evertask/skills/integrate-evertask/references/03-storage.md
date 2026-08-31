@@ -8,7 +8,7 @@ Exactly one storage call is mandatory after `AddEverTask(...)`.
 |---|---|---|
 | Local dev, unit/integration tests | **In-Memory** (or SQLite `:memory:`) | Zero infra; tasks lost on restart. |
 | Desktop / edge / small single-server app | **SQLite** | File-based, zero infra. |
-| Production, scale-out, high write concurrency, multi-instance | **SQL Server** or **PostgreSQL** | ACID, server-side queries, clustering. |
+| Production, high write concurrency, active/standby availability | **SQL Server** or **PostgreSQL** | ACID and server-side queries; one active EverTask host per store. |
 | Existing SQL Server / enterprise DBA stack | **SQL Server** | Stored procs, existing skills. |
 | Greenfield OSS stack, no license cost | **PostgreSQL** | Full SQL-Server parity, writable-CTE optimizations. |
 | Very large backlogs (>~10k pending) | **SQL Server / PostgreSQL** | SQLite recovery falls back to client-side keyset. |
@@ -17,6 +17,9 @@ Exactly one storage call is mandatory after `AddEverTask(...)`.
 Per-provider constraints: SQLite = no schema, single writer, client-side `DateTimeOffset`
 filtering; Postgres `SchemaName` lowercase only; MySQL/MariaDB = no schema (a "schema" is a
 database), net9.0/net10.0 only; In-Memory = no audit, no persistence, no cleanup.
+EverTask does not distribute execution across hosts: run one active host per store. A standby whose
+EverTask host is not started, or active hosts using separately scoped stores, are fine. See the
+single-active-host contract in `docs/scalability.md#horizontal-scaling-multiple-instances`.
 
 ## In-Memory (core `EverTask` package, no NuGet)
 
@@ -131,8 +134,16 @@ services.AddAuditCleanup(AuditRetentionPolicy retentionPolicy, int cleanupInterv
 Factories: `AuditRetentionPolicy.WithUniformRetention(days)`,
 `AuditRetentionPolicy.WithErrorPriority(successRetentionDays, errorRetentionDays)`. Individually
 settable: `StatusAuditRetentionDays`, `RunsAuditRetentionDays`, `ErrorAuditRetentionDays`,
-`ExecutionLogRetentionDays`, `MaxExecutionLogsPerTask`, `DeleteCompletedTasksAfterRetention` (all
-`null` = unlimited). The cleanup service also exposes `AuditCleanupOptions.CleanupInterval` (default
+`ExecutionLogRetentionDays`, `MaxExecutionLogsPerTask`, `OccurrenceRetentionDays`,
+`DeleteCompletedTasksAfterRetention` (all `null` = unlimited). `OccurrenceRetentionDays` prunes the
+finished occurrences of a durable recurring schedule in ANY terminal state (Completed, Failed and
+Cancelled), which `DeleteCompletedTasksAfterRetention` does not: that one only removes completed rows
+with no audit trail left. Both skip a row that still owns execution logs while a log-retention
+window/cap is active, so a short occurrence window never cascade-deletes logs a long log window kept; the
+occurrence pass skips a row whose StatusAudit rows are still inside their window whenever
+`StatusAuditRetentionDays` is set, and its RunsAudit rows whenever `RunsAuditRetentionDays` is, for the same
+reason. One guard per trail: a knob left unset prunes nothing and so holds nothing back.
+The cleanup service also exposes `AuditCleanupOptions.CleanupInterval` (default
 24h, from the `cleanupIntervalHours` arg) and `InitialDelay` (default 1 min before the first sweep).
 Requires an EF Core storage; warns + disables itself for custom non-EF storage.
 
@@ -142,23 +153,57 @@ Requires an EF Core storage; warns + disables itself for custom non-EF storage.
 row. Useful public read members for building status/inspection logic without reading source:
 `Status`, `CurrentRunCount`, `MaxRuns`, `NextRunUtc`, `RunUntil`, `TaskKey`, `QueueName`,
 `LastExecutionUtc`, `ExecutionTimeMs`, the `StatusAudits` / `RunsAudits` / `ExecutionLogs`
-collections, and the `IsRecoverable(now)` predicate.
+collections, and the recovery predicates `IsRecoverableForExecution(now)` /
+`IsRecurringSeriesToFinalize()` (`IsRecoverable(now)` is the former under its historical name).
+Durable recurring schedules add `ParentTaskId` (null on every ordinary row), `RuntimeInfo` and
+`ScheduleVersion`.
 
 ## Custom storage
 
 Implement `ITaskStorage` and register: `services.AddSingleton<ITaskStorage, MyStorage>();`.
 Key surface: `Get/GetAll/Persist/UpdateTask/Remove`, `RetrievePending` (keyset recovery),
-`GetByTaskKey`, the `Set*` status transitions (all take `AuditLevel`), `GetCurrentRunCount` /
-`UpdateCurrentRun`, recurring helpers (`CompleteRecurringRun`, `SetRecurringSeriesCompleted`,
+`GetByTaskKey`, the `Set*` status transitions (all take `AuditLevel`), `UpdateCurrentRun`, recurring helpers
+(`CompleteRecurringRun`, `SetRecurringSeriesCompleted`,
 `SetRecurringTaskPoisoned`), recovery guards (`TrySetQueuedIfRecoverable`,
 `IncrementRecoveryFailure`, `ClearRecoveryFailure`), and execution logs (`SaveExecutionLogsAsync`,
 `GetExecutionLogsAsync`).
 
 Critical: make `TrySetQueuedIfRecoverable` an **atomic conditional UPDATE** (the default fallback
 is non-atomic read-then-write → recovery double-execution); make the recurring helpers
-single-transaction; forward `AuditLevel`; match recoverable statuses to `QueuedTask.IsRecoverable`
-(`WaitingQueue, Queued, Pending, InProgress, ServiceStopped` + recurring tasks with a next run).
-Optionally implement `ITaskStorageStatistics` to avoid O(backlog) reads in the dashboard.
+single-transaction; forward `AuditLevel`; match recoverable statuses to
+`QueuedTask.IsRecoverableForExecution` (`WaitingQueue, Queued, Pending, InProgress, ServiceStopped` +
+recurring tasks with a next run). Optionally implement `ITaskStorageStatistics` to avoid O(backlog)
+reads in the dashboard.
+
+`RetrievePending` must return TWO categories: rows still to EXECUTE
+(`QueuedTask.IsRecoverableForExecution(now)`) and recurring series that only need FINALIZING
+(`QueuedTask.IsRecurringSeriesToFinalize()` — every remaining slot past `RunUntil`, or the run budget
+spent). `TrySetQueuedIfRecoverable` applies only the first, so a spent series is never handed back to a
+worker queue. Both members also have a `nowUtc` overload that the core always calls: the defaults
+delegate to the legacy signatures, so an existing storage keeps working but resolves the clock itself.
+
+Durable recurring schedules need atomic operations that no non-atomic emulation can provide
+(`MaterializeOccurrence`, `TryAdvanceScheduleCursor`, `CancelSchedule`, `RequeueTerminal`,
+`TryRequeueStaleOccurrence`, `UpdateSchedule`, `TryHaltSchedule`, `TrySetRecurringSeriesCompleted`,
+`TrySetTerminalOutcome` and the compare-and-swap overloads of `UpdateCurrentRun` / `CompleteRecurringRun`).
+`TryAdvanceScheduleCursor` is
+the write a SKIPPED slot needs — a compare-and-swap on version plus cursor that moves the cursor and
+nothing else: no run counted, no audit row. They default to throwing `NotSupportedException`, gated
+by `SupportsDurableOccurrences` / `SupportsScheduleVersioning` (both `false` by default). Implement them
+atomically before flipping either flag — a "best effort" version built from two writes is exactly the
+crash window they exist to close.
+
+`TrySetTerminalOutcome` is required when `SupportsScheduleVersioning` is `true`. It writes a delivery's
+terminal outcome only while the row still carries the version that delivery ran, and returns `false` when
+the version moved or the row is already `Cancelled` — unless the outcome being written is itself
+`Cancelled`.
+
+`TryReviveCancelledSchedule` sits beside them with one difference: its default WORKS (status write, then a
+read that confirms the row left `Cancelled`), because a re-dispatch under a cancelled schedule's task key —
+the documented way to restart one — has to work on any storage. What the default cannot do is bump
+`ScheduleVersion`, so a storage advertising `SupportsScheduleVersioning` owes it a real override: the revived
+row keeps its id, and the version is the only thing separating the new registration from a delivery of the
+series the cancel ended.
 
 > To add a new **EF Core relational** provider package (MySQL, Oracle, …), use the separate
 > `new-relational-storage-provider` skill: it has the mandatory per-DB verification matrix.

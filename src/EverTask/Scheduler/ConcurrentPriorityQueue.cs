@@ -113,7 +113,7 @@ internal sealed class ConcurrentPriorityQueue<TElement, TPriority>
     ///  <see cref="PriorityQueue{TElement, TPriority}"/> has no keyed removal, so the heap is rebuilt
     ///  without the target. O(n), bounded by the queue size — used only for the schedulers' latest-wins
     ///  replacement, to drop the stale node instead of letting it linger until its (possibly far-future)
-    ///  due time (CU19). Reference identity, not value equality: <typeparamref name="TElement"/> may be
+    ///  due time. Reference identity, not value equality: <typeparamref name="TElement"/> may be
     ///  a record whose value-equality would match unrelated entries.
     /// </remarks>
     /// <returns><see langword="true"/> if an element was removed.</returns>

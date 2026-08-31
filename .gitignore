@@ -197,6 +197,8 @@ PublishScripts/
 
 # NuGet Packages
 *.nupkg
+# What a failed migration-SQL snapshot test writes next to the baseline, for eyeballing the diff.
+*.actual.sql
 # NuGet Symbol Packages
 *.snupkg
 # The packages folder can be ignored because of Package Restore
@@ -552,6 +554,7 @@ fabric.properties
 # Custom
 /firebase.json
 .claude/
+.claude/workflows/
 
 # EverTask load harness generated reports
 benchmarks/results/
@@ -595,6 +598,11 @@ benchmarks/results/
 /review/recurring-skipforward-deep-review.raw.json
 /review/usp-completerecurringrun-plan-review.md
 /review/usp-completerecurringrun-tdd-plan.md
+/review/recurring-occurrences-phase1-adversarial-review.md
+/review/recurring-occurrences-phase1-adversarial-review.raw.json
+/review/recurring-occurrences-phase1-verification.md
+/review/recurring-occurrences-phase4-adversarial-review.md
+/review/recurring-occurrences-followups.md
 
 # issue23 orchestrator working files (reports are posted to GitHub)
 review/orchestrator/

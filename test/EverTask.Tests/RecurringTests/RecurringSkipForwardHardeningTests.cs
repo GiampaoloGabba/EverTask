@@ -113,6 +113,34 @@ public class RecurringSkipForwardHardeningTests
     }
 
     [Fact]
+    public void U9_uniform_count_excludes_the_slot_that_falls_exactly_on_runUntil()
+    {
+        // RunUntil is EXCLUSIVE on every other path of the grid, so the O(1) division must not count the slot
+        // that lands on it. Counting it made this path answer one more than the walk, and a catch-up cap of
+        // ten then read eleven due slots where there were ten — enough for the Halt breaker to stop a healthy
+        // series.
+        var task = new RecurringTask
+        {
+            MinuteInterval = new MinuteInterval(1),
+            RunUntil       = Utc(2026, 1, 1, 10, 10)
+        };
+        var anchor = Utc(2026, 1, 1, 10, 0);
+        var after  = Utc(2026, 1, 1, 10, 30);
+
+        // Ground truth from the grid itself, one occurrence at a time: 10:00 through 10:09.
+        var expected   = 0;
+        var occurrence = (DateTimeOffset?)anchor;
+        while (occurrence is { } slot && slot <= after)
+        {
+            expected++;
+            occurrence = task.NextOccurrenceStrictlyAfter(anchor, slot);
+        }
+
+        expected.ShouldBe(10, "the premise: the walk stops before the bound, it never lands on it");
+        task.CountMissedOccurrences(anchor, after).ShouldBe(expected);
+    }
+
+    [Fact]
     public void U10_false_uniform_schedule_counts_via_the_calendar_walk()
     {
         // DayInterval(0,OnDays)+Minute(5) is NOT a uniform grid: the count must come from the calendar walk,
@@ -156,42 +184,4 @@ public class RecurringSkipForwardHardeningTests
         (result == null || result.Value > after).ShouldBeTrue();
     }
 
-    // ---------------------------------------------------------------- Grace-window decision (U4, U5)
-
-    [Fact]
-    public void U4_just_due_calendar_occurrence_is_still_current_on_recovery()
-    {
-        // OnDays(Mon,Wed,Fri)@09:00; the Wednesday occurrence slipped 5 hours. The next slot (Friday) is not
-        // due yet, so the slipped Wednesday is STILL the current one -> recovery must execute it, not skip it.
-        var task = new RecurringTask
-        {
-            DayInterval = new DayInterval(0, [DayOfWeek.Monday, DayOfWeek.Wednesday, DayOfWeek.Friday]) { OnTimes = [new TimeOnly(9, 0)
-                ]
-            }
-        };
-        var occurrence = Utc(2026, 1, 7, 9, 0);  // Wednesday 09:00
-        var now        = Utc(2026, 1, 7, 14, 0); // 5h later, still before Friday
-
-        task.IsOccurrenceStillCurrent(occurrence, now).ShouldBeTrue();
-
-        // The flat GetMinimumInterval heuristic (5-minute default for OnDays) would WRONGLY skip it:
-        (now - occurrence > task.GetMinimumInterval()).ShouldBeTrue();
-    }
-
-    [Fact]
-    public void U5_superseded_calendar_occurrence_is_not_current_on_recovery()
-    {
-        // Same schedule; now it is Saturday (past Friday's slot). The Wednesday occurrence is superseded ->
-        // recovery must skip forward, not execute the stale one.
-        var task = new RecurringTask
-        {
-            DayInterval = new DayInterval(0, [DayOfWeek.Monday, DayOfWeek.Wednesday, DayOfWeek.Friday]) { OnTimes = [new TimeOnly(9, 0)
-                ]
-            }
-        };
-        var occurrence = Utc(2026, 1, 7, 9, 0);   // Wednesday
-        var now        = Utc(2026, 1, 10, 12, 0); // Saturday (Friday 09:00 already passed)
-
-        task.IsOccurrenceStillCurrent(occurrence, now).ShouldBeFalse();
-    }
 }

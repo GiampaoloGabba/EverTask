@@ -27,4 +27,14 @@ public record OverviewDto(
     List<TasksOverTimeDto> TasksOverTime,
     List<QueueSummaryDto> QueueSummaries,
     int ThrottledTasks = 0
-);
+)
+{
+    // An init property rather than an appended positional parameter: the constructor and Deconstruct
+    // signatures of a public record stay what they were.
+
+    /// <summary>
+    /// The occurrences of every durable schedule, by state, and how far behind the oldest pending one is.
+    /// All zero on a host that runs no durable schedule.
+    /// </summary>
+    public CatchUpBacklogDto CatchUpBacklog { get; init; } = new(0, 0, 0, 0, 0, null, 0, 0);
+}

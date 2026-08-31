@@ -51,8 +51,8 @@ public class CronInterval : IInterval
 
     /// <summary>
     /// Validates that the cron expression parses (correct field count + Cronos-parseable). A persisted cron
-    /// string that is corrupt/empty-but-set deserializes fine but throws at the next-run calculation — calling
-    /// this right after a recovery deserialize routes the throw to the terminal poison path (B2/gap #1).
+    /// string that is corrupt deserializes fine but throws at the next-run calculation, so calling this right
+    /// after a recovery deserialize routes the throw to the terminal poison path.
     /// </summary>
     public void Validate()
     {
@@ -60,6 +60,29 @@ public class CronInterval : IInterval
             GetParsedExpression(); // throws ArgumentException on an unparseable cron expression
     }
 
+    /// <summary>
+    /// The next occurrence strictly after <paramref name="current"/>, with the expression read as UTC.
+    /// </summary>
+    /// <remarks>
+    /// Kept as its own zero-zone method rather than an optional parameter on the overload below: the original
+    /// IL signature is what an assembly compiled against the previous release calls.
+    /// </remarks>
     public DateTimeOffset? GetNextOccurrence(DateTimeOffset current) =>
-        GetParsedExpression().GetNextOccurrence(current, TimeZoneInfo.Utc)?.ToUniversalTime();
+        GetNextOccurrence(current, TimeZoneInfo.Utc);
+
+    /// <summary>
+    /// The next occurrence strictly after <paramref name="current"/>, with the expression read on
+    /// <paramref name="zone"/>'s clock.
+    /// </summary>
+    /// <remarks>
+    /// Cronos owns the DST rules here: a skipped local time fires at the transition, a repeated one fires on
+    /// its first pass, and an interval expression (<c>*/n</c>) keeps stepping through both. It is the oracle
+    /// the fluent API's own zone math is measured against, never a second implementation of those rules.
+    /// </remarks>
+    public DateTimeOffset? GetNextOccurrence(DateTimeOffset current, TimeZoneInfo zone)
+    {
+        ArgumentNullException.ThrowIfNull(zone);
+
+        return GetParsedExpression().GetNextOccurrence(current, zone)?.ToUniversalTime();
+    }
 }

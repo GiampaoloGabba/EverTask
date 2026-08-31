@@ -7,7 +7,7 @@ nav_order: 6
 
 # MySQL / MariaDB Storage
 
-MySQL and MariaDB are open-source relational stores for production. Like the SQL Server and PostgreSQL providers, this provider handles multi-server concurrency and runs every recovery and cleanup query on the server.
+MySQL and MariaDB are open-source relational stores for production. Like the SQL Server and PostgreSQL providers, this provider handles high write concurrency and runs every recovery and cleanup query on the server. EverTask still requires [one active host per store](../scalability.md#horizontal-scaling-multiple-instances); an inactive standby is fine.
 
 The provider is built on [Microting.EntityFrameworkCore.MySql](https://www.nuget.org/packages/Microting.EntityFrameworkCore.MySql), the maintained fork of the (now abandoned) Pomelo provider. It targets **.NET 9 and .NET 10** and is tested against **MariaDB 10.11 LTS**; MySQL 8.0+ is also supported.
 
@@ -82,23 +82,15 @@ dotnet ef migrations script --project YourProject --output migrations.sql
 
 ## Performance Optimizations
 
-MySQL/MariaDB is a fully relational provider like SQL Server and PostgreSQL (not like SQLite). The provider maps `DateTimeOffset` to `datetime(6)` (normalized to UTC) and translates every ordering, keyset, and cleanup comparison **server-side**, so it inherits the optimized EF Core base. Recovery and cleanup run as server-side queries rather than materializing rows in memory.
+MySQL/MariaDB is a fully relational provider like SQL Server and PostgreSQL (not like SQLite). The provider stores timestamps normalized to UTC and translates every ordering, keyset, and cleanup comparison **server-side**, so it inherits the optimized EF Core base. Recovery and cleanup run as server-side queries rather than materializing rows in memory.
 
-### Recovery Index
+### Run Counter
 
-A composite index (`IX_QueuedTasks_Recovery`) on `(CreatedAtUtc, Id)` supports the startup-recovery query, serving its keyset ordering without a filesort on large tables. MySQL and MariaDB support neither covering `INCLUDE` columns (SQL Server) nor partial/filtered indexes (PostgreSQL), so the recoverable-status predicate stays a runtime filter rather than being pruned by the index.
-
-### Completed-Task Purge Override
-
-The shared retention cleanup is inherited unchanged except for the completed-task purge. On MySQL a `DELETE ... LIMIT` does not reliably honor a correlated `EXISTS` guard in its `WHERE`, which could purge a completed task that still owned execution logs a retention window meant to keep. The provider overrides that one method to resolve the matching rows with a `SELECT` (the `EXISTS` subqueries and the `DateTimeOffset` cutoff translate server-side) and then delete by primary key.
+The run counter **saturates at `int.MaxValue`** instead of overflowing: an unbounded recurring series that reaches that many runs keeps going with the counter frozen at its max. See [Recurring Tasks](../recurring-tasks.md) for the tradeoff.
 
 ### GUID Generation
 
-EverTask generates time-ordered GUIDs using the `UUIDNext` v7 family, stored as `char(36)`. A v7 GUID's canonical string sorts in temporal order (the timestamp is in the leading bytes), so sequentially generated identifiers keep inserts sequential and the recovery index / keyset stay efficient.
-
-### Hot-Write Stored Procedures
-
-The hot writes (`SetStatus`, `UpdateCurrentRun`, `CompleteRecurringRun`) are optimized with stored procedures, the MySQL/MariaDB analog of SQL Server's procedures and PostgreSQL's writable CTEs. MySQL/MariaDB have read-only CTEs and no `UPDATE ... RETURNING`, so stored procedures are the only way to collapse the audit insert and the row update into one atomic round-trip. Each proc runs a single transaction, so a crash can never split the audit from the row update. The audit decisions match the configured `AuditPolicy`: the `ErrorsOnly` runs-audit gate is decided server-side from the row's own status and exception; the run counter saturates at `int.MaxValue`. The procedures are created by the `AddHotWriteStoredProcedures` migration; the SQL lives in versioned C#.
+EverTask generates time-ordered GUIDs using the `UUIDNext` v7 family. A v7 GUID's canonical string sorts in temporal order (the timestamp is in the leading bytes), so sequentially generated identifiers keep inserts sequential.
 
 ## Connection String Configuration
 
@@ -118,7 +110,7 @@ The hot writes (`SetStatus`, `UpdateCurrentRun`, `CompleteRecurringRun`) are opt
 
 - Production-ready
 - Open-source (no licensing cost)
-- Highly scalable, multi-server
+- High write concurrency on one active EverTask host per store
 - ACID transactions
 - Server-side querying for all recovery and cleanup operations
 - Targets .NET 9 and .NET 10; tested on MariaDB 10.11 LTS, supports MySQL 8.0+

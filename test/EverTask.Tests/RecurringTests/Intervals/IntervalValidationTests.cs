@@ -116,4 +116,29 @@ public class IntervalValidationTests
             DayInterval = new DayInterval(0, [DayOfWeek.Monday]) { OnTimes = [new TimeOnly(9, 0)] },
             MaxRuns     = 5
         }.Validate());
+
+    // --- OccurrenceMode is corrupt-but-deserializable metadata too (R3) ---
+
+    [Theory]
+    [InlineData(OccurrenceMode.Inline)]
+    [InlineData(OccurrenceMode.Durable)]
+    public void RecurringTask_Validate_accepts_every_defined_occurrence_mode(OccurrenceMode mode) =>
+        Should.NotThrow(() => new RecurringTask
+        {
+            SecondInterval = new SecondInterval(30),
+            OccurrenceMode = mode
+        }.Validate());
+
+    [Theory]
+    [InlineData(2)]
+    [InlineData(-1)]
+    [InlineData(99)]
+    public void RecurringTask_Validate_rejects_an_occurrence_mode_outside_the_defined_values(int raw) =>
+        // Nothing downstream compares against anything but Durable, so an undefined value would silently
+        // behave as Inline: the schedule row would run its own handler instead of being poisoned as corrupt.
+        Should.Throw<ArgumentException>(() => new RecurringTask
+        {
+            SecondInterval = new SecondInterval(30),
+            OccurrenceMode = (OccurrenceMode)raw
+        }.Validate());
 }

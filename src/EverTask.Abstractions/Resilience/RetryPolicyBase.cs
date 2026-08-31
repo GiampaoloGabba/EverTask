@@ -315,11 +315,9 @@ public abstract class RetryPolicyBase<TPolicy> : IRetryPolicy where TPolicy : Re
                     }
                     catch (OperationCanceledException oce) when (exceptions.Count > 0)
                     {
-                        // G12: a cancel during the inter-retry delay would otherwise discard the
-                        // retryable causes accumulated so far, losing WHY the task had been retrying.
-                        // Preserve them as an inner AggregateException. This stays an
-                        // OperationCanceledException, so the terminal Cancelled classification is
-                        // unchanged — the causes are diagnostic only.
+                        // A cancel during the inter-retry delay would otherwise discard the causes
+                        // accumulated so far, losing WHY the task had been retrying. It stays an
+                        // OperationCanceledException, so the terminal Cancelled classification is unchanged.
                         throw new OperationCanceledException(
                             $"Cancelled during the retry delay after {exceptions.Count} failed attempt(s)",
                             new AggregateException(exceptions),

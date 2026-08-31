@@ -38,16 +38,15 @@ public static class DateTimeOffsetExtensions
         if (nextTimeIndex == -1)
         {
             // No matching onTime on the target day. Advance another day ONLY when we are still on the
-            // ORIGINAL day (same-day, no later slot). When nextDay is already a strictly-later day every
-            // onTime on it is valid, so use the earliest — bumping again would drop a whole day, which is
-            // what made a DayInterval whose onTimes were all before the reference time return day+2 (L26).
+            // ORIGINAL day (same-day, no later slot): when nextDay is already a strictly-later day every
+            // onTime on it is valid, so the earliest is used — bumping again would drop a whole day.
             if (addDays && !isDifferentDay)
                 nextDay = nextDay.AddDays(1);
             nextTimeIndex = 0;
         }
 
         var nextTime = onTimes[nextTimeIndex];
-        return nextDay.Adjust(hour: nextTime.Hour, minute: nextTime.Minute, second: nextTime.Second);
+        return nextDay.WithTimeOfDay(nextTime);
 
     }
 
@@ -56,7 +55,7 @@ public static class DateTimeOffsetExtensions
     /// <paramref name="onDays"/> at a time in <paramref name="onTimes"/> (sorted ascending). Fires on
     /// EVERY listed day of the current week, advancing by <paramref name="weekStride"/> weeks only once
     /// the current week's remaining slots are exhausted — so e.g. OnDays(Mon, Wed, Fri) fires three
-    /// times a week, not once (CU7).
+    /// times a week, not once.
     /// </summary>
     public static DateTimeOffset NextDayOfWeekSlot(this DateTimeOffset current, DayOfWeek[] onDays,
                                                    TimeOnly[] onTimes, int weekStride)
@@ -99,7 +98,7 @@ public static class DateTimeOffsetExtensions
 
         foreach (var time in onTimes) // sorted ascending
         {
-            var slot = day.Adjust(hour: time.Hour, minute: time.Minute, second: time.Second);
+            var slot = day.WithTimeOfDay(time);
             if (after == null || slot > after.Value)
                 return slot;
         }
@@ -209,15 +208,16 @@ public static class DateTimeOffsetExtensions
         throw new InvalidOperationException($"Could not find {dayOfWeek} in first week of month");
     }
 
-    public static TimeOnly ToUniversalTime(this TimeOnly time)
-    {
-        // Since EverTask works internally in UTC, we interpret TimeOnly as UTC time.
-        // This makes the API consistent and timezone-independent.
-        // If users want to specify local time, they should convert it themselves before passing it.
-        var datetime    = DateTimeOffset.UtcNow.Adjust(hour: time.Hour, minute: time.Minute, second: time.Second);
-        var utcDateTime = datetime.ToUniversalTime().DateTime;
-        return TimeOnly.FromDateTime(utcDateTime);
-    }
+    /// <summary>
+    /// <paramref name="day"/>'s date carrying <paramref name="time"/> as its time of day, with the offset
+    /// <paramref name="day"/> already had.
+    /// </summary>
+    /// <remarks>
+    /// The whole <see cref="TimeOnly"/>, sub-second included: <c>AtTime</c>/<c>AtTimes</c> store what the
+    /// caller passed verbatim, so the grid has to be able to land on it.
+    /// </remarks>
+    internal static DateTimeOffset WithTimeOfDay(this DateTimeOffset day, TimeOnly time) =>
+        new DateTimeOffset(day.Year, day.Month, day.Day, 0, 0, 0, day.Offset).Add(time.ToTimeSpan());
 
     public static DateTimeOffset Adjust(this DateTimeOffset dateTime, int? day = null, int? hour = null, int? minute = null, int? second = null)
     {

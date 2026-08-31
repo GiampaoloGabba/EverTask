@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.Http;
+
 namespace EverTask.Monitor.Api.Options;
 
 /// <summary>
@@ -36,11 +38,11 @@ public class EverTaskApiOptions
     public bool EnableUI { get; set; } = true;
 
     /// <summary>
-    /// No longer used. The Swashbuckle integration was removed in 3.12; setting this has no effect.
+    /// No longer used. The Swashbuckle integration was removed in 4.0; setting this has no effect.
     /// Use <see cref="EnableOpenApiDocument"/> (net9.0+) and optionally the EverTask.Monitor.Api.Scalar
     /// package for an interactive API reference.
     /// </summary>
-    [Obsolete("The Swashbuckle integration was removed in 3.12 and this setting is a no-op. Use EnableOpenApiDocument (net9.0+) and optionally the EverTask.Monitor.Api.Scalar package.")]
+    [Obsolete("The Swashbuckle integration was removed in 4.0 and this setting is a no-op. Use EnableOpenApiDocument (net9.0+) and optionally the EverTask.Monitor.Api.Scalar package.")]
     public bool EnableSwagger { get; set; } = false;
 
     /// <summary>
@@ -69,6 +71,14 @@ public class EverTaskApiOptions
     /// API is always accessible at /evertask-monitoring/api regardless of EnableUI setting
     /// </summary>
     public string ApiBasePath => $"{BasePath}/api";
+
+    /// <summary>
+    /// Base path of the management (write) endpoints (derived: "/evertask-monitoring/api/management").
+    /// Every path under it is refused unless <see cref="EnableManagementEndpoints"/> is on AND the caller
+    /// carries the operate role — the whole rest of the API is read-only, and this is the one prefix that
+    /// is not.
+    /// </summary>
+    public string ManagementBasePath => $"{ApiBasePath}/management";
 
     /// <summary>
     /// UI base path (only used when EnableUI is true)
@@ -102,6 +112,64 @@ public class EverTaskApiOptions
     /// JWT is the only supported authentication method
     /// </summary>
     public bool EnableAuthentication { get; set; } = true;
+
+    /// <summary>
+    /// Expose the management endpoints under <see cref="ManagementBasePath"/> (default: false)
+    /// They are the only write surface of the API — requeue an occurrence, resume a halted catch-up, cancel
+    /// a schedule — and they put handlers with side effects back into execution, so a host that upgrades
+    /// never gains them without asking. Every path under the prefix answers 404 while this is false.
+    /// </summary>
+    /// <remarks>
+    /// Turning it on is not enough to call them: the caller must also carry the operate role, granted by
+    /// <see cref="ManagementUsername"/>/<see cref="ManagementPassword"/> or by
+    /// <see cref="ManagementAuthorization"/>. The dashboard credential
+    /// (<see cref="Username"/>/<see cref="Password"/>) is a READ credential and never grants it.
+    /// </remarks>
+    public bool EnableManagementEndpoints { get; set; }
+
+    /// <summary>
+    /// Username of the second, operate-level credential (default: null = no credential grants the role)
+    /// Logging in with it returns a token carrying the operate role, which is what the management endpoints
+    /// require; every other login returns a read-only token.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately a SECOND account and not a flag on the first: the dashboard credential is shared by
+    /// everyone who looks at the dashboard, and a requeue is not a read. Both this and
+    /// <see cref="ManagementPassword"/> must be set for the credential to exist.
+    /// </remarks>
+    public string? ManagementUsername { get; set; }
+
+    /// <summary>
+    /// Password of the operate-level credential (default: null = no credential grants the role)
+    /// Compared in fixed time. WARNING: this credential can requeue, resume and cancel — treat it as an
+    /// administrative one and keep it out of the magic link, which always yields a read-only session.
+    /// </summary>
+    /// <remarks>
+    /// Registration REFUSES a value equal to <see cref="Password"/> or to <see cref="MagicLinkToken"/>, and
+    /// refuses half a pair: a username is not a secret, so an operate password the host already hands out
+    /// for reading is not a second credential at all.
+    /// </remarks>
+    public string? ManagementPassword { get; set; }
+
+    /// <summary>
+    /// Host-supplied authorization for the management endpoints (default: null)
+    /// When set, it REPLACES the role check: the host decides, from the whole <see cref="HttpContext"/>,
+    /// whether this caller may operate. Returning false answers 403.
+    /// </summary>
+    /// <remarks>
+    /// This is the hook for an application that already has its own authorization — an ASP.NET Core policy,
+    /// a claims check on its own principal, an mTLS certificate — and does not want a second credential in
+    /// the monitoring options. It runs only for the management endpoints, and only after
+    /// <see cref="EnableManagementEndpoints"/> and (when enabled) JWT authentication have already passed.
+    /// <para>
+    /// It runs INSIDE routing, as an MVC authorization filter, which means it runs after the host's own
+    /// <c>UseAuthentication</c>: <c>context.User</c> is the principal the application authenticated, so
+    /// <c>context.User.IsInRole(...)</c> and a claims check answer what the host expects. A host that wants
+    /// its own authentication to be the only one can set <see cref="EnableAuthentication"/> to false and let
+    /// this hook decide alone.
+    /// </para>
+    /// </remarks>
+    public Func<HttpContext, Task<bool>>? ManagementAuthorization { get; set; }
 
     /// <summary>
     /// Secret key for signing JWT tokens

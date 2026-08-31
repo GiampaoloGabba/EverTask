@@ -43,7 +43,10 @@ public class ConfigController : ControllerBase
             signalRHubPath        = _options.SignalRHubPath,
             requireAuthentication = _options.EnableAuthentication,
             uiEnabled             = _options.EnableUI,
-            eventDebounceMs       = _options.EventDebounceMs
+            eventDebounceMs       = _options.EventDebounceMs,
+            // Whether the write surface exists at all. Whether THIS caller may use it is a property of the
+            // session (the operate role, reported by the login and validate responses), not of the API.
+            managementEnabled     = _options.EnableManagementEndpoints
         });
     }
 }

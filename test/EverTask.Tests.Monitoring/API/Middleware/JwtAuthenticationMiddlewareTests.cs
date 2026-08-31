@@ -1,5 +1,8 @@
 using EverTask.Monitor.Api.DTOs.Auth;
+using EverTask.Monitor.Api.Extensions;
+using EverTask.Monitor.Api.Middleware;
 using EverTask.Tests.Monitoring.TestHelpers;
+using Microsoft.AspNetCore.Http;
 
 namespace EverTask.Tests.Monitoring.API.Middleware;
 
@@ -30,6 +33,37 @@ public class JwtAuthenticationMiddlewareTests : IAsyncLifetime
 
         var loginResponse = await response.Content.ReadFromJsonAsync<LoginResponse>();
         return loginResponse!.Token;
+    }
+
+    [Fact]
+    public async Task Should_preserve_the_3_11_constructor_and_forward_to_the_current_middleware()
+    {
+        typeof(JwtAuthenticationMiddleware)
+            .GetConstructor([typeof(RequestDelegate), typeof(EverTaskApiOptions)])
+            .ShouldNotBeNull();
+
+        var nextCalled = false;
+        RequestDelegate next = _ =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        };
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddEverTaskMonitoringApiStandalone(options => options.EnableManagementEndpoints = true);
+
+        using var provider = services.BuildServiceProvider();
+        var context = new DefaultHttpContext { RequestServices = provider };
+        context.Request.Path = "/evertask-monitoring/api/management/probe";
+
+        var legacyOptions = new EverTaskApiOptions { EnableManagementEndpoints = false };
+        var middleware = new JwtAuthenticationMiddleware(next, legacyOptions);
+
+        await middleware.InvokeAsync(context);
+
+        nextCalled.ShouldBeTrue(
+            "the legacy constructor must run today's request-service policy instead of its retired options path");
     }
 
     [Fact]

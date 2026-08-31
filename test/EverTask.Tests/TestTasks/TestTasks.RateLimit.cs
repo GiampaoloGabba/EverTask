@@ -31,6 +31,15 @@ public class RateLimitTestState
     /// <summary>OnError callbacks received by rate-limited handlers (index, exception).</summary>
     public ConcurrentBag<(int Index, Exception? Exception)> OnErrors { get; } = new();
 
+    /// <summary>Scoped <see cref="ScopedDisposableProbe"/> instances built for a handler.</summary>
+    public int ScopedProbesCreated;
+
+    /// <summary>Scoped <see cref="ScopedDisposableProbe"/> instances actually disposed.</summary>
+    public int ScopedProbesDisposed;
+
+    /// <summary>Calls a handler made on its scoped <see cref="ScopedDisposableProbe"/>.</summary>
+    public int ScopedProbesUsed;
+
     public void Record(string key, int index)
     {
         Executions.Add((key, index, DateTimeOffset.UtcNow));
@@ -435,5 +444,68 @@ public class RateLimitedSlowTaskHandler(RateLimitTestState state) : EverTaskHand
         Interlocked.Increment(ref state.SlowExecutions);
         state.SlowEntered.Release();
         await state.SlowGate.WaitAsync(cancellationToken);
+    }
+}
+
+/// <summary>
+/// A SCOPED dependency of a handler, standing in for the scoped DbContext of a real application: it is
+/// built inside whatever scope resolves the handler and released only when that scope is disposed. In eager
+/// mode that scope is the EverTask-owned one carried on the executor, so this probe's disposal is the proof
+/// the scope itself was released instead of stranded.
+/// </summary>
+public sealed class ScopedDisposableProbe : IAsyncDisposable
+{
+    private readonly RateLimitTestState _state;
+
+    // Counting the construction is the whole point, so this one keeps a real constructor body.
+    public ScopedDisposableProbe(RateLimitTestState state)
+    {
+        _state = state;
+        Interlocked.Increment(ref state.ScopedProbesCreated);
+    }
+
+    /// <summary>A real use of the dependency: one nobody touches would prove nothing about its lifetime.</summary>
+    public void Ping() => Interlocked.Increment(ref _state.ScopedProbesUsed);
+
+    public ValueTask DisposeAsync()
+    {
+        Interlocked.Increment(ref _state.ScopedProbesDisposed);
+        return ValueTask.CompletedTask;
+    }
+}
+
+/// <summary>
+/// One permit per 30 s with <c>Discard</c>: the warm-up dispatch takes the permit, the next one is
+/// terminally rejected with no waiting and no parking. The handler depends on a SCOPED disposable, so the
+/// lifetime of the scope each delivery was resolved into is observable from outside.
+/// </summary>
+public record RateLimitRejectedScopedTask(string Key, int Index) : IEverTask, IRateLimitedTask
+{
+    public string RateLimitKey => Key;
+}
+
+public class RateLimitRejectedScopedTaskHandler(RateLimitTestState state, ScopedDisposableProbe probe)
+    : EverTaskHandler<RateLimitRejectedScopedTask>
+{
+    public override RateLimitPolicy? RateLimitPolicy =>
+        new(1, TimeSpan.FromSeconds(30))
+        {
+            Burst            = 1,
+            OverflowBehavior = RateLimitOverflowBehavior.Discard
+        };
+
+    public override Task Handle(RateLimitRejectedScopedTask backgroundTask, CancellationToken cancellationToken)
+    {
+        probe.Ping();
+        state.Record(backgroundTask.Key, backgroundTask.Index);
+        return Task.CompletedTask;
+    }
+
+    public override ValueTask OnError(Guid taskId, Exception? exception, string? message)
+    {
+        // Reached even on the rejection path, which never enters the execution core.
+        probe.Ping();
+        state.OnErrors.Add((-3, exception));
+        return ValueTask.CompletedTask;
     }
 }

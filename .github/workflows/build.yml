@@ -37,6 +37,10 @@ jobs:
         run: pnpm run lint
         working-directory: src/Monitoring/EverTask.Monitor.Api/UI
 
+      - name: Test UI
+        run: pnpm test
+        working-directory: src/Monitoring/EverTask.Monitor.Api/UI
+
       - name: Build UI
         run: pnpm run build
         working-directory: src/Monitoring/EverTask.Monitor.Api/UI
@@ -67,8 +71,22 @@ jobs:
       - name: Test (EverTask.Tests)
         run: dotnet test test/EverTask.Tests/EverTask.Tests.csproj --no-restore --verbosity normal --framework net9.0
 
+      # SQL Server and PostgreSQL container suites stay out of CI by maintainer decision: those providers run
+      # locally with Testcontainers before every release.
       - name: Test (EverTask.Tests.Storage - exclude SQL Server + Postgres)
         run: dotnet test test/EverTask.Tests.Storage/EverTask.Tests.Storage.csproj --no-restore --verbosity normal --framework net9.0 --filter "FullyQualifiedName!~SqlServerEfCoreTaskStorageTests&FullyQualifiedName!~PostgresEfCoreTaskStorageTests&FullyQualifiedName!~AuditLevelIntegrationTests"
+
+      # The three suites the gate never opened. Between them they hold the whole monitoring API and dashboard
+      # contract, the analyzer rules and the Serilog integration: a change to a DTO, to TaskQueryService or to
+      # an analyzer broke them without turning the build red.
+      - name: Test (EverTask.Tests.Monitoring)
+        run: dotnet test test/EverTask.Tests.Monitoring/EverTask.Tests.Monitoring.csproj --no-restore --verbosity normal --framework net9.0
+
+      - name: Test (EverTask.Analyzers.Tests)
+        run: dotnet test test/EverTask.Analyzers.Tests/EverTask.Analyzers.Tests.csproj --no-restore --verbosity normal --framework net9.0
+
+      - name: Test (EverTask.Tests.Logging)
+        run: dotnet test test/EverTask.Tests.Logging/EverTask.Tests.Logging.csproj --no-restore --verbosity normal --framework net9.0
 
       # P2-7: the (de)serializer is the migration-critical surface (STJ 10.0.9 is pinned uniformly across TFMs,
       # but cross-TFM agreement must be pinned by tests too). Run the DETERMINISTIC serialization + schedule

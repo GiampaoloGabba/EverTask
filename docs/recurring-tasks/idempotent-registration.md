@@ -2,12 +2,12 @@
 layout: default
 title: Idempotent Task Registration
 parent: Recurring Tasks
-nav_order: 4
+nav_order: 7
 ---
 
 # Idempotent Task Registration
 
-Task keys prevent duplicate recurring tasks from being created. When you register a task with the same key twice, EverTask handles it intelligently instead of blindly creating a duplicate.
+Task keys prevent duplicate recurring tasks from being created. When you register a task with the same key twice, EverTask goes back to the existing task instead of blindly creating a duplicate.
 
 ## Basic Usage
 
@@ -147,6 +147,29 @@ public class TaskScheduleService
     }
 }
 ```
+
+### Re-dispatching versus rescheduling
+
+Re-dispatching under the same key updates the row in place and is the right tool at startup, where the code
+that registers a schedule is also the code that owns its definition. When something else changes the schedule
+of a series that is already running — an admin screen, a tenant setting, a support action — reach for
+[`ITaskScheduleManager`](managing-tasks.md#changing-a-schedule-while-it-runs) instead:
+
+- it refuses a key that names no schedule, rather than creating one;
+- it bumps the schedule version, so a run finishing at the same moment recomputes against the new definition
+  instead of writing the next run it had already worked out;
+- it can keep the schedule inside the calendar period it was already in (`RescheduleMode.RebaseFromCursor`),
+  which a re-dispatch cannot;
+- it tells you what it did: the new cursor, the new version, and any backlog it dropped.
+
+Both go through the same per-key critical section, so a startup registration and a runtime reschedule of the
+same key never interleave.
+
+**One limit worth knowing.** A reschedule is immediate for occurrences that have not fired yet: the parked
+registration is replaced. An occurrence already handed to a worker queue is considered fired, and within the
+process that rescheduled it EverTask drops that delivery instead of running the definition you just replaced.
+Across a restart there is nothing to drop against — a fresh process publishes no version — so a delivery
+recovered from storage always runs, and its advance is what applies the new definition.
 
 ## Task Key Guidelines
 

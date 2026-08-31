@@ -5,6 +5,29 @@ public interface IScheduler
     void Schedule(TaskHandlerExecutor item, DateTimeOffset? nextRecurringRun = null);
 
     /// <summary>
+    /// Registers <paramref name="item"/> the way <see cref="Schedule"/> does, unless a registration carrying a
+    /// NEWER <see cref="TaskHandlerExecutor.ScheduleVersion"/> of the same task is already parked — that one is
+    /// preserved and nothing is written.
+    /// </summary>
+    /// <param name="item">The task handler executor to park.</param>
+    /// <param name="nextRecurringRun">Next execution time for recurring tasks (overrides item.ExecutionTime).</param>
+    /// <returns>False when a newer registration was preserved and <paramref name="item"/> was NOT parked.</returns>
+    /// <remarks>
+    /// The conditional half of latest-wins, and the counterpart of
+    /// <see cref="TryUnschedule(Guid,TaskHandlerExecutor)"/>: it is how everything still holding an executor of
+    /// a definition that was replaced avoids parking a grid nobody owns any more. The comparison must be made
+    /// INSIDE the registration swap, since every ordering outside it has a window.
+    /// The default implementation schedules unconditionally and answers true (binary compatibility for external
+    /// schedulers compiled against older versions), so runtime rescheduling cannot refuse a stale in-flight
+    /// registration over such a scheduler — implement this member to take part in versioned re-registration.
+    /// </remarks>
+    bool TrySchedule(TaskHandlerExecutor item, DateTimeOffset? nextRecurringRun = null)
+    {
+        Schedule(item, nextRecurringRun);
+        return true;
+    }
+
+    /// <summary>
     /// Invalidates a parked registration for the given task, if present.
     /// Used when a task is re-dispatched outside the scheduler (e.g. an immediate re-dispatch
     /// via taskKey of a previously delayed task) or cancelled, so the stale parked occurrence
@@ -44,4 +67,15 @@ public interface IScheduler
     /// it with a real lookup.
     /// </remarks>
     bool IsScheduled(Guid persistenceId) => true;
+
+    /// <summary>
+    /// True when <see cref="IsScheduled"/> answers from a real registry lookup rather than the
+    /// conservative "assume scheduled" default.
+    /// </summary>
+    /// <remarks>
+    /// The durable-occurrence reconciliation tells a lost registration from a live one through
+    /// <see cref="IsScheduled"/>, so it is disabled entirely when the answer is the constant default.
+    /// Defaults to false: an external scheduler compiled before this member cannot introspect.
+    /// </remarks>
+    bool SupportsScheduleInspection => false;
 }

@@ -1,5 +1,8 @@
 ﻿using EverTask.Configuration;
 using EverTask.RateLimiting;
+using EverTask.Scheduler.Occurrences;
+using EverTask.Scheduler.Recurring;
+using EverTask.Scheduler.Recurring.Builder;
 
 // EverTask's DI wiring lives in Microsoft.Extensions.DependencyInjection so it surfaces without
 // extra usings, per the .NET hosting-extensions convention.
@@ -59,6 +62,49 @@ public class EverTaskServiceConfiguration
     internal AuditLevel DefaultAuditLevel { get; private set; } = AuditLevel.Full;
 
     internal RateLimiterOptions RateLimiterOptions { get; } = new();
+
+    internal TimeSpan MisfireThreshold { get; private set; } = TimeSpan.FromSeconds(5);
+
+    internal string? DefaultScheduleTimeZoneId { get; private set; }
+
+    private int? _materializationConcurrency;
+
+    /// <summary>
+    /// How many durable schedules may materialize occurrences at the same time. Resolved lazily against
+    /// <see cref="MaxDegreeOfParallelism"/> so it follows a parallelism configured after this one.
+    /// </summary>
+    /// <remarks>
+    /// Clamped to at least one for the same reason the worker and startup recovery clamp it:
+    /// <see cref="SetMaxDegreeOfParallelism"/> accepts zero and negatives, and the two places that consume it
+    /// treat those as "one". Inheriting the raw value instead made a zero throw out of the materializer's own
+    /// constructor — on the schedule's first slot, after the scheduler had already consumed its registration,
+    /// so nothing re-parked the row and every restart repeated it.
+    /// </remarks>
+    internal int MaterializationConcurrency => Math.Max(1, _materializationConcurrency ?? MaxDegreeOfParallelism);
+
+    internal TimeSpan BacklogRetryInterval { get; private set; } = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// The occurrence providers registered with <c>AddOccurrenceProvider&lt;T&gt;(key)</c>, by key. A schedule
+    /// persists the key alone, so this is what turns it back into an implementation (V2).
+    /// </summary>
+    /// <remarks>
+    /// Ordinal comparison: the key is an identifier the application chooses and a row carries verbatim, so
+    /// "Business-Days" and "business-days" are two keys — a culture-sensitive match would resolve a row to a
+    /// provider its author did not name.
+    /// </remarks>
+    internal Dictionary<string, Type> OccurrenceProviders { get; } = new(StringComparer.Ordinal);
+
+    internal Dictionary<string, ScheduleExclusions> ScheduleCalendars { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>How long a schedule waits before asking a failed occurrence provider again (V4).</summary>
+    internal OccurrenceProviderRetryOptions OccurrenceProviderRetry { get; } = new();
+
+    /// <summary>
+    /// Upper bound of <see cref="SetBacklogRetryInterval"/>. The interval is added to a UTC instant on every
+    /// operational re-park, so it has to stay inside what that addition can represent.
+    /// </summary>
+    internal static readonly TimeSpan MaxBacklogRetryInterval = TimeSpan.FromDays(1);
 
     /// <summary>
     /// Sets the channel capacity for the default queue.
@@ -322,6 +368,199 @@ public class EverTaskServiceConfiguration
     public EverTaskServiceConfiguration SetDefaultAuditLevel(AuditLevel auditLevel)
     {
         DefaultAuditLevel = auditLevel;
+        return this;
+    }
+
+    /// <summary>
+    /// Sets the lateness threshold used to classify delivery and durable-occurrence misfire metadata.
+    /// </summary>
+    /// <param name="threshold">
+    /// The tolerance between a nominal slot and the time it is observed. Default: 5 seconds. Zero classifies
+    /// every delivery that starts after its slot, and every overdue durable slot, as a misfire.
+    /// </param>
+    /// <returns>The configuration instance for method chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when the threshold is negative.</exception>
+    /// <remarks>
+    /// <para>
+    /// This is a classification threshold: it decides what
+    /// <see cref="ITaskExecutionContext.Misfire"/> reports to a handler and whether the durable planner stamps
+    /// a materialized row with catch-up or fire-once misfire metadata. It is not an execution gate: a late
+    /// occurrence runs exactly as it did before. A backlog containing more than one due slot is always missed
+    /// work, regardless of this threshold, and the one-second tolerance the recurring skip-forward path uses
+    /// to avoid treating a just-scheduled occurrence as past is a separate, untouched rule.
+    /// </para>
+    /// <para>
+    /// Raise it for schedules whose handler does not care about seconds; lower it when a handler compensates
+    /// for lateness (skipping stale work, shortening a window) and needs to know sooner.
+    /// </para>
+    /// </remarks>
+    public EverTaskServiceConfiguration SetMisfireThreshold(TimeSpan threshold)
+    {
+        if (threshold < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(threshold), threshold,
+                "The misfire threshold cannot be negative.");
+        }
+
+        MisfireThreshold = threshold;
+        return this;
+    }
+
+    /// <summary>
+    /// Sets how many durable schedules may be materializing occurrences at the same time.
+    /// </summary>
+    /// <param name="concurrency">
+    /// Maximum concurrent materializations. Default: the same value as
+    /// <see cref="SetMaxDegreeOfParallelism"/>, which is also what bounds startup recovery.
+    /// </param>
+    /// <returns>The configuration instance for method chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Less than one.</exception>
+    /// <remarks>
+    /// Materialization is a short burst of storage writes, so this bounds how much of that the store sees at
+    /// once — it has nothing to do with how many occurrences RUN concurrently, which is the queue's
+    /// parallelism, nor with how many may be alive per schedule, which is
+    /// <see cref="CatchUpOptions.MaxPendingOccurrences"/>. Lower it when a large restart backlog puts more
+    /// pressure on the database than the workload it is catching up on.
+    /// </remarks>
+    public EverTaskServiceConfiguration SetMaterializationConcurrency(int concurrency)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(concurrency, 1);
+
+        _materializationConcurrency = concurrency;
+        return this;
+    }
+
+    /// <summary>
+    /// Sets how long a durable schedule waits before trying again when it could not make progress: its
+    /// concurrency budget was full, or a compare-and-swapped write lost its race.
+    /// </summary>
+    /// <param name="interval">
+    /// The retry interval. Default: one minute. At least one second, and at most a day.
+    /// </param>
+    /// <returns>The configuration instance for method chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Below one second, or above one day.</exception>
+    /// <remarks>
+    /// The ordinary way a blocked schedule resumes is the kick each occurrence gives when it ends, which is
+    /// immediate. This is the guarantee behind it: startup recovery runs once, so without a retry a schedule
+    /// whose kick was lost would wait for the next restart. Shorter than the scheduler's own one-second tick
+    /// buys nothing. A HALTED catch-up is not retried at all — it never releases itself, and only an explicit
+    /// resume or reschedule clears the marker.
+    /// </remarks>
+    public EverTaskServiceConfiguration SetBacklogRetryInterval(TimeSpan interval)
+    {
+        if (interval < TimeSpan.FromSeconds(1))
+        {
+            throw new ArgumentOutOfRangeException(nameof(interval), interval,
+                "The backlog retry interval must be at least one second: the scheduler itself ticks once a " +
+                "second, so anything shorter only adds churn.");
+        }
+
+        // An upper bound because this is the LAST resort of a blocked schedule, and the value is added to a
+        // UTC instant on every re-park: an interval measured in centuries overflows that addition, and the
+        // failure path re-parks by repeating exactly the same addition, so the schedule ends up parked
+        // nowhere at all.
+        if (interval > MaxBacklogRetryInterval)
+        {
+            throw new ArgumentOutOfRangeException(nameof(interval), interval,
+                "The backlog retry interval must be at most one day: it is the guarantee that a blocked " +
+                "schedule makes progress without a restart, and a longer one is indistinguishable from none.");
+        }
+
+        BacklogRetryInterval = interval;
+        return this;
+    }
+
+    /// <summary>
+    /// Sets how long a schedule waits before asking its <see cref="INextOccurrenceProvider"/> again, when the
+    /// provider could not answer.
+    /// </summary>
+    /// <param name="configure">Action to configure the backoff (initial and maximum).</param>
+    /// <returns>The configuration instance for method chaining.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="configure"/> is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Either bound is not positive, or is longer than a day.</exception>
+    /// <remarks>
+    /// A provider failure is treated as transient — the database a calendar is read from being briefly down
+    /// must not end a series — so the schedule writes nothing, keeps its cursor and is parked again after this
+    /// wait. It doubles at each consecutive failure of the same schedule, up to <c>MaxBackoff</c>, and one
+    /// answer resets it.
+    /// <code>
+    /// opt.SetOccurrenceProviderRetry(r =>
+    /// {
+    ///     r.InitialBackoff = TimeSpan.FromSeconds(30);
+    ///     r.MaxBackoff     = TimeSpan.FromMinutes(5);
+    /// });
+    /// </code>
+    /// </remarks>
+    public EverTaskServiceConfiguration SetOccurrenceProviderRetry(Action<OccurrenceProviderRetryOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+
+        configure(OccurrenceProviderRetry);
+        return this;
+    }
+
+    /// <summary>Registers a reusable set of recurring-schedule exclusions under a persisted name.</summary>
+    /// <param name="name">Case-sensitive name used by <c>ExceptCalendar(name)</c>.</param>
+    /// <param name="configure">Adds the calendar's days, dates and absolute windows.</param>
+    /// <returns>The configuration instance for chaining.</returns>
+    /// <exception cref="ArgumentException">The trimmed name is empty or longer than 100 characters.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="configure"/> is null.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// The name is already registered, the callback adds nothing, or the calendar exceeds exclusion limits.
+    /// </exception>
+    public EverTaskServiceConfiguration AddScheduleCalendar(string name, Action<IExclusionBuilder> configure)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(configure);
+
+        name = name.Trim();
+        if (name.Length > ScheduleExclusionNormalizer.MaxCalendarNameLength)
+        {
+            throw new ArgumentException(
+                $"A schedule calendar name cannot exceed {ScheduleExclusionNormalizer.MaxCalendarNameLength} characters.",
+                nameof(name));
+        }
+
+        if (ScheduleCalendars.ContainsKey(name))
+            throw new InvalidOperationException($"A schedule calendar named '{name}' is already registered.");
+
+        var builder = new ExclusionBuilder();
+        configure(builder);
+        var calendar = builder.Build(null);
+        if (ScheduleExclusionNormalizer.Normalize(calendar))
+            throw new InvalidOperationException($"The schedule calendar '{name}' adds no exclusion.");
+
+        ScheduleCalendars.Add(name, calendar);
+        return this;
+    }
+
+    /// <summary>
+    /// Sets the time zone every calendar-anchored schedule is read on when it does not name one itself.
+    /// </summary>
+    /// <param name="timeZone">
+    /// A system time zone. Its IANA id is what gets persisted with each schedule, so a row keeps meaning the
+    /// same thing after this default changes — and on a host that resolves zones differently.
+    /// </param>
+    /// <returns>The configuration instance for method chaining.</returns>
+    /// <exception cref="ArgumentException">The zone cannot be persisted as an IANA id (a custom zone).</exception>
+    /// <remarks>
+    /// <para>
+    /// It applies at dispatch, to schedules built through <c>Dispatch(task, r =&gt; ...)</c> that are anchored
+    /// to a calendar — a time of day, a day of the week, a month selector, a cron expression — and that did
+    /// not call <c>InTimeZone</c>. A plain cadence (every N seconds/minutes/hours) is never touched: it is a
+    /// constant step in elapsed time, identical in every zone.
+    /// </para>
+    /// <para>
+    /// Rows already persisted keep whatever they were dispatched with, including no zone at all: the default
+    /// is stamped onto the schedule when it is built, not re-applied on recovery, so raising it does not
+    /// silently move existing schedules by an hour.
+    /// </para>
+    /// </remarks>
+    public EverTaskServiceConfiguration SetDefaultScheduleTimeZone(TimeZoneInfo timeZone)
+    {
+        ArgumentNullException.ThrowIfNull(timeZone);
+
+        DefaultScheduleTimeZoneId = ScheduleTimeZone.Normalize(timeZone);
         return this;
     }
 

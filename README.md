@@ -17,11 +17,13 @@
 
 **EverTask** runs background work in your .NET app: fire-and-forget jobs, delayed and scheduled tasks, and recurring schedules. Everything is persisted, so tasks survive a restart.
 
+With 4.0, a recurring schedule can also survive a downtime *observably*: every due slot gets its own persisted row, and a misfire policy decides what happens to the slots an outage missed. Nothing is lost silently: every dropped slot is reported.
+
 It runs in-process (no external scheduler, no Windows Service, no separate worker host), and it doesn't poll the database in a loop. An in-memory scheduler drives execution through channels, and persistence happens where it matters: on enqueue, on status changes, and for recovery after a restart.
 
 If you've used MediatR, the request/handler pattern will feel familiar. The difference is that here tasks are persisted, can be isolated across queues, and keep working under load.
 
-Tasks can be CPU-bound or I/O-bound, long- or short-running. Works with ASP.NET Core, Windows Services, or any .NET host.
+Tasks can be CPU-bound or I/O-bound, long- or short-running. Works with ASP.NET Core, Windows Services, or any .NET host. One active instance per store (a cold standby is fine); distributed execution is on the [roadmap](ROADMAP.md).
 
 ## Key Features
 
@@ -30,6 +32,16 @@ Tasks can be CPU-bound or I/O-bound, long- or short-running. Works with ASP.NET 
 - **No database polling**: the scheduler lives in memory and runs through channels; the database is written, not polled in a loop
 - **Persistence**: tasks resume after a restart (SQL Server, PostgreSQL, MySQL/MariaDB, SQLite, In-Memory)
 - **Fluent scheduling**: recurring tasks by minute, hour, day, week, month, or cron
+- **Time zones**: schedule on local wall-clock hours that keep their meaning across daylight saving
+- **Durable occurrences & misfire policies**: give every due slot its own row — with its own status, retries
+  and audit trail — and choose what a downtime does to the slots it missed: skip them, collapse them into one
+  run, or replay them under explicit caps, with every dropped slot reported
+- **Execution context**: a handler sees the slot it runs for (`Context.ScheduledAtUtc` / `ScheduledAtLocal`)
+  and whether its delivery is late or replayed work (`Context.Misfire`)
+- **Runtime schedule management**: change, re-evaluate, resume or cancel a schedule while the app is running
+- **Custom occurrence providers**: compute the next run yourself, from a calendar the library cannot know
+- **Fixed recurring exclusions**: subtract weekdays, dates and absolute maintenance windows from any built-in interval or cron grid
+- **Named exclusion calendars**: register a holiday or blackout set once and reuse it across schedules
 - **Idempotent registration**: a task key keeps duplicate recurring registrations out
 
 ### Performance & scalability
@@ -54,8 +66,7 @@ Tasks can be CPU-bound or I/O-bound, long- or short-running. Works with ASP.NET 
 - **Serilog integration**: structured logging
 - **Async throughout**
 - **Compile-time analyzer**: a Roslyn analyzer (ET0001–ET0012) bundled in `EverTask.Abstractions`
-  catches System.Text.Json contract violations, configuration mistakes and handler-registration
-  problems (open-generic or duplicate handlers) in the IDE/build, with code fixes (see below)
+  catches System.Text.Json contract violations, configuration mistakes and handler-registration problems (open-generic or duplicate handlers) in the IDE/build, with code fixes (see below)
 
 
 <img src="assets/screenshots/4.png" style="width:100%;max-width:900px;display: block; margin:20px auto;" alt="Task Details" />
@@ -140,6 +151,10 @@ Then `/reload-plugins` and run `/evertask:integrate-evertask`. For other agents,
 - **[Task Creation](https://GiampaoloGabba.github.io/EverTask/task-creation.html)** - Requests, handlers, lifecycle hooks, and best practices
 - **[Task Dispatching](https://GiampaoloGabba.github.io/EverTask/task-dispatching.html)** - Fire-and-forget, delayed, and scheduled tasks
 - **[Recurring Tasks](https://GiampaoloGabba.github.io/EverTask/recurring-tasks.html)** - Fluent scheduling API, cron expressions, idempotent registration
+- **[Durable Occurrences](https://GiampaoloGabba.github.io/EverTask/recurring-tasks/durable-occurrences.html)** - One row per occurrence, misfire policies, and what to do with the slots a downtime missed
+- **[Time Zones](https://GiampaoloGabba.github.io/EverTask/recurring-tasks/time-zones.html)** - Local hours that survive daylight saving
+- **[Managing Recurring Tasks](https://GiampaoloGabba.github.io/EverTask/recurring-tasks/managing-tasks.html)** - Reschedule, re-evaluate, resume, cancel and requeue at runtime
+- **[Occurrence Providers](https://GiampaoloGabba.github.io/EverTask/recurring-tasks/occurrence-providers.html)** - Compute the next run from a calendar the library cannot know
 - **[Resilience & Error Handling](https://GiampaoloGabba.github.io/EverTask/resilience.html)** - Retry policies, timeouts, CancellationToken usage
 - **[Monitoring](https://GiampaoloGabba.github.io/EverTask/monitoring.html)** - Complete monitoring guide (Dashboard, Events, and Logs)
 - **[Scalability](https://GiampaoloGabba.github.io/EverTask/scalability.html)** - Multi-queue support, keyed rate limiting, and sharded scheduler for high-load scenarios
@@ -167,6 +182,120 @@ await dispatcher.Dispatch(
     new BackupTask(),
     builder => builder.Schedule().EveryWeek().OnDays(days).AtTime(new TimeOnly(9, 0)).RunUntil(DateTimeOffset.UtcNow.AddDays(30)));
 ```
+
+### Excluding weekends, holidays and maintenance windows
+
+Any built-in interval or cron grid can subtract fixed moments — the slots simply never exist, so they
+consume no run, no misfire count and no durable row:
+
+```csharp
+// Daily report at 8:00, but never on weekends, Christmas, or during the maintenance window
+await dispatcher.Dispatch(
+    new DailyReportTask(),
+    builder => builder.Schedule().EveryDay().AtTime(new TimeOnly(8, 0))
+        .Except(e => e
+            .OnDays(DayOfWeek.Saturday, DayOfWeek.Sunday)
+            .OnDates(new DateOnly(2026, 12, 25))
+            .Between(maintenanceStart, maintenanceEnd)));
+
+// Metrics every 4 hours, weekdays only - the zone decides what "weekend" means
+await dispatcher.Dispatch(
+    new MetricsRollupTask(),
+    builder => builder.Schedule().Every(4).Hours()
+        .InTimeZone("Europe/Rome").ExceptWeekends());
+
+// Or define the holidays ONCE at the host and reuse them by name
+services.AddEverTask(opt => opt
+    .AddScheduleCalendar("it-holidays", cal => cal
+        .OnDates(new DateOnly(2026, 1, 1), new DateOnly(2026, 12, 25), new DateOnly(2026, 12, 26))));
+
+await dispatcher.Dispatch(
+    new DailyReportTask(),
+    builder => builder.Schedule().EveryDay().AtTime(new TimeOnly(8, 0))
+        .ExceptCalendar("it-holidays"));
+```
+
+Exclusions are part of the persisted definition and compose with misfire policies, catch-up, backfill and
+durable occurrences. Details: [Recurring Tasks](docs/recurring-tasks.md#excluding-moments).
+
+### Time Zones and Durable Occurrences
+
+A calendar schedule can name the zone its hours are read on, and a downtime no longer has to lose the slots it
+covered:
+
+```csharp
+// 02:00 in Rome, every day, whatever daylight saving does to the offset.
+// A downtime replays the slots it missed, one row each, up to 92 days back and 200 occurrences per episode.
+await dispatcher.Dispatch(
+    new NightlyReconciliationTask(),
+    r => r.Schedule()
+          .EveryDay().AtTime(new TimeOnly(2, 0))
+          .InTimeZone("Europe/Rome")
+          .OnMisfire(m => m.CatchUp(new CatchUpOptions(TimeSpan.FromDays(92), maxOccurrences: 200))),
+    taskKey: "nightly-reconciliation");
+```
+
+Three misfire policies decide what a downtime does to the slots it covered:
+
+- `.OnMisfire(m => m.Skip())` — the default: missed slots are skipped, and a durable schedule reports how many
+- `.OnMisfire(m => m.FireOnce())` — the whole missed run collapses into ONE occurrence, at the most recent slot
+- `.OnMisfire(m => m.CatchUp(...))` — every missed slot is replayed, oldest first, inside mandatory caps; a
+  backlog beyond the caps either halts the schedule until a person resumes it (`Halt`, the default) or keeps
+  the most recent slots and reports the drop (`SkipOldest`)
+
+Each replayed slot becomes its own persisted row, with its own status, retries and audit trail. The caps are
+mandatory on purpose: a schedule is never allowed to replay an unbounded backlog, and every slot it does drop
+is reported with a count and a range. See
+[Durable Occurrences](https://GiampaoloGabba.github.io/EverTask/recurring-tasks/durable-occurrences.html) and
+[Time Zones](https://GiampaoloGabba.github.io/EverTask/recurring-tasks/time-zones.html).
+
+### Execution Context
+
+A handler knows the slot it stands for — not just the moment it happened to start — and replayed or late work
+says so:
+
+```csharp
+public override async Task Handle(NightlyReconciliationTask task, CancellationToken ct)
+{
+    var slot = Context.ScheduledAtLocal; // the nominal slot, on the schedule's own clock
+
+    if (Context.Misfire is { } misfire)
+        Logger.LogInformation("Recovering slot {Slot}: {Kind}, {Count} slot(s) missed between {From} and {Through}",
+            slot, misfire.Kind, misfire.MissedCount, misfire.MissedFromUtc, misfire.MissedThroughUtc);
+
+    await ReconcileAsync(slot, ct);
+}
+```
+
+`Context` also carries the task id and key, the attempt number, the run number and the time zone; services
+deeper in the dependency graph read the same context through `ITaskExecutionContextAccessor`. See
+[Task Creation](https://GiampaoloGabba.github.io/EverTask/task-creation.html).
+
+### Runtime Schedule Management
+
+`ITaskScheduleManager` changes a live schedule without touching the running app's registration code:
+
+```csharp
+public class ScheduleAdminController(ITaskScheduleManager schedules) : ControllerBase
+{
+    [HttpPost("daily-report/time")]
+    public async Task<IActionResult> MoveTo(TimeOnly newTime)
+    {
+        var result = await schedules.Reschedule(
+            "daily-report",
+            r => r.Schedule().EveryDay().AtTime(newTime),
+            RescheduleMode.RebaseFromCursor);
+
+        return Ok(result);
+    }
+}
+```
+
+It can also re-evaluate a schedule from now (`ReevaluateSchedule`), release a halted catch-up
+(`ResumeSchedule`), cancel a series along with its pending occurrences (`CancelSchedule`), and put a failed
+occurrence back in a queue with its history intact (`RequeueFailedOccurrence`). Every accepted change
+publishes a monitoring event carrying what changed. See
+[Managing Recurring Tasks](https://GiampaoloGabba.github.io/EverTask/recurring-tasks/managing-tasks.html).
 
 ### Multi-Queue Workload Isolation
 
@@ -218,7 +347,7 @@ public class SyncTenantDataHandler : EverTaskHandler<SyncTenantData>
 }
 ```
 
-When a task exceeds its key's budget, EverTask reserves the next available slot and re-schedules it automatically: no worker is blocked, no task is dropped, and tasks for other keys keep flowing. Rate limiting is in-memory and per-instance (a pluggable seam for distributed limiters is on the [roadmap](#roadmap)).
+When a task exceeds its key's budget, EverTask reserves the next available slot and re-schedules it automatically: no worker is blocked, no task is dropped, and tasks for other keys keep flowing. Rate limiting is in-memory and per-instance (a pluggable seam for distributed limiters is on the [roadmap](ROADMAP.md)).
 
 ### Idempotent Task Registration
 
@@ -286,61 +415,32 @@ Capture all logs written during task execution and persist them to the database 
 <br />
 <em>View logs in dashboard or retrieve via storage</em>
 
-### Compile-time payload contract analyzer
+### Compile-time analyzers
 
 Tasks are persisted with System.Text.Json, and its contract is stricter than Newtonsoft's. A violation used to
 surface only at runtime, on recovery: a silently dropped member, or a deserialization throw. The Roslyn analyzer
 bundled in `EverTask.Abstractions` (no extra package, no runtime dependency) catches it the moment you reference
-`IEverTask`, in the IDE and in the build:
+`IEverTask`, in the IDE and in the build — with code fixes for the common cases.
 
-| Rule | Default | What it catches |
-|------|---------|-----------------|
-| **ET0001** | Warning | Public field on a payload (STJ serializes properties only). *Code fix: convert to property* |
-| **ET0002** | Warning | Property with a non-public setter and no matching constructor parameter (dropped on read). *Code fix* |
-| **ET0003** | Warning | Newtonsoft.Json attribute (ignored by STJ). *Code fix: remove / map to the STJ equivalent* |
-| **ET0004** | Warning | Abstract/interface property without `[JsonPolymorphic]`+`[JsonDerivedType]` (throws on recovery). *Code fix: scaffold* |
-| **ET0005** | Info | `object` / `Dictionary<string,object>` (comes back as `JsonElement`) |
-| **ET0006** | Off (opt-in) | Types unlikely to round-trip (delegate, `Stream`, `Type`, `IntPtr`, `DbContext`, `ValueTuple`, …) |
-| **ET0007** | Warning | Multiple public constructors, none parameterless or `[JsonConstructor]` (STJ throws on recovery) |
-
-Every rule is configurable via `.editorconfig` (e.g. `dotnet_diagnostic.ET0001.severity = error`).
+Twelve rules (ET0001–ET0012) cover the payload serialization contract (public fields, unreachable setters,
+Newtonsoft attributes, polymorphism without `[JsonPolymorphic]`, ambiguous constructors, …), delays beyond
+what a .NET timer can arm, monitoring API misconfiguration, `.InTimeZone(...)` on a schedule that cannot
+honor it, and handler-registration mistakes (open-generic or duplicate handlers). Every rule is configurable via `.editorconfig` (e.g. `dotnet_diagnostic.ET0001.severity = error`).
+Full rule list: [serialization analyzers](https://GiampaoloGabba.github.io/EverTask/storage/serialization.html#catching-mistakes-at-build-time).
 
 > Note: the payload serializer is reflection-based and isolated: a consumer's own STJ source generators don't
 > affect it, and Native AOT / reflection-disabled builds are unsupported (see `EverTask.Abstractions` docs).
 
-[View Complete Changelog](CHANGELOG.md)
+## Resources
 
-## Quick Links
-
-- 📦 **NuGet Packages**
-  - [EverTask](https://www.nuget.org/packages/EverTask) - Core library
-  - [EverTask.Abstractions](https://www.nuget.org/packages/EverTask.Abstractions) - Lightweight interfaces package
-  - [EverTask.Storage.SqlServer](https://www.nuget.org/packages/EverTask.Storage.SqlServer) - SQL Server storage
-  - [EverTask.Storage.Sqlite](https://www.nuget.org/packages/EverTask.Storage.Sqlite) - SQLite storage
-  - [EverTask.Storage.Postgres](https://www.nuget.org/packages/EverTask.Storage.Postgres) - PostgreSQL storage
-  - [EverTask.Storage.MySql](https://www.nuget.org/packages/EverTask.Storage.MySql) - MySQL/MariaDB storage
-  - [EverTask.Storage.EfCore](https://www.nuget.org/packages/EverTask.Storage.EfCore) - EF Core base storage
-  - [EverTask.Logging.Serilog](https://www.nuget.org/packages/EverTask.Logging.Serilog) - Serilog integration
-  - [EverTask.Monitor.AspnetCore.SignalR](https://www.nuget.org/packages/EverTask.Monitor.AspnetCore.SignalR) - Real-time monitoring
-  - [EverTask.Monitor.Api](https://www.nuget.org/packages/EverTask.Monitor.Api) - Monitoring API and Dashboard
-  - [EverTask.Monitor.Api.Scalar](https://www.nuget.org/packages/EverTask.Monitor.Api.Scalar) - Scalar API reference for the Monitoring API
-
-- 📝 **Resources**
-  - [Changelog](CHANGELOG.md) - Version history and release notes
-  - [GitHub Repository](https://github.com/GiampaoloGabba/EverTask) - Source code and issues
-  - [Examples](samples/) - Sample applications (ASP.NET Core, Console)
+- [Changelog](CHANGELOG.md) - Version history and release notes
+- [GitHub Repository](https://github.com/GiampaoloGabba/EverTask) - Source code and issues
+- [Examples](samples/) - Sample applications (ASP.NET Core, Console)
 
 ## Roadmap
 
-On the roadmap:
-
-- **Task Management API**: REST endpoints for stopping, restarting, and canceling tasks via the dashboard
-- **Distributed Clustering**: Multi-server task distribution with leader election and automatic failover
-- **Distributed Rate Limiting**: Redis-based keyed limiter sharing budgets across instances (the in-process keyed rate limiting shipped in 3.7.0; the `IKeyedRateLimiter` DI seam is ready)
-- **Adaptive Throttling**: Dynamic throttling based on system resources
-- **Workflow Orchestration**: Complex workflow and saga orchestration with fluent API
-- **Additional Monitoring**: Sentry Crons, Application Insights, OpenTelemetry support
-- **More Storage Options**: Redis, Cosmos DB (PostgreSQL and MySQL/MariaDB shipped)
+Distributed clustering with leader election, Redis-backed distributed rate limiting, workflow orchestration,
+task management from the dashboard, more storage providers — see [ROADMAP.md](ROADMAP.md).
 
 ## Contributing
 
@@ -354,6 +454,8 @@ Contributions are welcome. Bug reports, feature requests, and pull requests all 
 EverTask is licensed under the [MIT License](LICENSE).
 
 The task/handler pattern is inspired by Jimmy Bogard's [MediatR](https://github.com/jbogard/MediatR) — thanks for years of great ideas in the .NET space.
+
+See [ATTRIBUTION.md](ATTRIBUTION.md) for acknowledgements and attributions.
 
 ---
 

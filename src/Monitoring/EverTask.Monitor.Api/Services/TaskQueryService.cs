@@ -1,3 +1,4 @@
+using EverTask.Abstractions;
 using EverTask.Monitor.Api.DTOs.Tasks;
 using EverTask.RateLimiting;
 using EverTask.Storage;
@@ -7,30 +8,20 @@ namespace EverTask.Monitor.Api.Services;
 /// <summary>
 /// Service for querying tasks from storage.
 /// </summary>
-public class TaskQueryService : ITaskQueryService
+/// <param name="storage">The task storage.</param>
+/// <param name="rateLimiter">
+/// Optional rate-limiter introspection: sources the per-task <c>throttledUntil</c> overlay
+/// (in-memory join, single-node).
+/// </param>
+public class TaskQueryService(ITaskStorage storage, IRateLimiterIntrospection? rateLimiter = null) : ITaskQueryService
 {
-    private readonly ITaskStorage _storage;
-    private readonly IRateLimiterIntrospection? _rateLimiter;
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="TaskQueryService"/> class.
-    /// </summary>
-    /// <param name="storage">The task storage.</param>
-    /// <param name="rateLimiter">
-    /// Optional rate-limiter introspection: sources the per-task <c>throttledUntil</c> overlay
-    /// (in-memory join, single-node).
-    /// </param>
-    public TaskQueryService(ITaskStorage storage, IRateLimiterIntrospection? rateLimiter = null)
-    {
-        _storage     = storage;
-        _rateLimiter = rateLimiter;
-    }
+    private const int MaximumPageSize = 500;
 
     /// <inheritdoc />
     public async Task<TasksPagedResponse> GetTasksAsync(TaskFilter filter, PaginationParams pagination, CancellationToken ct = default)
     {
         // Get all tasks from storage
-        var allTasks = await _storage.GetAll(ct).ConfigureAwait(false);
+        var allTasks = await storage.GetAll(ct).ConfigureAwait(false);
         var query = allTasks.AsQueryable();
 
         // Apply filters
@@ -73,6 +64,27 @@ public class TaskQueryService : ITaskQueryService
                 (t.TaskKey != null && t.TaskKey.ToLower().Contains(searchLower)));
         }
 
+        if (filter.ParentTaskId.HasValue)
+        {
+            query = query.Where(t => t.ParentTaskId == filter.ParentTaskId.Value);
+        }
+
+        if (filter.OnlyOccurrences.HasValue)
+        {
+            query = filter.OnlyOccurrences.Value
+                        ? query.Where(t => t.ParentTaskId != null)
+                        : query.Where(t => t.ParentTaskId == null);
+        }
+
+        if (filter.OnlyCatchUp.HasValue)
+        {
+            // Only an occurrence can stand for missed work, and which kind lives in that row's runtime JSON:
+            // the column test comes first so the parse never runs over the whole store.
+            query = filter.OnlyCatchUp.Value
+                        ? query.Where(t => t.ParentTaskId != null && StandsForMissedWork(t))
+                        : query.Where(t => t.ParentTaskId == null || !StandsForMissedWork(t));
+        }
+
         // Count total before pagination
         var totalCount = query.Count();
 
@@ -81,27 +93,15 @@ public class TaskQueryService : ITaskQueryService
 
         // Apply pagination
         var skip = (pagination.Page - 1) * pagination.PageSize;
-        var items = query
+        var page = query
             .Skip(skip)
             .Take(pagination.PageSize)
-            .AsEnumerable() // project in memory: the throttledUntil overlay is an in-memory join
-            .Select(t => new TaskListDto(
-                t.Id,
-                GetShortTypeName(t.Type),
-                t.Status,
-                t.QueueName,
-                t.TaskKey,
-                t.CreatedAtUtc,
-                t.LastExecutionUtc,
-                t.ScheduledExecutionUtc,
-                t.IsRecurring,
-                t.RecurringInfo,
-                t.CurrentRunCount,
-                t.MaxRuns,
-                t.ExecutionTimeMs,
-                _rateLimiter?.GetThrottledUntil(t.Id)
-            ))
-            .ToList();
+            .ToList(); // project in memory: the throttledUntil overlay is an in-memory join
+
+        // One query for the whole page: when a run STARTED is recorded in the audit trail, not in a column.
+        var starts = await TaskRunTiming.RecordedStartsAsync(storage, page, ct).ConfigureAwait(false);
+
+        var items = page.Select(t => ToListDto(t, starts)).ToList();
 
         var totalPages = (int)Math.Ceiling(totalCount / (double)pagination.PageSize);
 
@@ -111,21 +111,19 @@ public class TaskQueryService : ITaskQueryService
     /// <inheritdoc />
     public async Task<TaskDetailDto?> GetTaskDetailAsync(Guid id, CancellationToken ct = default)
     {
-        var tasks = await _storage.Get(t => t.Id == id, ct).ConfigureAwait(false);
+        var tasks = await storage.Get(t => t.Id == id, ct).ConfigureAwait(false);
         var task = tasks.FirstOrDefault();
 
         if (task == null)
             return null;
 
-        var statusAudits = task.StatusAudits
-            .OrderByDescending(a => a.UpdatedAtUtc)
-            .Select(a => new StatusAuditDto(a.Id, a.QueuedTaskId, a.UpdatedAtUtc, a.NewStatus, a.Exception))
-            .ToList();
+        // The FIRST page of each trail, never the whole of it: a schedule that has run for a year holds a
+        // transition per state per run. The totals travel with it so a consumer knows there is more.
+        var statusAudits = await ReadStatusAuditsAsync(id, 0, ITaskQueryService.DefaultAuditPageSize, ct).ConfigureAwait(false);
+        var runsAudits   = await ReadRunsAuditsAsync(id, 0, ITaskQueryService.DefaultAuditPageSize, ct).ConfigureAwait(false);
 
-        var runsAudits = task.RunsAudits
-            .OrderByDescending(a => a.ExecutedAt)
-            .Select(a => new RunsAuditDto(a.Id, a.QueuedTaskId, a.ExecutedAt, a.ExecutionTimeMs, a.Status, a.Exception))
-            .ToList();
+        var facts  = TaskScheduleFacts.Read(task);
+        var starts = await TaskRunTiming.RecordedStartsAsync(storage, [task], ct).ConfigureAwait(false);
 
         return new TaskDetailDto(
             task.Id,
@@ -148,53 +146,93 @@ public class TaskQueryService : ITaskQueryService
             task.NextRunUtc,
             task.AuditLevel,
             task.ExecutionTimeMs,
-            statusAudits,
-            runsAudits,
-            _rateLimiter?.GetThrottledUntil(task.Id)
-        );
+            statusAudits.Audits,
+            runsAudits.Audits,
+            rateLimiter?.GetThrottledUntil(task.Id)
+        )
+        {
+            StatusAuditsTotalCount = statusAudits.TotalCount,
+            RunsAuditsTotalCount   = runsAudits.TotalCount,
+            ParentTaskId           = task.ParentTaskId,
+            OccurrenceMode         = facts.OccurrenceMode,
+            MisfirePolicy          = facts.MisfirePolicy,
+            TimeZoneId             = facts.TimeZoneId,
+            ScheduleVersion        = ScheduleVersionOf(task),
+            NominalSlotUtc         = facts.NominalSlotUtc,
+            StartedAtUtc           = TaskRunTiming.StartOfLastRun(task, starts),
+            MisfireKind            = facts.MisfireKind,
+            Occurrence             = facts.Occurrence,
+            Halt                   = facts.Halt
+        };
     }
 
     /// <inheritdoc />
-    public async Task<List<StatusAuditDto>> GetStatusAuditAsync(Guid id, CancellationToken ct = default)
-    {
-        var tasks = await _storage.Get(t => t.Id == id, ct).ConfigureAwait(false);
-        var task = tasks.FirstOrDefault();
-
-        if (task == null)
-            return new List<StatusAuditDto>();
-
-        return task.StatusAudits
-            .OrderByDescending(a => a.UpdatedAtUtc)
-            .Select(a => new StatusAuditDto(a.Id, a.QueuedTaskId, a.UpdatedAtUtc, a.NewStatus, a.Exception))
-            .ToList();
-    }
+    public Task<StatusAuditsResponse> GetStatusAuditAsync(Guid id, int skip = 0,
+                                                          int take = ITaskQueryService.DefaultAuditPageSize,
+                                                          CancellationToken ct = default) =>
+        ReadStatusAuditsAsync(id, skip, take, ct);
 
     /// <inheritdoc />
-    public async Task<List<RunsAuditDto>> GetRunsAuditAsync(Guid id, CancellationToken ct = default)
+    public Task<RunsAuditsResponse> GetRunsAuditAsync(Guid id, int skip = 0, int take = ITaskQueryService.DefaultAuditPageSize,
+                                                      CancellationToken ct = default) =>
+        ReadRunsAuditsAsync(id, skip, take, ct);
+
+    /// <summary>
+    /// One page of the row's status transitions, newest first, READ from the storage — never off
+    /// <see cref="QueuedTask.StatusAudits"/>, which no storage read populates. Ordering and counting belong to
+    /// the storage too: slicing here would transfer a long-lived schedule's whole trail to show twenty rows.
+    /// </summary>
+    private async Task<StatusAuditsResponse> ReadStatusAuditsAsync(Guid id, int skip, int take,
+                                                                   CancellationToken ct)
     {
-        var tasks = await _storage.Get(t => t.Id == id, ct).ConfigureAwait(false);
-        var task = tasks.FirstOrDefault();
+        (skip, take) = ClampPage(skip, take);
 
-        if (task == null)
-            return new List<RunsAuditDto>();
+        var page = await storage.GetStatusAuditsPage(id, skip, take, ct).ConfigureAwait(false);
 
-        return task.RunsAudits
-            .OrderByDescending(a => a.ExecutedAt)
-            .Select(a => new RunsAuditDto(a.Id, a.QueuedTaskId, a.ExecutedAt, a.ExecutionTimeMs, a.Status, a.Exception))
-            .ToList();
+        var audits = page.Audits
+                         .Select(a => new StatusAuditDto(a.Id, a.QueuedTaskId, a.UpdatedAtUtc, a.NewStatus,
+                             a.Exception))
+                         .ToList();
+
+        return new StatusAuditsResponse(audits, page.TotalCount, skip, take);
     }
+
+    /// <summary>One page of the row's runs, newest first, read from the storage for the same reason.</summary>
+    private async Task<RunsAuditsResponse> ReadRunsAuditsAsync(Guid id, int skip, int take, CancellationToken ct)
+    {
+        (skip, take) = ClampPage(skip, take);
+
+        var page = await storage.GetRunsAuditsPage(id, skip, take, ct).ConfigureAwait(false);
+
+        var audits = page.Audits
+                         .Select(a => new RunsAuditDto(a.Id, a.QueuedTaskId, a.ExecutedAt, a.ExecutionTimeMs,
+                             a.Status, a.Exception))
+                         .ToList();
+
+        return new RunsAuditsResponse(audits, page.TotalCount, skip, take);
+    }
+
+    /// <summary>
+    /// Query-string values are clamped before they reach storage: negative offsets break OFFSET / FETCH, and
+    /// an unbounded page lets one request amplify both the indexed read and its response.
+    /// </summary>
+    private static (int Skip, int Take) ClampPage(int skip, int take) =>
+        (Math.Max(0, skip), Math.Min(MaximumPageSize, Math.Max(0, take)));
 
     /// <inheritdoc />
     public async Task<ExecutionLogsResponse> GetExecutionLogsAsync(Guid taskId, int skip = 0, int take = 100, string? levelFilter = null, CancellationToken ct = default)
     {
+        (skip, take) = ClampPage(skip, take);
+
         // Get all logs for the task
-        var allLogs = await _storage.GetExecutionLogsAsync(taskId, ct).ConfigureAwait(false);
+        var allLogs = await storage.GetExecutionLogsAsync(taskId, ct).ConfigureAwait(false);
 
         // Apply level filter if specified. Materialized once: the count and the page below both
         // enumerate it, and re-running the predicate per enumeration is pure waste.
-        var filteredLogs = string.IsNullOrWhiteSpace(levelFilter)
-                               ? allLogs
-                               : allLogs.Where(l => l.Level.Equals(levelFilter, StringComparison.OrdinalIgnoreCase)).ToList();
+        IReadOnlyList<TaskExecutionLog> filteredLogs = string.IsNullOrWhiteSpace(levelFilter)
+                                                           ? allLogs
+                                                           : [.. allLogs.Where(l => l.Level.Equals(levelFilter,
+                                                               StringComparison.OrdinalIgnoreCase))];
 
         var totalCount = filteredLogs.Count;
 
@@ -221,15 +259,108 @@ public class TaskQueryService : ITaskQueryService
         // The standard/recurring split needs IsRecurring, which ITaskStorageStatistics does not
         // expose: the list is materialized once and every count derives from it (a separate
         // statistics roundtrip would be strictly more work on top of the same materialization).
-        var allTasksList = (await _storage.GetAll(ct).ConfigureAwait(false)).ToList();
+        var allTasksList = (await storage.GetAll(ct).ConfigureAwait(false)).ToList();
 
         var all       = allTasksList.Count;
         var recurring = allTasksList.Count(t => t.IsRecurring);
         var standard  = all - recurring;
         var failed    = allTasksList.Count(t => t.Status == QueuedTaskStatus.Failed);
 
-        return new TaskCountsDto(all, standard, recurring, failed);
+        // An occurrence is a one-shot row, so it is already inside Standard: this is the slice of it that a
+        // durable schedule produced, not a sixth disjoint bucket.
+        var occurrences = allTasksList.Count(t => t.ParentTaskId != null);
+
+        return new TaskCountsDto(all, standard, recurring, failed) { Occurrences = occurrences };
     }
+
+    /// <inheritdoc />
+    public async Task<OccurrencesResponse> GetOccurrencesAsync(Guid scheduleId, bool nonTerminalOnly = false,
+                                                               int skip = 0, int take = 100,
+                                                               CancellationToken ct = default)
+    {
+        (skip, take) = ClampPage(skip, take);
+
+        // The PAGE is the storage read, ordering and counting included: a schedule with a year of retention
+        // behind it holds hundreds of thousands of occurrence rows. The built-in providers answer it from the
+        // (ParentTaskId, ScheduledExecutionUtc) index the occurrence contract already needs.
+        var page = await storage.GetOccurrencesPage(scheduleId, nonTerminalOnly, skip, take, ct)
+                                 .ConfigureAwait(false);
+
+        var starts = await TaskRunTiming.RecordedStartsAsync(storage, page.Occurrences, ct)
+                                        .ConfigureAwait(false);
+
+        var occurrences = page.Occurrences
+            .Select(r => new OccurrenceDto(
+                r.Id,
+                scheduleId,
+                r.Status,
+                TaskScheduleFacts.Read(r).Occurrence ?? UnreadableOccurrence,
+                r.CreatedAtUtc,
+                r.LastExecutionUtc,
+                r.ExecutionTimeMs,
+                r.Exception,
+                r.ScheduleVersion)
+            {
+                StartedAtUtc = TaskRunTiming.StartOfLastRun(r, starts)
+            })
+            .ToList();
+
+        return new OccurrencesResponse(occurrences, page.TotalCount, skip, take);
+    }
+
+    /// <summary>
+    /// What an occurrence reports when the row carries no readable metadata at all — unreachable through the
+    /// storage read, which only returns rows whose ParentTaskId is set.
+    /// </summary>
+    private static readonly OccurrenceInfoDto UnreadableOccurrence =
+        new(null, null, null, null, null, null, null, null);
+
+    /// <summary>
+    /// True while the row's occurrence metadata says it was created out of missed work — a replayed slot, or a
+    /// run of missed slots collapsed into one.
+    /// </summary>
+    private static bool StandsForMissedWork(QueuedTask row) =>
+        TaskScheduleFacts.Read(row).MisfireKind is MisfireKind.CatchUp or MisfireKind.FireOnce;
+
+    private TaskListDto ToListDto(QueuedTask t, IReadOnlyDictionary<Guid, DateTimeOffset> recordedStarts)
+    {
+        var facts = TaskScheduleFacts.Read(t);
+
+        return new TaskListDto(
+            t.Id,
+            GetShortTypeName(t.Type),
+            t.Status,
+            t.QueueName,
+            t.TaskKey,
+            t.CreatedAtUtc,
+            t.LastExecutionUtc,
+            t.ScheduledExecutionUtc,
+            t.IsRecurring,
+            t.RecurringInfo,
+            t.CurrentRunCount,
+            t.MaxRuns,
+            t.ExecutionTimeMs,
+            rateLimiter?.GetThrottledUntil(t.Id)
+        )
+        {
+            ParentTaskId    = t.ParentTaskId,
+            OccurrenceMode  = facts.OccurrenceMode,
+            MisfirePolicy   = facts.MisfirePolicy,
+            TimeZoneId      = facts.TimeZoneId,
+            ScheduleVersion = ScheduleVersionOf(t),
+            NominalSlotUtc  = facts.NominalSlotUtc,
+            StartedAtUtc    = TaskRunTiming.StartOfLastRun(t, recordedStarts),
+            MisfireKind     = facts.MisfireKind
+        };
+    }
+
+    /// <summary>
+    /// The schedule version of a row that belongs to a schedule, and nothing at all for a row that does not.
+    /// The column exists on every row and defaults to 0, so it cannot answer this on its own: the schedule
+    /// fields must be absent together on a one-shot, which is how a consumer tells the two shapes apart.
+    /// </summary>
+    private static int? ScheduleVersionOf(QueuedTask row) =>
+        row.IsRecurring || row.ParentTaskId != null ? row.ScheduleVersion : null;
 
     private static IQueryable<QueuedTask> ApplySorting(IQueryable<QueuedTask> query, string? sortBy, bool descending)
     {

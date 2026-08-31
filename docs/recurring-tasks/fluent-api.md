@@ -230,6 +230,50 @@ await dispatcher.Dispatch(
         .MaxRuns(30));
 ```
 
+## Time Zones
+
+By default a schedule is computed in UTC. `InTimeZone` reads its calendar on a real clock instead, so the
+local hour survives daylight saving:
+
+```csharp
+await dispatcher.Dispatch(
+    new SendDailyDigestTask(),
+    builder => builder.Schedule()
+        .EveryDay()
+        .AtTime(new TimeOnly(9, 0))
+        .InTimeZone("Europe/Rome"),
+    taskKey: "daily-digest");
+
+// The zone can also come first, or as a TimeZoneInfo
+builder.Schedule().InTimeZone("America/New_York").EveryWeek().OnDay(DayOfWeek.Monday);
+builder.Schedule().EveryMonth().OnDay(1).InTimeZone(TimeZoneInfo.Utc);
+```
+
+A zone governs calendar-anchored schedules: days, weeks, months, times of day and cron. A plain cadence
+(`Every(n).Seconds/Minutes/Hours`) is a constant step in elapsed time and produces the same instants
+everywhere, so `InTimeZone` on one throws rather than doing nothing.
+
+Full rules, including what happens on the two transition days, are in [Time Zones](time-zones.md).
+
+## Excluding moments
+
+Use `.Except(...)` to subtract whole weekdays, whole dates and absolute half-open windows from the grid;
+calls union together. `.ExceptWeekends()` is the Saturday/Sunday shortcut.
+
+```csharp
+builder.Schedule().EveryDay().AtTime(new TimeOnly(8, 0))
+       .Except(e => e.OnDays(DayOfWeek.Saturday, DayOfWeek.Sunday)
+                     .OnDates(new DateOnly(2026, 12, 25))
+                     .Between(maintenanceStart, maintenanceEnd));
+
+builder.Schedule().Every(4).Hours().ExceptWeekends();
+```
+
+Day/date exclusions use the persisted schedule zone (or UTC); `Between` compares instants. Excluded slots
+consume no run or misfire count and produce no durable occurrence. Built-in intervals and cron are supported;
+occurrence providers and `RescheduleMode.RebaseFromCursor` are not. See [Recurring Tasks](../recurring-tasks.md#excluding-moments)
+for the full interaction rules.
+
 ## Complex Schedules
 
 ```csharp
@@ -261,6 +305,7 @@ await dispatcher.Dispatch(
 ## Next Steps
 
 - **[Cron Expressions](cron-expressions.md)** - Maximum flexibility with cron syntax
+- **[Time Zones](time-zones.md)** - Run a calendar schedule on a real clock
 - **[Idempotent Task Registration](idempotent-registration.md)** - Prevent duplicate tasks with task keys
 - **[Managing Recurring Tasks](managing-tasks.md)** - Cancel and monitor recurring tasks
 - **[Best Practices](best-practices.md)** - Follow recurring task best practices

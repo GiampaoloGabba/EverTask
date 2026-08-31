@@ -26,7 +26,7 @@ Adding the package enables the monitoring OpenAPI document automatically
 
 ## Requirements
 
-- `EverTask.Monitor.Api` 3.12.0+
+- `EverTask.Monitor.Api` 4.0.0+
 - .NET 9.0 or later at runtime. On .NET 8.0 the document generator built into ASP.NET Core does
   not exist, so the package logs a warning at startup and serves nothing.
 

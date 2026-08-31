@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Linq.Expressions;
 
 namespace EverTask.Handler;
@@ -30,10 +30,101 @@ public record TaskHandlerExecutor(
     string? RateLimitKey = null,
     // Eager mode only: the EverTask-owned DI scope the carried handler instance was resolved from.
     // The worker disposes it right after execution so eager handlers are NOT pinned in the singleton
-    // dispatcher's root container until shutdown (L27). Memory-only; null for lazy executors and
+    // dispatcher's root container until shutdown. Memory-only; null for lazy executors and
     // dropped by ToLazy(). Never persisted.
     IAsyncDisposable? HandlerScope = null)
 {
+    // Occurrence metadata lives in INIT properties declared in the body, never as appended positional
+    // parameters: appending would change the primary constructor and Deconstruct signatures, breaking every
+    // consumer that constructs or deconstructs an executor. `with` expressions copy them for free.
+
+    /// <summary>
+    /// The recurring schedule row this executor is an occurrence of, or null for a schedule row / plain task.
+    /// </summary>
+    public Guid? ParentTaskId { get; init; }
+
+    /// <summary>Occurrence metadata JSON carried to the persisted row (opaque to the worker).</summary>
+    public string? RuntimeInfo { get; init; }
+
+    /// <summary>1-based number of the run this delivery represents, when it is durably known.</summary>
+    public int? RunNumber { get; init; }
+
+    /// <summary>Version of the schedule definition this executor was built from (0 for unversioned rows).</summary>
+    public int ScheduleVersion { get; init; }
+
+    /// <summary>
+    /// The nominal slot this delivery belongs to, when it differs from <see cref="ExecutionTime"/> (the
+    /// rate-limit gate replaces the latter with its reserved slot). An occurrence carries the slot its ROW
+    /// states, read from <see cref="RuntimeInfo"/> where the row becomes a task, so the answer never depends
+    /// on which executor is delivering it — and when it was not stamped at all, <see cref="RowOccurrence"/>
+    /// still reads it back from the same place.
+    /// </summary>
+    public DateTimeOffset? NominalSlotUtc { get; init; }
+
+    /// <summary>
+    /// True once the rate-limit gate replaced <see cref="ExecutionTime"/> with the slot it reserved for this
+    /// task. Internal, and set only there: from that moment <see cref="ExecutionTime"/> answers "when does the
+    /// scheduler fire this", not "which slot is this", and only <see cref="NominalSlotUtc"/> answers the latter.
+    /// </summary>
+    internal bool ExecutionTimeIsReservedSlot { get; init; }
+
+    /// <summary>
+    /// True when this delivery exists only to ask a schedule's grid AGAIN — an
+    /// <see cref="INextOccurrenceProvider"/> that could not answer — and must not run the handler.
+    /// </summary>
+    /// <remarks>
+    /// Internal and set in exactly one place, the provider re-park. What the schedule owes is decided from the
+    /// ROW when the retry fires, which is the whole point: the question the provider left unanswered is which
+    /// slot is due, so parking an ordinary delivery would run one nobody has decided about.
+    /// </remarks>
+    internal bool IsScheduleRetry { get; init; }
+
+    /// <summary>
+    /// On a <see cref="IsScheduleRetry"/> delivery: the slot the interrupted decision was about, since
+    /// <see cref="ExecutionTime"/> now holds the instant the retry FIRES at.
+    /// </summary>
+    /// <remarks>
+    /// It exists for the one host that has nowhere else to read it: with a storage the retry re-reads the row
+    /// and the cursor there is the answer, but a storage-less series lives entirely on its delivery, and
+    /// re-deciding from the retry instant instead of from the slot would silently skip everything in between.
+    /// </remarks>
+    internal DateTimeOffset? ScheduleRetryFromUtc { get; init; }
+
+    /// <summary>
+    /// True when an exclusion-search retry must resume the interrupted advance without counting its run
+    /// again. Memory-only; a stored schedule reads the already-advanced counter from its row.
+    /// </summary>
+    internal bool ScheduleRunAlreadyRecorded { get; init; }
+
+    /// <summary>
+    /// What the persisted ROW states about this delivery when it is an occurrence — its slot and its run of
+    /// the series — or null when the delivery is not one.
+    /// </summary>
+    /// <remarks>
+    /// The stamped <see cref="NominalSlotUtc"/> / <see cref="RunNumber"/> are the same two facts, read once
+    /// where the row became a task; this is what answers when they were not stamped, so an occurrence handed
+    /// straight to the scheduler after being materialized reports its slot and its run just like a recovered
+    /// one. Only reached for an occurrence that arrived without them: every other delivery answers on the
+    /// preceding null check, without parsing anything.
+    /// </remarks>
+    internal OccurrenceRuntimeInfo? RowOccurrence =>
+        ParentTaskId != null ? OccurrenceRuntimeInfo.TryParse(RuntimeInfo) : null;
+
+    /// <summary>
+    /// The slot this delivery stands for: the occurrence's own slot, the scheduled time of a delayed task, or
+    /// null for a task dispatched to run immediately. Never the moving slot a rate-limit deferral parked it at
+    /// — reporting that one would make a deferred task look as if it had been scheduled for it — and never the
+    /// moment an overdue occurrence happened to be fired at either: an occurrence's slot comes from its own
+    /// row, whether it was stamped on the executor or is still only in the row's metadata.
+    /// </summary>
+    internal DateTimeOffset? NominalSlotOfDelivery =>
+        NominalSlotUtc ?? RowOccurrence?.SlotUtc ?? (ExecutionTimeIsReservedSlot ? null : ExecutionTime);
+
+    /// <summary>
+    /// True when this executor represents a DURABLE schedule row: it owns the definition and the cursor but
+    /// never runs the handler — its due slots become child rows instead.
+    /// </summary>
+    public bool IsScheduleOnly => RecurringTask?.OccurrenceMode == OccurrenceMode.Durable;
 
     /// <summary>
     /// Indicates whether this executor is in lazy mode (handler not yet resolved).
@@ -170,60 +261,43 @@ public record TaskHandlerExecutor(
     /// container that resolved it. Fresh handler instances are resolved and disposed at
     /// execution time inside the worker's per-task scope.
     /// </remarks>
-    public TaskHandlerExecutor ToLazy()
-    {
-        // ALWAYS create a new instance to ensure Parallel.ForEachAsync can process recurring tasks
-        // Even if already lazy, we need a NEW reference for the channel consumer to pick up
-        if (IsLazy)
+    public TaskHandlerExecutor ToLazy() =>
+        // ALWAYS a new instance, even when already lazy: the channel consumer needs a NEW reference so
+        // Parallel.ForEachAsync can process recurring tasks. `with` copies every member — the positional
+        // ones AND the init-only occurrence metadata — so a new member can never be forgotten here;
+        // only the handler instance, its callbacks and its owned scope are dropped. The handler type name
+        // is reused when stamped at dispatch, else derived from the instance being dropped.
+        this with
         {
-            // Create a NEW instance with the same values
-            return new TaskHandlerExecutor(
-                Task,
-                Handler: null,
-                HandlerTypeName,
-                ExecutionTime,
-                RecurringTask,
-                HandlerCallback: null,
-                HandlerErrorCallback: null,
-                HandlerStartedCallback: null,
-                HandlerCompletedCallback: null,
-                PersistenceId,
-                QueueName,
-                TaskKey,
-                AuditLevel,
-                RateLimitPolicy,
-                RateLimitKey
-            );
-        }
-
-        // Reuse the handler type name stamped at dispatch time when available,
-        // falling back to the shared type-name cache (AQN dedup)
-        var handlerTypeName = HandlerTypeName ?? TypeNameCache.GetAssemblyQualifiedName(Handler!.GetType());
-
-        // Create lazy executor with handler and callbacks set to null
-        return new TaskHandlerExecutor(
-            Task,
-            Handler: null,
-            HandlerTypeName: handlerTypeName,
-            ExecutionTime,
-            RecurringTask,
-            HandlerCallback: null,
-            HandlerErrorCallback: null,
-            HandlerStartedCallback: null,
-            HandlerCompletedCallback: null,
-            PersistenceId,
-            QueueName,
-            TaskKey,
-            AuditLevel,
-            RateLimitPolicy,
-            RateLimitKey
-        );
-    }
+            Handler = null,
+            HandlerTypeName = HandlerTypeName ?? (Handler != null
+                ? TypeNameCache.GetAssemblyQualifiedName(Handler.GetType())
+                : null),
+            HandlerCallback = null,
+            HandlerErrorCallback = null,
+            HandlerStartedCallback = null,
+            HandlerCompletedCallback = null,
+            HandlerScope = null
+        };
 };
 
 public static class TaskHandlerExecutorExtensions
 {
-    public static QueuedTask ToQueuedTask(this TaskHandlerExecutor executor)
+    /// <summary>
+    /// Maps an executor to the row that persists it, stamped from the real clock.
+    /// </summary>
+    /// <remarks>
+    /// The zero-extra-argument shape is preserved exactly: an assembly compiled against the previous release
+    /// calls THIS signature, and turning it into an optional parameter would have removed it.
+    /// </remarks>
+    public static QueuedTask ToQueuedTask(this TaskHandlerExecutor executor) => executor.ToQueuedTask(null);
+
+    /// <param name="createdAtUtc">
+    /// The scheduling clock's "now", stamped as <see cref="QueuedTask.CreatedAtUtc"/>. The recovery cutoff
+    /// compares that column against the same clock, so a host running on an injected one must not stamp its
+    /// rows from the wall clock or recovery would never see them. Null falls back to the real clock.
+    /// </param>
+    public static QueuedTask ToQueuedTask(this TaskHandlerExecutor executor, DateTimeOffset? createdAtUtc)
     {
         ArgumentNullException.ThrowIfNull(executor.Task);
 
@@ -262,25 +336,24 @@ public static class TaskHandlerExecutorExtensions
             scheduleTask = EverTaskJson.Serialize(executor.RecurringTask);
             isRecurring  = true;
 
-            // For a newly dispatched recurring task, NextRunUtc should be the time of the first execution
-            // (same as ScheduledExecutionUtc). If ExecutionTime is null (e.g., immediate execution),
-            // calculate the first occurrence from UtcNow.
+            // The first NextRunUtc is DECIDED BY THE DISPATCHER and arrives here as ExecutionTime: every
+            // persisted dispatch goes through the schedule evaluator first, so this mapping never re-derives
+            // the grid. The fallback below only serves direct callers of this extension that skipped the
+            // dispatcher (it is unreachable from the library's own paths).
             if (executor.ExecutionTime.HasValue)
             {
                 nextRun = executor.ExecutionTime;
             }
             else
             {
-                // Calculate first occurrence for immediate execution
                 var referenceTime = DateTimeOffset.UtcNow;
                 var result =
                     executor.RecurringTask.CalculateNextValidRun(referenceTime, 0, referenceTime: referenceTime);
                 nextRun = result.NextRun;
             }
 
-            // Computed inline (F22): the previous static cache was keyed by RecurringTask reference
-            // identity, but every persisted dispatch builds a fresh instance, so it never hit between
-            // distinct dispatches — it only retained one entry per dispatch forever (an unbounded leak).
+            // Computed inline, never cached: every persisted dispatch builds a fresh RecurringTask, so a
+            // cache keyed by reference identity never hits and only retains one entry per dispatch for ever.
             scheduleTaskInfo = executor.RecurringTask.ToString() ?? "Recurring Task";
 
             maxRuns  = executor.RecurringTask.MaxRuns;
@@ -298,7 +371,7 @@ public static class TaskHandlerExecutorExtensions
             Request               = request,
             Handler               = handlerType,
             Status                = QueuedTaskStatus.WaitingQueue,
-            CreatedAtUtc          = DateTimeOffset.UtcNow,
+            CreatedAtUtc          = createdAtUtc ?? DateTimeOffset.UtcNow,
             ScheduledExecutionUtc = executor.ExecutionTime,
             IsRecurring           = isRecurring,
             RecurringTask         = scheduleTask,
@@ -309,7 +382,10 @@ public static class TaskHandlerExecutorExtensions
             CurrentRunCount       = 0,
             QueueName             = executor.QueueName,
             TaskKey               = executor.TaskKey,
-            AuditLevel            = (int)executor.AuditLevel
+            AuditLevel            = (int)executor.AuditLevel,
+            ParentTaskId          = executor.ParentTaskId,
+            RuntimeInfo           = executor.RuntimeInfo,
+            ScheduleVersion       = executor.ScheduleVersion
         };
     }
 }

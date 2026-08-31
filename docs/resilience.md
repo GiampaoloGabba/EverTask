@@ -21,11 +21,24 @@ Resilient task handling comes down to a few things: retrying transient errors, f
 - **Cancellation Support**: Implement cooperative cancellation with CancellationTokens
 - **Graceful Shutdown**: Handle application restarts with automatic task recovery
 - **Error Observation**: React to errors with lifecycle hooks
+- **Misfire Policies**: Decide what a recurring schedule does with the slots a downtime missed
+
+## What a downtime does to a recurring schedule
+
+Recovery brings back everything that was pending, but a recurring schedule is a special case: the slots that
+came due while nobody was running are gone by the time the process is back. By default they are **skipped** —
+at most the slot that is still the current one runs, and the schedule moves on. That is the right answer for a
+heartbeat and the wrong one for a nightly billing job.
+
+`OnMisfire` is where you say which it is: `FireOnce` collapses the whole missed run into one occurrence, and
+`CatchUp` replays every missed slot inside caps you set. Both give each occurrence a durable row of its own,
+with its own retries and its own audit trail, and both come with an at-least-once contract: write handlers
+that can run twice. See [Durable Occurrences](recurring-tasks/durable-occurrences.md).
 
 ## Topics
 
 ### [Overview](resilience/overview.md)
-Introduction to resilience features with quick examples and feature overview.
+Introduction to the resilience features, with quick examples.
 
 ### [Retry Policies](resilience/retry-policies.md)
 Configure automatic retry behavior for failed tasks. Learn about LinearRetryPolicy, ExponentialRetryPolicy (exponential backoff), custom policies, and Polly integration.

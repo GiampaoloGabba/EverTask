@@ -2,9 +2,11 @@ using System.Collections;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using EverTask.Handler;
+using EverTask.Logger;
 using EverTask.Scheduler.Recurring;
 using EverTask.Storage;
 using EverTask.Tests.TestHelpers;
+using EverTask.Worker;
 using Newtonsoft.Json;
 
 namespace EverTask.Tests.IntegrationTests;
@@ -121,27 +123,41 @@ public class MemoryLeakRegressionTests : IsolatedIntegrationTestBase
     [Fact]
     public async Task Should_dispose_dispatch_time_metadata_handler_when_dispatching_immediate_task()
     {
-        // Host NOT started: only the dispatch runs, no execution.
+        // Host NOT started: only the dispatch runs, no execution. The probe is this test's own
+        // (TestTaskMem2DispatchProbe) so that the two exact-count tests of this class cannot reach
+        // each other's counters in any order xUnit runs them: both assert ABSOLUTE values taken after
+        // a Reset(), and this one leaves a delivery in the channel that no consumer will ever collect.
         await CreateIsolatedHostWithBuilderAsync(
             builder => builder.AddMemoryStorage(),
             startHost: false);
 
-        TestTaskMem2DisposeProbeHandler.Reset();
+        TestTaskMem2DispatchProbeHandler.Reset();
 
-        await Dispatcher.Dispatch(new TestTaskMem2DisposeProbe());
+        await Dispatcher.Dispatch(new TestTaskMem2DispatchProbe());
 
         // The dispatch-time metadata instance is created and promptly disposed with the
         // dispatch scope; the task itself has not executed.
-        TestTaskMem2DisposeProbeHandler.Created.ShouldBe(1);
-        TestTaskMem2DisposeProbeHandler.Disposed.ShouldBe(1,
+        TestTaskMem2DispatchProbeHandler.Created.ShouldBe(1);
+        TestTaskMem2DispatchProbeHandler.Disposed.ShouldBe(1,
             "the dispatch-time metadata instance must be disposed with the dispatch scope (MEM-2)");
-        TestTaskMem2DisposeProbeHandler.Executed.ShouldBe(0);
+        TestTaskMem2DispatchProbeHandler.Executed.ShouldBe(0);
     }
 
     [Fact]
     public async Task Should_resolve_and_dispose_fresh_handler_per_execution_for_immediate_tasks()
     {
-        await CreateIsolatedHostAsync();
+        // The count is exact, so the dispatch has to come after the host's STARTUP RECOVERY: recovery
+        // captures its cutoff when it begins, on a thread pool thread, so a row dispatched while it is
+        // still walking is created before that cutoff and is re-dispatched like any leftover — a
+        // legitimate re-dispatch that resolves the handler once more for its metadata and reads here as
+        // a third resolution nobody asked for. Whether the dispatch lands inside that window is pure
+        // timing: the test passed alone and failed right after another test had warmed the process up.
+        var recovery = new StartupRecoveryWatch();
+
+        await CreateIsolatedHostAsync(
+            configureServices: services => services.AddSingleton<IEverTaskLogger<WorkerService>>(recovery));
+
+        await recovery.Finished.WaitAsync(TimeSpan.FromSeconds(30));
 
         TestTaskMem2DisposeProbeHandler.Reset();
 

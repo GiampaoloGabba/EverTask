@@ -17,7 +17,6 @@ public class JwtTokenService : IJwtTokenService
 {
     private readonly EverTaskApiOptions _options;
     private readonly ILogger<JwtTokenService> _logger;
-    private readonly string _secret;
     private readonly SymmetricSecurityKey _signingKey;
 
     public JwtTokenService(IOptions<EverTaskApiOptions> options, ILogger<JwtTokenService> logger)
@@ -26,44 +25,53 @@ public class JwtTokenService : IJwtTokenService
         _logger = logger;
 
         // Generate or validate JWT secret
+        string secret;
         if (string.IsNullOrWhiteSpace(_options.JwtSecret))
         {
-            _secret = GenerateRandomSecret();
+            secret = GenerateRandomSecret();
             _logger.JwtSecretNotConfigured();
         }
         else
         {
-            _secret = _options.JwtSecret;
+            secret = _options.JwtSecret;
 
             // Validate minimum secret length (256 bits / 32 bytes)
-            if (Encoding.UTF8.GetByteCount(_secret) < 32)
+            if (Encoding.UTF8.GetByteCount(secret) < 32)
             {
                 _logger.JwtSecretTooShort();
             }
         }
 
-        _signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_secret));
+        _signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secret));
     }
 
     /// <inheritdoc />
-    public LoginResponse GenerateToken(string username)
+    public LoginResponse GenerateToken(string username) => GenerateToken(username, false);
+
+    /// <inheritdoc />
+    public LoginResponse GenerateToken(string username, bool canManage)
     {
         var now = DateTimeOffset.UtcNow;
         var expiresAt = now.AddHours(_options.JwtExpirationHours);
 
+        // The role is written on every token, read one included: a token carrying no role at all is
+        // indistinguishable from one minted before the claim existed.
         var claims = new[]
         {
             new Claim(JwtRegisteredClaimNames.Sub, username),
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
-            new Claim(JwtRegisteredClaimNames.Iat, now.ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64)
+            new Claim(JwtRegisteredClaimNames.Iat, now.ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
+            new Claim(MonitoringRoles.ClaimType, canManage ? MonitoringRoles.Operate : MonitoringRoles.Read)
         };
 
         var token = new JwtSecurityToken(
             issuer: _options.JwtIssuer,
             audience: _options.JwtAudience,
             claims: claims,
-            notBefore: now.DateTime,
-            expires: expiresAt.DateTime,
+            // UtcDateTime, not DateTime: an Unspecified kind is read as LOCAL time here, which shifts the
+            // real expiry by the host's UTC offset while LoginResponse keeps advertising the intended one.
+            notBefore: now.UtcDateTime,
+            expires: expiresAt.UtcDateTime,
             signingCredentials: new SigningCredentials(_signingKey, SecurityAlgorithms.HmacSha256)
         );
 
@@ -71,7 +79,7 @@ public class JwtTokenService : IJwtTokenService
 
         _logger.JwtTokenGenerated(username, expiresAt);
 
-        return new LoginResponse(tokenString, expiresAt, username);
+        return new LoginResponse(tokenString, expiresAt, username) { CanManage = canManage };
     }
 
     /// <inheritdoc />
@@ -101,6 +109,9 @@ public class JwtTokenService : IJwtTokenService
             // Extract username from claims (using original JWT claim type)
             var username = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
 
+            // A token minted without the claim is a read one: the role is only ever ADDED to a session.
+            var canManage = principal.FindFirst(MonitoringRoles.ClaimType)?.Value == MonitoringRoles.Operate;
+
             // Extract expiration
             var jwtToken = (JwtSecurityToken)validatedToken;
             var expiresAt = jwtToken.ValidTo != DateTime.MinValue
@@ -109,7 +120,7 @@ public class JwtTokenService : IJwtTokenService
 
             _logger.JwtTokenValidated(username);
 
-            return new TokenValidationResponse(true, username, expiresAt);
+            return new TokenValidationResponse(true, username, expiresAt) { CanManage = canManage };
         }
         catch (SecurityTokenExpiredException ex)
         {

@@ -177,6 +177,15 @@ public class RateLimitMonitoringTests
                    It.IsAny<CancellationToken>()))
                .ReturnsAsync([parkedTask]);
 
+        // The detail reads a PAGE of each audit trail: a storage answers an empty one for a row with no
+        // history, never null.
+        storage.Setup(s => s.GetStatusAuditsPage(It.IsAny<Guid>(), It.IsAny<int>(), It.IsAny<int>(),
+                   It.IsAny<CancellationToken>()))
+               .ReturnsAsync(new AuditPage<StatusAudit>([], 0));
+        storage.Setup(s => s.GetRunsAuditsPage(It.IsAny<Guid>(), It.IsAny<int>(), It.IsAny<int>(),
+                   It.IsAny<CancellationToken>()))
+               .ReturnsAsync(new AuditPage<RunsAudit>([], 0));
+
         var introspection = new FakeRateLimiterIntrospection { ThrottledUntil = { [parkedTask.Id] = slot } };
 
         var detail = await new TaskQueryService(storage.Object, introspection).GetTaskDetailAsync(parkedTask.Id);

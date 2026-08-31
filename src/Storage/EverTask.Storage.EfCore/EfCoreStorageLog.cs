@@ -36,10 +36,6 @@ internal static partial class EfCoreStorageLog
     public static partial void StatusUpdateFailed(this ILogger logger, Exception exception, QueuedTaskStatus status,
                                                   Guid taskId);
 
-    [LoggerMessage(EventId = 2006, Level = LogLevel.Debug,
-        Message = "Get the current run counter for Task {TaskId}")]
-    public static partial void GettingCurrentRunCount(this ILogger logger, Guid taskId);
-
     [LoggerMessage(EventId = 2007, Level = LogLevel.Debug,
         Message = "Update the current run counter for Task {TaskId}")]
     public static partial void UpdatingCurrentRun(this ILogger logger, Guid taskId);
@@ -103,4 +99,10 @@ internal static partial class EfCoreStorageLog
 
     [LoggerMessage(EventId = 2024, Level = LogLevel.Critical, Message = "Unable to remove task {TaskId}")]
     public static partial void TaskRemoveFailed(this ILogger logger, Exception exception, Guid taskId);
+
+    [LoggerMessage(
+        EventId = 2025,
+        Level = LogLevel.Warning,
+        Message = "Read {Operation} was chosen as deadlock victim, rerunning it (attempt {Attempt})")]
+    public static partial void RereadAfterDeadlock(this ILogger logger, string operation, int attempt);
 }

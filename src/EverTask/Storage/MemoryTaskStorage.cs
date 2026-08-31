@@ -29,15 +29,26 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
     }
 
     /// <inheritdoc />
+    public bool SupportsDurableOccurrences => true;
+
+    /// <inheritdoc />
+    public bool SupportsScheduleVersioning => true;
+
+    /// <inheritdoc />
     public Task Persist(QueuedTask task, CancellationToken ct = default)
     {
+        // Instants compare the same here whatever their offset, but the contract is the relational one:
+        // a row that round-trips at +02:00 here and at +00:00 on a real provider is a test that passes in
+        // memory and fails on SQLite.
+        task.NormalizeTimestampsToUtc();
+
         logger.TaskPersisted(task.Type);
 
         lock (_pendingTasksLock)
         {
             // Mirror the relational unique index on TaskKey: reject a duplicate so two rows can never
             // share a key — each would execute, since the delivery registry dedups only by PersistenceId,
-            // which are distinct (G13). Whitespace keys are treated as "no key" to match the dispatcher's
+            // which are distinct. Whitespace keys are treated as "no key" to match the dispatcher's
             // dedup semantics (IsNullOrWhiteSpace).
             if (!string.IsNullOrWhiteSpace(task.TaskKey) &&
                 _pendingTasks.Any(t => t.TaskKey == task.TaskKey))
@@ -46,23 +57,64 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
                     $"A task with TaskKey '{task.TaskKey}' already exists (unique constraint violation).");
             }
 
+            ValidateOccurrenceConstraints(task);
+
             _pendingTasks.Add(task);
         }
         return Task.FromResult(task.Id);
     }
 
+    /// <summary>
+    /// Enforces, by hand, the three relational guarantees an occurrence row relies on: the check constraint
+    /// (an occurrence always names its slot), the self-referencing foreign key (no orphans) and the unique
+    /// index on (parent, slot) (a slot is materialized at most once). Without them the in-memory store would
+    /// silently accept states the relational providers reject, and the same test would pass here and fail there.
+    /// </summary>
+    private void ValidateOccurrenceConstraints(QueuedTask task)
+    {
+        if (task.ParentTaskId is not { } parentId)
+            return;
+
+        if (task.ScheduledExecutionUtc == null)
+        {
+            throw new InvalidOperationException(
+                "An occurrence must carry its nominal slot in ScheduledExecutionUtc " +
+                "(check constraint CK_QueuedTasks_OccurrenceSlot).");
+        }
+
+        if (_pendingTasks.All(t => t.Id != parentId))
+        {
+            throw new InvalidOperationException(
+                $"No schedule row '{parentId}' exists for this occurrence (foreign key FK_QueuedTasks_Parent).");
+        }
+
+        if (_pendingTasks.Any(t => t.ParentTaskId == parentId
+                                   && t.ScheduledExecutionUtc == task.ScheduledExecutionUtc))
+        {
+            throw new InvalidOperationException(
+                $"Slot {task.ScheduledExecutionUtc:O} of schedule '{parentId}' is already materialized " +
+                "(unique constraint UX_QueuedTasks_Occurrence).");
+        }
+    }
+
     /// <inheritdoc />
-    public Task<QueuedTask[]> RetrievePending(DateTimeOffset? lastCreatedAt, Guid? lastId, int take, CancellationToken ct = default)
+    public Task<QueuedTask[]> RetrievePending(DateTimeOffset? lastCreatedAt, Guid? lastId, int take, CancellationToken ct = default) =>
+        RetrievePending(DateTimeOffset.UtcNow, lastCreatedAt, lastId, take, ct);
+
+    /// <inheritdoc />
+    public Task<QueuedTask[]> RetrievePending(DateTimeOffset nowUtc, DateTimeOffset? lastCreatedAt, Guid? lastId,
+                                              int take, CancellationToken ct = default)
     {
         logger.RetrievingPendingTasks(lastCreatedAt, lastId, take);
 
         lock (_pendingTasksLock)
         {
-            var now = DateTimeOffset.UtcNow;
+            var now = nowUtc;
 
-            // Recoverable statuses: canonical predicate shared with every provider (QueuedTask.IsRecoverable)
+            // The union of the two recovery categories — rows with work left to EXECUTE, and recurring
+            // series that only need FINALIZING. Canonical predicates on QueuedTask, shared with every provider.
             var pending = _pendingTasks
-                .Where(t => t.IsRecoverable(now));
+                .Where(t => t.IsRecoverableForExecution(now) || t.IsRecurringSeriesToFinalize());
 
             if (lastCreatedAt.HasValue)
             {
@@ -85,17 +137,22 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         SetStatus(taskId, QueuedTaskStatus.Queued, null, auditLevel, null, ct);
 
     /// <inheritdoc />
-    public Task<bool> TrySetQueuedIfRecoverable(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default)
+    public Task<bool> TrySetQueuedIfRecoverable(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default) =>
+        TrySetQueuedIfRecoverable(DateTimeOffset.UtcNow, taskId, auditLevel, ct);
+
+    /// <inheritdoc />
+    public Task<bool> TrySetQueuedIfRecoverable(DateTimeOffset nowUtc, Guid taskId, AuditLevel auditLevel,
+                                                CancellationToken ct = default)
     {
         // Atomic check-and-set under the store lock: the startup recovery must never resurrect a
-        // task that terminally finished after its page was read. Uses the canonical recoverable
-        // predicate (QueuedTask.IsRecoverable) so the MaxRuns/RunUntil guards can never drift from
-        // RetrievePending.
+        // task that terminally finished after its page was read. Uses the canonical execution predicate
+        // (QueuedTask.IsRecoverableForExecution) so the MaxRuns/RunUntil guards can never drift from
+        // RetrievePending. A series that only needs finalizing is deliberately NOT requeueable.
         lock (_pendingTasksLock)
         {
             var task = _pendingTasks.FirstOrDefault(t => t.Id == taskId);
 
-            var recoverable = task != null && task.IsRecoverable(DateTimeOffset.UtcNow);
+            var recoverable = task != null && task.IsRecoverableForExecution(nowUtc);
 
             if (!recoverable)
             {
@@ -106,7 +163,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
             task!.Status = QueuedTaskStatus.Queued;
 
             // Audit the recovery Queued transition like the relational providers (and like Memory's own
-            // live SetQueued), so the audit trail does not diverge by backend (L43).
+            // live SetQueued), so the audit trail does not diverge by backend.
             if (AuditPolicy.ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Queued, null))
             {
                 task.StatusAudits.Add(new StatusAudit
@@ -146,53 +203,73 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         {
             var task = _pendingTasks.FirstOrDefault(x => x.Id == taskId);
             if (task != null)
-            {
-                task.Status    = status;
-                task.Exception = exception.ToDetailedString();
-
-                // LastExecutionUtc only on terminal transitions, same rule as EfCoreTaskStorage.SetStatus:
-                // intermediate statuses (WaitingQueue, Queued, InProgress, Cancelled, Pending) preserve
-                // the previous value (no fake execution time, no wipe of the last real run).
-                if (status is not (QueuedTaskStatus.WaitingQueue or QueuedTaskStatus.Queued
-                    or QueuedTaskStatus.InProgress or QueuedTaskStatus.Cancelled or QueuedTaskStatus.Pending))
-                {
-                    task.LastExecutionUtc = DateTimeOffset.UtcNow;
-                }
-
-                // Set execution time if provided
-                if (executionTimeMs.HasValue)
-                {
-                    task.ExecutionTimeMs = executionTimeMs.Value;
-                }
-
-                // Respect audit level
-                if (AuditPolicy.ShouldCreateStatusAudit(auditLevel, status, exception))
-                {
-                    task.StatusAudits.Add(new StatusAudit
-                    {
-                        QueuedTaskId = taskId,
-                        UpdatedAtUtc = DateTimeOffset.UtcNow,
-                        NewStatus    = status,
-                        Exception    = exception.ToDetailedString()
-                    });
-                }
-            }
+                ApplyStatusLocked(task, status, exception, auditLevel, executionTimeMs);
         }
 
         return Task.CompletedTask;
     }
 
-    public Task<int> GetCurrentRunCount(Guid taskId)
+    /// <summary>
+    /// Applies a status transition and its audit to a row already held under
+    /// <see cref="_pendingTasksLock"/>: the body every status write shares, so the compare-and-swapped ones
+    /// cannot drift from the unconditional one.
+    /// </summary>
+    private static void ApplyStatusLocked(QueuedTask task, QueuedTaskStatus status, Exception? exception,
+                                          AuditLevel auditLevel, double? executionTimeMs)
     {
-        logger.GettingCurrentRunCount(taskId);
+        task.Status    = status;
+        task.Exception = exception.ToDetailedString();
+
+        // LastExecutionUtc only on terminal transitions, same rule as EfCoreTaskStorage.SetStatus:
+        // intermediate statuses (WaitingQueue, Queued, InProgress, Cancelled, Pending) preserve
+        // the previous value (no fake execution time, no wipe of the last real run).
+        if (status is not (QueuedTaskStatus.WaitingQueue or QueuedTaskStatus.Queued
+            or QueuedTaskStatus.InProgress or QueuedTaskStatus.Cancelled or QueuedTaskStatus.Pending))
+        {
+            task.LastExecutionUtc = DateTimeOffset.UtcNow;
+        }
+
+        // Set execution time if provided
+        if (executionTimeMs.HasValue)
+        {
+            task.ExecutionTimeMs = executionTimeMs.Value;
+        }
+
+        // Respect audit level
+        if (AuditPolicy.ShouldCreateStatusAudit(auditLevel, status, exception))
+        {
+            task.StatusAudits.Add(new StatusAudit
+            {
+                QueuedTaskId = task.Id,
+                UpdatedAtUtc = DateTimeOffset.UtcNow,
+                NewStatus    = status,
+                Exception    = exception.ToDetailedString()
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<bool> TrySetTerminalOutcome(Guid taskId, QueuedTaskStatus status, Exception? exception,
+                                            int expectedScheduleVersion, AuditLevel auditLevel,
+                                            CancellationToken ct = default)
+    {
+        logger.StatusSet(taskId, status);
 
         lock (_pendingTasksLock)
         {
             var task = _pendingTasks.FirstOrDefault(x => x.Id == taskId);
 
-            // Return 0 if task not found or CurrentRunCount is null (before first run)
-            // The count represents completed runs, so 0 = no runs completed yet
-            return Task.FromResult(task?.CurrentRunCount ?? 0);
+            // A cancellation over a cancellation is the ending of the run the cancel could not stop in time;
+            // any other outcome would erase the operator's decision.
+            if (task == null
+                || task.ScheduleVersion != expectedScheduleVersion
+                || (status != QueuedTaskStatus.Cancelled && task.Status == QueuedTaskStatus.Cancelled))
+            {
+                return Task.FromResult(false);
+            }
+
+            ApplyStatusLocked(task, status, exception, auditLevel, null);
+            return Task.FromResult(true);
         }
     }
 
@@ -232,28 +309,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
             var task = _pendingTasks.FirstOrDefault(x => x.Id == taskId);
 
             if (task != null)
-            {
-                // Respect audit level. ExecutedAt is stamped at the current time, like the relational
-                // providers — not the task's older LastExecutionUtc (L28).
-                if (AuditPolicy.ShouldCreateRunsAudit(auditLevel, task.Status, task.Exception))
-                {
-                    task.RunsAudits.Add(new RunsAudit
-                    {
-                        QueuedTaskId    = taskId,
-                        ExecutedAt      = DateTimeOffset.UtcNow,
-                        ExecutionTimeMs = executionTimeMs,
-                        Status          = task.Status,
-                        Exception       = task.Exception
-                    });
-                }
-
-                task.ExecutionTimeMs = executionTimeMs;
-                task.NextRunUtc      = nextRun;
-
-                // Advance by exactly one real execution (Option B): skipped occurrences never count.
-                // Saturating at int.MaxValue (see EfCoreTaskStorage.UpdateCurrentRun for the rationale).
-                task.CurrentRunCount = task.CurrentRunCount >= int.MaxValue ? int.MaxValue : (task.CurrentRunCount ?? 0) + 1;
-            }
+                UpdateCurrentRunLocked(task, executionTimeMs, nextRun, auditLevel);
         }
 
         return Task.CompletedTask;
@@ -268,46 +324,35 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         lock (_pendingTasksLock)
         {
             var task = _pendingTasks.FirstOrDefault(x => x.Id == taskId);
-            if (task == null)
-                return Task.CompletedTask;
-
-            // Status -> Completed (+ status audit, LastExecutionUtc) AND the run-counter / next-run
-            // advance (+ runs audit) committed TOGETHER under the single store lock, so a crash cannot
-            // leave the row Completed but not advanced (CU14/L29).
-            var now = DateTimeOffset.UtcNow;
-
-            if (AuditPolicy.ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Completed, null))
-            {
-                task.StatusAudits.Add(new StatusAudit
-                {
-                    QueuedTaskId = taskId,
-                    UpdatedAtUtc = now,
-                    NewStatus    = QueuedTaskStatus.Completed,
-                    Exception    = null
-                });
-            }
-
-            if (AuditPolicy.ShouldCreateRunsAudit(auditLevel, QueuedTaskStatus.Completed, null))
-            {
-                task.RunsAudits.Add(new RunsAudit
-                {
-                    QueuedTaskId    = taskId,
-                    ExecutedAt      = now,
-                    ExecutionTimeMs = executionTimeMs,
-                    Status          = QueuedTaskStatus.Completed,
-                    Exception       = null
-                });
-            }
-
-            task.Status           = QueuedTaskStatus.Completed;
-            task.Exception        = null;
-            task.LastExecutionUtc = now;
-            task.ExecutionTimeMs  = executionTimeMs;
-            task.NextRunUtc       = nextRun;
-            task.CurrentRunCount  = task.CurrentRunCount >= int.MaxValue ? int.MaxValue : (task.CurrentRunCount ?? 0) + 1; // one real execution (Option B); saturating
+            if (task != null)
+                CompleteRecurringRunLocked(task, executionTimeMs, nextRun, auditLevel);
         }
 
         return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task<ScheduleCasResult> RecordRecurringRunForExclusionRetry(
+        Guid taskId, double executionTimeMs, DateTimeOffset retainedCursorUtc, AuditLevel auditLevel,
+        bool markCompleted, string runtimeInfo, int? expectedScheduleVersion = null)
+    {
+        lock (_pendingTasksLock)
+        {
+            var task = _pendingTasks.FirstOrDefault(x => x.Id == taskId);
+            if (task == null || expectedScheduleVersion.HasValue &&
+                task.ScheduleVersion != expectedScheduleVersion.Value)
+            {
+                return Task.FromResult(ScheduleCasResult.VersionMismatch);
+            }
+
+            if (markCompleted)
+                CompleteRecurringRunLocked(task, executionTimeMs, retainedCursorUtc, auditLevel);
+            else
+                UpdateCurrentRunLocked(task, executionTimeMs, retainedCursorUtc, auditLevel);
+
+            task.RuntimeInfo = runtimeInfo;
+            return Task.FromResult(ScheduleCasResult.Applied);
+        }
     }
 
     public Task SetRecurringSeriesCompleted(Guid taskId, double executionTimeMs, AuditLevel auditLevel)
@@ -323,7 +368,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
             var now = DateTimeOffset.UtcNow;
 
             // Status -> Completed (+ status audit) AND NextRunUtc cleared together under the store lock.
-            // NO run-counter advance and NO runs audit: the skipped occurrence never executed (Option B).
+            // NO run-counter advance and NO runs audit: the skipped occurrence never executed.
             // Clearing NextRunUtc is what keeps the terminal row out of IsRecoverable (a Completed recurring
             // row with NextRunUtc != null is resurrected by recovery).
             if (AuditPolicy.ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Completed, null))
@@ -396,6 +441,8 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
 
     public Task UpdateTask(QueuedTask task, CancellationToken ct = default)
     {
+        task.NormalizeTimestampsToUtc();
+
         logger.UpdatingTask(task.Id, task.TaskKey);
 
         lock (_pendingTasksLock)
@@ -415,6 +462,7 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
                 existingTask.RunUntil              = task.RunUntil;
                 existingTask.NextRunUtc            = task.NextRunUtc;
                 existingTask.QueueName             = task.QueueName;
+                existingTask.RuntimeInfo           = task.RuntimeInfo;
                 existingTask.TaskKey               = task.TaskKey;
             }
             else
@@ -435,11 +483,485 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
             var task = _pendingTasks.FirstOrDefault(t => t.Id == taskId);
             if (task != null)
             {
+                // Occurrences go with their schedule, in the same critical section. The relational
+                // providers use a restrict foreign key, which would otherwise refuse the delete outright;
+                // deleting the children here is what keeps the two behaviours identical.
+                _pendingTasks.RemoveAll(t => t.ParentTaskId == taskId);
                 _pendingTasks.Remove(task);
             }
         }
 
         return Task.CompletedTask;
+    }
+
+    // ---- Durable occurrences and schedule versioning ----------------------------------------------
+    // Every operation below runs entirely under _pendingTasksLock, which IS this store's transaction: an
+    // observer either sees the whole change or none of it, exactly like the single-statement / single-commit
+    // implementations of the relational providers.
+
+    /// <inheritdoc />
+    public Task<OccurrenceMaterializationOutcome> MaterializeOccurrence(
+        Guid parentId, int expectedScheduleVersion, DateTimeOffset? expectedCursorUtc, QueuedTask occurrence,
+        DateTimeOffset? newCursorUtc, AuditLevel auditLevel, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(occurrence);
+
+        lock (_pendingTasksLock)
+        {
+            var parent = _pendingTasks.FirstOrDefault(t => t.Id == parentId);
+
+            // Inactive means "must not grow new occurrences": gone, cancelled, or already finalized (a
+            // finalized series has no cursor left to advance).
+            if (parent == null || parent.Status == QueuedTaskStatus.Cancelled || parent.NextRunUtc == null)
+                return Task.FromResult(OccurrenceMaterializationOutcome.ParentInactive);
+
+            if (parent.ScheduleVersion != expectedScheduleVersion)
+                return Task.FromResult(OccurrenceMaterializationOutcome.VersionMismatch);
+
+            if (parent.NextRunUtc != expectedCursorUtc)
+                return Task.FromResult(OccurrenceMaterializationOutcome.CursorMoved);
+
+            if (_pendingTasks.Any(t => t.ParentTaskId == parentId
+                                       && t.ScheduledExecutionUtc == occurrence.ScheduledExecutionUtc))
+                return Task.FromResult(OccurrenceMaterializationOutcome.AlreadyExists);
+
+            // Same row shape the relational providers write: this store keeps the caller's entity, so the
+            // contract is stamped on it rather than spelled out in an INSERT column list.
+            occurrence.ApplyOccurrenceContract(parentId, expectedScheduleVersion);
+            occurrence.NormalizeTimestampsToUtc();
+            ValidateOccurrenceConstraints(occurrence);
+            _pendingTasks.Add(occurrence);
+
+            parent.NextRunUtc = newCursorUtc;
+            // A materialization IS the run of a durable series: the child may later fail or be
+            // cancelled, and the budget is still spent — the schedule did produce that occurrence.
+            parent.CurrentRunCount = parent.CurrentRunCount >= int.MaxValue ? int.MaxValue : (parent.CurrentRunCount ?? 0) + 1;
+
+            // Last slot: the series ends in the SAME critical section that created its final occurrence, so
+            // no crash can leave a finished series with a cursor that recovery would resurrect.
+            if (newCursorUtc == null)
+                FinalizeParentLocked(parent, auditLevel);
+
+            return Task.FromResult(OccurrenceMaterializationOutcome.Created);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<bool> TrySetRecurringSeriesCompleted(Guid taskId, DateTimeOffset? expectedCursorUtc,
+                                                     QueuedTaskStatus expectedStatus, int expectedScheduleVersion,
+                                                     double executionTimeMs, AuditLevel auditLevel,
+                                                     CancellationToken ct = default)
+    {
+        logger.FinalizingRecurringSeries(taskId);
+
+        // A schedule with no cursor is already over: a null expectation would match exactly the rows that are
+        // finalized or poisoned. The relational stores refuse it for the same reason.
+        if (expectedCursorUtc == null)
+            return Task.FromResult(false);
+
+        lock (_pendingTasksLock)
+        {
+            var task = _pendingTasks.FirstOrDefault(t => t.Id == taskId);
+
+            if (task == null
+                || task.Status != expectedStatus
+                || task.NextRunUtc != expectedCursorUtc
+                || task.ScheduleVersion != expectedScheduleVersion)
+            {
+                return Task.FromResult(false);
+            }
+
+            task.ExecutionTimeMs = executionTimeMs;
+            FinalizeParentLocked(task, auditLevel);
+            return Task.FromResult(true);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<bool> TryAdvanceScheduleCursor(Guid parentId, int expectedScheduleVersion,
+                                               DateTimeOffset expectedCursorUtc, DateTimeOffset newCursorUtc,
+                                               CancellationToken ct = default)
+    {
+        lock (_pendingTasksLock)
+        {
+            var task = _pendingTasks.FirstOrDefault(t => t.Id == parentId);
+
+            if (task == null
+                || task.Status == QueuedTaskStatus.Cancelled
+                || task.ScheduleVersion != expectedScheduleVersion
+                || task.NextRunUtc != expectedCursorUtc)
+            {
+                return Task.FromResult(false);
+            }
+
+            // No run counted and no audit: skipping a slot only moves where the schedule points.
+            task.NextRunUtc = newCursorUtc;
+            return Task.FromResult(true);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task CancelSchedule(Guid parentId, AuditLevel auditLevel, CancellationToken ct = default)
+    {
+        lock (_pendingTasksLock)
+        {
+            var parent = _pendingTasks.FirstOrDefault(t => t.Id == parentId);
+            if (parent != null)
+                TransitionLocked(parent, QueuedTaskStatus.Cancelled, auditLevel);
+
+            // Occurrences already executing are left alone: they own a live delivery and end on their own.
+            // ServiceStopped is cancelled with the rest: recovery would otherwise put it back in a queue
+            // at the next restart and run an occurrence of a cancelled schedule.
+            foreach (var child in _pendingTasks.Where(t => t.ParentTaskId == parentId
+                                                           && t.Status is QueuedTaskStatus.WaitingQueue
+                                                               or QueuedTaskStatus.Queued or QueuedTaskStatus.Pending
+                                                               or QueuedTaskStatus.ServiceStopped))
+            {
+                TransitionLocked(child, QueuedTaskStatus.Cancelled, auditLevel);
+            }
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task<bool> RequeueTerminal(Guid taskId, AuditLevel auditLevel, CancellationToken ct = default)
+    {
+        lock (_pendingTasksLock)
+        {
+            var task = _pendingTasks.FirstOrDefault(t => t.Id == taskId);
+            if (task == null || task.Status is not (QueuedTaskStatus.Failed or QueuedTaskStatus.Cancelled))
+                return Task.FromResult(false);
+
+            // The failure counter goes with the exception: a requeue is the way back from a poison, and a row
+            // that came back carrying the attempts that ended it is poisoned again by its first failure,
+            // without one of the retries the ceiling exists to grant.
+            task.Exception                    = null;
+            task.RecoveryDispatchFailureCount = null;
+            TransitionLocked(task, QueuedTaskStatus.Queued, auditLevel);
+            return Task.FromResult(true);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<bool> TryRequeueStaleOccurrence(Guid childId, QueuedTaskStatus expectedStatus, AuditLevel auditLevel,
+                                                CancellationToken ct = default)
+    {
+        lock (_pendingTasksLock)
+        {
+            var task = _pendingTasks.FirstOrDefault(t => t.Id == childId);
+            if (task == null || task.Status != expectedStatus)
+                return Task.FromResult(false);
+
+            TransitionLocked(task, QueuedTaskStatus.Queued, auditLevel);
+            return Task.FromResult(true);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<bool> UpdateSchedule(Guid taskId, int expectedScheduleVersion, DateTimeOffset? expectedCursorUtc,
+                                     string recurringTaskJson, string? recurringInfo, DateTimeOffset? nextRunUtc,
+                                     int? maxRuns, DateTimeOffset? runUntil, string? runtimeInfo,
+                                     CancellationToken ct = default)
+    {
+        lock (_pendingTasksLock)
+        {
+            var task = _pendingTasks.FirstOrDefault(t => t.Id == taskId);
+
+            // The cursor belongs in the compare-and-swap next to the version: an advance moves it (and the run
+            // counter with it) without touching the version, so a reschedule decided against a reading the
+            // completion has since superseded must lose here rather than commit over it. Cancelled is refused
+            // apart from both, because it is the one state NEITHER answers for: a cancel writes the status and
+            // leaves the version and the cursor exactly as they were.
+            if (task == null || task.ScheduleVersion != expectedScheduleVersion ||
+                task.NextRunUtc != expectedCursorUtc || task.Status == QueuedTaskStatus.Cancelled)
+            {
+                return Task.FromResult(false);
+            }
+
+            task.RecurringTask   = recurringTaskJson;
+            task.RecurringInfo   = recurringInfo;
+            task.NextRunUtc      = nextRunUtc;
+            task.MaxRuns         = maxRuns;
+            task.RunUntil        = runUntil;
+            task.RuntimeInfo     = runtimeInfo;
+            task.ScheduleVersion = expectedScheduleVersion + 1;
+            return Task.FromResult(true);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<bool> TryReviveCancelledSchedule(Guid taskId, int expectedScheduleVersion, AuditLevel auditLevel,
+                                                 CancellationToken ct = default)
+    {
+        lock (_pendingTasksLock)
+        {
+            var task = _pendingTasks.FirstOrDefault(t => t.Id == taskId);
+
+            if (task == null || task.Status != QueuedTaskStatus.Cancelled ||
+                task.ScheduleVersion != expectedScheduleVersion)
+            {
+                return Task.FromResult(false);
+            }
+
+            // The version moves with the status: a revival replaces the definition of a row that keeps its id,
+            // so the deliveries of the series the cancel ended answer to the id the new registration uses too,
+            // and the version is the only thing left that tells them apart.
+            task.Exception       = null;
+            task.ScheduleVersion = expectedScheduleVersion + 1;
+            TransitionLocked(task, QueuedTaskStatus.WaitingQueue, auditLevel);
+            return Task.FromResult(true);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<bool> TryHaltSchedule(Guid parentId, int expectedScheduleVersion, DateTimeOffset? expectedCursorUtc,
+                                      QueuedTaskStatus expectedStatus, string runtimeInfo,
+                                      CancellationToken ct = default)
+    {
+        // Same refusal as the finalization above: halting an already-ended series is not a compare-and-swap win.
+        if (expectedCursorUtc == null)
+            return Task.FromResult(false);
+
+        lock (_pendingTasksLock)
+        {
+            var task = _pendingTasks.FirstOrDefault(t => t.Id == parentId);
+
+            if (task == null
+                || task.ScheduleVersion != expectedScheduleVersion
+                || task.NextRunUtc != expectedCursorUtc
+                || task.Status != expectedStatus)
+            {
+                return Task.FromResult(false);
+            }
+
+            task.RuntimeInfo = runtimeInfo;
+            return Task.FromResult(true);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<ScheduleCasResult> UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
+                                                    AuditLevel auditLevel, int expectedScheduleVersion)
+    {
+        logger.UpdatingCurrentRunCount(taskId);
+
+        lock (_pendingTasksLock)
+        {
+            var task = _pendingTasks.FirstOrDefault(x => x.Id == taskId);
+            if (task == null || task.ScheduleVersion != expectedScheduleVersion)
+                return Task.FromResult(ScheduleCasResult.VersionMismatch);
+
+            UpdateCurrentRunLocked(task, executionTimeMs, nextRun, auditLevel);
+            return Task.FromResult(ScheduleCasResult.Applied);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<ScheduleCasResult> CompleteRecurringRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
+                                                        AuditLevel auditLevel, int expectedScheduleVersion)
+    {
+        logger.CompletingRecurringRun(taskId);
+
+        lock (_pendingTasksLock)
+        {
+            var task = _pendingTasks.FirstOrDefault(x => x.Id == taskId);
+            if (task == null || task.ScheduleVersion != expectedScheduleVersion)
+                return Task.FromResult(ScheduleCasResult.VersionMismatch);
+
+            CompleteRecurringRunLocked(task, executionTimeMs, nextRun, auditLevel);
+            return Task.FromResult(ScheduleCasResult.Applied);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<QueuedTask[]> GetOccurrences(Guid parentId, bool nonTerminalOnly = false,
+                                             CancellationToken ct = default)
+    {
+        lock (_pendingTasksLock)
+        {
+            return Task.FromResult(_pendingTasks
+                                   .Where(t => t.ParentTaskId == parentId
+                                               && (!nonTerminalOnly || QueuedTask.IsNonTerminalStatus(t.Status)))
+                                   .ToArray());
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<OccurrencePage> GetOccurrencesPage(Guid parentId, bool nonTerminalOnly, int skip, int take,
+                                                   CancellationToken ct = default)
+    {
+        lock (_pendingTasksLock)
+        {
+            // Filtered once: the total and the page are two questions about the same set, and asking the list
+            // twice would walk it twice for no gain.
+            var matching = _pendingTasks
+                           .Where(t => t.ParentTaskId == parentId
+                                       && (!nonTerminalOnly || QueuedTask.IsNonTerminalStatus(t.Status)))
+                           .ToArray();
+
+            return Task.FromResult(new OccurrencePage(
+                matching.OrderByDescending(t => t.ScheduledExecutionUtc).Skip(skip).Take(take).ToArray(),
+                matching.Length));
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyDictionary<Guid, DateTimeOffset>> GetLastRunStarts(IReadOnlyCollection<Guid> taskIds,
+                                                                           CancellationToken ct = default)
+    {
+        var starts = new Dictionary<Guid, DateTimeOffset>(taskIds.Count);
+
+        lock (_pendingTasksLock)
+        {
+            foreach (var task in _pendingTasks.Where(t => taskIds.Contains(t.Id)))
+            {
+                // The LAST InProgress audit of the list, not the newest timestamp: the audits of a row are
+                // appended in transition order and the clock here is coarse enough for two of them to share
+                // an instant.
+                var started = task.StatusAudits.LastOrDefault(a => a.NewStatus == QueuedTaskStatus.InProgress);
+                if (started != null)
+                    starts[task.Id] = started.UpdatedAtUtc;
+            }
+        }
+
+        return Task.FromResult<IReadOnlyDictionary<Guid, DateTimeOffset>>(starts);
+    }
+
+    /// <inheritdoc />
+    public Task<AuditPage<StatusAudit>> GetStatusAuditsPage(Guid taskId, int skip, int take,
+                                                            CancellationToken ct = default)
+    {
+        lock (_pendingTasksLock)
+        {
+            var task = _pendingTasks.FirstOrDefault(t => t.Id == taskId);
+
+            if (task == null)
+                return Task.FromResult(new AuditPage<StatusAudit>([], 0));
+
+            // Reversed insertion order, never the timestamp.
+            var audits = task.StatusAudits;
+
+            return Task.FromResult(new AuditPage<StatusAudit>(
+                audits.Reverse().Skip(skip).Take(take).ToArray(), audits.Count));
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<AuditPage<RunsAudit>> GetRunsAuditsPage(Guid taskId, int skip, int take,
+                                                        CancellationToken ct = default)
+    {
+        lock (_pendingTasksLock)
+        {
+            var task = _pendingTasks.FirstOrDefault(t => t.Id == taskId);
+
+            if (task == null)
+                return Task.FromResult(new AuditPage<RunsAudit>([], 0));
+
+            var audits = task.RunsAudits;
+
+            return Task.FromResult(new AuditPage<RunsAudit>(
+                audits.Reverse().Skip(skip).Take(take).ToArray(), audits.Count));
+        }
+    }
+
+    /// <summary>
+    /// Run-counter advance (+ runs audit) of one real execution, under the caller's lock. Shared by the plain
+    /// and the compare-and-swap overload so the version check and the write it guards sit in the SAME critical
+    /// section: a check that released the lock before writing would let a reschedule slip in between and the
+    /// stale run would still write its old-definition cursor, which is exactly what the CAS exists to refuse.
+    /// </summary>
+    private static void UpdateCurrentRunLocked(QueuedTask task, double executionTimeMs, DateTimeOffset? nextRun,
+                                               AuditLevel auditLevel)
+    {
+        // Respect audit level. ExecutedAt is stamped at the current time, like the relational
+        // providers — not the task's older LastExecutionUtc.
+        if (AuditPolicy.ShouldCreateRunsAudit(auditLevel, task.Status, task.Exception))
+        {
+            task.RunsAudits.Add(new RunsAudit
+            {
+                QueuedTaskId    = task.Id,
+                ExecutedAt      = DateTimeOffset.UtcNow,
+                ExecutionTimeMs = executionTimeMs,
+                Status          = task.Status,
+                Exception       = task.Exception
+            });
+        }
+
+        task.ExecutionTimeMs = executionTimeMs;
+        task.NextRunUtc      = nextRun;
+
+        // Advance by exactly one real execution: skipped occurrences never count.
+        // Saturating at int.MaxValue (see EfCoreTaskStorage.UpdateCurrentRun for the rationale).
+        task.CurrentRunCount = task.CurrentRunCount >= int.MaxValue ? int.MaxValue : (task.CurrentRunCount ?? 0) + 1;
+    }
+
+    /// <summary>
+    /// Completed transition (+ status audit, LastExecutionUtc) AND the run-counter / next-run advance
+    /// (+ runs audit) applied together, under the caller's lock, so a crash cannot leave the row Completed
+    /// but not advanced. Shared by the plain and the compare-and-swap overload — see
+    /// <see cref="UpdateCurrentRunLocked"/> for why the CAS cannot check the version outside this lock.
+    /// </summary>
+    private static void CompleteRecurringRunLocked(QueuedTask task, double executionTimeMs, DateTimeOffset? nextRun,
+                                                   AuditLevel auditLevel)
+    {
+        var now = DateTimeOffset.UtcNow;
+
+        if (AuditPolicy.ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Completed, null))
+        {
+            task.StatusAudits.Add(new StatusAudit
+            {
+                QueuedTaskId = task.Id,
+                UpdatedAtUtc = now,
+                NewStatus    = QueuedTaskStatus.Completed,
+                Exception    = null
+            });
+        }
+
+        if (AuditPolicy.ShouldCreateRunsAudit(auditLevel, QueuedTaskStatus.Completed, null))
+        {
+            task.RunsAudits.Add(new RunsAudit
+            {
+                QueuedTaskId    = task.Id,
+                ExecutedAt      = now,
+                ExecutionTimeMs = executionTimeMs,
+                Status          = QueuedTaskStatus.Completed,
+                Exception       = null
+            });
+        }
+
+        task.Status           = QueuedTaskStatus.Completed;
+        task.Exception        = null;
+        task.LastExecutionUtc = now;
+        task.ExecutionTimeMs  = executionTimeMs;
+        task.NextRunUtc       = nextRun;
+        task.CurrentRunCount  = task.CurrentRunCount >= int.MaxValue ? int.MaxValue : (task.CurrentRunCount ?? 0) + 1; // one real execution; saturating
+    }
+
+    /// <summary>Terminal Completed transition of a schedule row with its cursor cleared. Caller holds the lock.</summary>
+    private static void FinalizeParentLocked(QueuedTask parent, AuditLevel auditLevel)
+    {
+        parent.NextRunUtc = null;
+        TransitionLocked(parent, QueuedTaskStatus.Completed, auditLevel);
+        parent.Exception        = null;
+        parent.LastExecutionUtc = DateTimeOffset.UtcNow;
+    }
+
+    /// <summary>Status transition plus its audit row, under the caller's lock.</summary>
+    private static void TransitionLocked(QueuedTask task, QueuedTaskStatus status, AuditLevel auditLevel)
+    {
+        task.Status = status;
+
+        if (!AuditPolicy.ShouldCreateStatusAudit(auditLevel, status, null))
+            return;
+
+        task.StatusAudits.Add(new StatusAudit
+        {
+            QueuedTaskId = task.Id,
+            UpdatedAtUtc = DateTimeOffset.UtcNow,
+            NewStatus    = status,
+            Exception    = null
+        });
     }
 
     /// <inheritdoc />

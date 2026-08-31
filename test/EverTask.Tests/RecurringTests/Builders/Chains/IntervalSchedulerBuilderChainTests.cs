@@ -20,7 +20,7 @@ public class IntervalSchedulerBuilderChainTests
         _builder.Schedule().EveryDay().AtTime(time).MaxRuns(5);
 
         Assert.NotNull(_builder.RecurringTask.DayInterval);
-        Assert.Contains(time.ToUniversalTime(), _builder.RecurringTask.DayInterval.OnTimes);
+        Assert.Contains(time, _builder.RecurringTask.DayInterval.OnTimes);
         Assert.Equal(5, _builder.RecurringTask.MaxRuns);
         Assert.Null(_builder.RecurringTask.RunUntil);
     }
@@ -34,7 +34,7 @@ public class IntervalSchedulerBuilderChainTests
         _builder.Schedule().EveryDay().AtTime(time).RunUntil(runUntil);
 
         Assert.NotNull(_builder.RecurringTask.DayInterval);
-        Assert.Contains(time.ToUniversalTime(), _builder.RecurringTask.DayInterval.OnTimes);
+        Assert.Contains(time, _builder.RecurringTask.DayInterval.OnTimes);
         Assert.Null(_builder.RecurringTask.MaxRuns);
         Assert.Equal(runUntil, _builder.RecurringTask.RunUntil);
     }

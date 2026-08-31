@@ -2,9 +2,11 @@ using EverTask.Monitor.Api.Conventions;
 using EverTask.Monitor.Api.Infrastructure;
 using EverTask.Monitor.Api.Options;
 using EverTask.Monitor.Api.Services;
+using EverTask.Monitor.AspnetCore.SignalR;
 using EverTask.Monitoring;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
 #if NET9_0_OR_GREATER
 using Microsoft.AspNetCore.OpenApi;
@@ -33,6 +35,8 @@ public static class ServiceCollectionExtensions
         var options = new EverTaskApiOptions();
         configure?.Invoke(options);
 
+        ValidateManagementCredentials(options);
+
         // Register options both as singleton instance AND as IOptions<T> wrapper
         // This allows injection of both EverTaskApiOptions and IOptions<EverTaskApiOptions>
         services.AddSingleton(options);
@@ -53,7 +57,20 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ITaskQueryService, TaskQueryService>();
         services.AddScoped<IDashboardService, DashboardService>();
         services.AddScoped<IStatisticsService, StatisticsService>();
+        services.AddScoped<IManagementService, ManagementService>();
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
+        services.AddSingleton<MonitoringAccessPolicy>();
+        services.AddSingleton<MonitoringAccessFilter>();
+        services.AddSingleton<ManagementAuthorizationFilter>();
+
+        if (options.EnableAuthentication)
+        {
+            services.AddSingleton<MonitoringTokenExpirationHubFilter>();
+            // AddHubOptions, not a bare Configure<HubOptions<THub>>: only it registers SignalR's per-hub
+            // options setup, without which the dispatcher never consumes the per-hub filter list.
+            services.AddSignalR().AddHubOptions<TaskMonitorHub>(hubOptions =>
+                hubOptions.AddFilter<MonitoringTokenExpirationHubFilter>());
+        }
 
         // NOTE: JWT authentication is handled by JwtAuthenticationMiddleware (custom middleware)
         // We do NOT use ASP.NET Core's .AddAuthentication().AddJwtBearer() because:
@@ -131,6 +148,8 @@ public static class ServiceCollectionExtensions
         var options = new EverTaskApiOptions();
         configure?.Invoke(options);
 
+        ValidateManagementCredentials(options);
+
         // Register options both as singleton instance AND as IOptions<T> wrapper
         // This allows injection of both EverTaskApiOptions and IOptions<EverTaskApiOptions>
         services.AddSingleton(options);
@@ -140,7 +159,20 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ITaskQueryService, TaskQueryService>();
         services.AddScoped<IDashboardService, DashboardService>();
         services.AddScoped<IStatisticsService, StatisticsService>();
+        services.AddScoped<IManagementService, ManagementService>();
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
+        services.AddSingleton<MonitoringAccessPolicy>();
+        services.AddSingleton<MonitoringAccessFilter>();
+        services.AddSingleton<ManagementAuthorizationFilter>();
+
+        if (options.EnableAuthentication)
+        {
+            services.AddSingleton<MonitoringTokenExpirationHubFilter>();
+            // AddHubOptions, not a bare Configure<HubOptions<THub>>: only it registers SignalR's per-hub
+            // options setup, without which the dispatcher never consumes the per-hub filter list.
+            services.AddSignalR().AddHubOptions<TaskMonitorHub>(hubOptions =>
+                hubOptions.AddFilter<MonitoringTokenExpirationHubFilter>());
+        }
 
         // NOTE: JWT authentication is handled by JwtAuthenticationMiddleware (custom middleware)
         // We do NOT use ASP.NET Core's .AddAuthentication().AddJwtBearer() because:
@@ -202,11 +234,60 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
+    /// <summary>
+    /// Refuses a management credential that is not really a second credential, at startup rather than at the
+    /// first login.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// Only one half of the pair is configured, or its password is one the host already hands out for
+    /// reading.
+    /// </exception>
+    private static void ValidateManagementCredentials(EverTaskApiOptions options)
+    {
+        var hasUsername = !string.IsNullOrEmpty(options.ManagementUsername);
+        var hasPassword = !string.IsNullOrEmpty(options.ManagementPassword);
+
+        if (hasUsername != hasPassword)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(EverTaskApiOptions.ManagementUsername)} and " +
+                $"{nameof(EverTaskApiOptions.ManagementPassword)} must be configured together: with only one " +
+                "of them the operate credential does not exist, and every management call would answer 403.");
+        }
+
+        if (!hasPassword)
+            return;
+
+        // A username is not a secret, so an equal password is the whole credential: anyone holding the shared
+        // read one could log in as the operate account by guessing a name.
+        if (string.Equals(options.ManagementPassword, options.Password, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"{nameof(EverTaskApiOptions.ManagementPassword)} must differ from " +
+                $"{nameof(EverTaskApiOptions.Password)}: the dashboard credential is shared by everyone who " +
+                "looks at the dashboard, and giving it the management password promotes it to the operate " +
+                "role — which is exactly what the second credential exists to prevent.");
+        }
+
+        if (!string.IsNullOrEmpty(options.MagicLinkToken)
+            && string.Equals(options.ManagementPassword, options.MagicLinkToken, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"{nameof(EverTaskApiOptions.ManagementPassword)} must differ from " +
+                $"{nameof(EverTaskApiOptions.MagicLinkToken)}: a magic link travels in a URL, so a token equal " +
+                "to the management password puts that password in browser history and proxy logs.");
+        }
+    }
+
 #if NET9_0_OR_GREATER
     private static void ConfigureOpenApi(OpenApiOptions openApiOptions, EverTaskApiOptions options)
     {
-        // Strictly this document's group: ungrouped host endpoints stay in the host's documents
-        openApiOptions.ShouldInclude = description => description.GroupName == options.OpenApiDocumentName;
+        // Strictly this document's group: ungrouped host endpoints stay in the host's documents. The
+        // management routes are left out while disabled, because every one of them answers 404 then.
+        openApiOptions.ShouldInclude = description =>
+            description.GroupName == options.OpenApiDocumentName
+            && (options.EnableManagementEndpoints
+                || description.RelativePath?.Contains("/api/management/", StringComparison.OrdinalIgnoreCase) != true);
 
         // The built-in generator ignores [Obsolete]; surface it as "deprecated" (GET /auth/magic, #22)
         openApiOptions.AddOperationTransformer((operation, context, _) =>

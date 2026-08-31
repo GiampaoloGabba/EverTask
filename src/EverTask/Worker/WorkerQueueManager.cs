@@ -19,7 +19,8 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
         ILoggerFactory loggerFactory,
         ITaskStorage? taskStorage = null,
         RateLimitParkingLot? parkingLot = null,
-        TaskDeliveryRegistry? deliveryRegistry = null)
+        TaskDeliveryRegistry? deliveryRegistry = null,
+        TimeProvider? timeProvider = null)
     {
         _configurations = configurations ?? throw new ArgumentNullException(nameof(configurations));
         _logger         = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -28,20 +29,17 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
         var blacklist1     = blacklist ?? throw new ArgumentNullException(nameof(blacklist));
         var loggerFactory1 = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
 
-        // ONE delivery registry shared by every queue of this host: the in-process
-        // double-delivery defense must be global (a task rerouted to another queue is the
-        // same task)
+        // ONE delivery registry shared by every queue of this host: the in-process double-delivery
+        // defense must be global (a task rerouted to another queue is the same task)
         var registry = deliveryRegistry ?? new TaskDeliveryRegistry();
 
-        // Initialize all configured queues
         foreach (var (name, config) in configurations)
         {
             var queueLogger = loggerFactory1.CreateLogger($"EverTask.Worker.WorkerQueue.{name}");
-            var queue       = new WorkerQueue(config, queueLogger, blacklist1, taskStorage, registry) { ParkingLot = parkingLot };
+            var queue       = new WorkerQueue(config, queueLogger, blacklist1, taskStorage, registry, timeProvider) { ParkingLot = parkingLot };
             _queues[name] = queue;
         }
 
-        // Ensure default queue always exists
         if (!_queues.ContainsKey(QueueNames.Default))
         {
             var defaultConfig = new QueueConfiguration
@@ -54,7 +52,7 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
                 }
             };
             var queueLogger = loggerFactory1.CreateLogger("EverTask.Worker.WorkerQueue.default");
-            _queues[QueueNames.Default] = new WorkerQueue(defaultConfig, queueLogger, blacklist1, taskStorage, registry)
+            _queues[QueueNames.Default] = new WorkerQueue(defaultConfig, queueLogger, blacklist1, taskStorage, registry, timeProvider)
             {
                 ParkingLot = parkingLot
             };
@@ -86,35 +84,37 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
 
         try
         {
-            // Attempt to enqueue based on the queue's full behavior
             switch (config.QueueFullBehavior)
             {
                 case QueueFullBehavior.ThrowException:
-                    // Try to queue immediately - throw if full
                     switch (await targetQueue.TryQueue(task, cancellationToken).ConfigureAwait(false))
                     {
                         case EnqueueResult.Enqueued:
+                            return true;
                         case EnqueueResult.DuplicateInProcess: // already in flight: idempotent success
+                            // The executor's life ends here — unlike a scheduler, this caller never retries
+                            // the same instance — so the eager scope it carries is released.
+                            await DroppedDelivery.ReleaseAsync(task, _logger).ConfigureAwait(false);
                             return true;
                         case EnqueueResult.QueueFull:
+                            await DroppedDelivery.ReleaseAsync(task, _logger).ConfigureAwait(false);
                             throw new QueueFullException(targetQueueName, task.PersistenceId);
                         default: // Discarded (blacklisted): nothing to enqueue, not an error
                             return false;
                     }
 
                 case QueueFullBehavior.FallbackToDefault:
-                    // Try target queue first without waiting
                     switch (await targetQueue.TryQueue(task, cancellationToken).ConfigureAwait(false))
                     {
                         case EnqueueResult.Enqueued:
                             return true;
                         case EnqueueResult.DuplicateInProcess: // already in flight: must NOT be re-routed
+                            await DroppedDelivery.ReleaseAsync(task, _logger).ConfigureAwait(false);
                             return true;
                         case EnqueueResult.Discarded: // blacklisted: must not be re-routed
                             return false;
                     }
 
-                    // Queue is full - fallback to default queue if not already default
                     if (targetQueueName != QueueNames.Default)
                     {
                         _logger.QueueFullFallingBackToDefault(targetQueueName, task.PersistenceId);
@@ -127,13 +127,14 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
                             return true;
                         }
 
+                        await DroppedDelivery.ReleaseAsync(task, _logger).ConfigureAwait(false);
+
                         throw new QueueFullException(targetQueueName, task.PersistenceId,
                             "Target queue is full and default queue is unavailable");
                     }
 
-                    // Already on the Default queue: FallbackToDefault here is a self-reference, so apply
-                    // Wait backpressure (block until space) instead of throwing QueueFullException at the
-                    // caller (G19).
+                    // Already on the Default queue: FallbackToDefault is a self-reference here, so apply Wait
+                    // backpressure instead of throwing QueueFullException at the caller.
                     await targetQueue.Queue(task, cancellationToken).ConfigureAwait(false);
                     return true;
 
@@ -161,10 +162,8 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
     {
         var (targetQueue, _, _) = ResolveQueue(queueName, task);
 
-        // EnqueueBlocking is the startup-recovery entry point: the SetQueued transition must be
-        // conditional on the row still being recoverable (a live copy may have terminally
-        // finished after the recovery's page read). Custom IWorkerQueue implementations fall
-        // back to the plain blocking enqueue.
+        // Startup-recovery entry point: the SetQueued transition must be conditional on the row still being
+        // recoverable, since a live copy may have terminally finished after the recovery's page read.
         if (targetQueue is WorkerQueue workerQueue)
             await workerQueue.QueueForRecovery(task, cancellationToken).ConfigureAwait(false);
         else
@@ -176,10 +175,8 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
     {
         var (targetQueue, _, _) = ResolveQueue(queueName, task);
 
-        // Scheduler dispatch (a due slot fires): the SetQueued transition must be conditional on the
-        // row still being recoverable, so a stale slot for a row that terminally finished after the
-        // recovery page-read never resurrects it (L11). Custom IWorkerQueue implementations fall back
-        // to the plain non-blocking enqueue.
+        // Scheduler dispatch (a due slot fires): the SetQueued transition must be conditional on the row
+        // still being recoverable, so a stale slot never resurrects a row that terminally finished.
         if (targetQueue is WorkerQueue workerQueue)
             return await workerQueue.TryQueueForRecovery(task, cancellationToken).ConfigureAwait(false);
 
@@ -188,14 +185,12 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
 
     private (IWorkerQueue Queue, QueueConfiguration Config, string Name) ResolveQueue(string? queueName, TaskHandlerExecutor task)
     {
-        // Determine target queue name inline to avoid redundant ContainsKey check
         var targetQueueName = !string.IsNullOrEmpty(queueName)
                                      ? queueName
                                      : (task.RecurringTask != null && _queues.ContainsKey(QueueNames.Recurring)
                                             ? QueueNames.Recurring
                                             : QueueNames.Default);
 
-        // Single dictionary lookup with fallback
         if (!_queues.TryGetValue(targetQueueName, out var targetQueue))
         {
             _logger.QueueNotFoundFallingBackToDefault(targetQueueName);
@@ -203,7 +198,6 @@ internal sealed class WorkerQueueManager : IWorkerQueueManager
             targetQueue     = GetQueue(QueueNames.Default);
         }
 
-        // Get config directly from queue if possible, otherwise lookup
         var config = targetQueue switch
         {
             WorkerQueue wq => wq.Configuration,

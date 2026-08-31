@@ -55,7 +55,7 @@ multi-queue isolation, and monitoring. Multi-targets net8.0/net9.0/net10.0.
 | Defining task records + handlers, dispatch overloads, lifecycle callbacks, `taskKey` idempotency, cancel | `references/02-tasks-and-handlers.md` |
 | Choosing & configuring a storage provider, audit levels, retention/cleanup, custom `ITaskStorage` | `references/03-storage.md` |
 | Retry policies, exception filtering (whitelist/blacklist/predicate), timeout, cancellation, graceful shutdown | `references/04-resilience.md` |
-| Delayed / scheduled / recurring tasks, fluent builder, cron, idempotent startup registration, drift | `references/05-scheduling.md` |
+| Delayed / scheduled / recurring tasks, fluent builder, cron, fixed exclusions, time zones, misfire policies and durable occurrences, occurrence providers, idempotent startup registration, drift, changing a schedule at runtime (`ITaskScheduleManager`) | `references/05-scheduling.md` |
 | Keyed (per-tenant) rate limiting, named multi-queues, scalability, sharded scheduler | `references/06-rate-limiting-queues.md` |
 | Monitoring events, SignalR, dashboard + REST API (JWT), Serilog, persistent execution logs | `references/07-monitoring-logging.md` |
 | System.Text.Json payload contract + every analyzer rule ET0001–ET0007 + payload checklist | `references/08-payload-contract.md` |
@@ -150,7 +150,14 @@ For each capability selected in Phase 1, read the matching reference and apply:
   `Dispatch(task, DateTimeOffset)` for one-shots, or the fluent recurring builder. For
   recurring, register at startup via an `IHostedService` with a stable `taskKey` for
   idempotency (`templates/RecurringRegistrar.md`). Warn: `UseCron(...)` overrides all other
-  interval calls; all schedules are UTC.
+  interval calls; schedules are UTC unless they name a zone with `.InTimeZone(...)`, which
+  calendar-anchored schedules accept and plain cadences refuse. Ask whether a run the host
+  MISSED still has to happen: if it does, `.OnMisfire(m => m.CatchUp(...))` (or `m.FireOnce()`)
+  gives every occurrence a durable row of its own and replays the backlog inside explicit caps —
+  at-least-once, single active host. Skipping is the default and the right answer for a heartbeat.
+  When no interval or cron can express the grid at all (business days, a holiday table, opening
+  hours), the calendar belongs to the application: register an `INextOccurrenceProvider` with
+  `AddOccurrenceProvider<T>("key")` and select it with `.UseOccurrenceProvider("key", config?)`.
 - **Retry/timeout** (`04-resilience.md`): override `RetryPolicy` / `Timeout` on the handler,
   or set queue/global defaults. Default is `LinearRetryPolicy(3, 500ms)` retrying everything
   except `OperationCanceledException`/`TimeoutException`. For exponential backoff use
@@ -165,7 +172,7 @@ For each capability selected in Phase 1, read the matching reference and apply:
   Optional `.AddMonitoringApiScalar()` (package `EverTask.Monitor.Api.Scalar`, net9+) serves a
   Scalar API reference at `/evertask-monitoring/scalar`. Everything the monitoring API adds
   (routes, JSON contract, CORS, SPA fallback, OpenAPI document) stays under `/evertask-monitoring`
-  and never touches the host's own MVC/OpenAPI setup (3.12+).
+  and never touches the host's own MVC/OpenAPI setup (4.0+).
   **Change the default `admin`/`admin` credentials.**
 - **Serilog** (`07-monitoring-logging.md`): `.AddSerilog(...)` for a dedicated pipeline.
 - **Persistent logs** (`07-monitoring-logging.md`): `.WithPersistentLogger(...)`; pair with

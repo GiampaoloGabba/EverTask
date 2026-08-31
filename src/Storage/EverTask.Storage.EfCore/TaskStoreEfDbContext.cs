@@ -8,6 +8,14 @@ public abstract class TaskStoreEfDbContext<T>(DbContextOptions<T> options)
 {
     public string? Schema { get; } = options.FindExtension<EverTaskSchemaExtension>()?.Schema;
 
+    /// <summary>
+    /// Body of the check constraint that keeps an occurrence from existing without its nominal slot.
+    /// Unquoted identifiers, which SQL Server, SQLite and MySQL resolve case-insensitively; PostgreSQL folds
+    /// them to lower case while EF emits quoted mixed-case names, so it overrides this with a quoted form.
+    /// </summary>
+    protected virtual string OccurrenceSlotCheckSql =>
+        "ParentTaskId IS NULL OR ScheduledExecutionUtc IS NOT NULL";
+
     public DbSet<QueuedTask>       QueuedTasks       => Set<QueuedTask>();
     public DbSet<StatusAudit>      StatusAudit       => Set<StatusAudit>();
     public DbSet<RunsAudit>        RunsAudit         => Set<RunsAudit>();
@@ -48,6 +56,51 @@ public abstract class TaskStoreEfDbContext<T>(DbContextOptions<T> options)
         modelBuilder.Entity<QueuedTask>()
                     .HasIndex(q => q.TaskKey)
                     .IsUnique();
+
+        // Durable occurrences: a child row names its schedule, and the three constraints below are what make
+        // "one row per slot" a database guarantee instead of an application convention.
+        modelBuilder.Entity<QueuedTask>()
+                    .HasOne(q => q.Parent)
+                    .WithMany(q => q.Occurrences)
+                    .HasForeignKey(q => q.ParentTaskId)
+                    // Restrict, never cascade: SQL Server rejects a cascading self-reference outright, and
+                    // without a foreign key a Remove(schedule) racing a materializer would leave orphans.
+                    // Deleting a schedule deletes its occurrences explicitly, in the same transaction.
+                    .OnDelete(DeleteBehavior.Restrict);
+
+        modelBuilder.Entity<QueuedTask>()
+                    // Stable name: the materializer recognises a lost race by the CONSTRAINT that was
+                    // violated, not by a provider's generic duplicate-key code.
+                    .HasIndex(q => new { q.ParentTaskId, q.ScheduledExecutionUtc })
+                    .IsUnique()
+                    .HasDatabaseName("UX_QueuedTasks_Occurrence");
+
+        // Every ordinary row has a null ParentTaskId, so the unique index above must not collapse them.
+        // PostgreSQL, SQLite and MySQL treat nulls as distinct; SQL Server does not, and EF's convention
+        // filters unique indexes over nullable columns there — which is exactly the filter needed.
+
+        modelBuilder.Entity<QueuedTask>()
+                    .HasIndex(q => q.ParentTaskId)
+                    .HasDatabaseName("IX_QueuedTasks_ParentTaskId")
+                    .IsUnique(false);
+
+        modelBuilder.Entity<QueuedTask>()
+                    .HasIndex(q => new { q.ParentTaskId, q.Status })
+                    .HasDatabaseName("IX_QueuedTasks_ParentTaskId_Status")
+                    .IsUnique(false);
+
+        modelBuilder.Entity<QueuedTask>()
+                    .ToTable(t => t.HasCheckConstraint("CK_QueuedTasks_OccurrenceSlot", OccurrenceSlotCheckSql));
+
+        // The DEFAULT belongs to the MODEL, not just to the AddColumn of one migration: SQLite cannot ALTER a
+        // foreign key or a check constraint in, so its migration rebuilds the table from the model and the
+        // rebuilt column would come out NOT NULL with no default, diverging from the other three providers.
+        // ValueGeneratedNever keeps EverTask writing the value itself, so the default only serves an outside
+        // writer that omits the column.
+        modelBuilder.Entity<QueuedTask>()
+                    .Property(q => q.ScheduleVersion)
+                    .HasDefaultValue(0)
+                    .ValueGeneratedNever();
 
         modelBuilder.Entity<QueuedTask>()
                     .HasMany(a => a.StatusAudits)

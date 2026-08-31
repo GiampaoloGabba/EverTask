@@ -7,7 +7,7 @@ nav_order: 5
 
 # PostgreSQL Storage
 
-PostgreSQL is an open-source relational store for production. Like the SQL Server provider, it handles multi-server concurrency and runs every recovery and cleanup query on the server.
+PostgreSQL is an open-source relational store for production. Like the SQL Server provider, it handles high write concurrency and runs every recovery and cleanup query on the server. EverTask still requires [one active host per store](../scalability.md#horizontal-scaling-multiple-instances); an inactive standby is fine.
 
 ## Installation
 
@@ -105,21 +105,15 @@ dotnet ef migrations script --project YourProject --context TaskStoreDbContext -
 
 ## Performance Optimizations
 
-PostgreSQL is a fully relational provider like SQL Server (not like SQLite). Npgsql maps `DateTimeOffset` to `timestamptz` and translates every ordering, keyset, and cleanup comparison **server-side**, so the provider inherits the optimized EF Core base with **no client-side overrides**. There is no in-memory keyset filtering during recovery: the `uuid` keyset and the bounded cleanup delete run as server-side `uuid >` / `LIMIT`.
+PostgreSQL is a fully relational provider like SQL Server (not like SQLite). Npgsql maps `DateTimeOffset` to `timestamptz` and translates every ordering, keyset, and cleanup comparison **server-side**, so the provider inherits the optimized EF Core base with **no client-side overrides**. Recovery and cleanup run entirely on the server, with no in-memory filtering.
 
-### Recovery Index
+### Run Counter
 
-A dedicated partial covering index (`IX_QueuedTasks_Recovery`) supports recovery on startup. It is keyed on `(CreatedAtUtc, Id)` to serve the keyset ordering, includes the runtime-predicate columns, and has a static partial `WHERE` clause that prunes the bulk of terminal rows (completed and failed non-recurring tasks).
-
-### Writable-CTE Optimizations
-
-The hot writes (`SetStatus`, `UpdateCurrentRun`, `CompleteRecurringRun`) override the base with single-statement, data-modifying CTEs: PostgreSQL's analog of the SQL Server stored procedures. Because each is a single statement, the audit insert and the row update commit together atomically. The audit decisions match the configured `AuditPolicy`. There is no stored database object and no extra migration: the SQL lives in versioned C#.
-
-The run counter is an `integer` and **saturates at `int.MaxValue`** (a `CASE` guard) instead of overflowing: an unbounded recurring series that reaches that many runs keeps going with the counter frozen at its max. See [Recurring Tasks](../recurring-tasks.md) for the tradeoff.
+The run counter **saturates at `int.MaxValue`** instead of overflowing: an unbounded recurring series that reaches that many runs keeps going with the counter frozen at its max. See [Recurring Tasks](../recurring-tasks.md) for the tradeoff.
 
 ### GUID Generation
 
-EverTask generates time-ordered GUIDs using the `UUIDNext` PostgreSQL (v7) family. PostgreSQL sorts `uuid` values byte-wise, so sequentially generated identifiers stay in temporal order: inserts remain sequential and the recovery index / keyset stay efficient.
+EverTask generates time-ordered GUIDs using the `UUIDNext` PostgreSQL (v7) family. PostgreSQL sorts `uuid` values byte-wise, so sequentially generated identifiers stay in temporal order and inserts remain sequential.
 
 ## Connection String Configuration
 
@@ -139,10 +133,9 @@ EverTask generates time-ordered GUIDs using the `UUIDNext` PostgreSQL (v7) famil
 
 - Production-ready
 - Open-source (no licensing cost)
-- Highly scalable, multi-server
+- High write concurrency on one active EverTask host per store
 - ACID transactions
 - Server-side querying for all recovery and cleanup operations
-- Writable-CTE optimizations for hot writes (single-statement, atomic)
 - Requires a PostgreSQL instance
 
 ## Best Practices

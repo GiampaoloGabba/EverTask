@@ -1,7 +1,9 @@
 using EverTask.Dispatcher;
 using EverTask.Logger;
 using EverTask.Scheduler.Recurring;
+using EverTask.Scheduler.Recurring.Intervals;
 using EverTask.Storage;
+using EverTask.Tests.TestHelpers;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 
@@ -40,6 +42,129 @@ public class WorkerServiceRecoveryPoisonTests
     }
 
     [Fact]
+    public async Task Should_route_exclusion_budget_exhaustion_through_the_bounded_recovery_counter()
+    {
+        var storage = new MemoryTaskStorage(Mock.Of<IEverTaskLogger<MemoryTaskStorage>>());
+        var row = new QueuedTask
+        {
+            Id              = Guid.NewGuid(),
+            Type            = typeof(RecoveryFailProbeTask).AssemblyQualifiedName!,
+            Request         = JsonConvert.SerializeObject(new RecoveryFailProbeTask()),
+            Handler         = "seeded-by-test",
+            Status          = QueuedTaskStatus.Queued,
+            IsRecurring     = true,
+            RecurringTask   = JsonConvert.SerializeObject(new RecurringTask
+            {
+                MinuteInterval = new MinuteInterval(1)
+            }),
+            NextRunUtc      = DateTimeOffset.UtcNow.AddMinutes(-1),
+            CurrentRunCount = 0,
+            CreatedAtUtc    = DateTimeOffset.UtcNow.AddMinutes(-5)
+        };
+
+        await storage.Persist(row);
+
+        var dispatcher = new Mock<ITaskDispatcherInternal>();
+        dispatcher.Setup(d => d.ExecuteDispatch(It.IsAny<IEverTask>(), It.IsAny<DateTimeOffset?>(),
+                      It.IsAny<RecurringTask?>(), It.IsAny<int?>(), It.IsAny<CancellationToken>(),
+                      It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<AuditLevel?>(), It.IsAny<bool>(),
+                      It.IsAny<DispatchRowMetadata>()))
+                  .ThrowsAsync(new ExclusionSearchBudgetExceededException(row.NextRunUtc.Value));
+
+        var service = RecoveryHarness.CreateRecoveryService(storage, maxAttempts: 2, dispatcher.Object);
+
+        await service.ProcessPendingAsync();
+
+        var retriable = (await storage.Get(t => t.Id == row.Id))[0];
+        retriable.Status.ShouldBe(QueuedTaskStatus.Queued);
+        retriable.NextRunUtc.ShouldBe(row.NextRunUtc);
+        retriable.RecoveryDispatchFailureCount.ShouldBe(1);
+
+        await service.ProcessPendingAsync();
+
+        var poisoned = (await storage.Get(t => t.Id == row.Id))[0];
+        poisoned.Status.ShouldBe(QueuedTaskStatus.Failed);
+        poisoned.NextRunUtc.ShouldBeNull();
+        poisoned.RecoveryDispatchFailureCount.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task Should_poison_a_schedule_when_a_calendar_edit_makes_its_resolved_union_invalid()
+    {
+        var storage = new MemoryTaskStorage(Mock.Of<IEverTaskLogger<MemoryTaskStorage>>());
+        var row = new QueuedTask
+        {
+            Id = Guid.NewGuid(),
+            Type = typeof(RecoveryFailProbeTask).AssemblyQualifiedName!,
+            Request = JsonConvert.SerializeObject(new RecoveryFailProbeTask()),
+            Handler = "seeded-by-test",
+            Status = QueuedTaskStatus.Queued,
+            IsRecurring = true,
+            RecurringTask = JsonConvert.SerializeObject(new RecurringTask
+            {
+                DayInterval = new DayInterval(1),
+                Exclusions = new ScheduleExclusions { Calendars = ["business", "weekend"] }
+            }),
+            NextRunUtc = DateTimeOffset.UtcNow.AddDays(1),
+            CreatedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-5)
+        };
+        await storage.Persist(row);
+        var calendars = ScheduleCalendarRegistry.Create(new Dictionary<string, ScheduleExclusions>
+        {
+            ["business"] = new()
+            {
+                Days = [DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday,
+                    DayOfWeek.Thursday, DayOfWeek.Friday]
+            },
+            ["weekend"] = new() { Days = [DayOfWeek.Saturday, DayOfWeek.Sunday] }
+        });
+        var dispatcher = new Mock<ITaskDispatcherInternal>();
+
+        await RecoveryHarness.CreateRecoveryService(storage, dispatcher: dispatcher.Object, calendars: calendars)
+            .ProcessPendingAsync();
+
+        var poisoned = (await storage.Get(t => t.Id == row.Id))[0];
+        poisoned.Status.ShouldBe(QueuedTaskStatus.Failed);
+        poisoned.NextRunUtc.ShouldBeNull();
+        poisoned.Exception.ShouldNotBeNull().ShouldContain("every day of the week", Case.Insensitive);
+        dispatcher.Verify(d => d.ExecuteDispatch(It.IsAny<IEverTask>(), It.IsAny<DateTimeOffset?>(),
+            It.IsAny<RecurringTask?>(), It.IsAny<int?>(), It.IsAny<CancellationToken>(), It.IsAny<Guid?>(),
+            It.IsAny<string?>(), It.IsAny<AuditLevel?>(), It.IsAny<bool>(), It.IsAny<DispatchRowMetadata>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task Should_poison_a_recovered_schedule_that_names_an_unregistered_calendar()
+    {
+        var storage = new MemoryTaskStorage(Mock.Of<IEverTaskLogger<MemoryTaskStorage>>());
+        var row = new QueuedTask
+        {
+            Id = Guid.NewGuid(),
+            Type = typeof(RecoveryFailProbeTask).AssemblyQualifiedName!,
+            Request = JsonConvert.SerializeObject(new RecoveryFailProbeTask()),
+            Handler = "seeded-by-test",
+            Status = QueuedTaskStatus.Queued,
+            IsRecurring = true,
+            RecurringTask = JsonConvert.SerializeObject(new RecurringTask
+            {
+                DayInterval = new DayInterval(1),
+                Exclusions = new ScheduleExclusions { Calendars = ["removed-holidays"] }
+            }),
+            NextRunUtc = DateTimeOffset.UtcNow.AddDays(1),
+            CreatedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-5)
+        };
+        await storage.Persist(row);
+        var calendars = ScheduleCalendarRegistry.Create(new Dictionary<string, ScheduleExclusions>());
+
+        await RecoveryHarness.CreateRecoveryService(storage, calendars: calendars).ProcessPendingAsync();
+
+        var poisoned = (await storage.Get(t => t.Id == row.Id))[0];
+        poisoned.Status.ShouldBe(QueuedTaskStatus.Failed);
+        poisoned.NextRunUtc.ShouldBeNull();
+        poisoned.Exception.ShouldNotBeNull().ShouldContain("removed-holidays");
+    }
+
+    [Fact]
     public async Task Should_poison_persistently_failing_recovered_task_and_not_log_false_success()
     {
         var row = new QueuedTask
@@ -54,9 +179,12 @@ public class WorkerServiceRecoveryPoisonTests
 
         var storage = new Mock<ITaskStorage>();
         // First page returns the row until it is poisoned; subsequent pages (cursor set) are empty.
-        storage.Setup(s => s.RetrievePending(It.IsAny<DateTimeOffset?>(), It.IsAny<Guid?>(), It.IsAny<int>(),
-                   It.IsAny<CancellationToken>()))
-               .ReturnsAsync((DateTimeOffset? last, Guid? id, int take, CancellationToken ct) =>
+        // The core always asks for a page on ITS OWN clock (P9), so the clock-carrying overload is the one
+        // to stub: a mock proxy implements every interface member, default ones included, so the default
+        // that delegates to the legacy signature never runs here.
+        storage.Setup(s => s.RetrievePending(It.IsAny<DateTimeOffset>(), It.IsAny<DateTimeOffset?>(),
+                   It.IsAny<Guid?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+               .ReturnsAsync((DateTimeOffset now, DateTimeOffset? last, Guid? id, int take, CancellationToken ct) =>
                    last == null && row.Status != QueuedTaskStatus.Failed ? [row] : []);
         storage.Setup(s => s.IncrementRecoveryFailure(row.Id, It.IsAny<CancellationToken>()))
                .ReturnsAsync(() =>
@@ -80,7 +208,8 @@ public class WorkerServiceRecoveryPoisonTests
         var dispatcher    = new Mock<ITaskDispatcherInternal>();
         dispatcher.Setup(d => d.ExecuteDispatch(It.IsAny<IEverTask>(), It.IsAny<DateTimeOffset?>(),
                       It.IsAny<RecurringTask?>(), It.IsAny<int?>(), It.IsAny<CancellationToken>(),
-                      It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<AuditLevel?>(), It.IsAny<bool>()))
+                      It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<AuditLevel?>(), It.IsAny<bool>(),
+                      It.IsAny<DispatchRowMetadata>()))
                   .Callback(() => Interlocked.Increment(ref dispatchCount))
                   .ThrowsAsync(new InvalidOperationException("re-dispatch boom"));
 
@@ -151,9 +280,12 @@ public class WorkerServiceRecoveryPoisonTests
         };
 
         var storage = new Mock<ITaskStorage>();
-        storage.Setup(s => s.RetrievePending(It.IsAny<DateTimeOffset?>(), It.IsAny<Guid?>(), It.IsAny<int>(),
-                   It.IsAny<CancellationToken>()))
-               .ReturnsAsync((DateTimeOffset? last, Guid? id, int take, CancellationToken ct) =>
+        // The core always asks for a page on ITS OWN clock (P9), so the clock-carrying overload is the one
+        // to stub: a mock proxy implements every interface member, default ones included, so the default
+        // that delegates to the legacy signature never runs here.
+        storage.Setup(s => s.RetrievePending(It.IsAny<DateTimeOffset>(), It.IsAny<DateTimeOffset?>(),
+                   It.IsAny<Guid?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+               .ReturnsAsync((DateTimeOffset now, DateTimeOffset? last, Guid? id, int take, CancellationToken ct) =>
                    last == null && row.Status != QueuedTaskStatus.Failed ? [row] : []);
         storage.Setup(s => s.IncrementRecoveryFailure(row.Id, It.IsAny<CancellationToken>()))
                .ReturnsAsync(() =>
@@ -201,7 +333,8 @@ public class WorkerServiceRecoveryPoisonTests
         // The task handler was never invoked (the payload never deserialized) — no false dispatch.
         dispatcher.Verify(d => d.ExecuteDispatch(It.IsAny<IEverTask>(), It.IsAny<DateTimeOffset?>(),
             It.IsAny<RecurringTask?>(), It.IsAny<int?>(), It.IsAny<CancellationToken>(),
-            It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<AuditLevel?>(), It.IsAny<bool>()), Times.Never);
+            It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<AuditLevel?>(), It.IsAny<bool>(),
+            It.IsAny<DispatchRowMetadata>()), Times.Never);
     }
 
     /// <summary>
@@ -223,9 +356,12 @@ public class WorkerServiceRecoveryPoisonTests
         };
 
         var storage = new Mock<ITaskStorage>();
-        storage.Setup(s => s.RetrievePending(It.IsAny<DateTimeOffset?>(), It.IsAny<Guid?>(), It.IsAny<int>(),
-                   It.IsAny<CancellationToken>()))
-               .ReturnsAsync((DateTimeOffset? last, Guid? id, int take, CancellationToken ct) =>
+        // The core always asks for a page on ITS OWN clock (P9), so the clock-carrying overload is the one
+        // to stub: a mock proxy implements every interface member, default ones included, so the default
+        // that delegates to the legacy signature never runs here.
+        storage.Setup(s => s.RetrievePending(It.IsAny<DateTimeOffset>(), It.IsAny<DateTimeOffset?>(),
+                   It.IsAny<Guid?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+               .ReturnsAsync((DateTimeOffset now, DateTimeOffset? last, Guid? id, int take, CancellationToken ct) =>
                    last == null && row.Status != QueuedTaskStatus.Failed ? [row] : []);
         storage.Setup(s => s.SetStatus(row.Id, QueuedTaskStatus.Failed, It.IsAny<Exception?>(), It.IsAny<AuditLevel>(),
                    It.IsAny<double?>(), It.IsAny<CancellationToken>()))
@@ -279,9 +415,10 @@ public class WorkerServiceRecoveryPoisonTests
         };
 
         var storage = new Mock<ITaskStorage>();
-        storage.Setup(s => s.RetrievePending(It.IsAny<DateTimeOffset?>(), It.IsAny<Guid?>(), It.IsAny<int>(),
-                   It.IsAny<CancellationToken>()))
-               .ReturnsAsync((DateTimeOffset? last, Guid? id, int take, CancellationToken ct) =>
+        // The core always asks for a page on ITS OWN clock (P9) — see the note on the first test.
+        storage.Setup(s => s.RetrievePending(It.IsAny<DateTimeOffset>(), It.IsAny<DateTimeOffset?>(),
+                   It.IsAny<Guid?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+               .ReturnsAsync((DateTimeOffset now, DateTimeOffset? last, Guid? id, int take, CancellationToken ct) =>
                    last == null ? [row] : []);
 
         var provider = new Mock<IServiceProvider>();
@@ -295,9 +432,11 @@ public class WorkerServiceRecoveryPoisonTests
         var dispatcher = new Mock<ITaskDispatcherInternal>();
         dispatcher.Setup(d => d.ExecuteDispatch(It.IsAny<IEverTask>(), It.IsAny<DateTimeOffset?>(),
                       It.IsAny<RecurringTask?>(), It.IsAny<int?>(), It.IsAny<CancellationToken>(),
-                      It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<AuditLevel?>(), It.IsAny<bool>()))
+                      It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<AuditLevel?>(), It.IsAny<bool>(),
+                      It.IsAny<DispatchRowMetadata>()))
                   .Callback((IEverTask _, DateTimeOffset? _, RecurringTask? _, int? _, CancellationToken _,
-                             Guid? _, string? _, AuditLevel? auditLevel, bool _) => capturedAuditLevel = auditLevel)
+                             Guid? _, string? _, AuditLevel? auditLevel, bool _, DispatchRowMetadata _) =>
+                      capturedAuditLevel = auditLevel)
                   .ReturnsAsync(Guid.NewGuid());
 
         var service = new WorkerService(
@@ -312,5 +451,77 @@ public class WorkerServiceRecoveryPoisonTests
 
         capturedAuditLevel.ShouldBe(AuditLevel.Minimal,
             "recovery must re-dispatch with the persisted per-task audit level, not the global default");
+    }
+
+    /// <summary>
+    /// The rest of the row's identity travels with the re-dispatch too. Re-deriving it turned a recovered
+    /// occurrence back into a parentless task at schedule version 0, dropped its occurrence metadata, and let
+    /// the handler attribute decide the queue — while the recovery loop had already grouped that very row by
+    /// its STORED queue, so the two disagreed about where it was going.
+    /// [UNIT-necessario: captures exactly what ProcessPendingAsync hands to the dispatcher.]
+    /// </summary>
+    [Fact]
+    public async Task Should_carry_the_persisted_row_identity_into_recovery_redispatch()
+    {
+        var parentId = Guid.NewGuid();
+        var row = new QueuedTask
+        {
+            Id                    = Guid.NewGuid(),
+            Type                  = typeof(RecoveryFailProbeTask).AssemblyQualifiedName!,
+            Request               = JsonConvert.SerializeObject(new RecoveryFailProbeTask()),
+            Handler               = "seeded-by-test",
+            Status                = QueuedTaskStatus.Queued,
+            CreatedAtUtc          = DateTimeOffset.UtcNow.AddMinutes(-5),
+            ScheduledExecutionUtc = DateTimeOffset.UtcNow.AddMinutes(-1),
+            ParentTaskId          = parentId,
+            RuntimeInfo           = "{\"SlotUtc\":\"2026-05-01T10:00:00Z\"}",
+            ScheduleVersion       = 4,
+            TaskKey               = "nightly-report",
+            QueueName             = "reports"
+        };
+
+        var storage = new Mock<ITaskStorage>();
+        storage.Setup(s => s.RetrievePending(It.IsAny<DateTimeOffset>(), It.IsAny<DateTimeOffset?>(),
+                   It.IsAny<Guid?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+               .ReturnsAsync((DateTimeOffset now, DateTimeOffset? last, Guid? id, int take, CancellationToken ct) =>
+                   last == null ? [row] : []);
+
+        var provider = new Mock<IServiceProvider>();
+        provider.Setup(p => p.GetService(typeof(ITaskStorage))).Returns(storage.Object);
+        var scope = new Mock<IServiceScope>();
+        scope.Setup(s => s.ServiceProvider).Returns(provider.Object);
+        var scopeFactory = new Mock<IServiceScopeFactory>();
+        scopeFactory.Setup(f => f.CreateScope()).Returns(scope.Object);
+
+        string?             capturedTaskKey  = null;
+        DispatchRowMetadata capturedMetadata = default;
+        var dispatcher = new Mock<ITaskDispatcherInternal>();
+        dispatcher.Setup(d => d.ExecuteDispatch(It.IsAny<IEverTask>(), It.IsAny<DateTimeOffset?>(),
+                      It.IsAny<RecurringTask?>(), It.IsAny<int?>(), It.IsAny<CancellationToken>(),
+                      It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<AuditLevel?>(), It.IsAny<bool>(),
+                      It.IsAny<DispatchRowMetadata>()))
+                  .Callback((IEverTask _, DateTimeOffset? _, RecurringTask? _, int? _, CancellationToken _,
+                             Guid? _, string? taskKey, AuditLevel? _, bool _, DispatchRowMetadata metadata) =>
+                  {
+                      capturedTaskKey  = taskKey;
+                      capturedMetadata = metadata;
+                  })
+                  .ReturnsAsync(Guid.NewGuid());
+
+        var service = new WorkerService(
+            new Mock<IWorkerQueueManager>().Object,
+            scopeFactory.Object,
+            dispatcher.Object,
+            new EverTaskServiceConfiguration(),
+            new Mock<IEverTaskWorkerExecutor>().Object,
+            new RecordingLogger<WorkerService>());
+
+        await service.ProcessPendingAsync();
+
+        capturedTaskKey.ShouldBe("nightly-report");
+        capturedMetadata.ParentTaskId.ShouldBe(parentId);
+        capturedMetadata.RuntimeInfo.ShouldBe("{\"SlotUtc\":\"2026-05-01T10:00:00Z\"}");
+        capturedMetadata.ScheduleVersion.ShouldBe(4);
+        capturedMetadata.QueueName.ShouldBe("reports");
     }
 }

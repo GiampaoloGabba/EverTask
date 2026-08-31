@@ -69,6 +69,31 @@ public class DailyCleanupHandler(AppDbContext db) : EverTaskHandler<DailyCleanup
 Dispatch (see `RecurringRegistrar.md` for idempotent startup registration):
 `await dispatcher.Dispatch(new DailyCleanupTask(), r => r.Schedule().EveryDay().AtTime(new TimeOnly(3,0)), taskKey: "daily-cleanup");`
 
+## Slot-aware handler (reads the execution context)
+
+```csharp
+public record BuildDailyReportTask(Guid TenantId) : IEverTask;
+
+public class BuildDailyReportHandler(IReportBuilder builder) : EverTaskHandler<BuildDailyReportTask>
+{
+    public override async Task Handle(BuildDailyReportTask task, CancellationToken ct)
+    {
+        // The day the report is FOR is the slot, not the moment the run happens to start:
+        // after a downtime or a rate-limit deferral the two differ.
+        var day = (Context.ScheduledAtUtc ?? Context.StartedAtUtc).UtcDateTime.Date;
+
+        if (Context.Misfire is { Lateness.TotalHours: > 6 })
+            Logger.LogWarning("Report for {Day} is run {Run}, started {Late} late", day, Context.RunNumber,
+                Context.Misfire.Lateness);
+
+        await builder.BuildAsync(task.TenantId, day, ct);
+    }
+}
+```
+
+Outside the handler, inject `ITaskExecutionContextAccessor` and read `.Current` (null when no task is
+running on the flow) — see `references/02-tasks-and-handlers.md`.
+
 ## Rate-limited task (per tenant)
 
 ```csharp

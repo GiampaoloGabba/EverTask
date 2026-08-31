@@ -10,4 +10,10 @@ public record TokenValidationResponse(
     bool IsValid,
     string? Username,
     DateTimeOffset? ExpiresAt
-);
+)
+{
+    /// <summary>
+    /// Whether the validated token carries the operate role. Always false for an invalid token.
+    /// </summary>
+    public bool CanManage { get; init; }
+}

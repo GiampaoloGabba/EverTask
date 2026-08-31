@@ -15,10 +15,18 @@ namespace EverTask.Tests.IntegrationTests;
 /// a legitimate end-of-series mistaken for an error, and a per-restart poison when combined with a
 /// stale NextRunUtc. The fix FINALIZES the exhausted series instead: Completed, NextRunUtc cleared,
 /// no failure recorded.
+///
+/// It runs on an INJECTED clock (P9), frozen a decade away from the wall clock, and its assertions are the
+/// ones it has always made. Every instant the scenario depends on — the recovery cutoff, the recoverable
+/// predicate, the natural successor the grace window asks for, the finalization itself — is relative to the
+/// seeded row, so the whole chain either reads the clock the core hands it and the test passes unchanged, or
+/// one forgotten <c>UtcNow</c> puts the row a decade past its boundary and it does not.
 /// </summary>
 public class RunUntilPastNextRunRecoveryReproTests : IsolatedIntegrationTestBase
 {
     private readonly ResilienceTestState _state = new();
+
+    private static readonly DateTimeOffset FrozenNow = new(2016, 4, 1, 8, 0, 0, TimeSpan.Zero);
 
     [Fact]
     public async Task Recovery_finalizes_exhausted_series_with_past_NextRunUtc_and_future_RunUntil()
@@ -28,9 +36,10 @@ public class RunUntilPastNextRunRecoveryReproTests : IsolatedIntegrationTestBase
                 b.AddMemoryStorage();
                 b.Services.AddSingleton(_state);
             },
-            startHost: false);
+            startHost: false,
+            clock: new FakeTimeProvider(FrozenNow));
 
-        var now = DateTimeOffset.UtcNow;
+        var now = Clock.GetUtcNow();
 
         // Finding scenario: NextRunUtc well in the past (beyond the grace window) and the next occurrence
         // (~now+120s) falls past RunUntil. RunUntil is kept far enough ahead (20s) that the row is

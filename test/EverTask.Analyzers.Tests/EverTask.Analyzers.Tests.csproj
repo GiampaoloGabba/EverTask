@@ -1,9 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <!-- Single-target: the analyzer is TFM-agnostic and CI runs tests on net9.0. -->
-    <TargetFrameworks></TargetFrameworks>
-    <TargetFramework>net9.0</TargetFramework>
+    <!-- Multi-targets net8.0;net9.0;net10.0 like every other test project (inherited from
+         Directory.Build.props). The host TFM is irrelevant to what is asserted - the code under test is
+         always compiled against ReferenceAssemblies.Net.Net80 (Verifiers.cs) - but a single-target test
+         project breaks any framework-scoped solution run: `dotnet test EverTask.slnx -f net10.0` passes
+         TargetFramework as a GLOBAL property, which a project-level assignment cannot override, and the
+         restore has no net10.0 target -> NETSDK1005. The analyzer libraries themselves stay netstandard2.0
+         (they must) and are unaffected: they are reached only through ProjectReference, which undefines
+         TargetFramework. -->
     <IsPackable>false</IsPackable>
     <!-- Analyzer-test sources are string literals; relax nullable/CS warnings-as-errors noise. -->
     <Nullable>enable</Nullable>

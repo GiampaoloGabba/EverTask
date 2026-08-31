@@ -63,11 +63,6 @@ public class TestTaskStorage : ITaskStorage
         return Task.CompletedTask;
     }
 
-    public Task<int> GetCurrentRunCount(Guid taskId)
-    {
-        return Task.FromResult(0);
-    }
-
     public Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel)
     {
         return Task.CompletedTask;

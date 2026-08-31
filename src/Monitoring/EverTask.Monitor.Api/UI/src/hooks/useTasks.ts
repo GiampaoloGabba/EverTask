@@ -5,7 +5,10 @@ import {
   PaginationParams,
   TasksPagedResponse,
   TaskDetailDto,
-  TaskCountsDto
+  TaskCountsDto,
+  OccurrencesResponse,
+  StatusAuditsResponse,
+  RunsAuditsResponse
 } from '@/types/task.types';
 
 export const useTasks = (
@@ -47,6 +50,69 @@ export const useTaskCounts = (
       const response = await apiService.getTaskCounts();
       return response.data;
     },
+    ...options,
+  });
+};
+
+/**
+ * One page of the occurrences of a schedule. The paging is the SERVER's — a schedule with a long retention
+ * behind it holds hundreds of thousands of rows — so `skip` belongs to the query key: two pages are two
+ * different answers, not the same one filtered.
+ */
+export const useOccurrences = (
+  scheduleId: string,
+  enabled: boolean,
+  skip: number = 0,
+  take: number = 100,
+  options?: Omit<UseQueryOptions<OccurrencesResponse>, 'queryKey' | 'queryFn'>
+) => {
+  return useQuery({
+    queryKey: ['occurrences', scheduleId, skip, take],
+    queryFn: async () => {
+      const response = await apiService.getOccurrences(scheduleId, skip, take);
+      return response.data;
+    },
+    enabled: enabled && !!scheduleId,
+    ...options,
+  });
+};
+
+/**
+ * One page of a task's status transitions. The paging is the SERVER's — a long-lived recurring row records
+ * one transition per state per run — so `skip` belongs to the query key, exactly as it does for the
+ * occurrences above: two pages are two different answers, not the same one filtered.
+ */
+export const useStatusAudits = (
+  taskId: string,
+  skip: number = 0,
+  take: number = 100,
+  options?: Omit<UseQueryOptions<StatusAuditsResponse>, 'queryKey' | 'queryFn'>
+) => {
+  return useQuery({
+    queryKey: ['statusAudits', taskId, skip, take],
+    queryFn: async () => {
+      const response = await apiService.getStatusAudit(taskId, skip, take);
+      return response.data;
+    },
+    enabled: !!taskId,
+    ...options,
+  });
+};
+
+/** One page of a task's recorded runs, paged by the server for the same reason. */
+export const useRunsAudits = (
+  taskId: string,
+  skip: number = 0,
+  take: number = 100,
+  options?: Omit<UseQueryOptions<RunsAuditsResponse>, 'queryKey' | 'queryFn'>
+) => {
+  return useQuery({
+    queryKey: ['runsAudits', taskId, skip, take],
+    queryFn: async () => {
+      const response = await apiService.getRunsAudit(taskId, skip, take);
+      return response.data;
+    },
+    enabled: !!taskId,
     ...options,
   });
 };

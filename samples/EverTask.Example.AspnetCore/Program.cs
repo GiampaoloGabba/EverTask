@@ -195,7 +195,28 @@ static async Task DispatchSampleTasksAsync(IServiceProvider services)
             taskBuilder => taskBuilder.Schedule().Every(2).Minutes().MaxRuns(5)
         );
 
-        // 12. Keyed rate limiting demo - multi-tenant burst.
+        // 12. Durable occurrences (4.0) - every due slot becomes its own persisted child row.
+        //     Watch the task list: one schedule row plus one occurrence per slot, each with its own
+        //     status, retries and audit trail.
+        await dispatcher.Dispatch(
+            new DemoLoggingTask("Durable Metrics Rollup", LogCount: 3, ShouldFail: false),
+            taskBuilder => taskBuilder.Schedule().Every(20).Seconds().WithDurableOccurrences().MaxRuns(10),
+            taskKey: "durable-metrics-rollup");
+
+        // 13. Catch-up backfill (4.0) - a daily 02:00 Europe/Rome schedule whose cursor starts three
+        //     days in the past: the missed slots materialize immediately as CatchUp occurrences, each
+        //     carrying the misfire range it stands for (see NightlyReconciliationHandler).
+        await dispatcher.Dispatch(
+            new NightlyReconciliationTask(),
+            taskBuilder => taskBuilder.Schedule()
+                                      .EveryDay().AtTime(new TimeOnly(2, 0))
+                                      .InTimeZone("Europe/Rome")
+                                      .BackfillFrom(DateTimeOffset.UtcNow.AddDays(-3))
+                                      .OnMisfire(m => m.CatchUp(
+                                          new CatchUpOptions(maxAge: TimeSpan.FromDays(4), maxOccurrences: 5))),
+            taskKey: "nightly-reconciliation");
+
+        // 14. Keyed rate limiting demo - multi-tenant burst.
         // Three tenants burst 4 calls each AT THE SAME TIME against a per-tenant policy of
         // 3 calls / 10s (Burst=1 → one call every ~3.3s per tenant). Watch the logs: each
         // tenant's calls come out evenly spaced, the three tenants interleave freely (no

@@ -3,12 +3,12 @@
 Resolve the package set from the user's storage choice + selected capabilities. The version is
 governed lockstep by `Directory.Build.props` in this repo; for an external consumer, take the
 latest published version of each package (they release in lockstep). Current repo package version:
-**3.11.0**.
+**4.0.0**, not yet released — the latest published one is **3.11.0**.
 
 | Feature / choice | Package | Notes |
 |---|---|---|
 | Core (always) | `EverTask` | Dispatcher, worker, scheduler, in-memory storage. |
-| Interfaces only (referenced by the task/handler library) | `EverTask.Abstractions` | `IEverTask`, `ITaskDispatcher`, `EverTaskHandler<T>`, retry/rate-limit types. **Bundles the ET0001–ET0008 analyzers.** |
+| Interfaces only (referenced by the task/handler library) | `EverTask.Abstractions` | `IEverTask`, `ITaskDispatcher`, `EverTaskHandler<T>`, retry/rate-limit types. **Bundles the ET0001–ET0010 analyzers.** |
 | In-Memory storage | (none) | Built into `EverTask`; just call `.AddMemoryStorage()`. |
 | SQL Server storage | `EverTask.Storage.SqlServer` | Pulls `EverTask.Storage.EfCore` + EF SqlServer. |
 | PostgreSQL storage | `EverTask.Storage.Postgres` | Pulls `EverTask.Storage.EfCore` + Npgsql. |

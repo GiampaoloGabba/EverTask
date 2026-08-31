@@ -145,7 +145,6 @@ public class CancelPipelineIntegrationTests : IsolatedIntegrationTestBase
         public Task SetCompleted(Guid taskId, double executionTimeMs, AuditLevel auditLevel) => inner.SetCompleted(taskId, executionTimeMs, auditLevel);
         public Task SetCancelledByService(Guid taskId, Exception exception, AuditLevel auditLevel) => inner.SetCancelledByService(taskId, exception, auditLevel);
         public Task SetStatus(Guid taskId, QueuedTaskStatus status, Exception? exception, AuditLevel auditLevel, double? executionTimeMs = null, CancellationToken ct = default) => inner.SetStatus(taskId, status, exception, auditLevel, executionTimeMs, ct);
-        public Task<int> GetCurrentRunCount(Guid taskId) => inner.GetCurrentRunCount(taskId);
         public Task UpdateCurrentRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun, AuditLevel auditLevel) => inner.UpdateCurrentRun(taskId, executionTimeMs, nextRun, auditLevel);
         public Task<QueuedTask?> GetByTaskKey(string taskKey, CancellationToken ct = default) => inner.GetByTaskKey(taskKey, ct);
         public Task UpdateTask(QueuedTask task, CancellationToken ct = default) => inner.UpdateTask(task, ct);

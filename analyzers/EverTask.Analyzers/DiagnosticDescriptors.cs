@@ -6,9 +6,9 @@ namespace EverTask.Analyzers;
 /// The EverTask diagnostics: the payload-contract rules (ET0001-ET0007), which mirror at compile time the
 /// System.Text.Json round-trip contract enforced at runtime by <c>EverTask.Serialization.EverTaskJson</c>
 /// (see <c>src/EverTask.Abstractions/CLAUDE.md</c> §Serialization Guidelines), plus the monitoring rule
-/// ET0008, the resilience rule ET0009 (delays above the maximum timer duration) and the registration
-/// rules ET0011/ET0012, which mirror the G1/G2 startup warnings of <c>HandlerRegistrar</c>.
-/// ET0010 is RESERVED (durable-occurrences branch, issue #34) — do not reuse it here.
+/// ET0008, the resilience rule ET0009 (delays above the maximum timer duration), the scheduling rule
+/// ET0010 (a time zone on a plain cadence) and the registration rules ET0011/ET0012, which mirror the
+/// G1/G2 startup warnings of <c>HandlerRegistrar</c>.
 /// Keep this list in lockstep with <c>AnalyzerReleases.Unshipped.md</c> (RS2002).
 /// </summary>
 internal static class DiagnosticDescriptors
@@ -98,6 +98,16 @@ internal static class DiagnosticDescriptors
         isEnabledByDefault: true,
         description: "Task.Delay and CancellationTokenSource.CancelAfter reject delays above uint.MaxValue - 1 milliseconds (about 49.7 days). EverTask validates retry delays at construction and clamps timeouts and cleanup intervals to that ceiling, so a larger value either throws or silently behaves as ~49.7 days instead of what was written.",
         helpLinkUri: "https://github.com/GiampaoloGabba/EverTask/blob/master/docs/resilience/retry-policies.md");
+
+    public static readonly DiagnosticDescriptor TimeZoneOnElapsedSchedule = new(
+        id: "ET0010",
+        title: "Time zone has no effect on a plain cadence",
+        messageFormat: "'InTimeZone' throws when this schedule is built: a plain cadence (every N seconds/minutes/hours) is a constant step in elapsed time and produces the same instants in every zone; anchor the schedule to a calendar (a time of day, a day of the week, a month selector, a cron expression or a day/date exclusion) or drop the call",
+        category: "EverTask.Scheduling",
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "A time zone governs calendar-anchored schedules and day/date exclusions only. On a cadence in seconds, minutes or hours with no calendar exclusion EverTask refuses it with an InvalidOperationException when the schedule is built, rather than accepting a call it could not honor. Reported only for a completed chain whose shape is provable in place; a chain split across variables or methods is left to the runtime check.",
+        helpLinkUri: "https://github.com/GiampaoloGabba/EverTask/blob/master/docs/recurring-tasks/time-zones.md");
 
     public static readonly DiagnosticDescriptor OpenGenericHandler = new(
         id: "ET0011",

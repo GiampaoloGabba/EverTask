@@ -14,6 +14,18 @@ public class RoutePrefixConvention(string prefix, string apiExplorerGroupName) :
 {
     private static readonly MonitoringJsonResultFilter JsonFilter = new();
 
+    /// <summary>
+    /// Resolved per request from DI, because the gate needs the options and the token service.
+    /// </summary>
+    private static readonly ServiceFilterAttribute ManagementGate = new(typeof(ManagementAuthorizationFilter));
+
+    /// <summary>
+    /// The IP whitelist and the JWT check, inside routing: the middleware that also carries them cannot see
+    /// the path a host's <c>UsePathBase</c> produced, and under one every read answered anonymously.
+    /// </summary>
+    private static readonly ServiceFilterAttribute AccessGate =
+        new(typeof(MonitoringAccessFilter)) { Order = MonitoringAccessFilter.FilterOrder };
+
     private readonly string _prefix = prefix.Trim('/');
 
     /// <summary>
@@ -36,6 +48,7 @@ public class RoutePrefixConvention(string prefix, string apiExplorerGroupName) :
 
             // Monitoring JSON contract without touching the host's shared MVC JsonOptions
             controller.Filters.Add(JsonFilter);
+            controller.Filters.Add(AccessGate);
 
             foreach (var selector in controller.Selectors)
             {
@@ -46,6 +59,20 @@ public class RoutePrefixConvention(string prefix, string apiExplorerGroupName) :
                         selector.AttributeRouteModel);
                 }
             }
+
+            // Keyed on the ROUTE and not on the controller type: the write surface is a prefix, so a
+            // controller added under it inherits the gate instead of having to remember an attribute.
+            if (IsRoutedUnderManagement(controller))
+                controller.Filters.Add(ManagementGate);
         }
+    }
+
+    private bool IsRoutedUnderManagement(ControllerModel controller)
+    {
+        var managementPrefix = $"{_prefix}/api/management";
+
+        return controller.Selectors.Any(selector =>
+            selector.AttributeRouteModel?.Template?.StartsWith(managementPrefix, StringComparison.OrdinalIgnoreCase)
+            == true);
     }
 }

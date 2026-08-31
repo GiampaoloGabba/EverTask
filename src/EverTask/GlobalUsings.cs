@@ -18,8 +18,11 @@ global using Microsoft.Extensions.Logging;
 using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("EverTask.Tests")]
-// B4/P2-4: lets the storage integration tests assert the REAL recovery read path (EverTaskJson.Deserialize)
-// against rows written by the legacy producer — proving typed payload/schedule recovery, not just DB byte
-// fidelity. Same trust already extended to EverTask.Tests; the serializer stays internal to consumers.
+// Lets the storage integration tests assert the REAL recovery read path (EverTaskJson.Deserialize) against
+// rows written by the legacy producer, not just DB byte fidelity.
 [assembly: InternalsVisibleTo("EverTask.Tests.Storage")]
+// The monitoring API reads a row's schedule facts (the serialized RecurringTask, both shapes of RuntimeInfo)
+// with EverTaskJson's lenient options: a second reader in the API project would drift from them. Read-only
+// trust — nothing internal is written from there.
+[assembly: InternalsVisibleTo("EverTask.Monitor.Api")]
 [assembly: InternalsVisibleTo("DynamicProxyGenAssembly2")]

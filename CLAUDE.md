@@ -32,6 +32,10 @@ The analyzer ruleset is an explicit rule list at the end of `.editorconfig` (NOT
   `completed`, `cancelled`, `Error occurred` stable).
 - **Never flatten an explicit `object[]` into `params` on `ExecuteSqlRawAsync(sql, args, ct)`**: overload
   resolution moves to `params object[]`, the `CancellationToken` silently becomes a SQL parameter, it compiles.
+- **Comments say WHY, never HOW — and only a non-obvious why**: a special case, a fixed race, an order
+  that must not change, in 1-3 tight lines. No essays (long rationale goes in the commit message), no
+  plan/review codes (`M7`, `CU13`, `F6`, ...) — a GitHub issue reference is fine. XML docs only on public
+  surface: contract and exceptions, not history. Never comment to persuade a reviewer.
 - **EF migrations are frozen**: exclude them from every formatting/cleanup pass (`dotnet format` ignores the
   ReSharper pass's exclusion — pass `--exclude "**/Migrations/**"`).
 
@@ -40,6 +44,7 @@ The analyzer ruleset is an explicit rule list at the end of `.editorconfig` (NOT
 - **Dispatcher** → serializes & persists (`ITaskStorage`) → routes: immediate to a bounded channel,
   scheduled/recurring to the priority queue of `PeriodicTimerScheduler` / `ShardedScheduler`
 - **WorkerExecutor** → retry policy, timeout and lifecycle callbacks, in a scoped service scope per task
+- **OccurrenceMaterializer** (durable schedules only, opt-in) → one child row per due slot, misfire policies
 - **RateLimitGate** (handlers declaring a `RateLimitPolicy` only) → per-key GCRA budget at dequeue
 - **ITaskStorage** → SqlServer, Postgres, MySql, Sqlite (all EF Core) + InMemory
 
@@ -62,7 +67,10 @@ them before touching the dispatcher, the worker or a recovery filter.
 ## Ops Quick Facts
 
 - **Central Package Management**: versions go in `Directory.Packages.props`, never in a `.csproj`
-- **Version**: `Directory.Build.props`, lockstep across all packages (current 3.11.0)
+- **Version**: `Directory.Build.props`, lockstep across all packages (current 4.0.0, unreleased — bumped early
+  so the consumer-compatibility fixture really loads a 3.11-compiled assembly against a 4.0 one)
+- **License**: MIT since the clean-room relicense — the MediatR-derived files were rewritten; credit lives in
+  the README's License section, never as per-file attribution comments
 
 ## Module-Specific Guidance
 

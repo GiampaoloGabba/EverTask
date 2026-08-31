@@ -56,6 +56,18 @@ public interface IEverTaskHandler<in TTask> : IEverTaskHandlerOptions, IAsyncDis
     void SetLogCapture(ITaskLogCapture logCapture);
 
     /// <summary>
+    /// Internal method called by WorkerExecutor to inject the execution context of this delivery, before
+    /// <see cref="OnStarted"/>. DO NOT call manually. DO NOT implement explicitly (base class handles it).
+    /// </summary>
+    /// <param name="context">The context of the delivery about to run.</param>
+    /// <remarks>
+    /// A default no-op body, so a handler implementing this interface directly (without
+    /// <see cref="EverTaskHandler{TTask}"/>) keeps compiling and running unchanged. Such a handler reads the
+    /// context through <see cref="ITaskExecutionContextAccessor"/> instead, or implements this member itself.
+    /// </remarks>
+    void SetExecutionContext(ITaskExecutionContext context) { }
+
+    /// <summary>
     /// Derives the rate-limit key for a task. The default implementation reads
     /// <see cref="IRateLimitedTask.RateLimitKey"/> when the task implements
     /// <see cref="IRateLimitedTask"/>, and returns null otherwise.

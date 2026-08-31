@@ -18,7 +18,7 @@ namespace EverTask.Storage.Postgres.Migrations
 #pragma warning disable 612, 618
             modelBuilder
                 .HasDefaultSchema("evertask")
-                .HasAnnotation("ProductVersion", "9.0.17")
+                .HasAnnotation("ProductVersion", "9.0.19")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -61,6 +61,9 @@ namespace EverTask.Storage.Postgres.Migrations
                     b.Property<DateTimeOffset?>("NextRunUtc")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<Guid?>("ParentTaskId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("QueueName")
                         .HasColumnType("text");
 
@@ -79,6 +82,13 @@ namespace EverTask.Storage.Postgres.Migrations
 
                     b.Property<DateTimeOffset?>("RunUntil")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("RuntimeInfo")
+                        .HasColumnType("text");
+
+                    b.Property<int>("ScheduleVersion")
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
 
                     b.Property<DateTimeOffset?>("ScheduledExecutionUtc")
                         .HasColumnType("timestamp with time zone");
@@ -99,12 +109,25 @@ namespace EverTask.Storage.Postgres.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("ParentTaskId")
+                        .HasDatabaseName("IX_QueuedTasks_ParentTaskId");
+
+                    b.HasIndex("ParentTaskId", "Status")
+                        .HasDatabaseName("IX_QueuedTasks_ParentTaskId_Status");
+
                     b.HasIndex("Status");
 
                     b.HasIndex("TaskKey")
                         .IsUnique();
 
-                    b.ToTable("QueuedTasks", "evertask");
+                    b.HasIndex("ParentTaskId", "ScheduledExecutionUtc")
+                        .IsUnique()
+                        .HasDatabaseName("UX_QueuedTasks_Occurrence");
+
+                    b.ToTable("QueuedTasks", "evertask", t =>
+                        {
+                            t.HasCheckConstraint("CK_QueuedTasks_OccurrenceSlot", "\"ParentTaskId\" IS NULL OR \"ScheduledExecutionUtc\" IS NOT NULL");
+                        });
                 });
 
             modelBuilder.Entity("EverTask.Storage.RunsAudit", b =>
@@ -204,6 +227,16 @@ namespace EverTask.Storage.Postgres.Migrations
                     b.ToTable("TaskExecutionLogs", "evertask");
                 });
 
+            modelBuilder.Entity("EverTask.Storage.QueuedTask", b =>
+                {
+                    b.HasOne("EverTask.Storage.QueuedTask", "Parent")
+                        .WithMany("Occurrences")
+                        .HasForeignKey("ParentTaskId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("Parent");
+                });
+
             modelBuilder.Entity("EverTask.Storage.RunsAudit", b =>
                 {
                     b.HasOne("EverTask.Storage.QueuedTask", "QueuedTask")
@@ -240,6 +273,8 @@ namespace EverTask.Storage.Postgres.Migrations
             modelBuilder.Entity("EverTask.Storage.QueuedTask", b =>
                 {
                     b.Navigation("ExecutionLogs");
+
+                    b.Navigation("Occurrences");
 
                     b.Navigation("RunsAudits");
 

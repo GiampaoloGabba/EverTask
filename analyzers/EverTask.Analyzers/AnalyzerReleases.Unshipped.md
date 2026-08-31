@@ -14,5 +14,6 @@ ET0006  | EverTask.Serialization | Disabled | Property of a type that is unlikel
 ET0007  | EverTask.Serialization | Warning  | Type has multiple public constructors but none usable by System.Text.Json
 ET0008  | EverTask.Monitoring    | Warning  | Monitoring OpenAPI document (EnableOpenApiDocument / Scalar UI) is a no-op on net8.0
 ET0009  | EverTask.Resilience    | Warning  | Constant delay/timeout/interval exceeds the maximum timer duration (~49.7 days)
+ET0010  | EverTask.Scheduling    | Warning  | InTimeZone on a provably elapsed completed chain without inline or named calendar exclusions throws when the schedule is built
 ET0011  | EverTask.Registration  | Warning  | Open-generic handler is skipped by the assembly scan and never registered
 ET0012  | EverTask.Registration  | Warning  | Multiple handlers for the same task type in one compilation; only the first discovered wins

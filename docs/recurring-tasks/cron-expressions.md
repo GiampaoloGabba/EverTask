@@ -113,9 +113,25 @@ await dispatcher.Dispatch(
         .RunUntil(DateTimeOffset.UtcNow.AddDays(7)));
 ```
 
+## Cron in a Time Zone
+
+A cron expression is read in UTC unless the schedule names a zone:
+
+```csharp
+// 02:00 in New York, all year, whatever the offset is on the day
+await dispatcher.Dispatch(
+    new NightlyReportTask(),
+    builder => builder.Schedule().UseCron("0 2 * * *").InTimeZone("America/New_York"),
+    taskKey: "nightly-report");
+```
+
+Cronos evaluates the expression against the zone, including the days a local hour is skipped or repeated.
+See [Time Zones](time-zones.md).
+
 ## Next Steps
 
 - **[Fluent Scheduling API](fluent-api.md)** - Type-safe schedule building for simple patterns
+- **[Time Zones](time-zones.md)** - Run a cron expression on a real clock
 - **[Idempotent Task Registration](idempotent-registration.md)** - Prevent duplicate tasks
 - **[Managing Recurring Tasks](managing-tasks.md)** - Cancel and monitor tasks
 - **[Best Practices](best-practices.md)** - Choose the right schedule format

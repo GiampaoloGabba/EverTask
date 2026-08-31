@@ -31,7 +31,7 @@ public class HourInterval : IInterval
                 nameof(HourInterval));
 
         // Out-of-range hour/minute/second selectors deserialize but throw downstream at NextValidHour/Adjust —
-        // validate them here so recovery poisons the row cleanly (B2/gap #2).
+        // validate them here so recovery poisons the row cleanly.
         foreach (var hour in OnHours)
             if (hour < 0 || hour > 23)
                 throw new ArgumentException($"Invalid Hour Interval, '{hour}' is not a valid hour (0-23).",

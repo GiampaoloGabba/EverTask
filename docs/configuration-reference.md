@@ -19,6 +19,9 @@ This is a complete reference for all EverTask configuration options.
 - [Monitoring Configuration](#monitoring-configuration)
 - [Storage Provider Details](#storage-provider-details)
 - [Handler Configuration](#handler-configuration)
+- [Dispatch Parameters](#dispatch-parameters)
+- [Recurring Task Builder](#recurring-task-builder)
+- [Runtime Schedule Management](#runtime-schedule-management)
 - [Complete Examples](#complete-examples)
 - [Configuration Validation](#configuration-validation)
 - [Performance Tuning Guidelines](#performance-tuning-guidelines)
@@ -215,6 +218,219 @@ opt.SetDefaultAuditLevel(AuditLevel.None)
 - Use lower levels (Minimal/ErrorsOnly/None) for high-frequency recurring tasks
 - See [Audit Configuration](storage/audit-configuration.md) for detailed usage guide
 
+### SetMisfireThreshold
+
+Sets how late a delivery may start before its execution context reports it as a misfire.
+
+**Signature:**
+```csharp
+SetMisfireThreshold(TimeSpan threshold)
+```
+
+**Parameters:**
+- `threshold` (TimeSpan): tolerance between the nominal slot (`ITaskExecutionContext.ScheduledAtUtc`) and the actual start (`StartedAtUtc`). Must not be negative; `TimeSpan.Zero` reports every delivery that starts after its slot.
+
+**Default:** 5 seconds
+
+**Examples:**
+```csharp
+// A handler that compensates for lateness wants to know early
+opt.SetMisfireThreshold(TimeSpan.FromMilliseconds(500))
+
+// A nightly report does not care about a minute of scheduler drift
+opt.SetMisfireThreshold(TimeSpan.FromMinutes(5))
+```
+
+**Notes:**
+- This is a **classification** threshold. It decides what gets *reported* about a delivery or persisted as durable-occurrence misfire metadata, never whether anything runs: a late task runs exactly as it did before, and no status, retry or execution decision depends on it.
+- Below the threshold `Misfire` is `null`, so a handler that does not care never has to inspect a kind. Above it, `Misfire.Kind` is `Late` and `Misfire.Lateness` is the real gap.
+- It is the same threshold a **durable schedule** applies one step earlier, when it materializes an occurrence: a slot that came due longer ago than this produces an occurrence stamped with the backlog it stands for (`Misfire.Kind` `CatchUp` or `FireOnce`, plus the missed range and count), while a slot inside it produces an ordinary occurrence. See [Durable Occurrences](recurring-tasks/durable-occurrences.md).
+- A run of **more than one** missed slot is reported whatever the threshold says. `FireOnce` is about to collapse those slots and `CatchUp` to replay them, and neither may happen unreported just because the grid ticks faster than the tolerance.
+- A task dispatched to run immediately has no slot, so it can never be late.
+- The one-second tolerance the recurring skip-forward path uses to avoid treating a just-scheduled occurrence as past is a **separate rule**, unchanged by this setting.
+- See [Task Creation › Execution Context](task-creation.md#execution-context).
+
+### SetDefaultScheduleTimeZone
+
+Sets the time zone every calendar-anchored schedule or day/date exclusion is read on when it does not name
+one itself.
+
+**Signature:**
+```csharp
+SetDefaultScheduleTimeZone(TimeZoneInfo timeZone)
+```
+
+**Parameters:**
+- `timeZone` (TimeZoneInfo): a system time zone. Its IANA id is what gets persisted with each schedule, so the row resolves the same way on any host. A zone built with `TimeZoneInfo.CreateCustomTimeZone` has no such id and throws `ArgumentException`.
+
+**Default:** `null`. Schedules with no zone of their own are computed in UTC, as they always were.
+
+**Examples:**
+```csharp
+// One application, one zone
+opt.SetDefaultScheduleTimeZone(TimeZoneInfo.FindSystemTimeZoneById("Europe/Rome"))
+
+// A single schedule can still opt out
+r.Schedule().EveryDay().AtTime(new TimeOnly(9, 0)).InTimeZone("Asia/Tokyo")
+```
+
+**Notes:**
+- It applies at dispatch to calendar-anchored schedules and schedules carrying `Except` day/date selectors,
+  when they did not call `InTimeZone`. An explicit `InTimeZone` always wins.
+- A plain cadence without calendar exclusions is never touched. A cadence with `Except(e => e.OnDays/OnDates)`
+  keeps its elapsed grid and uses the zone only to decide the excluded local date.
+- The zone is written **into the definition** when the schedule is built. Rows already stored keep whatever they were dispatched with, so changing this default later does not silently move existing schedules by an hour; re-register them under the same `taskKey` to move them.
+- See [Recurring Tasks › Time Zones](recurring-tasks/time-zones.md) for daylight-saving behaviour and the id rules.
+
+### SetMaterializationConcurrency
+
+Sets how many durable schedules may be turning due slots into occurrence rows at the same time.
+
+**Signature:**
+```csharp
+SetMaterializationConcurrency(int concurrency)
+```
+
+**Parameters:**
+- `concurrency` (int): maximum concurrent materializations. Must be at least 1.
+
+**Default:** the value of `SetMaxDegreeOfParallelism`, which is also what bounds startup recovery. It is
+resolved lazily, so setting the parallelism after this call still takes effect.
+
+**Examples:**
+```csharp
+// A restart with many durable schedules puts more pressure on the database than the work itself
+opt.SetMaterializationConcurrency(4)
+```
+
+**Notes:**
+- Materialization is a short burst of storage writes, so this bounds how much of that the store sees at once.
+- It is **not** how many occurrences execute concurrently — that is the queue's parallelism — and not how many
+  may be alive per schedule, which is `CatchUpOptions.MaxPendingOccurrences`.
+- See [Recurring Tasks › Durable Occurrences](recurring-tasks/durable-occurrences.md).
+
+### SetBacklogRetryInterval
+
+Sets how long a durable schedule waits before trying again when it could not make progress.
+
+**Signature:**
+```csharp
+SetBacklogRetryInterval(TimeSpan interval)
+```
+
+**Parameters:**
+- `interval` (TimeSpan): the retry interval. Must be at least one second and at most one day; anything outside
+  that range throws `ArgumentOutOfRangeException`.
+
+**Default:** 1 minute
+
+**Examples:**
+```csharp
+// A schedule with a large backlog and a wide MaxPendingOccurrences drains faster on a shorter retry
+opt.SetBacklogRetryInterval(TimeSpan.FromSeconds(15))
+```
+
+**Notes:**
+- A schedule cannot make progress when its concurrency budget is full, or when one of its compare-and-swapped
+  writes lost a race and the run has to look at the row again. The ordinary way it resumes is the kick each
+  occurrence gives when it ends, which is immediate; this interval is the guarantee behind that kick.
+- Startup recovery runs once, so without a retry a schedule whose kick was lost would wait for the next
+  restart.
+- A **halted** catch-up is the one thing this interval does not cover. A halt never releases itself, not by
+  ageing and not by restarting, so retrying it would put the schedule row back through the worker queue every
+  interval for ever: a status transition and an audit row each time, to produce nothing. Only
+  an explicit schedule change releases one — `ResumeSchedule`, `Reschedule`, or dispatching the series again
+  after a cancel.
+- Below the scheduler's own one-second tick it buys nothing, which is the lower bound.
+- The upper bound is one day. This interval is the last thing between a blocked schedule and the next restart,
+  so a value measured in weeks guarantees nothing. It is also added to a UTC instant at every re-park,
+  including on the failure path, which repeats the same addition: an interval of centuries overflows both, and
+  the schedule then sits parked nowhere at all.
+- See [Recurring Tasks › Durable Occurrences](recurring-tasks/durable-occurrences.md).
+
+### SetOccurrenceProviderRetry
+
+Sets how long a live schedule waits before retrying an occurrence evaluation that could not answer: an
+`INextOccurrenceProvider` failure or exclusion-search budget exhaustion.
+
+**Signature:**
+```csharp
+SetOccurrenceProviderRetry(Action<OccurrenceProviderRetryOptions> configure)
+```
+
+**Options:**
+- `InitialBackoff` (TimeSpan): the wait after the first failure. Default: 1 minute.
+- `MaxBackoff` (TimeSpan): the longest wait the doubling reaches. Default: 15 minutes.
+
+Both must be positive and at most one day; anything else throws `ArgumentOutOfRangeException`. A `MaxBackoff`
+below `InitialBackoff` simply makes every wait that long.
+
+**Examples:**
+```csharp
+// A calendar read from a local table recovers in seconds, so waiting a minute is waiting for nothing
+opt.SetOccurrenceProviderRetry(retry =>
+{
+    retry.InitialBackoff = TimeSpan.FromSeconds(30);
+    retry.MaxBackoff     = TimeSpan.FromMinutes(5);
+})
+```
+
+**Notes:**
+- A provider that throws is treated as TRANSIENT: the database a calendar is read from being briefly down
+  must not end a series. Nothing is written — the row keeps its cursor and stays recoverable — and the
+  schedule is parked to ask again after this wait.
+- The wait doubles at each consecutive failure of the SAME schedule, up to `MaxBackoff`, and one answer
+  resets it. The counter is in memory and per host: a restart starts over at `InitialBackoff`, which costs
+  nothing, because the row was never written.
+- The startup-recovery poison counter is not touched by a provider failure. A calendar down across five
+  restarts would otherwise mark the series `Failed` for ever.
+- An unregistered provider key is NOT covered by this: it is a configuration error, refused at dispatch with
+  `ArgumentException` and poisoned at recovery like a corrupt cron expression.
+- See [Recurring Tasks › Occurrence Providers](recurring-tasks/occurrence-providers.md).
+
+### AddScheduleCalendar
+
+Registers a reusable static exclusion set during the `AddEverTask` configuration callback.
+
+```csharp
+opt.AddScheduleCalendar("it-holidays", calendar => calendar
+    .OnDates(new DateOnly(2026, 1, 1), new DateOnly(2026, 1, 6), new DateOnly(2026, 12, 25))
+    .OnDates(Pasquetta2026, Ferragosto2026));
+```
+
+Names are trimmed, case-sensitive and limited to 100 characters. Duplicate names, empty callbacks and invalid
+sets throw while the host is being configured. EverTask freezes a deep snapshot immediately after the callback;
+later mutations do not affect that host. Schedules reference it with `.ExceptCalendar("it-holidays")`. The
+persisted definition contains only the names, while days and dates use each schedule's zone and ranges remain
+absolute. An unknown name is refused before an ingress write and poisons a recovered schedule.
+
+### AddOccurrenceProvider&lt;T&gt;
+
+Registers an occurrence provider under the key schedules name it by. It is a method on the
+`EverTaskServiceBuilder` (what `AddEverTask` returns), not on the configuration object.
+
+**Signature:**
+```csharp
+AddOccurrenceProvider<TProvider>(string key) where TProvider : class, INextOccurrenceProvider
+```
+
+**Examples:**
+```csharp
+services.AddEverTask(opt => opt.RegisterTasksFromAssembly(typeof(Program).Assembly))
+        .AddSqlServerStorage(connectionString)
+        .AddOccurrenceProvider<BusinessDaysProvider>("business-days");
+```
+
+**Notes:**
+- `TProvider` is registered as **scoped** with `TryAdd`, so an application that wants another lifetime (a
+  singleton holding a cached calendar) registers it itself and keeps that registration. It is resolved in a
+  fresh scope for every question.
+- The KEY is what every schedule using the provider persists — never a type name, which a rename would
+  orphan. Treat it as part of the durable contract; it is matched ordinally.
+- Registering the same type under the same key twice is a no-op, so a registration that runs at every startup
+  is idempotent. A DIFFERENT type under a key already taken throws `ArgumentException`.
+- See [Recurring Tasks › Occurrence Providers](recurring-tasks/occurrence-providers.md).
+
 ### Audit & Execution-Log Retention (`AddAuditCleanup`)
 
 Configure automatic retention to prevent unbounded growth of the audit and execution-log tables. Retention is enforced by the optional `AuditCleanupHostedService`, registered with **`AddAuditCleanup(policy, cleanupIntervalHours)`**, the single entry-point that actually applies the policy.
@@ -272,6 +488,7 @@ var policy = new AuditRetentionPolicy
     ErrorAuditRetentionDays = 90,              // Errors retained for 90 days
     ExecutionLogRetentionDays = 30,            // Captured execution logs trimmed after 30 days
     MaxExecutionLogsPerTask = 1000,            // Keep at most the latest 1000 logs per task
+    OccurrenceRetentionDays = 60,              // Finished occurrences of durable schedules pruned after 60 days
     DeleteCompletedTasksAfterRetention = true  // Purge completed task rows once aged out (see below)
 };
 
@@ -291,11 +508,14 @@ builder.Services.AddAuditCleanup(policy, cleanupIntervalHours: 12);
 | `ErrorAuditRetentionDays` | `int?` | `null` | Days to retain error audit records (overrides above for failures) |
 | `ExecutionLogRetentionDays` | `int?` | `null` | Days to retain captured execution logs (`TaskExecutionLog`), trimmed independently of the parent task (anchored on `TimestampUtc`) |
 | `MaxExecutionLogsPerTask` | `int?` | `null` | Per-task, cross-run cap: keep at most the latest N execution logs per task and delete the oldest beyond N |
+| `OccurrenceRetentionDays` | `int?` | `null` | Days to retain the finished occurrences of a durable recurring schedule (the child rows it materializes, one per slot) |
 | `DeleteCompletedTasksAfterRetention` | `bool` | `false` | Hard-delete a completed non-recurring task once it is older than the longest retention window **and** has no audit rows |
 
 > `DeleteCompletedTasksWithAudits` is **`[Obsolete]`**: a legacy alias that forwards to `DeleteCompletedTasksAfterRetention`. Don't use it in new code; it remains only for source compatibility with pre-rename configs.
 >
 > **When a completed task is deleted:** when it is older than the longest of `StatusAuditRetentionDays`/`RunsAuditRetentionDays`/`ErrorAuditRetentionDays` (measured from `LastExecutionUtc`, falling back to `CreatedAtUtc`) and has no remaining StatusAudit/RunsAudit rows. If no retention window is configured, no completed tasks are deleted (a non-positive window counts as disabled). **When a log-retention window or cap (`ExecutionLogRetentionDays` / `MaxExecutionLogsPerTask`) is active, a task that still has surviving logs is preserved**, so its logs are never cascade-deleted before their own window expires; once those logs age out the task is purged. With no log retention configured, deleting the task cascades to everything it owns, captured execution logs included.
+>
+> **Occurrence retention.** `OccurrenceRetentionDays` prunes the finished occurrences of a durable recurring schedule, whatever terminal state they ended in: Completed, Failed and Cancelled alike. That is where it differs from `DeleteCompletedTasksAfterRetention`, which only removes completed rows with no audit trail left; without a window of its own, a busy schedule's failed and cancelled occurrences would pile up forever. Pruning them loses nothing, because a durable schedule is driven by its cursor and not by its past occurrence rows, so a pruned slot is never materialized again. The schedule row is recurring, and this pass never deletes it. **When a log-retention window or cap is active, an occurrence that still owns execution logs is preserved**, exactly as for completed tasks: the occurrence window is usually much shorter than the log one, and deleting the row would cascade to logs the log retention chose to keep. **Each audit trail has a guard of its own**: with `StatusAuditRetentionDays` set, an occurrence whose status rows are still inside that window is preserved, and `RunsAuditRetentionDays` guards the runs trail the same way. Deleting the row cascades both. An occurrence window of 7 days against an error window of 90 would otherwise erase a failure on day eight, and the cleanup line would report only an occurrence count. There is one guard per trail rather than one for both, because each audit pass runs only when its own knob is set: a window you never configured prunes nothing, so it has nothing to hold back. Default `null` (unlimited); enforced by `AddAuditCleanup(policy, …)`.
 >
 > **Execution-log retention.** `ExecutionLogRetentionDays` and `MaxExecutionLogsPerTask` trim `TaskExecutionLog` rows on their own, without deleting the task, so a long-running service (recurring tasks especially) never accumulates logs without bound. Both default to `null` (unlimited), so enabling persistent logging never starts deleting logs on its own. They are separate from `PersistentLoggerOptions.MaxLogsPerTask`, which caps a single execution's logs at capture time; these two trim logs across all past runs. When both are set, a log is deleted if it breaks either rule. Both are enforced by `AddAuditCleanup(policy, …)`.
 
@@ -485,7 +705,7 @@ When enabled, EverTask automatically chooses the best resolution strategy:
 - **Delayed tasks with delay < 30 minutes**: Eager mode
 
 **Benefits:**
-- **Memory Optimization**: Handlers are disposed after dispatch, reducing memory footprint for long-running scheduled tasks
+- **Memory Optimization**: Handlers are disposed after dispatch, so long-running scheduled tasks hold less memory
 - **Fresh Dependencies**: Handlers get fresh scoped services at execution time (important for DbContext, etc.)
 - **Automatic Tuning**: Adaptive algorithm balances memory and performance
 
@@ -502,12 +722,44 @@ Only disable lazy resolution if:
 - **CPU**: Negligible overhead (handler instantiation is fast with DI)
 
 **Notes:**
-- Handler dependencies are resolved at execution time, ensuring fresh scoped services
+- Handler dependencies are resolved at execution time, so the scoped services they get are fresh
 - At dispatch time, a short-lived metadata instance is resolved (and disposed with its scope) to extract handler options
 
 ### SetRateLimiterOptions
 
 Configures the global infrastructure knobs of the keyed rate limiter (v3.7+). See the dedicated [Rate Limiting Configuration](#rate-limiting-configuration) section below for the full reference (global knobs, per-handler `RateLimitPolicy`, key source).
+
+### The Scheduling Clock (`TimeProvider`)
+
+Not a builder method, but a DI registration. `AddEverTask` registers `TimeProvider.System` with `TryAddSingleton`, and that single instance is what answers "what time is it?" for dispatch delays, the occurrence grid of a recurring schedule, both schedulers, startup recovery, and the rate limiter with its gate and parking lot.
+
+**Signature:**
+```csharp
+services.AddSingleton<TimeProvider>(myProvider);   // before AddEverTask, or on .Services afterwards
+```
+
+**Default:** `TimeProvider.System`
+
+**Examples:**
+```csharp
+// Production: nothing to do. AddEverTask registers the system clock.
+builder.Services.AddEverTask(opt => opt.RegisterTasksFromAssembly(typeof(Program).Assembly));
+
+// Tests: register a controllable clock and the whole pipeline follows it.
+var clock = new FakeTimeProvider(new DateTimeOffset(2026, 5, 1, 12, 0, 0, TimeSpan.Zero));
+services.AddSingleton<TimeProvider>(clock);
+services.AddEverTask(opt => opt.RegisterTasksFromAssembly(typeof(Program).Assembly))
+        .AddMemoryStorage();
+
+// ...dispatch a schedule, then move time forward instead of waiting for it:
+clock.Advance(TimeSpan.FromHours(2));
+```
+
+**Notes:**
+- `TryAddSingleton` is what makes this a seam: register your own provider first and `AddEverTask` leaves it alone. Registering it afterwards works too, as long as it is a plain `AddSingleton` that replaces the entry.
+- The schedulers wait on `Task.Delay(delay, timeProvider)`, not on a wall-clock timeout, so a test clock that stands still keeps an occurrence pending no matter how much real time passes. A fake provider has to drive its timers as well as `GetUtcNow()` for that to hold.
+- Storage never resolves the clock on its own: the core passes the instant into `RetrievePending` and `TrySetQueuedIfRecoverable`, so the recovery filter judges a row against the same "now" the rest of the pipeline sees. A custom store that only implements the older signatures keeps working and reads the real clock (see [Custom Storage](storage/custom-storage.md)).
+- Retry delays, audit timestamps and log timestamps stay on the real clock deliberately. `IRetryPolicy` is a public interface that owns its own waits, and an audit row records when something really happened. Do not expect a fake clock to complete a retry delay.
 
 ## Queue Configuration
 
@@ -634,7 +886,7 @@ Per-queue retry/timeout resolution chain (v3.7+): **handler override → queue d
 
 ## Rate Limiting Configuration
 
-Keyed rate limiting (v3.7+) constrains how often tasks of a type execute **per key** (tenant, account, external resource). Behavior, semantics, and edge cases are documented in [Keyed Rate Limiting](rate-limiting.md); this section covers the configuration surface.
+Keyed rate limiting (v3.7+) constrains how often tasks of a type execute **per key** (tenant, account, external resource). Behavior and edge cases are documented in [Keyed Rate Limiting](rate-limiting.md); this section covers the configuration surface.
 
 Configuration lives in three places:
 
@@ -1114,10 +1366,14 @@ not auto-register SignalR monitoring and requires you to register `ITaskStorage`
 |----------|------|---------|-------------|
 | `EnableUI` | `bool` | `true` | Enable embedded React dashboard |
 | `EnableOpenApiDocument` | `bool` | `false` | Serve the monitoring OpenAPI document (net9.0+; auto-enabled by the Scalar package) |
-| `EnableSwagger` | `bool` | `false` | Obsolete no-op since 3.12.0 (use `EnableOpenApiDocument`) |
+| `EnableSwagger` | `bool` | `false` | Obsolete no-op since 4.0.0 (use `EnableOpenApiDocument`) |
 | `Username` | `string` | `"admin"` | JWT Authentication username |
 | `Password` | `string` | `"admin"` | JWT Authentication password (CHANGE IN PRODUCTION!) |
 | `EnableAuthentication` | `bool` | `true` | Enable JWT Authentication |
+| `EnableManagementEndpoints` | `bool` | `false` | Expose the management (write) endpoints under `/evertask-monitoring/api/management`. While false, every path under that prefix answers 404 |
+| `ManagementUsername` | `string?` | `null` | Username of the second, operate-level credential. Logging in with it returns a token carrying the operate role, which is what the management endpoints require |
+| `ManagementPassword` | `string?` | `null` | Password of the operate-level credential (compared in fixed time). Both halves must be set for the credential to exist |
+| `ManagementAuthorization` | `Func<HttpContext, Task<bool>>?` | `null` | Host-supplied authorization for the management endpoints. When set it **replaces** the role check; returning false answers 403 |
 | `JwtSecret` | `string?` | `null` | JWT signing key; when unset, a random 256-bit secret is generated per instance. Set it explicitly (≥ 32 bytes) for multi-instance deployments |
 | `JwtIssuer` | `string` | `"EverTask.Monitor.Api"` | JWT issuer claim |
 | `JwtAudience` | `string` | `"EverTask.Monitor.Api"` | JWT audience claim |
@@ -1125,7 +1381,7 @@ not auto-register SignalR monitoring and requires you to register `ITaskStorage`
 | `EnableCors` | `bool` | `true` | **Registers** a named CORS policy (`EverTaskMonitoringApi`); EverTask does NOT apply it: your app must (`app.UseCors(...)`). See note below |
 | `CorsAllowedOrigins` | `string[]` | `[]` | Origins for the registered policy (empty = allow-any). Only effective once the policy is actually applied |
 | `AllowedIpAddresses` | `string[]` | `[]` | IP address whitelist (empty = allow all IPs). Supports IPv4, IPv6, and CIDR notation |
-| `MagicLinkToken` | `string?` | `null` | Static token for magic link authentication. When set, enables instant access via `/evertask-monitoring/magic#token=...` (exchanged with `POST /api/auth/magic`; the `?token=` query form is deprecated since 3.12.0 because it lands in request logs) |
+| `MagicLinkToken` | `string?` | `null` | Static token for magic link authentication. When set, enables instant access via `/evertask-monitoring/magic#token=...` (exchanged with `POST /api/auth/magic`; the `?token=` query form is deprecated since 4.0.0 because it lands in request logs) |
 | `EventDebounceMs` | `int` | `1000` | Debounce time in milliseconds for SignalR event-driven cache invalidation in the dashboard. Higher values reduce API load during task bursts but introduce slight UI update delays. Recommended: 300ms (very responsive), 500ms (balanced), 1000ms (conservative for high-volume) |
 | `BasePath` | `string` | `/evertask-monitoring` | **Read-only** computed property (fixed; cannot be set) |
 | `ApiBasePath` | `string` | `/evertask-monitoring/api` | **Read-only** computed property (`{BasePath}/api`) |
@@ -1175,7 +1431,7 @@ Scalar setup and the optional recipe to surface the document inside the host's o
 
 #### EnableSwagger (obsolete)
 
-No-op since 3.12.0: the Swashbuckle integration was removed (it broke .NET 10 hosts using the
+No-op since 4.0.0: the Swashbuckle integration was removed (it broke .NET 10 hosts using the
 built-in OpenAPI stack, issue #20). Use `EnableOpenApiDocument` and optionally the
 `EverTask.Monitor.Api.Scalar` package instead.
 
@@ -1225,6 +1481,13 @@ options.EnableAuthentication = !builder.Environment.IsDevelopment();
 - **SignalR hub**: Real-time monitoring hub at `/evertask-monitoring/hub`
 - **UI**: Not protected by JWT (only IP whitelist, see `AllowedIpAddresses`)
 
+**Behind a path base.** The checks are enforced inside routing, so they hold when the application runs under
+`app.UsePathBase("/tenant")`: what is judged is the path routing resolved, which is the monitoring path
+without the base. Before 4.0.0 they were enforced only by a middleware that runs before `UsePathBase`, so on
+such a host every layer was skipped at once — the read endpoints answered anonymously, the IP whitelist never
+ran and the SignalR handshake was granted (issue #46). Only the monitoring CORS policy still keys off the
+pre-`UsePathBase` path, so under a path base you may need your own CORS setup for cross-origin dashboards.
+
 **Always Accessible (No JWT Required):**
 - `/api/config` - Dashboard configuration endpoint
 - `/api/auth/login` - Login endpoint for obtaining JWT
@@ -1244,6 +1507,73 @@ options.EnableAuthentication = !builder.Environment.IsDevelopment();
 - UI is always accessible (relies on IP whitelist for protection)
 - JWT tokens expire after 8 hours by default (see `JwtExpirationHours`)
 
+#### EnableManagementEndpoints, ManagementUsername / ManagementPassword, ManagementAuthorization
+
+The monitoring API is read-only by construction. These four options are what opens the one exception to that
+— the management endpoints, which requeue a terminal occurrence, resume a halted catch-up or cancel a
+schedule — and they start from the **authorization**, not from the endpoints.
+
+**Why a second credential.** `Username`/`Password` is the dashboard credential: everyone who looks at the
+dashboard shares it, and looking is all it is for. A requeue puts a handler with side effects back into
+execution, so it does not travel on that credential. `ManagementUsername`/`ManagementPassword` is a separate
+account, and logging in with it returns a token carrying the **operate** role; every other login — the
+dashboard credential and every magic link, which is a URL and gets forwarded — returns a read-only one.
+
+**Examples:**
+```csharp
+// Default: no write surface at all. A host that upgrades gains nothing it did not ask for.
+options.EnableManagementEndpoints = false;
+
+// Opened, behind a second credential
+options.EnableManagementEndpoints = true;
+options.ManagementUsername        = "evertask-operator";
+options.ManagementPassword        = builder.Configuration["EverTask:OperatePassword"];
+
+// Or decided by the application's own authorization, whatever it is. The hook runs inside routing, after
+// the host's UseAuthentication, so context.User is the principal the application authenticated.
+options.EnableManagementEndpoints = true;
+options.ManagementAuthorization   = context =>
+    Task.FromResult(context.User.IsInRole("BackgroundJobsOperator"));
+```
+
+**How a request is decided** (`/evertask-monitoring/api/management/*` only):
+1. `EnableManagementEndpoints` is false → **404**. The prefix does not exist; an API that never opened a
+   write surface does not advertise one.
+2. Authentication is enabled and no valid token is presented → **401**, as everywhere else.
+3. `ManagementAuthorization` is set → the host decides. It **replaces** the role check, so holding the
+   operate credential does not bypass it. Returning false → **403**.
+4. Otherwise the session must carry the operate role → **403** without it.
+
+With `EnableAuthentication = false` there is no session and therefore no role: the management endpoints are
+refused (403) unless `ManagementAuthorization` says otherwise. Opening the read API must not silently mean
+"anyone may cancel a schedule".
+
+**Where the decision runs.** Inside routing, as an MVC authorization filter on the management routes — not in
+the monitoring middleware. Two things follow, and both matter:
+
+- It sees the request as routing does, so a host that calls `app.UsePathBase("/tenant")` is covered.
+  `UsePathBase` moves the prefix out of `Request.Path` *after* the monitoring middleware has run, so a check
+  living only there would miss the very request that routing then resolves to the action.
+- It runs after the host's `UseAuthentication`, so `context.User` inside `ManagementAuthorization` is the
+  principal your application authenticated. `context.User.IsInRole(...)`, a claims check or anything else you
+  already use answers exactly what it answers in your own controllers.
+
+**The management credential must really be a second one.** Registration throws `InvalidOperationException`
+when `ManagementPassword` equals `Password` or `MagicLinkToken`, and when only one half of
+`ManagementUsername` / `ManagementPassword` is set. A username is not a secret: an operate password the host
+already hands out for reading is not a second credential, it is the shared one with a different name on it.
+
+**CSRF.** These endpoints need no anti-forgery token: the API authenticates a session with a Bearer token in
+the `Authorization` header, never with a cookie (the `?access_token=` fallback exists on the SignalR hub path
+alone). A browser attaches neither to a cross-site request, so a page the operator did not open cannot make
+one of these calls in their name — which also means the dashboard's token must stay out of cookies.
+
+The endpoints themselves are documented in
+[Monitoring API Reference](monitoring-api-reference.md#management-endpoints). The application-side road is
+unchanged and still the right one for anything programmatic: `ITaskScheduleManager`, called behind the
+application's own authorization (see
+[Managing schedules at runtime](recurring-tasks/managing-tasks.md)).
+
 #### SignalRHubPath
 
 The SignalR hub path is now fixed to `/evertask-monitoring/hub` and cannot be changed.
@@ -1256,7 +1586,7 @@ The SignalR hub path is now fixed to `/evertask-monitoring/hub` and cannot be ch
 #### EnableCors
 
 When `true`, registers the `EverTaskMonitoringApi` CORS policy and applies it to requests under
-`/evertask-monitoring` (since 3.12.0). The host pipeline is untouched: no global `UseCors` and
+`/evertask-monitoring` (since 4.0.0). The host pipeline is untouched: no global `UseCors` and
 nothing to wire manually. With `CorsAllowedOrigins` empty the policy allows any origin; with
 origins set it restricts to them and adds `AllowCredentials`.
 
@@ -1343,19 +1673,37 @@ options.AllowedIpAddresses = new[]
 **Features:**
 - Supports **IPv4** and **IPv6** addresses
 - Supports **CIDR notation** (e.g., `192.168.0.0/24`)
-- Checks `X-Forwarded-For` header first (reverse proxy support)
+- The client address is `Connection.RemoteIpAddress` — **no header is trusted** (see below)
 - Returns **403 Forbidden** if IP not in whitelist
 - IP check runs **before authentication** (more efficient)
 
 **Security Notes:**
 - Empty array = **allow all IPs** (default, suitable for internal networks)
 - Always configure in production when exposed to internet
-- Works with reverse proxies (nginx, IIS, etc.)
-- Protects both API and SignalR hub endpoints
+- Protects the API, the SignalR hub and the dashboard files (which no JWT covers)
 - More efficient than firewall rules at application level
 
-**Reverse Proxy Configuration:**
-When behind a reverse proxy, ensure `X-Forwarded-For` header is set:
+**Behind a reverse proxy** (changed in 4.0.0 — see below)
+
+The whitelist compares the address of the connection EverTask actually sees. Behind a proxy that address is
+the proxy's, so the host must let ASP.NET Core replace it first, with the standard
+[forwarded headers middleware](https://learn.microsoft.com/aspnet/core/host-and-deploy/proxy-load-balancer):
+
+```csharp
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor;
+    // Only these peers may be believed. Without them nothing is forwarded.
+    options.KnownProxies.Add(IPAddress.Parse("10.0.0.7"));
+    // options.KnownNetworks.Add(new IPNetwork(IPAddress.Parse("10.0.0.0"), 8));
+});
+
+var app = builder.Build();
+app.UseForwardedHeaders();   // before UseRouting
+```
+
+and the proxy must send the header:
+
 ```nginx
 # Nginx example
 location /evertask-monitoring {
@@ -1363,6 +1711,12 @@ location /evertask-monitoring {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 }
 ```
+
+> **BREAKING (4.0.0), security.** Before 4.0.0 EverTask read `X-Forwarded-For` itself and believed it
+> unconditionally, so **any** direct caller could bypass the whitelist by sending a whitelisted address in
+> that header (issue #47). It no longer reads the header at all. If you are behind a proxy and relied on the
+> old behavior, configure `UseForwardedHeaders` as above — with `KnownProxies` or `KnownNetworks` set, which
+> is what decides whether the header may be believed. Hosts not behind a proxy need no change.
 
 #### MagicLinkToken
 
@@ -1378,7 +1732,7 @@ options.MagicLinkToken = "your-secret-token";
 options.AllowedIpAddresses = new[] { "10.0.0.0/8" };
 ```
 
-**Access URL** (since 3.12.0, token in the URL fragment):
+**Access URL** (since 4.0.0, token in the URL fragment):
 ```
 https://your-server/evertask-monitoring/magic#token=your-very-long-secret-token-here-min-32-chars
 ```
@@ -1410,15 +1764,19 @@ https://your-server/evertask-monitoring/magic#token=your-very-long-secret-token-
 Once configured, the monitoring API exposes REST endpoints for querying tasks and reading statistics. All endpoints are relative to `{BasePath}/api` (default: `/evertask-monitoring/api`).
 
 **Main endpoints:**
-- `GET /tasks` - Paginated task list with filtering
+- `GET /tasks` - Paginated task list with filtering, including the `parentTaskId`, `onlyOccurrences` and `onlyCatchUp` filters for [durable occurrences](recurring-tasks/durable-occurrences.md)
 - `GET /tasks/{id}` - Task details
+- `GET /tasks/counts` - Task counts by category (all, standard, recurring, failed, occurrences)
 - `GET /tasks/{id}/status-audit` - Status change history
 - `GET /tasks/{id}/runs-audit` - Execution history
 - `GET /tasks/{id}/execution-logs` - Persisted handler logs (when persistent logging is enabled)
-- `GET /dashboard/overview` - Dashboard statistics
+- `GET /tasks/{id}/occurrences` - The occurrences a durable schedule has materialized, newest slot first, paged by the storage itself
+- `GET /dashboard/overview` - Dashboard statistics, including the catch-up backlog of every durable schedule by state
 - `GET /queues` - Queue metrics
 - `GET /statistics/success-rate-trend` - Success rate trends
 - `GET /rate-limits` - Keyed rate-limit state (per-key parked count, next slot, tracked keys, fail-open count; in-memory, single-node)
+
+Every endpoint is read-only: nothing here changes a task or a schedule. Changing a schedule while the application runs is [`ITaskScheduleManager`](recurring-tasks/managing-tasks.md), called from your own code behind your own authorization — the dashboard credentials are one read credential shared by everyone who looks at it.
 
 See [Monitoring Dashboard](monitoring-dashboard.md) for complete API documentation.
 
@@ -1427,8 +1785,10 @@ See [Monitoring Dashboard](monitoring-dashboard.md) for complete API documentati
 When `EnableUI` is true, the embedded React dashboard provides:
 
 - **Overview Dashboard**: Total tasks, success rate, active queues, execution times
-- **Task List**: Filtering, sorting, pagination, status filters
+- **Catch-up Backlog**: The occurrences of every durable schedule by state (pending, active, failed, skipped, completed), how far behind the oldest pending slot is, and how many schedules stopped themselves over their catch-up cap. Shown only when a durable schedule exists
+- **Task List**: Filtering, sorting, pagination, status filters, plus a catch-up badge and a lateness badge on the rows that stand for missed work
 - **Task Details**: Complete information, execution history, error details
+- **Occurrences**: A tab on a durable schedule — the occurrences it materialized, newest slot first, with page controls
 - **Queue Metrics**: Per-queue statistics and health monitoring
 - **Analytics**: Success rate trends, task type distribution, execution times
 - **Real-Time Updates**: Live task updates via SignalR
@@ -1740,7 +2100,8 @@ PRAGMA temp_store=MEMORY;
 **Notes / limitations:**
 - `SchemaName` lowercase-only (see above).
 - All `DateTimeOffset` values map to `timestamptz` (UTC).
-- Full multi-server / high-write-concurrency support (unlike SQLite).
+- High-write-concurrency support on one active EverTask host per store; an inactive standby is fine. See
+  [Horizontal Scaling](scalability.md#horizontal-scaling-multiple-instances).
 
 ### MySQL / MariaDB Storage Options
 
@@ -1782,7 +2143,8 @@ PRAGMA temp_store=MEMORY;
 - No schema concept (see above).
 - Built on Microting.EntityFrameworkCore.MySql (maintained Pomelo fork); MySQL 8.0+ and MariaDB 10.11+.
 - All `DateTimeOffset` values map to `datetime(6)` (UTC).
-- Full multi-server / high-write-concurrency support (unlike SQLite).
+- High-write-concurrency support on one active EverTask host per store; an inactive standby is fine. See
+  [Horizontal Scaling](scalability.md#horizontal-scaling-multiple-instances).
 
 ## Handler Configuration
 
@@ -1826,6 +2188,10 @@ public class MyHandler : EverTaskHandler<MyTask>
 - `GetRateLimitKey(TTask task)`: derive the rate-limit bucket key from task data (e.g. `task.TenantId.ToString()`) without implementing `IRateLimitedTask`. Default reads `IRateLimitedTask.RateLimitKey`.
 - Lifecycle callbacks: `OnStarted(Guid)`, `OnCompleted(Guid)`, `OnError(Guid, Exception?, string?)`, `OnRetry(Guid, int attemptNumber, Exception, TimeSpan delay)`, and `DisposeAsyncCore()`. See [Resilience › Error Observation](resilience/error-observation.md) and [Retry Callbacks](resilience/retry-callbacks.md).
 
+**Injected per delivery (read, don't override):**
+- `Logger` (`ITaskLogCapture`): task-scoped logging, persisted when `WithPersistentLogger` is configured.
+- `Context` (`ITaskExecutionContext`): the identity of the delivery being executed. `TaskId`, `ScheduleId`, `TaskKey`, `ScheduledAtUtc` (the nominal slot; a rate-limit deferral moves the delivery, not this), `ScheduledAtLocal`, `TimeZoneId`, `StartedAtUtc`, `Attempt`, `RunNumber` (durable across restarts), `ScheduleVersion`, `IsRecurring`, `IsOccurrence` and `Misfire`. Both are injected before `OnStarted`, so they are readable in `Handle` and in every callback, and reading `Context` from a constructor throws `InvalidOperationException`. Services that are not the handler read the same instance through `ITaskExecutionContextAccessor` (singleton; `Current` follows the delivery's asynchronous flow and is null outside one). Full walkthrough: [Task Creation › Execution Context](task-creation.md#execution-context).
+
 ## Dispatch Parameters
 
 Every `ITaskDispatcher.Dispatch(...)` overload accepts these optional parameters (see [Task Dispatching](task-dispatching.md) for full behavior):
@@ -1840,7 +2206,7 @@ The scheduling discriminator (`TimeSpan` delay, `DateTimeOffset` time, or `Actio
 
 ## Recurring Task Builder
 
-The `Action<IRecurringTaskBuilder>` overload of `Dispatch` configures a recurring schedule via a fluent builder (`src/EverTask.Abstractions/Recurring/IRecurringTaskBuilder.cs`). All times are **UTC**. Full feature docs: [Recurring Tasks](recurring-tasks.md).
+The `Action<IRecurringTaskBuilder>` overload of `Dispatch` configures a recurring schedule via a fluent builder (`src/EverTask.Abstractions/Recurring/IRecurringTaskBuilder.cs`). All times are **UTC** unless the schedule names a zone. Full feature docs: [Recurring Tasks](recurring-tasks.md).
 
 **Entry / first run:**
 - `Schedule()`: pure recurring, no initial one-off run.
@@ -1849,8 +2215,8 @@ The `Action<IRecurringTaskBuilder>` overload of `Dispatch` configures a recurrin
 **Interval:**
 - `Every(int n)` followed by `.Seconds()` / `.Minutes()` / `.Hours()` / `.Days()` / `.Weeks()` / `.Months()`.
 - `EverySecond()` / `EveryMinute()` / `EveryHour()` / `EveryDay()` / `EveryWeek()` / `EveryMonth()`.
-- `OnHours()`: every hour (1-hour interval; refine with `.AtMinute(...)`).
 - `OnDays(params DayOfWeek[])`: specific weekdays; `OnMonths(params int[])`: specific months.
+- There is no hourly counterpart of those two. `OnHours()` is on the concrete `IntervalSchedulerBuilder` but not on `IIntervalSchedulerBuilder`, so `Schedule().OnHours()` does not compile, and it selects no hours in any case: it builds `EveryHour()`'s plain cadence, which a time zone does not govern. For specific hours of the day use `EveryDay().AtTimes(...)`.
 
 **Refinement:**
 - Hour → `.AtMinute(0–59)`; minute → `.AtSecond(0–59)`.
@@ -1858,11 +2224,113 @@ The `Action<IRecurringTaskBuilder>` overload of `Dispatch` configures a recurrin
 - Week → `.OnDay(DayOfWeek)` / `.OnDays(params DayOfWeek[])` → then `.AtTime(...)`.
 - Month → `.OnDay(1–31)` / `.OnDays(params int[])` / `.OnFirst(DayOfWeek)` → then `.AtTime(...)`.
 
+**Exclusions:**
+- `.Except(Action<IExclusionBuilder>)` subtracts any union of whole weekdays (`OnDays`), whole dates
+  (`OnDates`) and absolute half-open windows (`Between(from, to)`, where `from` is included and `to` is not).
+  Calls are additive and repeatable.
+- `.ExceptWeekends()` is exactly `.Except(e => e.OnDays(DayOfWeek.Saturday, DayOfWeek.Sunday))`.
+- `.ExceptCalendar(params string[] names)` adds reusable sets registered by `AddScheduleCalendar`; calls and
+  names are additive, with at most 16 distinct names per schedule.
+- Excluded grid slots do not exist: they consume no run, misfire count, durable row, audit or event. First-run
+  overrides from `RunNow`, `RunDelayed` and `RunAt` are explicit instants and are not filtered.
+- Day/date exclusions use the persisted schedule zone, or UTC when none is named. This makes
+  `Every(4).Hours().InTimeZone("Europe/Rome").ExceptWeekends()` legal: the cadence stays elapsed while the zone
+  governs only which local dates are excluded. Absolute `Between` windows compare instants.
+- Allowed with built-in intervals and cron; refused with `INextOccurrenceProvider`. `MaxRuns`, `RunUntil`,
+  misfire policies, `SkipOldest`, backfill and durable occurrences operate on the filtered grid.
+- `RescheduleMode.RebaseFromCursor` is refused when either definition has exclusions; use
+  `RecalculateFromNow`. Evaluation is bounded, and a definition whose filtered grid cannot be found surfaces
+  an error instead of being mistaken for a finished series.
+- Calendar configuration is frozen for one host lifetime. An edit applies after the next host start and only
+  looking forward: future slots follow the new calendar; nothing already passed, materialized or halted changes.
+
 **Cron:** `UseCron("expr")`: 5-field (`min hour dom month dow`) or 6-field (with seconds), via Cronos. **Overrides** every other interval call; invalid expressions throw `ArgumentException` on the first schedule calculation.
 
-**Limits:** `.RunUntil(DateTimeOffset)` (must be future) and `.MaxRuns(int)` (counts real executions only; occurrences skipped to realign after downtime do not consume the budget). Stops at whichever is reached first.
+**Time zone:** `.InTimeZone(TimeZoneInfo)` / `.InTimeZone(string)`, accepted before the interval (on `Schedule()`), on the interval builder itself (`EveryDay().InTimeZone(z).AtTime(...)`) and after the final refinement: every position but between `Every(n)` and its unit. The id may be IANA or Windows; the IANA form is what gets persisted, inside the schedule definition, with no new column. It governs calendar-anchored schedules and the local dates read by day/date exclusions. A plain cadence without calendar exclusions still refuses it. Across daylight saving, a skipped local time fires at the gap's exit and a repeated one fires on its first pass. Global default: [`SetDefaultScheduleTimeZone`](#setdefaultscheduletimezone). Full rules: [Time Zones](recurring-tasks/time-zones.md).
+
+**Occurrence provider:** `.UseOccurrenceProvider(string key, string? config = null)` on `Schedule()`, for a calendar no interval and no cron can express. The grid then comes from the `INextOccurrenceProvider` registered as [`AddOccurrenceProvider<T>(key)`](#addoccurrenceprovidert), which answers "which occurrence comes strictly after this instant" in UTC; `null` ends the series. **Exclusive** with every interval and with cron — a provider replaces the grid instead of refining it, and naming both throws `InvalidOperationException` at build. Only the key and the opaque `config` string are persisted (never a type name), and the schedule's `InTimeZone` id travels to the provider, which is what reads the calendar on it. Everything else applies unchanged: misfire policies, durable occurrences, `MaxRuns`/`RunUntil`, the skip-forward after a downtime, and `ReevaluateSchedule` as the way to say the calendar changed. Two exceptions: `CatchUpOverflowPolicy.SkipOldest` needs `IsDeterministic => true` on the provider (refused at dispatch otherwise) and `RescheduleMode.RebaseFromCursor` is refused, because a provider exposes no nominal period. An unknown key is a configuration error (`ArgumentException` at dispatch, terminal poison at recovery); a provider that throws is transient — nothing is written, the schedule is re-parked after [`SetOccurrenceProviderRetry`](#setoccurrenceproviderretry)'s backoff, and it surfaces as `OccurrenceProviderException` only where a caller is holding the call: a dispatch, and the `ITaskScheduleManager` methods that decide a new cursor (`Reschedule`, `ReevaluateSchedule`). Full rules: [Occurrence Providers](recurring-tasks/occurrence-providers.md).
+
+**Limits:** `.RunUntil(DateTimeOffset)` (must be future) and `.MaxRuns(int)` (counts real executions only; occurrences skipped to realign after downtime do not consume the budget). Stops at whichever is reached first. On a **durable** schedule `MaxRuns` counts materializations instead — an occurrence that later fails or is cancelled still spent a run, because the schedule did produce it.
+
+**Durable occurrences:** `.WithDurableOccurrences()`, `.OnMisfire(Action<IMisfirePolicyBuilder>)` and `.BackfillFrom(DateTimeOffset)`, accepted in the same positions as `InTimeZone`. They turn every due slot into its own one-shot row — its own status, retries, audit trail and rate-limit budget — and the schedule row stops running the handler.
+
+- `.OnMisfire(m => m.Skip())` is the default written out: missed slots are dropped, at most the one still current runs, and no occurrence rows are created.
+- `.OnMisfire(m => m.FireOnce(options))` collapses a whole run of missed slots into ONE occurrence at the most recent of them, with the range it covers in `ITaskExecutionContext.Misfire`. `FireOnceOptions.MaxAge` (default `null`) drops the run entirely when even its newest slot is older than the window.
+- `.OnMisfire(m => m.CatchUp(options))` replays every missed slot, oldest first. `CatchUpOptions(maxAge, maxOccurrences)` requires both caps; `MaxPendingOccurrences` (default `1`) is how many occurrences may be alive at once; `OverflowPolicy` is `Halt` (default — nothing is materialized, a durable marker is written, the schedule stops being parked so it costs no further deliveries or writes, and neither time nor a restart releases it: only an explicit schedule change does — [`ResumeSchedule` or `Reschedule`](#runtime-schedule-management), or dispatching the series again after a cancel) or `SkipOldest`, which keeps the most recent `MaxOccurrences`.
+- Both replaying policies imply durable occurrences; `.WithDurableOccurrences()` gives the rows without the replay.
+- `.BackfillFrom(startUtc)` starts the cursor at the first occurrence on or after `startUtc` instead of after the dispatch. New registrations only, and still bounded by the caps above.
+- Requires a storage that implements the atomic occurrence operations. Every built-in provider does; a custom one that does not is refused at dispatch with `NotSupportedException`.
+- Contracts: at-least-once (write idempotent handlers) and **one active host**. Full rules: [Durable Occurrences](recurring-tasks/durable-occurrences.md).
 
 > `OnLast(DayOfWeek)` is **not** implemented (only `OnFirst`). For idempotent registration across restarts, pass a stable `taskKey` (see [Dispatch Parameters](#dispatch-parameters)).
+
+## Runtime Schedule Management
+
+`ITaskScheduleManager` changes a schedule that is already registered. `AddEverTask` registers it next to `ITaskDispatcher`, which is untouched: a dispatch registers a schedule, this manages the one already registered. Schedules are addressed by the `taskKey` they were dispatched with; occurrences by their own id.
+
+```csharp
+public class ScheduleAdmin(ITaskScheduleManager schedules)
+{
+    public Task<ScheduleUpdateResult> MoveDailyReport(TimeOnly at) =>
+        schedules.Reschedule(
+            "daily-report",
+            r => r.Schedule().EveryDay().AtTime(at).InTimeZone("Europe/Rome"),
+            RescheduleMode.RebaseFromCursor);
+}
+```
+
+| Method | Returns | Purpose |
+|--------|---------|---------|
+| `Reschedule(taskKey, configure, mode, ct)` | `ScheduleUpdateResult` | Replace the definition and choose a new cursor |
+| `ReevaluateSchedule(taskKey, ct)` | `ScheduleUpdateResult` | Keep the definition, recompute the cursor from now — a durable backlog is discarded |
+| `ResumeSchedule(taskKey, ct)` | `ScheduleUpdateResult` | Release a durable catch-up halt, keeping the cursor |
+| `RequeueFailedOccurrence(occurrenceId, ct)` | `bool` | Put one terminal occurrence back in the queue |
+| `CancelSchedule(taskKey, ct)` | `Task` | Cancel the schedule and every pending occurrence of it |
+
+**Requirements.** Every method needs a registered storage, and beyond that each one asks for what it actually uses. `Reschedule`, `ReevaluateSchedule` and `ResumeSchedule` rewrite a schedule row and need `SupportsScheduleVersioning`; `RequeueFailedOccurrence` addresses a child row and needs `SupportsDurableOccurrences`; `CancelSchedule` needs neither, because writing a cancellation is something every storage has always done. What a call is asked to WRITE counts too: a `Reschedule` whose new definition turns the schedule durable — `WithDurableOccurrences()`, or an `OnMisfire` policy of `FireOnce`/`CatchUp` — needs `SupportsDurableOccurrences` on top of the versioning, and is refused before anything is written, exactly as a dispatch of the same definition would be. Both capabilities are true for all built-in providers. A storage without the one a call needs throws `NotSupportedException` rather than degrading: without a real compare-and-swap a reschedule could report success while a run finishing at the same moment silently overwrote it, and there is no half-atomic emulation of the occurrence operations to fall back on.
+
+**Storage is the source of truth.** Each schedule row carries a `ScheduleVersion`. A reschedule writes the definition, the cursor, the bounds and the version in one conditional update, guarded by the version it read; every advance of a managed schedule carries the version its run belonged to, so a completion that lands after a reschedule loses the guard, records its run against the row's own cursor and lets the new definition stand.
+
+### RescheduleMode
+
+`RecalculateFromNow` (the default) points the cursor at the new definition's first occurrence after now. On a durable schedule, whatever the old definition still owed is dropped and reported — `DiscardedBacklog`, `DiscardedBacklogIsExact` and a monitoring event naming the count.
+
+`RebaseFromCursor` keeps the schedule inside the calendar period it was already in. The day, week or month the old cursor fell in is read on the old definition's clock, and the new cursor is the new definition's occurrence at the same POSITION inside that period, read on the new one. That is what preserves the logical date when the time of day or the zone changes. Position matters as soon as a period holds more than one slot: with `OnDays(Monday, Wednesday).AtTimes(09:00, 15:00)`, a cursor standing on the afternoon run rebases onto the new afternoon time and never back onto the morning one that has already run — which would replay it and spend one more of `MaxRuns`, where `RecalculateFromNow` on the same definition answers the later slot. It is refused, with `InvalidOperationException` and no write, when:
+
+- the two definitions have different shapes (a different cadence, different weekday or month selectors, a different period kind — only the time of day, the zone, `RunUntil`/`MaxRuns` and the misfire settings may move);
+- either side is a cron schedule or a schedule driven by an occurrence provider, neither of which states a nominal period;
+- the period holds no slot of the new definition, or fewer slots than the cursor had already passed, so there is no position to land on. A rebase never crosses into the next period: doing so would skip a period of work or replay one;
+- the new definition's bounds are already past. `RunUntil` and `MaxRuns` are what an operator changes to wind a series down, and the period arithmetic applies neither: a plain cadence keeps its cursor verbatim and the day-carrying cadences place their slot by hand, so neither ever asks the grid, which is the only thing that applies `RunUntil`. Both bounds are checked here instead. A definition one mode would refuse is refused by the other too, rather than running one occurrence past the end just set.
+
+A plain cadence has no calendar structure to preserve, so its cursor is carried over unchanged, which is how a halted catch-up keeps its backlog while its caps are widened. A week or month cadence that names no day inside its period — `EveryWeek()` and `EveryMonth()` without `OnDay`/`OnDays`/`OnFirst` — carries that day on the cursor rather than in the definition, so the day it was already on is what the rebase keeps, and only the time of day and the zone move.
+
+### Linearization
+
+A reschedule takes effect immediately for occurrences that have not fired: the scheduler's registration is replaced in place, with no window in which the schedule is parked nowhere. A delivery already handed to a worker queue is past the scheduler's reach and is considered fired; inside the process that rescheduled it, EverTask drops that delivery rather than running the definition just replaced. After a restart nothing has been published, so a delivery recovered from storage always runs and its advance is what applies the new definition.
+
+If the re-park itself fails, nothing is published and the update still stands: the previous occurrence runs once more, and its advance loses the compare-and-swap, applies the new definition and parks the schedule from the row it has just read — so a re-park that threw costs one extra run of the old definition, never a series that stops.
+
+### ScheduleUpdateResult
+
+| Property | Meaning |
+|----------|---------|
+| `TaskId` | The schedule row that was updated |
+| `ScheduleVersion` / `PreviousScheduleVersion` | The version now on the row, and the one it replaced |
+| `NextRunUtc` / `PreviousNextRunUtc` | Where the schedule now stands, and where it stood |
+| `Mode` | The mode the cursor was decided with |
+| `DiscardedBacklog` / `DiscardedBacklogIsExact` | Due slots this call dropped, and whether that number is a total or a lower bound |
+| `ReleasedHalt` | Whether this call cleared a durable catch-up halt |
+
+### What it refuses
+
+`InvalidOperationException`, always before anything is written:
+
+- no task carries that key, or the task it names is a one-shot;
+- the schedule was cancelled — a cancellation is terminal, dispatch it again;
+- the new definition has no occurrence left to run (its bounds are already past). Use `CancelSchedule` to end a series on purpose, instead of leaving a row nothing can finish;
+- the row's payload or definition cannot be rebuilt by this build;
+- a rebase that cannot map the cursor (see above);
+- the row changed under the call and the conditional update lost. Read it again and retry.
 
 ## Complete Examples
 
