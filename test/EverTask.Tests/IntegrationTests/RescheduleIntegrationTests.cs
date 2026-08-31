@@ -1424,6 +1424,57 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
     }
 
     [Fact]
+    public async Task Should_resume_a_recorded_exclusion_advance_against_the_restarted_calendar_union()
+    {
+        var slot = Clock.GetUtcNow();
+
+        await StartHostAsync(configureEverTask: configuration =>
+        {
+            configuration.SetOccurrenceProviderRetry(retry =>
+            {
+                retry.InitialBackoff = TimeSpan.FromDays(1);
+                retry.MaxBackoff = TimeSpan.FromDays(1);
+            });
+            configuration.AddScheduleCalendar(
+                "closed", calendar => calendar.OnDays(slot.DayOfWeek));
+        });
+        var definition = new RecurringTask
+        {
+            RunNow = true,
+            DayInterval = new DayInterval(7),
+            MaxRuns = 2,
+            Exclusions = new ScheduleExclusions { Calendars = ["closed"] }
+        };
+        var id = await SeedDurableScheduleAsync(definition, slot, $"calendar-budget-{Guid.NewGuid():N}");
+        await WorkerExecutor.DoWork(await BuildExecutorAsync(await RowAsync(id)), CancellationToken.None);
+
+        var recorded = await RowAsync(id);
+        recorded.CurrentRunCount.ShouldBe(1);
+        ScheduleRuntimeInfo.TryParse(recorded.RuntimeInfo)?.ExclusionAdvanceRetry.ShouldNotBeNull();
+
+        await StartHostAsync(watchRegistrations: true, configureEverTask: configuration =>
+        {
+            configuration.SetOccurrenceProviderRetry(retry =>
+            {
+                retry.InitialBackoff = TimeSpan.FromDays(1);
+                retry.MaxBackoff = TimeSpan.FromDays(1);
+            });
+            configuration.AddScheduleCalendar("closed", calendar => calendar.OnDates(
+                DateOnly.FromDateTime(slot.AddDays(7).UtcDateTime)));
+        });
+
+        await TaskWaitHelper.WaitForConditionAsync(() => _registrations.Registrations.Any(registration =>
+            registration.Id == id), 20000);
+        _registrations.Registrations.Last(registration => registration.Id == id).At.ShouldBe(
+            new DateTimeOffset(slot.AddDays(14).UtcDateTime.Date, TimeSpan.Zero));
+
+        var resumed = await RowAsync(id);
+        resumed.CurrentRunCount.ShouldBe(1);
+        resumed.NextRunUtc.ShouldBe(slot);
+        _recorder.Count.ShouldBe(1);
+    }
+
+    [Fact]
     public async Task A_reschedule_that_an_advance_beats_to_the_row_writes_nothing_and_publishes_nothing()
     {
         // The other half of the same compare-and-swap. When the reschedule wins, the advance re-aims and the
@@ -2541,7 +2592,7 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
                 throw new InvalidOperationException("the scheduler refused this registration");
 
             inner.Schedule(item, nextRecurringRun);
-            watch?.Record(item.PersistenceId, item.ScheduleVersion, true);
+            watch?.Record(item.PersistenceId, item.ScheduleVersion, true, nextRecurringRun);
         }
 
         public bool TrySchedule(TaskHandlerExecutor item, DateTimeOffset? nextRecurringRun = null)
@@ -2554,7 +2605,7 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
             // Forwarded, never degraded to the interface default: a wrapper that answered "scheduled" for a
             // registration the real scheduler would refuse would hide exactly what these tests are about.
             var accepted = inner.TrySchedule(item, nextRecurringRun);
-            watch?.Record(item.PersistenceId, item.ScheduleVersion, accepted);
+            watch?.Record(item.PersistenceId, item.ScheduleVersion, accepted, nextRecurringRun);
 
             return accepted;
         }
@@ -2581,7 +2632,7 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
         private          Guid    _armedFor;
         private          Action? _hook;
 
-        public ConcurrentQueue<(Guid Id, int Version, bool Accepted)> Registrations { get; } = new();
+        public ConcurrentQueue<(Guid Id, int Version, bool Accepted, DateTimeOffset? At)> Registrations { get; } = new();
 
         /// <summary>Runs <paramref name="hook"/> ONCE, just before the next registration of that task.</summary>
         public void ArmBeforeNextRegistrationOf(Guid taskId, Action hook)
@@ -2611,8 +2662,8 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
             hook?.Invoke();
         }
 
-        public void Record(Guid taskId, int version, bool accepted) =>
-            Registrations.Enqueue((taskId, version, accepted));
+        public void Record(Guid taskId, int version, bool accepted, DateTimeOffset? at) =>
+            Registrations.Enqueue((taskId, version, accepted, at));
 
         public bool Refused(Guid taskId, int version) =>
             Registrations.Any(r => r.Id == taskId && r.Version == version && !r.Accepted);
@@ -2645,7 +2696,7 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
         {
             watch.FireIfArmed(item.PersistenceId);
             inner.Schedule(item, nextRecurringRun);
-            watch.Record(item.PersistenceId, item.ScheduleVersion, true);
+            watch.Record(item.PersistenceId, item.ScheduleVersion, true, nextRecurringRun);
         }
 
         public bool TrySchedule(TaskHandlerExecutor item, DateTimeOffset? nextRecurringRun = null)
@@ -2653,7 +2704,7 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
             watch.FireIfArmed(item.PersistenceId);
 
             var accepted = inner.TrySchedule(item, nextRecurringRun);
-            watch.Record(item.PersistenceId, item.ScheduleVersion, accepted);
+            watch.Record(item.PersistenceId, item.ScheduleVersion, accepted, nextRecurringRun);
 
             return accepted;
         }

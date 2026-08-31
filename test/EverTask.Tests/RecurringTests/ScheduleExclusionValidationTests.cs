@@ -130,6 +130,9 @@ public class ScheduleExclusionValidationTests
         };
 
         Should.Throw<InvalidOperationException>(() => task.Validate());
+
+        task.Exclusions = new ScheduleExclusions { Calendars = ["holidays"] };
+        Should.Throw<InvalidOperationException>(() => task.Validate());
     }
 
     [Fact]

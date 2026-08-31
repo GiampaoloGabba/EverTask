@@ -68,6 +68,18 @@ Subtract fixed weekdays, dates or absolute windows from any built-in interval or
 .Schedule().Every(4).Hours().ExceptWeekends()
 ```
 
+Register reusable sets once and reference them by name from any schedule:
+
+```csharp
+services.AddEverTask(opt => opt
+    .AddScheduleCalendar("it-holidays", cal => cal
+        .OnDates(new DateOnly(2026, 1, 1), new DateOnly(2026, 1, 6), new DateOnly(2026, 12, 25))
+        .OnDates(Pasquetta2026, Ferragosto2026)));
+
+.Schedule().EveryDay().AtTime(new TimeOnly(8, 0)).ExceptCalendar("it-holidays")
+.Schedule().Every(4).Hours().ExceptWeekends().ExceptCalendar("it-holidays", "maintenance")
+```
+
 Calls to `Except` are additive and repeatable. `OnDays` and `OnDates` use the schedule's persisted time zone,
 or UTC when none is named; `Between(from, to)` compares absolute instants in the half-open range `[from, to)`.
 `ExceptWeekends()` is sugar for excluding Saturday and Sunday.
@@ -83,6 +95,12 @@ calendar. `RescheduleMode.RebaseFromCursor` is also refused when either definiti
 `RecalculateFromNow`. A search that cannot find a usable slot within the fixed evaluation budget fails
 explicitly, and the schedule retries under a doubling backoff announced by monitoring events; it is never
 treated as the end of the series.
+
+A named calendar unions with inline exclusions. It cannot accompany an occurrence provider, and
+`RebaseFromCursor` remains refused; misfire, durable, backfill and budget behavior is otherwise identical.
+Names resolve from an immutable snapshot. A calendar edit applies from the next host start and only looking
+forward: future slots follow the new calendar, nothing already passed, materialized or halted changes. Invalid
+or unknown calendars are refused at ingress and poison a rebuilt schedule rather than being ignored.
 
 ## Topics
 

@@ -1,4 +1,6 @@
 using System.Linq.Expressions;
+using EverTask.Scheduler.Recurring;
+using EverTask.Scheduler.Recurring.Intervals;
 using EverTask.Tests.Monitoring.TestData;
 
 namespace EverTask.Tests.Monitoring.API.Services;
@@ -72,6 +74,27 @@ public class TaskQueryServiceTests
         result.Type.ShouldNotBeNullOrEmpty();
         result.Handler.ShouldNotBeNullOrEmpty();
         result.Status.ShouldBe(QueuedTaskStatus.Completed);
+    }
+
+    [Fact]
+    public async Task Should_read_schedule_facts_without_resolving_named_calendars()
+    {
+        var row = CreateTaskWithAudits(Guid.NewGuid());
+        row.IsRecurring = true;
+        row.RecurringTask = JsonSerializer.Serialize(new RecurringTask
+        {
+            DayInterval = new DayInterval(1),
+            TimeZoneId = "Europe/Rome",
+            Exclusions = new ScheduleExclusions { Calendars = ["holidays"] }
+        });
+        _storageMock.Setup(s => s.Get(It.IsAny<Expression<Func<QueuedTask, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([row]);
+
+        var detail = await _service.GetTaskDetailAsync(row.Id);
+
+        detail.ShouldNotBeNull().TimeZoneId.ShouldBe("Europe/Rome");
+        detail.OccurrenceMode.ShouldBe(OccurrenceMode.Inline);
     }
 
     [Fact]

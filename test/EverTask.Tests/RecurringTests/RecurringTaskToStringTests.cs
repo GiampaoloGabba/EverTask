@@ -181,5 +181,23 @@ public class RecurringTaskToStringTests
 
         task.ToString().ShouldBe("every 1 day(s) at 00:00 except 4 dates, 4 windows");
     }
+
+    [Fact]
+    public void Should_render_named_calendars_without_resolving_them()
+    {
+        var task = new RecurringTask
+        {
+            DayInterval = new DayInterval(1),
+            Exclusions = new ScheduleExclusions
+            {
+                Days = [DayOfWeek.Sunday],
+                Calendars = ["it-holidays", "maintenance"]
+            }
+        };
+        task.Validate();
+
+        task.ToString().ShouldBe(
+            "every 1 day(s) at 00:00 except Sunday except calendars it-holidays, maintenance");
+    }
 }
 

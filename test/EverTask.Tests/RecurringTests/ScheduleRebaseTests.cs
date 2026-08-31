@@ -24,7 +24,7 @@ public class ScheduleRebaseTests
     {
         var current     = Daily(new TimeOnly(9, 0));
         var replacement = Daily(new TimeOnly(10, 0));
-        var exclusions  = new ScheduleExclusions { Days = [DayOfWeek.Sunday] };
+        var exclusions  = new ScheduleExclusions { Calendars = ["holidays"] };
 
         if (exclusionsOnCurrent)
             current.Exclusions = exclusions;

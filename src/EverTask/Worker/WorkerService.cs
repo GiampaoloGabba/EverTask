@@ -180,10 +180,12 @@ public class WorkerService(
         using var scope       = serviceScopeFactory.CreateScope();
         var       taskStorage = scope.ServiceProvider.GetService<ITaskStorage>();
 
-        // Resolved once for the whole recovery: it is what turns "this row names provider X" into "nothing
-        // answers to X in this build", which is corrupt schedule metadata and takes the terminal poison route
-        // like an unparseable cron — instead of failing at every next-run of every restart.
-        var providers = scope.ServiceProvider.GetService<OccurrenceProviderRegistry>();
+        // Resolved once for the whole recovery: a provider or exclusion calendar this build no longer
+        // registers is corrupt schedule metadata and takes the terminal poison route like an unparseable
+        // cron, instead of failing at every next-run of every restart.
+        var validationContext = new ScheduleValidationContext(
+            scope.ServiceProvider.GetService<OccurrenceProviderRegistry>(),
+            scope.ServiceProvider.GetService<ScheduleCalendarRegistry>());
 
         if (taskStorage == null)
         {
@@ -247,7 +249,8 @@ public class WorkerService(
                 // Rebuild every row ONCE, up front: the durable/ordinary split below needs the deserialized
                 // schedule, and doing it here keeps a single decode per row instead of one per decision.
                 var prepared = pendingTasks
-                               .Select(row => new PreparedRow(row, RecoveredTaskFactory.FromRow(row, providers)))
+                               .Select(row => new PreparedRow(row,
+                                   RecoveredTaskFactory.FromRow(row, validationContext)))
                                .ToArray();
 
                 if (durableSchedules == 0)
@@ -338,7 +341,8 @@ public class WorkerService(
                     var schedules = page
                                     .Where(row => row.CreatedAtUtc < recoveryCutoff
                                                   && !string.IsNullOrEmpty(row.RecurringTask))
-                                    .Select(row => new PreparedRow(row, RecoveredTaskFactory.FromRow(row, providers)))
+                                    .Select(row => new PreparedRow(row,
+                                        RecoveredTaskFactory.FromRow(row, validationContext)))
                                     .Where(p => p.Recovered.IsDurableSchedule);
 
                     schedulePipeline.Add(RecoverWaveAsync(schedules));

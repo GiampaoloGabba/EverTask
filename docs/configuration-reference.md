@@ -388,6 +388,22 @@ opt.SetOccurrenceProviderRetry(retry =>
   `ArgumentException` and poisoned at recovery like a corrupt cron expression.
 - See [Recurring Tasks › Occurrence Providers](recurring-tasks/occurrence-providers.md).
 
+### AddScheduleCalendar
+
+Registers a reusable static exclusion set during the `AddEverTask` configuration callback.
+
+```csharp
+opt.AddScheduleCalendar("it-holidays", calendar => calendar
+    .OnDates(new DateOnly(2026, 1, 1), new DateOnly(2026, 1, 6), new DateOnly(2026, 12, 25))
+    .OnDates(Pasquetta2026, Ferragosto2026));
+```
+
+Names are trimmed, case-sensitive and limited to 100 characters. Duplicate names, empty callbacks and invalid
+sets throw while the host is being configured. EverTask freezes a deep snapshot immediately after the callback;
+later mutations do not affect that host. Schedules reference it with `.ExceptCalendar("it-holidays")`. The
+persisted definition contains only the names, while days and dates use each schedule's zone and ranges remain
+absolute. An unknown name is refused before an ingress write and poisons a recovered schedule.
+
 ### AddOccurrenceProvider&lt;T&gt;
 
 Registers an occurrence provider under the key schedules name it by. It is a method on the
@@ -2213,6 +2229,8 @@ The `Action<IRecurringTaskBuilder>` overload of `Dispatch` configures a recurrin
   (`OnDates`) and absolute half-open windows (`Between(from, to)`, where `from` is included and `to` is not).
   Calls are additive and repeatable.
 - `.ExceptWeekends()` is exactly `.Except(e => e.OnDays(DayOfWeek.Saturday, DayOfWeek.Sunday))`.
+- `.ExceptCalendar(params string[] names)` adds reusable sets registered by `AddScheduleCalendar`; calls and
+  names are additive, with at most 16 distinct names per schedule.
 - Excluded grid slots do not exist: they consume no run, misfire count, durable row, audit or event. First-run
   overrides from `RunNow`, `RunDelayed` and `RunAt` are explicit instants and are not filtered.
 - Day/date exclusions use the persisted schedule zone, or UTC when none is named. This makes
@@ -2223,6 +2241,8 @@ The `Action<IRecurringTaskBuilder>` overload of `Dispatch` configures a recurrin
 - `RescheduleMode.RebaseFromCursor` is refused when either definition has exclusions; use
   `RecalculateFromNow`. Evaluation is bounded, and a definition whose filtered grid cannot be found surfaces
   an error instead of being mistaken for a finished series.
+- Calendar configuration is frozen for one host lifetime. An edit applies after the next host start and only
+  looking forward: future slots follow the new calendar; nothing already passed, materialized or halted changes.
 
 **Cron:** `UseCron("expr")`: 5-field (`min hour dom month dow`) or 6-field (with seconds), via Cronos. **Overrides** every other interval call; invalid expressions throw `ArgumentException` on the first schedule calculation.
 

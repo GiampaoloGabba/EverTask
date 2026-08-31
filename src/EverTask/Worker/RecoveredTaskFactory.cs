@@ -50,12 +50,12 @@ internal readonly record struct RecoveredTask(
 internal static class RecoveredTaskFactory
 {
     /// <param name="row">The persisted row.</param>
-    /// <param name="providers">
-    /// The registered occurrence providers, when the caller can reach them. A row naming a provider key this
-    /// build no longer registers is then corrupt schedule metadata like an unparseable cron, and takes the
-    /// same terminal poison route instead of failing at every next-run for ever.
+    /// <param name="validationContext">
+    /// The registered occurrence providers and exclusion calendars, when the caller can reach them. A row
+    /// naming a definition this build no longer registers is then corrupt schedule metadata like an
+    /// unparseable cron, and takes the same terminal poison route instead of failing at every next-run.
     /// </param>
-    public static RecoveredTask FromRow(QueuedTask row, OccurrenceProviderRegistry? providers = null)
+    public static RecoveredTask FromRow(QueuedTask row, ScheduleValidationContext? validationContext = null)
     {
         IEverTask? task            = null;
         var        typeWasLoadable = false;
@@ -90,7 +90,7 @@ internal static class RecoveredTaskFactory
                 // OnDays/OnHours/OnMonths, a negative Interval) must be treated like un-deserializable
                 // metadata — validated HERE so the caller's poison guard sees it, instead of throwing later at
                 // next-run (a bounded per-restart failure) or scheduling a wrong/never-firing occurrence.
-                recurring?.Validate(new ScheduleValidationContext(providers, null));
+                recurring?.Validate(validationContext);
             }
         }
         catch (Exception e)

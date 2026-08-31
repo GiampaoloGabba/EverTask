@@ -26,7 +26,7 @@ public sealed class ScheduleTimeZoneAnalyzer : DiagnosticAnalyzer
     private const string InTimeZone = "InTimeZone";
 
     private static readonly ImmutableHashSet<string> Exclusions = ImmutableHashSet.Create(
-        "Except", "ExceptWeekends");
+        "Except", "ExceptWeekends", "ExceptCalendar");
 
     // Where a fresh interval selection begins. `Then` qualifies too: it is reachable only from the first-run
     // calls, none of which touch the grid.

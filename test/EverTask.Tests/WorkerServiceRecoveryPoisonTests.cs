@@ -89,6 +89,82 @@ public class WorkerServiceRecoveryPoisonTests
     }
 
     [Fact]
+    public async Task Should_poison_a_schedule_when_a_calendar_edit_makes_its_resolved_union_invalid()
+    {
+        var storage = new MemoryTaskStorage(Mock.Of<IEverTaskLogger<MemoryTaskStorage>>());
+        var row = new QueuedTask
+        {
+            Id = Guid.NewGuid(),
+            Type = typeof(RecoveryFailProbeTask).AssemblyQualifiedName!,
+            Request = JsonConvert.SerializeObject(new RecoveryFailProbeTask()),
+            Handler = "seeded-by-test",
+            Status = QueuedTaskStatus.Queued,
+            IsRecurring = true,
+            RecurringTask = JsonConvert.SerializeObject(new RecurringTask
+            {
+                DayInterval = new DayInterval(1),
+                Exclusions = new ScheduleExclusions { Calendars = ["business", "weekend"] }
+            }),
+            NextRunUtc = DateTimeOffset.UtcNow.AddDays(1),
+            CreatedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-5)
+        };
+        await storage.Persist(row);
+        var calendars = ScheduleCalendarRegistry.Create(new Dictionary<string, ScheduleExclusions>
+        {
+            ["business"] = new()
+            {
+                Days = [DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday,
+                    DayOfWeek.Thursday, DayOfWeek.Friday]
+            },
+            ["weekend"] = new() { Days = [DayOfWeek.Saturday, DayOfWeek.Sunday] }
+        });
+        var dispatcher = new Mock<ITaskDispatcherInternal>();
+
+        await RecoveryHarness.CreateRecoveryService(storage, dispatcher: dispatcher.Object, calendars: calendars)
+            .ProcessPendingAsync();
+
+        var poisoned = (await storage.Get(t => t.Id == row.Id))[0];
+        poisoned.Status.ShouldBe(QueuedTaskStatus.Failed);
+        poisoned.NextRunUtc.ShouldBeNull();
+        poisoned.Exception.ShouldNotBeNull().ShouldContain("every day of the week", Case.Insensitive);
+        dispatcher.Verify(d => d.ExecuteDispatch(It.IsAny<IEverTask>(), It.IsAny<DateTimeOffset?>(),
+            It.IsAny<RecurringTask?>(), It.IsAny<int?>(), It.IsAny<CancellationToken>(), It.IsAny<Guid?>(),
+            It.IsAny<string?>(), It.IsAny<AuditLevel?>(), It.IsAny<bool>(), It.IsAny<DispatchRowMetadata>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task Should_poison_a_recovered_schedule_that_names_an_unregistered_calendar()
+    {
+        var storage = new MemoryTaskStorage(Mock.Of<IEverTaskLogger<MemoryTaskStorage>>());
+        var row = new QueuedTask
+        {
+            Id = Guid.NewGuid(),
+            Type = typeof(RecoveryFailProbeTask).AssemblyQualifiedName!,
+            Request = JsonConvert.SerializeObject(new RecoveryFailProbeTask()),
+            Handler = "seeded-by-test",
+            Status = QueuedTaskStatus.Queued,
+            IsRecurring = true,
+            RecurringTask = JsonConvert.SerializeObject(new RecurringTask
+            {
+                DayInterval = new DayInterval(1),
+                Exclusions = new ScheduleExclusions { Calendars = ["removed-holidays"] }
+            }),
+            NextRunUtc = DateTimeOffset.UtcNow.AddDays(1),
+            CreatedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-5)
+        };
+        await storage.Persist(row);
+        var calendars = ScheduleCalendarRegistry.Create(new Dictionary<string, ScheduleExclusions>());
+
+        await RecoveryHarness.CreateRecoveryService(storage, calendars: calendars).ProcessPendingAsync();
+
+        var poisoned = (await storage.Get(t => t.Id == row.Id))[0];
+        poisoned.Status.ShouldBe(QueuedTaskStatus.Failed);
+        poisoned.NextRunUtc.ShouldBeNull();
+        poisoned.Exception.ShouldNotBeNull().ShouldContain("removed-holidays");
+    }
+
+    [Fact]
     public async Task Should_poison_persistently_failing_recovered_task_and_not_log_false_success()
     {
         var row = new QueuedTask

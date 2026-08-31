@@ -471,8 +471,7 @@ public class WorkerExecutor(
                 return;
             }
 
-            var recovered = RecoveredTaskFactory.FromRow(row,
-                scope.ServiceProvider.GetService<OccurrenceProviderRegistry>());
+            var recovered = RecoveredTaskFactory.FromRow(row, ValidationContext(scope.ServiceProvider));
 
             if (recovered.Task is null || recovered.Recurring is not { } definition)
             {
@@ -2008,15 +2007,14 @@ public class WorkerExecutor(
 
         try
         {
-            var recovered = RecoveredTaskFactory.FromRow(row);
+            using var scope = serviceScopeFactory.CreateScope();
+            var recovered = RecoveredTaskFactory.FromRow(row, ValidationContext(scope.ServiceProvider));
 
             if (recovered.Recurring is not { } definition || recovered.Task is null)
             {
                 logger.ScheduleReparkFromRowFailed(recovered.ScheduleError ?? recovered.PayloadError, row.Id);
                 return;
             }
-
-            using var scope = serviceScopeFactory.CreateScope();
 
             var executor = await Dispatcher.Dispatcher.CreateCachedWrapper(recovered.Task.GetType())
                                            .Handle(recovered.Task, cursor, definition, scope.ServiceProvider,
@@ -2043,6 +2041,10 @@ public class WorkerExecutor(
             logger.ScheduleReparkFromRowFailed(e, row.Id);
         }
     }
+
+    private static ScheduleValidationContext ValidationContext(IServiceProvider provider) => new(
+        provider.GetService<OccurrenceProviderRegistry>(),
+        provider.GetService<ScheduleCalendarRegistry>());
 
     #region Logging and event pubblishing
 

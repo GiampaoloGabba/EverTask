@@ -633,6 +633,13 @@ public class RecurringTask
     {
         collapsedSlots = 0;
 
+        if (Exclusions?.Calendars is { Length: > 0 })
+        {
+            throw new ArgumentException(
+                $"The named exclusion calendars '{string.Join("', '", Exclusions.Calendars)}' must be resolved " +
+                "by the schedule evaluator before occurrence math can run.", nameof(Exclusions));
+        }
+
         // Every advance starts from a real unfiltered occurrence. A discarded occurrence's DST collapse
         // count is replaced with the next candidate's count instead of leaking onto the returned slot.
         for (var discarded = 0; candidate is { } current; discarded++)
@@ -1103,6 +1110,13 @@ public class RecurringTask
         return baseGrid;
     }
 
+    internal RecurringTask WithExclusions(ScheduleExclusions exclusions)
+    {
+        var clone = (RecurringTask)MemberwiseClone();
+        clone.Exclusions = exclusions;
+        return clone;
+    }
+
     /// <summary>
     /// True when <see cref="CountMissedOccurrences"/> answers by division instead of walking the grid.
     /// </summary>
@@ -1425,6 +1439,11 @@ public class RecurringTask
 
         if (details.Count > 0)
             parts.Add($"except {string.Join(", ", details)}");
+
+        if (exclusions.Calendars is { Length: 1 })
+            parts.Add($"except calendar {exclusions.Calendars[0]}");
+        else if (exclusions.Calendars is { Length: > 1 })
+            parts.Add($"except calendars {string.Join(", ", exclusions.Calendars)}");
     }
 
     /// <summary>The termination bounds, which read the same whatever produced the occurrences.</summary>

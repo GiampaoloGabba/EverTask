@@ -41,6 +41,7 @@ Tasks can be CPU-bound or I/O-bound, long- or short-running. Works with ASP.NET 
 - **Runtime schedule management**: change, re-evaluate, resume or cancel a schedule while the app is running
 - **Custom occurrence providers**: compute the next run yourself, from a calendar the library cannot know
 - **Fixed recurring exclusions**: subtract weekdays, dates and absolute maintenance windows from any built-in interval or cron grid
+- **Named exclusion calendars**: register a holiday or blackout set once and reuse it across schedules
 - **Idempotent registration**: a task key keeps duplicate recurring registrations out
 
 ### Performance & scalability
@@ -86,6 +87,7 @@ dotnet add package EverTask.Storage.SqlServer  # Or EverTask.Storage.Postgres / 
 builder.Services.AddEverTask(opt =>
 {
     opt.RegisterTasksFromAssembly(typeof(Program).Assembly);
+    opt.AddScheduleCalendar("it-holidays", cal => cal.OnDates(new DateOnly(2026, 12, 25)));
 })
 .AddSqlServerStorage(builder.Configuration.GetConnectionString("EverTaskDb"));
 ```

@@ -10,7 +10,9 @@ namespace EverTask.Scheduler.Recurring;
 /// For a schedule with no provider every method returns an already-completed <see cref="ValueTask{TResult}"/>,
 /// so routing a call site through the seam costs one virtual call and no allocation.
 /// </remarks>
-internal sealed class ScheduleEvaluator(ProviderScheduleGrid? providerGrid = null) : IScheduleEvaluator
+internal sealed class ScheduleEvaluator(
+    ProviderScheduleGrid? providerGrid = null,
+    ScheduleCalendarRegistry? calendars = null) : IScheduleEvaluator
 {
     /// <summary>
     /// Fallback instance for the few call sites that cannot reach the container (hand-wired executors in
@@ -22,40 +24,55 @@ internal sealed class ScheduleEvaluator(ProviderScheduleGrid? providerGrid = nul
     public ValueTask<NextRunResult> CalculateNextValidRunAsync(
         RecurringTask definition, DateTimeOffset scheduledTime, int currentRun, DateTimeOffset nowUtc,
         DateTimeOffset? referenceTime = null, bool isRecovery = false, bool computeSkippedCount = true,
-        ScheduleIdentity identity = default, CancellationToken ct = default) =>
-        definition.Provider is null
+        ScheduleIdentity identity = default, CancellationToken ct = default)
+    {
+        definition = ResolveCalendars(definition);
+        return definition.Provider is null
             ? new ValueTask<NextRunResult>(definition.CalculateNextValidRun(scheduledTime, currentRun, referenceTime,
                 isRecovery, computeSkippedCount, nowUtc))
             : Provider(definition).CalculateNextValidRunAsync(definition, scheduledTime, currentRun, nowUtc,
                 referenceTime, isRecovery, computeSkippedCount, identity, ct);
+    }
 
     public ValueTask<DateTimeOffset?> NextAfterAsync(
         RecurringTask definition, DateTimeOffset anchor, DateTimeOffset after, ScheduleIdentity identity = default,
-        CancellationToken ct = default) =>
-        definition.Provider is null
+        CancellationToken ct = default)
+    {
+        definition = ResolveCalendars(definition);
+        return definition.Provider is null
             ? new ValueTask<DateTimeOffset?>(definition.NextOccurrenceStrictlyAfter(anchor, after))
             : Provider(definition).NextAfterAsync(definition, anchor, after, identity, ct);
+    }
 
     public ValueTask<int> CountMissedAsync(
         RecurringTask definition, DateTimeOffset anchor, DateTimeOffset after, int cap,
-        ScheduleIdentity identity = default, CancellationToken ct = default) =>
-        definition.Provider is null
+        ScheduleIdentity identity = default, CancellationToken ct = default)
+    {
+        definition = ResolveCalendars(definition);
+        return definition.Provider is null
             ? new ValueTask<int>(definition.CountMissedOccurrences(anchor, after, cap))
             : Provider(definition).CountMissedAsync(definition, anchor, after, cap, identity, ct);
+    }
 
     public ValueTask<DateTimeOffset?> NextGridOccurrenceAfterAsync(
         RecurringTask definition, DateTimeOffset occurrence, ScheduleIdentity identity = default,
-        CancellationToken ct = default) =>
-        definition.Provider is null
+        CancellationToken ct = default)
+    {
+        definition = ResolveCalendars(definition);
+        return definition.Provider is null
             ? new ValueTask<DateTimeOffset?>(definition.NextGridOccurrenceAfter(occurrence))
             : Provider(definition).NextGridOccurrenceAfterAsync(definition, occurrence, identity, ct);
+    }
 
     public ValueTask<DateTimeOffset?> FirstOccurrenceOnOrAfterAsync(
         RecurringTask definition, DateTimeOffset instant, ScheduleIdentity identity = default,
-        CancellationToken ct = default) =>
-        definition.Provider is null
+        CancellationToken ct = default)
+    {
+        definition = ResolveCalendars(definition);
+        return definition.Provider is null
             ? new ValueTask<DateTimeOffset?>(definition.FirstOccurrenceOnOrAfter(instant))
             : Provider(definition).FirstOccurrenceOnOrAfterAsync(definition, instant, identity, ct);
+    }
 
     public ValueTask<DateTimeOffset?> NormalizeCursorAsync(
         RecurringTask definition, DateTimeOffset cursor, int currentRunCount,
@@ -66,7 +83,10 @@ internal sealed class ScheduleEvaluator(ProviderScheduleGrid? providerGrid = nul
         if (definition.Exclusions is null || IsPendingFirstRunOverride(definition, cursor, currentRunCount))
             return new ValueTask<DateTimeOffset?>(cursor);
 
-        return FirstOccurrenceOnOrAfterAsync(definition, cursor, identity, ct);
+        definition = ResolveCalendars(definition);
+        return definition.Provider is null
+            ? new ValueTask<DateTimeOffset?>(definition.FirstOccurrenceOnOrAfter(cursor))
+            : Provider(definition).FirstOccurrenceOnOrAfterAsync(definition, cursor, identity, ct);
     }
 
     /// <summary>
@@ -79,6 +99,7 @@ internal sealed class ScheduleEvaluator(ProviderScheduleGrid? providerGrid = nul
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentOutOfRangeException.ThrowIfNegative(cap);
+        definition = ResolveCalendars(definition);
 
         // RunUntil is exclusive on the slot, and the walk below only learns about it from the SUCCESSOR:
         // a cursor already at or past the boundary has to be refused here or it would be reported as due.
@@ -107,6 +128,18 @@ internal sealed class ScheduleEvaluator(ProviderScheduleGrid? providerGrid = nul
         ?? throw new NotSupportedException(
             $"The schedule takes its occurrences from the provider '{definition.Provider?.Key}', which needs " +
             "the schedule evaluator registered by AddEverTask. This one was built without a container.");
+
+    private RecurringTask ResolveCalendars(RecurringTask definition)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+
+        if (definition.Provider != null || definition.Exclusions is not { Calendars.Length: > 0 })
+            return definition;
+
+        return calendars is null
+            ? definition
+            : definition.WithExclusions(calendars.Resolve(definition.Exclusions));
+    }
 
     private static bool IsPendingFirstRunOverride(RecurringTask definition, DateTimeOffset cursor,
                                                   int currentRunCount) =>

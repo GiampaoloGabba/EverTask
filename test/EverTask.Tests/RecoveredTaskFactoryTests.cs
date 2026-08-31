@@ -195,6 +195,28 @@ public class RecoveredTaskFactoryTests
     }
 
     [Fact]
+    public void Should_report_an_unknown_named_calendar_as_a_schedule_error_when_rebuilding_a_row()
+    {
+        var services = new ServiceCollection();
+        services.AddEverTask(options => options.RegisterTasksFromAssembly(typeof(RecoveredTaskFactoryTests).Assembly));
+        using var provider = services.BuildServiceProvider();
+        var schedule = EverTaskJson.Serialize(new RecurringTask
+        {
+            DayInterval = new DayInterval(1),
+            Exclusions = new ScheduleExclusions { Calendars = ["removed-holidays"] }
+        });
+
+        var recovered = RecoveredTaskFactory.FromRow(Row(r =>
+        {
+            r.IsRecurring = true;
+            r.RecurringTask = schedule;
+        }), new ScheduleValidationContext(null, provider.GetRequiredService<ScheduleCalendarRegistry>()));
+
+        recovered.Recurring.ShouldBeNull();
+        recovered.ScheduleError.ShouldNotBeNull().Message.ShouldContain("removed-holidays");
+    }
+
+    [Fact]
     public void An_occurrence_mode_outside_the_defined_values_is_a_schedule_error()
     {
         // B2/R3: the tolerant enum converter passes an unknown numeric value through rather than failing the

@@ -74,7 +74,9 @@ public static class ServiceCollectionExtensions
         // instance for hand-wired components has none), and letting the container choose between the two
         // would silently build the one that cannot answer for a provider-driven schedule.
         services.TryAddSingleton<IScheduleEvaluator>(sp =>
-            new ScheduleEvaluator(sp.GetRequiredService<ProviderScheduleGrid>()));
+            new ScheduleEvaluator(
+                sp.GetRequiredService<ProviderScheduleGrid>(),
+                sp.GetRequiredService<ScheduleCalendarRegistry>()));
 
         // Ambient execution context. Singleton on purpose: an eager handler's dependency graph is built
         // in the DISPATCHER's scope, so a scoped accessor would be invisible to exactly the services that

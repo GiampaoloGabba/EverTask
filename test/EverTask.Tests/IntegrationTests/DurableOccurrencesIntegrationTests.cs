@@ -134,6 +134,97 @@ public class DurableOccurrencesIntegrationTests : IsolatedIntegrationTestBase
             timeoutMs);
 
     [Fact]
+    public async Task Should_replay_only_non_holiday_slots_from_a_named_calendar()
+    {
+        var now = new DateTimeOffset(2026, 12, 27, 12, 0, 0, TimeSpan.Zero);
+        await StartHostAsync(startHost: false,
+            configure: options => options.AddScheduleCalendar(
+                "holidays", calendar => calendar.OnDates(new DateOnly(2026, 12, 25))),
+            clock: new FakeTimeProvider(now));
+        var definition = new RecurringTask
+        {
+            DayInterval = new DayInterval(1) { OnTimes = [new TimeOnly(8, 0)] },
+            OccurrenceMode = OccurrenceMode.Durable,
+            Misfire = new MisfireSettings
+            {
+                Policy = MisfirePolicy.CatchUp,
+                MaxAge = TimeSpan.FromDays(7),
+                MaxOccurrences = 10,
+                MaxPendingOccurrences = 10
+            },
+            Exclusions = new ScheduleExclusions { Calendars = ["holidays"] }
+        };
+        var id = await SeedScheduleAsync(definition,
+            new DateTimeOffset(2026, 12, 24, 8, 0, 0, TimeSpan.Zero));
+
+        await Host!.Services.GetRequiredService<OccurrenceMaterializer>().RunAsync(id, null);
+
+        (await OccurrencesOfAsync(id)).Select(row => row.ScheduledExecutionUtc!.Value).OrderBy(slot => slot)
+            .ShouldBe([
+                new DateTimeOffset(2026, 12, 24, 8, 0, 0, TimeSpan.Zero),
+                new DateTimeOffset(2026, 12, 26, 8, 0, 0, TimeSpan.Zero),
+                new DateTimeOffset(2026, 12, 27, 8, 0, 0, TimeSpan.Zero)
+            ]);
+    }
+
+    [Fact]
+    public async Task Should_not_revoke_an_occurrence_materialized_before_a_calendar_widens()
+    {
+        var now = new DateTimeOffset(2026, 12, 26, 12, 0, 0, TimeSpan.Zero);
+        var clock = new FakeTimeProvider(now);
+        await StartHostAsync(startHost: false,
+            configure: options => options.AddScheduleCalendar(
+                "holidays", calendar => calendar.OnDates(new DateOnly(2026, 12, 25))), clock: clock);
+        var definition = new RecurringTask
+        {
+            DayInterval = new DayInterval(1) { OnTimes = [new TimeOnly(8, 0)] },
+            OccurrenceMode = OccurrenceMode.Durable,
+            Misfire = new MisfireSettings
+            {
+                Policy = MisfirePolicy.CatchUp,
+                MaxAge = TimeSpan.FromDays(7),
+                MaxOccurrences = 10,
+                MaxPendingOccurrences = 10
+            },
+            Exclusions = new ScheduleExclusions { Calendars = ["holidays"] }
+        };
+        var slot = new DateTimeOffset(2026, 12, 26, 8, 0, 0, TimeSpan.Zero);
+        var id = await SeedScheduleAsync(definition, slot);
+        await Host!.Services.GetRequiredService<OccurrenceMaterializer>().RunAsync(id, null);
+        (await OccurrencesOfAsync(id)).ShouldHaveSingleItem().ScheduledExecutionUtc.ShouldBe(slot);
+
+        await StartHostAsync(startHost: false,
+            configure: options => options.AddScheduleCalendar("holidays", calendar => calendar.OnDates(
+                new DateOnly(2026, 12, 25), new DateOnly(2026, 12, 26))), clock: clock);
+        await Host!.Services.GetRequiredService<OccurrenceMaterializer>().RunAsync(id, null);
+
+        (await OccurrencesOfAsync(id)).ShouldContain(row => row.ScheduledExecutionUtc == slot);
+    }
+
+    [Fact]
+    public async Task Should_preserve_a_standing_halt_across_a_calendar_edit()
+    {
+        var now = new DateTimeOffset(2026, 12, 20, 12, 0, 0, TimeSpan.Zero);
+        var clock = new FakeTimeProvider(now);
+        await StartHostAsync(startHost: false,
+            configure: options => options.AddScheduleCalendar(
+                "holidays", calendar => calendar.OnDates(new DateOnly(2026, 12, 25))), clock: clock);
+        var definition = MinuteCatchUp(TimeSpan.FromDays(1), 3);
+        definition.Exclusions = new ScheduleExclusions { Calendars = ["holidays"] };
+        var id = await SeedScheduleAsync(definition, now.AddMinutes(-10));
+        await Host!.Services.GetRequiredService<OccurrenceMaterializer>().RunAsync(id, null);
+        var halt = (await _shared.Get(t => t.Id == id))[0].RuntimeInfo.ShouldNotBeNull();
+
+        await StartHostAsync(startHost: false,
+            configure: options => options.AddScheduleCalendar("holidays", calendar => calendar.OnDates(
+                new DateOnly(2026, 12, 21), new DateOnly(2026, 12, 25))), clock: clock);
+        await Host!.Services.GetRequiredService<OccurrenceMaterializer>().RunAsync(id, null);
+
+        (await _shared.Get(t => t.Id == id))[0].RuntimeInfo.ShouldBe(halt);
+        (await OccurrencesOfAsync(id)).ShouldBeEmpty();
+    }
+
+    [Fact]
     public async Task Should_persist_a_normalized_future_cursor_without_materializing_or_reporting_a_slot()
     {
         var now    = new DateTimeOffset(2026, 8, 31, 12, 0, 0, TimeSpan.Zero);

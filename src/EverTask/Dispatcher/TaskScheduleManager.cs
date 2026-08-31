@@ -242,7 +242,7 @@ internal sealed class TaskScheduleManager(
                 "again to start a new series.");
         }
 
-        var recovered = RecoveredTaskFactory.FromRow(row);
+        var recovered = RecoveredTaskFactory.FromRow(row, new ScheduleValidationContext(providers, calendars));
 
         if (recovered.Recurring is not { } current)
         {

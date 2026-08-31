@@ -985,6 +985,37 @@ public class DueSlotEnumeratorTests
             "the bisection probes the instant axis; each probe is a bounded count");
     }
 
+    [Fact]
+    public async Task Should_match_a_brute_force_skip_oldest_walk_over_a_named_calendar()
+    {
+        var services = new ServiceCollection();
+        services.AddEverTask(options => options
+            .RegisterTasksFromAssembly(typeof(DueSlotEnumeratorTests).Assembly)
+            .AddScheduleCalendar("closed", calendar => calendar
+                .OnDays(DayOfWeek.Saturday, DayOfWeek.Sunday)
+                .OnDates(new DateOnly(2026, 2, 10), new DateOnly(2026, 2, 11))));
+        using var provider = services.BuildServiceProvider();
+        var enumerator = new DueSlotEnumerator(provider.GetRequiredService<IScheduleEvaluator>(), Threshold);
+        var cursor = Now.AddDays(-30);
+        var schedule = new RecurringTask
+        {
+            HourInterval = new HourInterval(1),
+            OccurrenceMode = OccurrenceMode.Durable,
+            Misfire = CatchUp(TimeSpan.FromDays(31), 5, CatchUpOverflowPolicy.SkipOldest, maxPending: 10),
+            Exclusions = new ScheduleExclusions { Calendars = ["closed"] }
+        };
+        var expected = Enumerable.Range(0, (int)(Now - cursor).TotalHours + 1)
+            .Select(hour => cursor.AddHours(hour))
+            .Where(slot => slot.DayOfWeek is not (DayOfWeek.Saturday or DayOfWeek.Sunday))
+            .Where(slot => DateOnly.FromDateTime(slot.UtcDateTime) is not ({ Month: 2, Day: 10 } or { Month: 2, Day: 11 }))
+            .TakeLast(5)
+            .ToArray();
+
+        var plan = await enumerator.PlanAsync(schedule, cursor, Now, 0, 0);
+
+        plan.Slots.ShouldBe(expected);
+    }
+
     // ---- A daylight-saving transition INSIDE the replayed backlog ----------------------------------
 
     /// <summary>

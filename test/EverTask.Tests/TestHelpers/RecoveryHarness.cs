@@ -1,5 +1,6 @@
 using EverTask.Dispatcher;
 using EverTask.Logger;
+using EverTask.Scheduler.Recurring;
 using EverTask.Storage;
 
 namespace EverTask.Tests.TestHelpers;
@@ -21,10 +22,12 @@ internal static class RecoveryHarness
 {
     internal static WorkerService CreateRecoveryService(ITaskStorage storage, int maxAttempts = 5,
                                                         ITaskDispatcherInternal? dispatcher = null,
-                                                        IEverTaskLogger<WorkerService>? logger = null)
+                                                        IEverTaskLogger<WorkerService>? logger = null,
+                                                        ScheduleCalendarRegistry? calendars = null)
     {
         var provider = new Mock<IServiceProvider>();
         provider.Setup(p => p.GetService(typeof(ITaskStorage))).Returns(storage);
+        provider.Setup(p => p.GetService(typeof(ScheduleCalendarRegistry))).Returns(calendars);
         var scope = new Mock<IServiceScope>();
         scope.Setup(s => s.ServiceProvider).Returns(provider.Object);
         var scopeFactory = new Mock<IServiceScopeFactory>();

@@ -97,7 +97,7 @@ r => r.Schedule().UseCron("0 2 * * *").InTimeZone("Asia/Tokyo")
   the call): an elapsed step is the same set of instants in every zone. `AtMinute`/`AtSecond` therefore align
   on UTC — `EveryHour().AtMinute(30)` fires at :00 local in India (+05:30) and :15 in Nepal (+05:45).
   Analyzer **ET0010** warns at compile time on a completed chain it can prove is elapsed; `Except` or
-  `ExceptWeekends` anywhere in that chain suppresses it. A chain split over a variable
+  `ExceptWeekends` or `ExceptCalendar` anywhere in that chain suppresses it. A chain split over a variable
   or a helper method is left to the exception, so a clean build proves nothing on its own.
 - An id this machine cannot resolve, or a `TimeZoneInfo.CreateCustomTimeZone` zone, throws `ArgumentException`
   at build. A stored id that stops resolving later is poisoned at recovery like a corrupt cron.
@@ -126,8 +126,21 @@ r => r.Schedule().EveryDay().AtTime(new TimeOnly(8,0))
 r => r.Schedule().Every(4).Hours().ExceptWeekends()
 ```
 
+Reusable named sets are registered once and referenced additively:
+
+```csharp
+services.AddEverTask(opt => opt.AddScheduleCalendar("it-holidays",
+    calendar => calendar.OnDates(new DateOnly(2026,12,25))));
+
+r => r.Schedule().EveryDay().AtTime(new TimeOnly(8,0)).ExceptCalendar("it-holidays")
+```
+
 - `Except` calls union. `OnDays`/`OnDates` use the persisted schedule zone or UTC; `Between` is an absolute
   half-open `[from, to)` range. `ExceptWeekends()` excludes Saturday and Sunday.
+- `ExceptCalendar(params string[] names)` unions the registered sets with inline exclusions. At most 16
+  distinct names are allowed; an unknown name is refused at ingress and poisons a rebuilt schedule.
+- Calendar edits apply at the next host start and only forward from the stored cursor. They do not replay a
+  passed slot, revoke a materialized occurrence, filter a first-run override or clear a halt.
 - An excluded grid slot does not exist: no run budget, misfire count, durable occurrence, audit or event.
   `RunNow`/`RunDelayed`/`RunAt` first-run overrides are explicit instants and stay unfiltered.
 - Works with built-in intervals, cron, `RunUntil`, all misfire policies, `SkipOldest`, backfill and durable

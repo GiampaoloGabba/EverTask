@@ -6,6 +6,141 @@ namespace EverTask.Tests.RecurringTests;
 public class RecurringExclusionMathTests
 {
     [Fact]
+    public async Task Should_resolve_named_calendars_without_mutating_the_persisted_definition()
+    {
+        using var provider = BuildProvider(options => options.AddScheduleCalendar(
+            "holidays", calendar => calendar.OnDates(new DateOnly(2026, 12, 25))));
+        var evaluator = provider.GetRequiredService<IScheduleEvaluator>();
+        var task = Valid(new RecurringTask
+        {
+            DayInterval = new DayInterval(1) { OnTimes = [new TimeOnly(9, 0)] },
+            Exclusions = new ScheduleExclusions { Calendars = ["holidays"] }
+        });
+
+        var next = await evaluator.NextAfterAsync(task, Utc(2026, 12, 24, 9), Utc(2026, 12, 24, 9));
+
+        next.ShouldBe(Utc(2026, 12, 26, 9));
+        task.Exclusions.ShouldNotBeNull().Calendars.ShouldBe(["holidays"]);
+        task.Exclusions.ShouldNotBeNull().Dates.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Should_union_inline_dates_with_named_ranges_and_keep_the_region_exit()
+    {
+        using var provider = BuildProvider(options => options.AddScheduleCalendar("maintenance", calendar =>
+            calendar.Between(Utc(2026, 1, 1, 4), Utc(2026, 1, 1, 8))));
+        var evaluator = provider.GetRequiredService<IScheduleEvaluator>();
+        var task = Valid(new RecurringTask
+        {
+            HourInterval = new HourInterval(4),
+            Exclusions = new ScheduleExclusions
+            {
+                Dates = [new DateOnly(2026, 1, 2)],
+                Calendars = ["maintenance"]
+            }
+        });
+
+        (await evaluator.NextAfterAsync(task, Utc(2026, 1, 1, 0), Utc(2026, 1, 1, 0)))
+            .ShouldBe(Utc(2026, 1, 1, 8));
+        (await evaluator.NextAfterAsync(task, Utc(2026, 1, 1, 20), Utc(2026, 1, 1, 20)))
+            .ShouldBe(Utc(2026, 1, 3, 0));
+    }
+
+    [Fact]
+    public async Task Should_refuse_an_unresolved_named_calendar_at_the_filtered_door()
+    {
+        var task = Valid(new RecurringTask
+        {
+            DayInterval = new DayInterval(1),
+            Exclusions = new ScheduleExclusions { Calendars = ["holidays"] }
+        });
+
+        var refusal = await Should.ThrowAsync<ArgumentException>(async () =>
+            await ScheduleEvaluator.Default.NextAfterAsync(task, Utc(2026, 12, 24, 0), Utc(2026, 12, 24, 0)));
+
+        refusal.Message.ShouldContain("holidays");
+    }
+
+    [Fact]
+    public async Task Should_apply_a_narrowed_calendar_only_at_or_after_the_standing_cursor()
+    {
+        using var provider = BuildProvider(options => options.AddScheduleCalendar(
+            "holidays", calendar => calendar.OnDates(new DateOnly(2026, 12, 24))));
+        var evaluator = provider.GetRequiredService<IScheduleEvaluator>();
+        var task = Valid(new RecurringTask
+        {
+            DayInterval = new DayInterval(1),
+            Exclusions = new ScheduleExclusions { Calendars = ["holidays"] }
+        });
+
+        var atCursor = await evaluator.NormalizeCursorAsync(task, Utc(2026, 12, 25, 0), 1);
+        var afterCursor = await evaluator.NormalizeCursorAsync(task, Utc(2026, 12, 26, 0), 1);
+
+        atCursor.ShouldBe(Utc(2026, 12, 25, 0), "a newly unexcluded standing slot is visible inclusively");
+        afterCursor.ShouldBe(Utc(2026, 12, 26, 0), "the newly unexcluded slot behind it is never re-owed");
+    }
+
+    [Fact]
+    public async Task Should_read_one_named_calendar_on_each_schedules_exclusion_clock()
+    {
+        using var provider = BuildProvider(options => options.AddScheduleCalendar(
+            "holidays", calendar => calendar.OnDates(new DateOnly(2026, 12, 25))));
+        var evaluator = provider.GetRequiredService<IScheduleEvaluator>();
+        var utc = Valid(new RecurringTask
+        {
+            DayInterval = new DayInterval(1),
+            TimeZoneId = "UTC",
+            Exclusions = new ScheduleExclusions { Calendars = ["holidays"] }
+        });
+        var newYork = Valid(new RecurringTask
+        {
+            DayInterval = new DayInterval(1),
+            TimeZoneId = "America/New_York",
+            Exclusions = new ScheduleExclusions { Calendars = ["holidays"] }
+        });
+
+        var utcNext = await evaluator.NextAfterAsync(utc, Utc(2026, 12, 24, 0), Utc(2026, 12, 24, 0));
+        var newYorkNext = await evaluator.NextAfterAsync(
+            newYork, Utc(2026, 12, 24, 5), Utc(2026, 12, 24, 5));
+
+        utcNext.ShouldBe(Utc(2026, 12, 26, 0));
+        newYorkNext.ShouldBe(Utc(2026, 12, 26, 5));
+    }
+
+    [Fact]
+    public void Should_report_the_base_minimum_interval_without_resolving_named_calendars()
+    {
+        var task = Valid(new RecurringTask
+        {
+            HourInterval = new HourInterval(4),
+            Exclusions = new ScheduleExclusions { Calendars = ["holidays"] }
+        });
+
+        task.GetMinimumInterval().ShouldBe(TimeSpan.FromHours(4));
+    }
+
+    [Fact]
+    public async Task Should_enforce_the_resolved_union_cap_at_evaluation()
+    {
+        var first = Enumerable.Range(0, 501)
+            .Select(day => new DateOnly(2020, 1, 1).AddDays(day)).ToArray();
+        var second = Enumerable.Range(501, 500)
+            .Select(day => new DateOnly(2020, 1, 1).AddDays(day)).ToArray();
+        using var provider = BuildProvider(options => options
+            .AddScheduleCalendar("first", calendar => calendar.OnDates(first))
+            .AddScheduleCalendar("second", calendar => calendar.OnDates(second)));
+        var task = Valid(new RecurringTask
+        {
+            DayInterval = new DayInterval(1),
+            Exclusions = new ScheduleExclusions { Calendars = ["first", "second"] }
+        });
+
+        await Should.ThrowAsync<InvalidOperationException>(async () =>
+            await provider.GetRequiredService<IScheduleEvaluator>()
+                .NextAfterAsync(task, Utc(2026, 1, 1, 0), Utc(2026, 1, 1, 0)));
+    }
+
+    [Fact]
     public void Should_preserve_cadence_phase_across_a_range_and_include_its_exit()
     {
         var anchor = Utc(2026, 1, 1, 0);
@@ -284,4 +419,15 @@ public class RecurringExclusionMathTests
 
     private static DateTimeOffset Utc(int year, int month, int day, int hour, int minute = 0) =>
         new(year, month, day, hour, minute, 0, TimeSpan.Zero);
+
+    private static ServiceProvider BuildProvider(Action<EverTaskServiceConfiguration> configure)
+    {
+        var services = new ServiceCollection();
+        services.AddEverTask(options =>
+        {
+            options.RegisterTasksFromAssembly(typeof(RecurringExclusionMathTests).Assembly);
+            configure(options);
+        });
+        return services.BuildServiceProvider();
+    }
 }

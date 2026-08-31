@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added (recurring exclusions, #36)
 
+- **Named exclusion calendars reuse one frozen holiday or blackout set across schedules.** Register with
+  `AddScheduleCalendar(name, ...)` and reference it additively with `ExceptCalendar(names)`. Only names are
+  persisted; evaluation resolves the inline-and-named union once against the immutable host snapshot. Calendar
+  edits apply after restart and only forward from the standing cursor; unknown or newly invalid unions are
+  refused at ingress and poison rebuilt schedules instead of running without exclusions.
 - **Built-in recurring grids can exclude fixed moments.** `.Except(...)` unions whole weekdays, dates and
   absolute half-open windows; `.ExceptWeekends()` is the Saturday/Sunday shortcut. Exclusions are serialized
   with the definition and apply inside the occurrence grid, so excluded slots consume no run, misfire count,

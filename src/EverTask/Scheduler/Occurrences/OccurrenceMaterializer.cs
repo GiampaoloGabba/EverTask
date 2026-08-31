@@ -220,8 +220,7 @@ internal sealed class OccurrenceMaterializer
         }
 
         var now       = _timeProvider.GetUtcNow();
-        var recovered = RecoveredTaskFactory.FromRow(row,
-            scope.ServiceProvider.GetService<OccurrenceProviderRegistry>());
+        var recovered = RecoveredTaskFactory.FromRow(row, ValidationContext(scope.ServiceProvider));
 
         if (recovered.Recurring is { IsDurable: false } inline)
         {
@@ -696,7 +695,7 @@ internal sealed class OccurrenceMaterializer
                 row.NextRunUtc is null)
                 return null;
 
-            var recovered = RecoveredTaskFactory.FromRow(row);
+            var recovered = RecoveredTaskFactory.FromRow(row, ValidationContext(scope.ServiceProvider));
 
             if (recovered.Recurring is not { IsDurable: true } definition || recovered.Task is null)
                 return null;
@@ -706,6 +705,10 @@ internal sealed class OccurrenceMaterializer
                          .ConfigureAwait(false);
         }
     }
+
+    private static ScheduleValidationContext ValidationContext(IServiceProvider provider) => new(
+        provider.GetService<OccurrenceProviderRegistry>(),
+        provider.GetService<ScheduleCalendarRegistry>());
 
     /// <summary>Tells a monitoring subscriber that a schedule is parked nowhere until the next restart.</summary>
     private void PublishReParkFailedEvent(TaskHandlerExecutor? executor, Guid parentId, Exception failure)
