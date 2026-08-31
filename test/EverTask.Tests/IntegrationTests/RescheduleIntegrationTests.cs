@@ -157,7 +157,7 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
 
     // cursor: where the schedule stands, or null for a series that has already ended.
     private async Task<Guid> SeedDurableScheduleAsync(RecurringTask definition, DateTimeOffset? cursor,
-                                                      string taskKey,
+                                                      string? taskKey,
                                                       QueuedTaskStatus status = QueuedTaskStatus.Queued)
     {
         var row = new QueuedTask
@@ -1240,7 +1240,7 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
         ScheduleUpdateResult? rescheduled = null;
         var landed = 0;
 
-        faulty.RunBefore(nameof(ITaskStorage.CompleteRecurringRun), () =>
+        faulty.RunBefore(nameof(ITaskStorage.RecordRecurringRunForExclusionRetry), () =>
         {
             if (Interlocked.Exchange(ref landed, 1) == 1)
                 return;
@@ -1264,6 +1264,163 @@ public class RescheduleIntegrationTests : IsolatedIntegrationTestBase
             .ShouldBeGreaterThanOrEqualTo(2,
                 "the manager parks its definition, then the losing advance reparks from that same row");
         _registrations.AcceptedAStaleRegistration(id).ShouldBeFalse();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Should_resume_a_recorded_exclusion_budget_advance_without_reexecuting_its_slot(
+        bool versioned)
+    {
+        await StartHostAsync(configureEverTask: configuration => configuration.SetOccurrenceProviderRetry(retry =>
+        {
+            retry.InitialBackoff = TimeSpan.FromDays(1);
+            retry.MaxBackoff     = TimeSpan.FromDays(1);
+        }));
+
+        var events = new ConcurrentQueue<EverTaskEventData>();
+        WorkerExecutor.TaskEventOccurredAsync += Collect;
+
+        try
+        {
+            var slot = Clock.GetUtcNow();
+            var blocked = new RecurringTask
+            {
+                RunNow      = true,
+                DayInterval = new DayInterval(7),
+                MaxRuns     = 2,
+                Exclusions  = new ScheduleExclusions { Days = [slot.DayOfWeek] }
+            };
+            var id = await SeedDurableScheduleAsync(blocked, slot,
+                versioned ? $"budget-resume-{Guid.NewGuid():N}" : null);
+
+            await WorkerExecutor.DoWork(await BuildExecutorAsync(await RowAsync(id)), CancellationToken.None);
+
+            var recorded = await RowAsync(id);
+            recorded.CurrentRunCount.ShouldBe(1);
+            recorded.NextRunUtc.ShouldBe(slot);
+            _recorder.Count.ShouldBe(1);
+
+            var repaired = new RecurringTask
+            {
+                DayInterval = new DayInterval(1),
+                MaxRuns     = 2
+            };
+            recorded.RecurringTask = EverTaskJson.Serialize(repaired);
+            recorded.RecurringInfo = repaired.ToString();
+            await _shared.UpdateTask(recorded);
+
+            var retry = await BuildExecutorAsync(recorded);
+            retry = retry with
+            {
+                ExecutionTime              = Clock.GetUtcNow(),
+                IsScheduleRetry            = true,
+                ScheduleRetryFromUtc       = slot,
+                ScheduleRunAlreadyRecorded = true
+            };
+
+            await WorkerExecutor.DoWork(retry, CancellationToken.None);
+            await Task.Delay(500);
+
+            var resumed = await RowAsync(id);
+            resumed.CurrentRunCount.ShouldBe(1,
+                "the retry resumes the advance whose run is already on the row");
+            resumed.NextRunUtc.ShouldBe(slot,
+                "the retained cursor is not rewritten until the next real run advances it");
+            _recorder.Count.ShouldBe(1, "the executed slot is never delivered a second time");
+
+            await TaskWaitHelper.WaitForConditionAsync(() => events.Any(e =>
+                e.Message.Contains("Exclusion search for schedule", StringComparison.Ordinal)), 20000);
+
+            events.Single(e => e.Message.Contains("Exclusion search for schedule", StringComparison.Ordinal))
+                  .Severity.ShouldBe(nameof(SeverityLevel.Warning));
+        }
+        finally
+        {
+            WorkerExecutor.TaskEventOccurredAsync -= Collect;
+        }
+
+        Task Collect(EverTaskEventData data)
+        {
+            events.Enqueue(data);
+            return Task.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public async Task Should_publish_an_error_event_when_an_exclusion_retry_cannot_be_parked()
+    {
+        await StartHostAsync(startHost: false, faultyScheduler: true);
+
+        var slot = Clock.GetUtcNow();
+        var blocked = new RecurringTask
+        {
+            RunNow      = true,
+            DayInterval = new DayInterval(7),
+            MaxRuns     = 2,
+            Exclusions  = new ScheduleExclusions { Days = [slot.DayOfWeek] }
+        };
+        var id = await SeedDurableScheduleAsync(blocked, slot, $"budget-park-failure-{Guid.NewGuid():N}");
+
+        _faults.FailNextFor(id);
+
+        var events = await EventsOfAsync(
+            async () => await WorkerExecutor.DoWork(await BuildExecutorAsync(await RowAsync(id)),
+                CancellationToken.None),
+            "could not be parked after its exclusion search");
+
+        events.Single(e => e.Message.Contains("could not be parked after its exclusion search",
+                  StringComparison.Ordinal))
+              .Severity.ShouldBe(nameof(SeverityLevel.Error));
+    }
+
+    [Fact]
+    public async Task Should_resume_a_recorded_exclusion_budget_advance_after_restart()
+    {
+        static void ConfigureRetry(EverTaskServiceConfiguration configuration) =>
+            configuration.SetOccurrenceProviderRetry(retry =>
+            {
+                retry.InitialBackoff = TimeSpan.FromDays(1);
+                retry.MaxBackoff     = TimeSpan.FromDays(1);
+            });
+
+        await StartHostAsync(configureEverTask: ConfigureRetry);
+
+        var slot = Clock.GetUtcNow();
+        var blocked = new RecurringTask
+        {
+            RunNow      = true,
+            DayInterval = new DayInterval(7),
+            MaxRuns     = 2,
+            Exclusions  = new ScheduleExclusions { Days = [slot.DayOfWeek] }
+        };
+        var id = await SeedDurableScheduleAsync(blocked, slot, $"budget-restart-{Guid.NewGuid():N}");
+
+        await WorkerExecutor.DoWork(await BuildExecutorAsync(await RowAsync(id)), CancellationToken.None);
+
+        var recorded = await RowAsync(id);
+        recorded.CurrentRunCount.ShouldBe(1);
+        recorded.NextRunUtc.ShouldBe(slot);
+        ScheduleRuntimeInfo.TryParse(recorded.RuntimeInfo)?.ExclusionAdvanceRetry.ShouldNotBeNull(
+            "the memory-only delivery flag needs a persisted counterpart for startup recovery");
+
+        var repaired = new RecurringTask
+        {
+            DayInterval = new DayInterval(1),
+            MaxRuns     = 2
+        };
+        recorded.RecurringTask = EverTaskJson.Serialize(repaired);
+        recorded.RecurringInfo = repaired.ToString();
+        await _shared.UpdateTask(recorded);
+
+        await StartHostAsync(configureEverTask: ConfigureRetry);
+        await Task.Delay(500);
+
+        var resumed = await RowAsync(id);
+        resumed.CurrentRunCount.ShouldBe(1,
+            "startup recovery resumes the recorded advance instead of granting its retained cursor grace");
+        resumed.NextRunUtc.ShouldBe(slot);
+        _recorder.Count.ShouldBe(1, "the recorded slot is never recovered as a pending delivery");
     }
 
     [Fact]

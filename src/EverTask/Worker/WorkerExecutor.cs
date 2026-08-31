@@ -482,13 +482,25 @@ public class WorkerExecutor(
                 return;
             }
 
+            if (task.ScheduleRunAlreadyRecorded)
+            {
+                var resumed = await Dispatcher.Dispatcher.CreateCachedWrapper(recovered.Task.GetType())
+                                              .Handle(recovered.Task, row.NextRunUtc, definition,
+                                                  scope.ServiceProvider, recovered.AuditLevel, row.Id, row.TaskKey,
+                                                  useLazyExecutor: true, recovered.RowMetadata)
+                                              .ConfigureAwait(false);
+
+                await QueueNextOccourrence(resumed, 0, storage, serviceToken, countsAsRun: false)
+                    .ConfigureAwait(false);
+                ProviderRetries?.RecordSuccess(task.PersistenceId);
+                return;
+            }
+
             await dispatcher.ExecuteDispatch(recovered.Task, row.NextRunUtc, definition, row.CurrentRunCount,
                     serviceToken, row.Id, row.TaskKey, recovered.AuditLevel, isRecovery: true,
                     recovered.RowMetadata)
                 .ConfigureAwait(false);
 
-            if (task.ScheduleRunAlreadyRecorded)
-                ProviderRetries?.RecordSuccess(task.PersistenceId);
         }
         catch (OperationCanceledException) when (serviceToken.IsCancellationRequested)
         {
@@ -1785,24 +1797,31 @@ public class WorkerExecutor(
             return new ScheduleAdvance(true, null);
         }
 
+        var recordedRunCount = current?.CurrentRunCount >= int.MaxValue
+                                   ? int.MaxValue
+                                   : (current?.CurrentRunCount ?? 0) + 1;
+        var runtimeInfo = ScheduleRuntimeInfo.WithExclusionAdvanceRetry(
+            current?.RuntimeInfo, retainedCursor, recordedRunCount);
+
         if (IsVersionedSchedule(task, current, taskStorage))
         {
+            var outcome = await taskStorage
+                                .RecordRecurringRunForExclusionRetry(task.PersistenceId, executionTimeMs,
+                                    retainedCursor, task.AuditLevel, markCompleted, runtimeInfo,
+                                    task.ScheduleVersion)
+                                .ConfigureAwait(false);
+
+            if (outcome == ScheduleCasResult.Applied)
+                return new ScheduleAdvance(true, null);
+
             return await AdvanceVersionedRunAsync(task, executionTimeMs, retainedCursor, markCompleted, taskStorage)
                          .ConfigureAwait(false);
         }
 
-        if (markCompleted)
-        {
-            await taskStorage
-                  .CompleteRecurringRun(task.PersistenceId, executionTimeMs, retainedCursor, task.AuditLevel)
-                  .ConfigureAwait(false);
-        }
-        else
-        {
-            await taskStorage
-                  .UpdateCurrentRun(task.PersistenceId, executionTimeMs, retainedCursor, task.AuditLevel)
-                  .ConfigureAwait(false);
-        }
+        await taskStorage
+              .RecordRecurringRunForExclusionRetry(task.PersistenceId, executionTimeMs, retainedCursor,
+                  task.AuditLevel, markCompleted, runtimeInfo)
+              .ConfigureAwait(false);
 
         return new ScheduleAdvance(true, null);
     }
@@ -1824,11 +1843,27 @@ public class WorkerExecutor(
                       ScheduleRetryFromUtc       = task.ScheduleRetryFromUtc ?? task.ExecutionTime,
                       ScheduleRunAlreadyRecorded = true
                   },
-                  (_, _) => logger.NextOccurrenceRefusedBySuccessor(task.PersistenceId, task.ScheduleVersion),
-                  (_, at) => logger.ExclusionSearchDeferred(failure, task.PersistenceId,
-                      failure.StandingInstant, failures, at),
-                  (_, error) => logger.ExclusionSearchRetryParkFailed(error, task.PersistenceId,
-                      failure.StandingInstant))
+                  (_, at) => logger.ExclusionSearchRetryParkRefused(task.PersistenceId,
+                      failure.StandingInstant, at),
+                  (_, at) =>
+                      RegisterEvent(LogLevel.Warning, SeverityLevel.Warning, task, failure, null,
+                          (TaskId: task.PersistenceId, failure.StandingInstant, Failures: failures, RetryAt: at),
+                          static (l, a, e) => l.ExclusionSearchDeferred(e!, a.TaskId, a.StandingInstant,
+                              a.Failures, a.RetryAt),
+                          static a => string.Create(CultureInfo.InvariantCulture,
+                              $"Exclusion search for schedule {a.TaskId} exhausted at " +
+                              $"{a.StandingInstant:O} ({a.Failures} consecutive failure(s)); the run was " +
+                              $"recorded, the cursor was retained, and the schedule is parked to retry at " +
+                              $"{a.RetryAt:O}")),
+                  (_, error) =>
+                      RegisterEvent(LogLevel.Error, SeverityLevel.Error, task, error, null,
+                          (TaskId: task.PersistenceId, failure.StandingInstant),
+                          static (l, a, e) => l.ExclusionSearchRetryParkFailed(e!, a.TaskId,
+                              a.StandingInstant),
+                          static a => string.Create(CultureInfo.InvariantCulture,
+                              $"Schedule {a.TaskId} could not be parked after its exclusion search exhausted " +
+                              $"at {a.StandingInstant:O}; the recorded run and retained cursor wait for " +
+                              $"startup recovery")))
               .ConfigureAwait(false);
     }
 

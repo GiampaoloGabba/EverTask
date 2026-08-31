@@ -629,6 +629,77 @@ public class EfCoreTaskStorage(ITaskStoreDbContextFactory contextFactory, IEverT
         }
     }
 
+    /// <inheritdoc />
+    public virtual async Task<ScheduleCasResult> RecordRecurringRunForExclusionRetry(
+        Guid taskId, double executionTimeMs, DateTimeOffset retainedCursorUtc, AuditLevel auditLevel,
+        bool markCompleted, string runtimeInfo, int? expectedScheduleVersion = null)
+    {
+        await using var dbContext = await contextFactory.CreateDbContextAsync().ConfigureAwait(false);
+
+        var task = await dbContext.QueuedTasks
+                                  .Where(x => x.Id == taskId &&
+                                              (!expectedScheduleVersion.HasValue ||
+                                               x.ScheduleVersion == expectedScheduleVersion.Value))
+                                  .FirstOrDefaultAsync()
+                                  .ConfigureAwait(false);
+
+        if (task == null)
+            return ScheduleCasResult.VersionMismatch;
+
+        var now = UtcNowNormalized;
+
+        if (markCompleted)
+        {
+            if (AuditPolicy.ShouldCreateStatusAudit(auditLevel, QueuedTaskStatus.Completed, null))
+            {
+                dbContext.StatusAudit.Add(new StatusAudit
+                {
+                    QueuedTaskId = taskId,
+                    UpdatedAtUtc = now,
+                    NewStatus    = QueuedTaskStatus.Completed,
+                    Exception    = null
+                });
+            }
+
+            if (AuditPolicy.ShouldCreateRunsAudit(auditLevel, QueuedTaskStatus.Completed, null))
+            {
+                task.RunsAudits.Add(new RunsAudit
+                {
+                    QueuedTaskId    = taskId,
+                    ExecutedAt      = now,
+                    ExecutionTimeMs = executionTimeMs,
+                    Status          = QueuedTaskStatus.Completed,
+                    Exception       = null
+                });
+            }
+
+            task.Status           = QueuedTaskStatus.Completed;
+            task.Exception        = null;
+            task.LastExecutionUtc = now;
+        }
+        else if (AuditPolicy.ShouldCreateRunsAudit(auditLevel, task.Status, task.Exception))
+        {
+            task.RunsAudits.Add(new RunsAudit
+            {
+                QueuedTaskId    = taskId,
+                ExecutedAt      = now,
+                ExecutionTimeMs = executionTimeMs,
+                Status          = task.Status,
+                Exception       = task.Exception
+            });
+        }
+
+        task.ExecutionTimeMs = executionTimeMs;
+        task.NextRunUtc      = retainedCursorUtc;
+        task.CurrentRunCount = task.CurrentRunCount >= int.MaxValue
+                                   ? int.MaxValue
+                                   : (task.CurrentRunCount ?? 0) + 1;
+        task.RuntimeInfo     = runtimeInfo;
+
+        await dbContext.SaveChangesAsync(CancellationToken.None).ConfigureAwait(false);
+        return ScheduleCasResult.Applied;
+    }
+
     /// <summary>
     /// Finalizes a recurring series that ended on a SKIPPED occurrence (next slot past RunUntil): sets
     /// Completed AND clears <see cref="QueuedTask.NextRunUtc"/> in ONE tracked SaveChanges, WITHOUT

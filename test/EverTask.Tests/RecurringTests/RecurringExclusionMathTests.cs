@@ -153,10 +153,57 @@ public class RecurringExclusionMathTests
     }
 
     [Fact]
-    public void Should_jump_a_minute_cron_across_a_thirty_day_window()
+    public async Task Should_throw_the_typed_failure_when_cursor_normalization_exhausts_its_walk()
+    {
+        var cursor = Utc(2026, 6, 1, 0);
+        var task = Valid(new RecurringTask
+        {
+            WeekInterval = new WeekInterval(1,
+                [DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday, DayOfWeek.Friday]),
+            Exclusions = new ScheduleExclusions
+            {
+                Ranges = [Range(cursor.AddDays(-7 * 33), cursor.AddDays(2))]
+            }
+        });
+
+        await Should.ThrowAsync<ExclusionSearchBudgetExceededException>(async () =>
+            await ScheduleEvaluator.Default.NormalizeCursorAsync(task, cursor, 1));
+    }
+
+    [Fact]
+    public void Should_fall_back_to_the_anchored_walk_when_a_uniform_jump_cannot_verify_the_shape()
+    {
+        var anchor = Utc(2026, 1, 1, 0);
+        var exit = Utc(2026, 1, 1, 10);
+        var baseGrid = Valid(new RecurringTask
+        {
+            HourInterval   = new HourInterval(1) { OnMinute = 30 },
+            MinuteInterval = new MinuteInterval(45),
+            SecondInterval = new SecondInterval(20)
+        });
+        var filtered = Valid(new RecurringTask
+        {
+            HourInterval   = new HourInterval(1) { OnMinute = 30 },
+            MinuteInterval = new MinuteInterval(45),
+            SecondInterval = new SecondInterval(20),
+            Exclusions = new ScheduleExclusions
+            {
+                Ranges = [Range(Utc(2026, 1, 1, 2), exit)]
+            }
+        });
+
+        var expected = baseGrid.CalculateNextRun(anchor, 1);
+        while (expected < exit)
+            expected = baseGrid.CalculateNextRun(expected!.Value, 1);
+
+        filtered.CalculateNextRun(anchor, 1).ShouldBe(expected);
+    }
+
+    [Fact]
+    public void Should_jump_a_minute_cron_across_a_window_wider_than_the_discard_budget()
     {
         var start = Utc(2026, 1, 1, 0);
-        var exit = Utc(2026, 1, 31, 0);
+        var exit = start.AddDays(365);
         var task = Valid(new RecurringTask
         {
             CronInterval = new CronInterval("* * * * *"),

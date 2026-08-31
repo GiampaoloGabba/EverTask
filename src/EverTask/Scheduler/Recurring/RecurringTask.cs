@@ -707,7 +707,11 @@ public class RecurringTask
             if (discarded + 1 > MaxExclusionSearchIterations)
                 throw new ExclusionSearchBudgetExceededException(current);
 
-            candidate = AdvanceBasePastExcludedRegion(baseGrid, current, exit.Value, out candidateCollapsed);
+            var next = AdvanceBasePastExcludedRegion(baseGrid, current, exit.Value, out candidateCollapsed);
+            if (next is { } value && value <= current)
+                return null;
+
+            candidate = next;
         }
 
         return null;
@@ -719,7 +723,11 @@ public class RecurringTask
         collapsedSlots = 0;
 
         if (baseGrid.IsUniformGrid())
-            return TryJumpBaseUniformGrid(baseGrid, candidate, exit.AddTicks(-1));
+        {
+            var jumped = TryJumpBaseUniformGrid(baseGrid, candidate, exit.AddTicks(-1));
+            if (jumped.HasValue)
+                return jumped;
+        }
 
         if (!string.IsNullOrEmpty(baseGrid.CronInterval?.CronExpression))
         {
@@ -1020,7 +1028,10 @@ public class RecurringTask
             slot = next;
         }
 
-        return slot is { } value && value >= instant ? value : null;
+        if (slot is { } value && value < instant && Exclusions != null)
+            throw new ExclusionSearchBudgetExceededException(value);
+
+        return slot is { } candidate && candidate >= instant ? candidate : null;
     }
 
     /// <summary>

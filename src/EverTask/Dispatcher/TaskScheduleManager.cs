@@ -617,18 +617,17 @@ internal sealed class TaskScheduleManager(
     }
 
     /// <summary>
-    /// Drops a durable catch-up halt from the row's runtime state. Any schedule change releases it: the halt
-    /// exists to stop a replay nobody asked for, and asking is exactly what these calls are.
+    /// Drops schedule-runtime markers superseded by a schedule change. A new definition owns both its cursor
+    /// and whether catch-up remains halted.
     /// </summary>
     /// <remarks>
-    /// The marker is the only thing the schedule half of that column carries, so clearing it clears the column.
-    /// Unreadable JSON is left verbatim: it is not a halt, and rewriting what this build cannot read would
-    /// destroy whatever wrote it.
+    /// Unreadable JSON is left verbatim: rewriting what this build cannot read would destroy whatever wrote it.
     /// </remarks>
     private static string? ClearHalt(string? runtimeInfo, out bool released)
     {
-        released = ScheduleRuntimeInfo.TryParse(runtimeInfo)?.Halted is not null;
-        return released ? null : runtimeInfo;
+        var state = ScheduleRuntimeInfo.TryParse(runtimeInfo);
+        released = state?.Halted is not null;
+        return state is { Halted: not null } or { ExclusionAdvanceRetry: not null } ? null : runtimeInfo;
     }
 
     private void Publish(TaskHandlerExecutor executor, SeverityLevel severity, string message,

@@ -218,6 +218,56 @@ public interface ITaskStorage
     }
 
     /// <summary>
+    /// Records one real recurring run while retaining its executed cursor and atomically marks that the next
+    /// occurrence still has to be decided. The marker prevents startup recovery from delivering the retained
+    /// cursor as pending work.
+    /// </summary>
+    /// <remarks>
+    /// Built-in stores override this atomically. The default preserves compatibility for custom stores but
+    /// writes the runtime marker after the run update, leaving their historical crash window between writes.
+    /// </remarks>
+    async Task<ScheduleCasResult> RecordRecurringRunForExclusionRetry(
+        Guid taskId, double executionTimeMs, DateTimeOffset retainedCursorUtc, AuditLevel auditLevel,
+        bool markCompleted, string runtimeInfo, int? expectedScheduleVersion = null)
+    {
+        ScheduleCasResult outcome;
+
+        if (expectedScheduleVersion.HasValue)
+        {
+            outcome = markCompleted
+                          ? await CompleteRecurringRun(taskId, executionTimeMs, retainedCursorUtc, auditLevel,
+                                  expectedScheduleVersion.Value)
+                              .ConfigureAwait(false)
+                          : await UpdateCurrentRun(taskId, executionTimeMs, retainedCursorUtc, auditLevel,
+                                  expectedScheduleVersion.Value)
+                              .ConfigureAwait(false);
+        }
+        else
+        {
+            if (markCompleted)
+                await CompleteRecurringRun(taskId, executionTimeMs, retainedCursorUtc, auditLevel)
+                    .ConfigureAwait(false);
+            else
+                await UpdateCurrentRun(taskId, executionTimeMs, retainedCursorUtc, auditLevel)
+                    .ConfigureAwait(false);
+
+            outcome = ScheduleCasResult.Applied;
+        }
+
+        if (outcome != ScheduleCasResult.Applied)
+            return outcome;
+
+        var rows = await Get(t => t.Id == taskId).ConfigureAwait(false);
+        if (rows.FirstOrDefault() is { } row)
+        {
+            row.RuntimeInfo = runtimeInfo;
+            await UpdateTask(row).ConfigureAwait(false);
+        }
+
+        return outcome;
+    }
+
+    /// <summary>
     /// Finalizes a recurring series that ENDED on a skipped occurrence (its next slot fell past
     /// <see cref="QueuedTask.RunUntil"/>): sets <see cref="QueuedTaskStatus.Completed"/> AND clears
     /// <see cref="QueuedTask.NextRunUtc"/> in ONE atomic write, WITHOUT advancing the run counter and

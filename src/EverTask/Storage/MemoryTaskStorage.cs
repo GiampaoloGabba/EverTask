@@ -331,6 +331,30 @@ public class MemoryTaskStorage(IEverTaskLogger<MemoryTaskStorage> logger) : ITas
         return Task.CompletedTask;
     }
 
+    /// <inheritdoc />
+    public Task<ScheduleCasResult> RecordRecurringRunForExclusionRetry(
+        Guid taskId, double executionTimeMs, DateTimeOffset retainedCursorUtc, AuditLevel auditLevel,
+        bool markCompleted, string runtimeInfo, int? expectedScheduleVersion = null)
+    {
+        lock (_pendingTasksLock)
+        {
+            var task = _pendingTasks.FirstOrDefault(x => x.Id == taskId);
+            if (task == null || expectedScheduleVersion.HasValue &&
+                task.ScheduleVersion != expectedScheduleVersion.Value)
+            {
+                return Task.FromResult(ScheduleCasResult.VersionMismatch);
+            }
+
+            if (markCompleted)
+                CompleteRecurringRunLocked(task, executionTimeMs, retainedCursorUtc, auditLevel);
+            else
+                UpdateCurrentRunLocked(task, executionTimeMs, retainedCursorUtc, auditLevel);
+
+            task.RuntimeInfo = runtimeInfo;
+            return Task.FromResult(ScheduleCasResult.Applied);
+        }
+    }
+
     public Task SetRecurringSeriesCompleted(Guid taskId, double executionTimeMs, AuditLevel auditLevel)
     {
         logger.FinalizingRecurringSeries(taskId);

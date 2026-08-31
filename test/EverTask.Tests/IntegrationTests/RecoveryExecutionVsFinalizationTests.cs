@@ -135,6 +135,68 @@ public class RecoveryExecutionVsFinalizationTests : IsolatedIntegrationTestBase
             "the Saturday cursor came from RunAt and is not a recurring grid slot to filter");
     }
 
+    [Fact]
+    public async Task Should_schedule_an_excluded_inline_cursor_at_its_normalized_instant_without_persisting_it()
+    {
+        var saturday = new DateTimeOffset(2026, 8, 29, 12, 0, 0, TimeSpan.Zero);
+        var sunday   = saturday.AddDays(1);
+        var clock    = new FakeTimeProvider(sunday);
+
+        await StartHostWithoutConsumersAsync(clock);
+
+        var seeded = await SeedSeriesAsync(DailyAtNoonExceptWeekends(), saturday, QueuedTaskStatus.Queued,
+            currentRunCount: 1, createdAtUtc: sunday.AddDays(-30));
+
+        await Host!.StartAsync();
+        await Task.Delay(300);
+
+        var waiting = (await Storage.Get(t => t.Id == seeded.Id))[0];
+        waiting.NextRunUtc.ShouldBe(saturday,
+            "inline recovery re-derives the Monday delivery without persisting the normalized cursor");
+        waiting.CurrentRunCount.ShouldBe(1);
+        _state.ExecutedIndexes.ShouldBeEmpty();
+
+        clock.Advance(TimeSpan.FromDays(1));
+        await WaitForRowAsync(seeded.Id, row => (row.CurrentRunCount ?? 0) == 2, 20000);
+
+        _state.ExecutedIndexes.Count.ShouldBe(1, "the normalized delivery fires at Monday noon");
+    }
+
+    [Fact]
+    public async Task Should_route_a_normalization_walk_cap_as_recovery_failure_instead_of_finalizing()
+    {
+        var cursor = new DateTimeOffset(2026, 6, 1, 0, 0, 0, TimeSpan.Zero);
+        await StartHostWithoutConsumersAsync(new FakeTimeProvider(cursor));
+
+        var recurring = new RecurringTask
+        {
+            WeekInterval = new WeekInterval(1,
+                [DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday, DayOfWeek.Friday]),
+            Exclusions = new ScheduleExclusions
+            {
+                Ranges =
+                [
+                    new ExclusionRange
+                    {
+                        FromUtc = cursor.AddDays(-7 * 33),
+                        ToUtc   = cursor.AddDays(2)
+                    }
+                ]
+            }
+        };
+        var seeded = await SeedSeriesAsync(recurring, cursor, QueuedTaskStatus.Queued, currentRunCount: 1,
+            createdAtUtc: cursor.AddDays(-300));
+
+        await Host!.StartAsync();
+        var failed = await WaitForRowAsync(seeded.Id,
+            row => (row.RecoveryDispatchFailureCount ?? 0) == 1, 20000);
+
+        failed.Status.ShouldBe(QueuedTaskStatus.Queued);
+        failed.NextRunUtc.ShouldBe(cursor, "a computational cap is never a completed series");
+        failed.CurrentRunCount.ShouldBe(1);
+        _state.ExecutedIndexes.ShouldBeEmpty();
+    }
+
     private static RecurringTask DailyAtNoonExceptWeekends() => new()
     {
         DayInterval = new DayInterval(1) { OnTimes = [new TimeOnly(12, 0)] },

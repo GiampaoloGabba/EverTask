@@ -196,6 +196,15 @@ public sealed class FaultInjectingTaskStorage(ITaskStorage inner) : ITaskStorage
         return inner.CompleteRecurringRun(taskId, executionTimeMs, nextRun, auditLevel);
     }
 
+    public Task<ScheduleCasResult> RecordRecurringRunForExclusionRetry(
+        Guid taskId, double executionTimeMs, DateTimeOffset retainedCursorUtc, AuditLevel auditLevel,
+        bool markCompleted, string runtimeInfo, int? expectedScheduleVersion = null)
+    {
+        Gate(nameof(RecordRecurringRunForExclusionRetry));
+        return inner.RecordRecurringRunForExclusionRetry(taskId, executionTimeMs, retainedCursorUtc, auditLevel,
+            markCompleted, runtimeInfo, expectedScheduleVersion);
+    }
+
     public Task<ScheduleCasResult> CompleteRecurringRun(Guid taskId, double executionTimeMs, DateTimeOffset? nextRun,
                                                         AuditLevel auditLevel, int expectedScheduleVersion)
     {

@@ -568,12 +568,16 @@ public class Dispatcher(
                 (existingCurrentRunCount ?? currentRun ?? 0) + 1);
 
             RecurringRunDecision decision;
+            var recordedAdvance = isRecovery && existingNextRunUtc is { } retainedCursor &&
+                                  ScheduleRuntimeInfo.TryParse(rowMetadata.RuntimeInfo)
+                                                     ?.IsExclusionAdvanceRetry(retainedCursor,
+                                                         existingCurrentRunCount ?? currentRun ?? 0) == true;
 
             try
             {
                 decision = await DecideRecurringRunAsync(recurring, isRecovery, existingNextRunUtc,
                                    existingCurrentRunCount, executionTime, existingTaskId, currentRun, nowUtc,
-                                   identity, ct)
+                                   identity, recordedAdvance, ct)
                                .ConfigureAwait(false);
             }
             catch (OccurrenceProviderException failure) when (isRecovery && existingTaskId is { } scheduleId)
@@ -1014,8 +1018,18 @@ public class Dispatcher(
     private async Task<RecurringRunDecision> DecideRecurringRunAsync(
         RecurringTask recurring, bool isRecovery, DateTimeOffset? existingNextRunUtc, int? existingCurrentRunCount,
         DateTimeOffset? executionTime, Guid? existingTaskId, int? currentRun, DateTimeOffset nowUtc,
-        ScheduleIdentity identity, CancellationToken ct)
+        ScheduleIdentity identity, bool resumeRecordedAdvance, CancellationToken ct)
     {
+        if (resumeRecordedAdvance && existingNextRunUtc is { } retainedCursor)
+        {
+            var resumed = await Evaluator.CalculateNextValidRunAsync(
+                    recurring, retainedCursor, existingCurrentRunCount ?? currentRun ?? 0, nowUtc,
+                    isRecovery: true, computeSkippedCount: false, identity: identity, ct: ct)
+                .ConfigureAwait(false);
+
+            return new RecurringRunDecision(resumed.NextRun, resumed.NextRun == null);
+        }
+
         if (recurring.Exclusions != null && existingNextRunUtc is { } storedCursor)
         {
             existingNextRunUtc = await Evaluator

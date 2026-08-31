@@ -254,4 +254,11 @@ internal static partial class WorkerExecutorLog
                   "{StandingInstant:O}; the retained cursor waits for startup recovery")]
     public static partial void ExclusionSearchRetryParkFailed(this ILogger logger, Exception exception, Guid taskId,
                                                               DateTimeOffset standingInstant);
+
+    [LoggerMessage(EventId = 1246, Level = LogLevel.Warning,
+        Message = "Exclusion-search retry for schedule {TaskId} at {StandingInstant:O} was refused for " +
+                  "{RetryAtUtc:O}; another schedule version or shutdown owns the registration")]
+    public static partial void ExclusionSearchRetryParkRefused(this ILogger logger, Guid taskId,
+                                                               DateTimeOffset standingInstant,
+                                                               DateTimeOffset retryAtUtc);
 }

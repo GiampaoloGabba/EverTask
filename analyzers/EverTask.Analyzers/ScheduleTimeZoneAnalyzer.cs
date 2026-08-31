@@ -174,7 +174,7 @@ public sealed class ScheduleTimeZoneAnalyzer : DiagnosticAnalyzer
 
         if (current.Parent is IInvocationOperation outer &&
             IsBuilderMethod(outer.TargetMethod, builders) &&
-            ReferenceEquals(Unwrap(outer.Instance), current))
+            ReferenceEquals(Unwrap(outer.Instance), Unwrap(current)))
         {
             invocation = outer;
             return true;
