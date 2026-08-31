@@ -133,5 +133,6 @@ Fluent builder (`Builder/RecurringTaskBuilder.cs`) + occurrence math (`Recurring
 Tests (`test/EverTask.Tests/`): `RecurringTests/` — `Builders/`, `Intervals/`, `TimeZones/` (mapping, DST,
 `CronOracleTests`, id normalization), `RecurringTaskScheduleDriftTests`, `RecurringCalendarSkipForwardTests`,
 `RecurringSkipForwardHardeningTests`, `BackfillCursorTests`, `ScheduleRebaseTests`,
-`RecurringExclusionMathTests`, `ScheduleExclusionValidationTests`, `TimeZones/ExclusionTimeZoneTests`, plus
+`RecurringExclusionMathTests`, `ScheduleExclusionValidationTests`, `ScheduleCalendarRegistrationTests`,
+`TimeZones/ExclusionTimeZoneTests`, plus
 `Serialization/IntervalSerializationParityTests` and `IntegrationTests/ScheduleTimeZoneIntegrationTests.cs`.
