@@ -14,12 +14,20 @@
     <PackageReference Include="BenchmarkDotNet" />
     <!-- For the payload serialization micro: EverTask's serializer is Newtonsoft (EverTaskJson, internal). -->
     <PackageReference Include="Newtonsoft.Json" />
+    <!-- Testcontainers for the storage micros (#17 PersistInsert, #18 ProcRawAdo). Docker, local only. -->
+    <!-- Direct SSH.NET reference: overrides Testcontainers' vulnerable transitive (GHSA-q939-rpr3-3284) -->
+    <PackageReference Include="SSH.NET" />
+    <PackageReference Include="Testcontainers.MsSql" />
+    <PackageReference Include="Testcontainers.PostgreSql" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\EverTask\EverTask.csproj" />
     <!-- For the DbContext pooling micro-benchmark: real SqliteTaskStoreContext + UseSqlite. -->
     <ProjectReference Include="..\..\src\Storage\EverTask.Storage.Sqlite\EverTask.Storage.Sqlite.csproj" />
+    <!-- The proc/CTE providers the storage micros A/B against raw ADO. -->
+    <ProjectReference Include="..\..\src\Storage\EverTask.Storage.SqlServer\EverTask.Storage.SqlServer.csproj" />
+    <ProjectReference Include="..\..\src\Storage\EverTask.Storage.Postgres\EverTask.Storage.Postgres.csproj" />
   </ItemGroup>
 
 </Project>

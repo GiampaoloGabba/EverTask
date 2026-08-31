@@ -410,3 +410,327 @@ extra ~550 B/task is ~500 MB/s of additional Gen0 pressure, which is where the 6
 sees it — their per-task cost is 6–25× larger and DB-bound — but reclaiming it is tracked with the storage
 allocation issues (#48–#53); the lazy navigation collections from P-J's follow-up note remain the first
 candidate, now joined by the executor's context fields.
+
+## P-L — Storage write costs: the measure-first pass for #16 / #17 / #18
+
+the pooling win.
+
+### What was added
+
+| File | Purpose |
+|------|---------|
+| `benchmarks/EverTask.Benchmarks/StorageBenchInfra.cs` | Container provisioning, a production-wired host per provider, and the model-derived raw `INSERT` builder |
+| `benchmarks/EverTask.Benchmarks/PersistInsertBenchmark.cs` | #17 — tracked `Persist` vs raw parameterized INSERT (EF command / raw ADO) |
+| `benchmarks/EverTask.Benchmarks/ProcRawAdoBenchmark.cs` | #18 — proc/CTE through a pooled `DbContext` vs raw ADO command; its baseline is also #16's standalone `SetQueued` cost |
+| `benchmarks/EverTask.Benchmarks/Program.cs` | Provisions the two containers once for the whole run |
+| `benchmarks/EverTask.Benchmarks/EverTask.Benchmarks.csproj` | Adds the SqlServer/Postgres providers + Testcontainers |
+
+```bash
+# both micros, all three providers (Docker for postgres/sqlserver)
+dotnet run -c Release --project benchmarks/EverTask.Benchmarks -- --filter *PersistInsert* *ProcRawAdo* --job short
+# one backend at a time
+EVERTASK_BENCH_PROVIDERS=sqlite dotnet run -c Release --project benchmarks/EverTask.Benchmarks -- --filter *PersistInsert* --job short
+```
+
+### Methodology
+
+- **Production wiring, not a proxy.** Each case builds the real DI graph (`AddSqliteStorage` /
+  `AddPostgresStorage` / `AddSqlServerStorage`): pooled `DbContextFactory`, migrations applied, the real
+  `ITaskStorage`. The baseline variant calls the storage interface itself, so it is literally the shipped path.
+- **The A/B is the write mechanism, nothing else.** The `QueuedTask` is allocated once in `[GlobalSetup]`
+  and only its `Id` changes per op; row construction is the caller's cost either way.
+- **The raw INSERT is verified, not assumed.** Its column list is derived from the EF model (a mapped column
+  missing from the hand-written value list throws), and `[GlobalSetup]` writes one row through each variant
+  and compares every column of the three rows read back through EF, offsets included. A raw INSERT that
+  stored a different shape would be a bug, not a win.
+- **Raw ADO uses the same pool.** `SqlConnection` / `NpgsqlConnection` / `SqliteConnection` open on the
+  *same connection string* the EF context uses, so there is no connection-churn artefact.
+- **Containers provisioned once** (`postgres:16-alpine`, `mcr.microsoft.com/mssql/server:2022-latest`) by the
+  host process and handed to BenchmarkDotNet's per-case child processes through a temp file. Tables are
+  emptied at `[GlobalSetup]` so every case starts from a comparable table size.
+- **Job**: `--job short` (3 warmup + 3 iterations), `[MemoryDiagnoser]`, net10.0 / EF Core 10, tree at
+  `23cbc0c`.
+
+### Noise caveat, and when each run was captured
+
+**Allocation is deterministic and is the decision metric. Times are indicative.** Every op here is a real
+database round-trip on a shared machine. Quote the `Allocated` columns; treat the `Mean` columns as order of
+magnitude. SQL Server runs in a WSL2 container and is ~3x slower per round-trip than Postgres here, exactly
+as in P-H — that is the container, not the provider.
+
+One window matters for the timings: **16:35-17:30 UTC**, during which the orchestrator ran the #19 AFTER
+benchmark (`L8 sqlite`) on the main tree, so both processes were fsync-bound on the same disk. The capture
+timeline:
+
+| Run | UTC | In the contention window? |
+|-----|-----|---------------------------|
+| `PersistInsertBenchmark` + `ProcRawAdoBenchmark`, postgres + sqlserver | 16:00-16:02 | no |
+| `PersistInsertBenchmark` + `ProcRawAdoBenchmark`, sqlite | ~16:07 | no |
+| `L8` postgres, audit none (P-L.3) | 16:04 | no |
+| `L8` sqlite, audit none (P-L.5) | 16:19 | no |
+| `L8` sqlite, audit full — **discarded** | 16:41-17:44 | **yes**, and it never completed |
+| `L8` sqlite, audit full — the kept run (P-L.5) | 18:00-18:54 | no |
+
+**Every number this document draws a conclusion from was captured outside that window.** The one run that
+fell inside it was thrown away and re-run on a quiet machine — and the re-run reproduced its per-iteration
+throughput exactly (6-7 tasks/s either way), so `--audit full` on SQLite is simply that slow rather than
+having been starved.
+
+---
+
+### P-L.1 — #17: the tracked `Persist` insert
+
+`PersistInsertBenchmark`, allocated bytes/op and Gen0 collections per 1,000 ops.
+
+| Provider | Variant | Allocated | vs tracked | Gen0 | Mean (indicative) |
+|----------|---------|----------:|-----------:|-----:|------------------:|
+| SQLite | `Tracked_Persist` (production) | **38.63 KB** | — | 1.95 | 684 µs |
+| SQLite | `Raw_Insert_EfCommand` | 17.53 KB | **−55%** | 0.98 | 649 µs (0.95x) |
+| SQLite | `Raw_Insert_AdoCommand` | 6.41 KB | **−83%** | 0 | 635 µs (0.93x) |
+| Postgres | `Tracked_Persist` (production) | **37.42 KB** | — | 1.95 | 466 µs |
+| Postgres | `Raw_Insert_EfCommand` | 21.05 KB | **−44%** | 0.98 | 438 µs (0.94x) |
+| Postgres | `Raw_Insert_AdoCommand` | 12.10 KB | **−68%** | 0 | 441 µs (0.95x) |
+| SqlServer | `Tracked_Persist` (production) | **40.03 KB** | — | 1.95 | 1,436 µs |
+| SqlServer | `Raw_Insert_EfCommand` | 20.87 KB | **−48%** | 0 | 1,351 µs (0.94x) |
+| SqlServer | `Raw_Insert_AdoCommand` | 10.89 KB | **−73%** | 0 | 1,327 µs (0.92x) |
+
+Reads:
+
+- **The tracked insert costs 37–40 KB per call on every provider** — the change tracker entry, the property
+  snapshot for a 24-column row and the `ModificationCommandBatch`. It is by far the single heaviest write of
+  the four, and #17's "biggest single allocation slice" hypothesis is confirmed with room to spare.
+- **Keeping EF but dropping the tracker (`ExecuteSqlRaw` of a parameterized INSERT) already returns 44–55%**
+  of it. Going all the way to a raw ADO command returns **68–83%**.
+- **Time is flat** (0.92–0.95x, inside the noise band). Nothing here buys throughput: the durable path is
+  round-trip-bound, exactly as P-H/P-I found. What it buys is allocation and Gen0 pressure — the tracked path
+  is the only variant that pushes a measurable Gen0 rate.
+- **The per-provider SQL the issue worried about does not have to be hand-written.** The benchmark builds the
+  statement once at startup from the EF model — `IEntityType.GetProperties()` for the column list,
+  `ISqlGenerationHelper.DelimitIdentifier` for quoting and schema, the property's value converter for the
+  store type. One code path produced a correct INSERT for all three providers, and the round-trip comparison
+  passed column by column on all three. Only the 24-value list is hand-written, and a model column missing
+  from it throws at startup.
+
+### P-L.2 — #18: the proc/CTE through a `DbContext`
+
+`ProcRawAdoBenchmark`. The op is the `Queued` status write at `AuditLevel.None` — literally the `SetQueued`
+call `WorkerQueue` makes after enqueuing, so the baseline column is also #16's number.
+
+| Provider | Variant | Allocated | vs production | Mean (indicative) |
+|----------|---------|----------:|--------------:|------------------:|
+| Postgres | `Production_SetQueued` (CTE via pooled ctx) | **12.20 KB** | — | 494 µs |
+| Postgres | `Ef_ExecuteSqlRaw` (same CTE, cached SQL string) | 10.81 KB | −11% | 509 µs |
+| Postgres | `Raw_AdoCommand` (`NpgsqlCommand`, same pool) | 5.49 KB | **−55%** | 490 µs |
+| SqlServer | `Production_SetQueued` (proc via pooled ctx) | **8.67 KB** | — | 1,477 µs |
+| SqlServer | `Ef_ExecuteSqlRaw` (same EXEC, cached SQL string) | 8.26 KB | −5% | 1,338 µs |
+| SqlServer | `Raw_AdoCommand` (`SqlCommand`, same pool) | 5.42 KB | **−37%** | 1,377 µs |
+| SQLite\* | `Production_SetQueued` (base: transaction + `ExecuteUpdate`) | **21.26 KB** | — | 660 µs |
+| SQLite\* | `Ef_ExecuteSqlRaw` (plain UPDATE, no transaction) | 9.03 KB | −58% | 583 µs (0.88x) |
+| SQLite\* | `Raw_AdoCommand` (`SqliteCommand`, same pool) | 1.85 KB | **−91%** | 570 µs (0.86x) |
+
+\* SQLite has no proc/CTE, so it is **not** in #18's scope. Its rows compare the base relational `SetStatus`
+(explicit transaction + `ExecuteUpdate`) against the single UPDATE that path reduces to when no audit row is
+written — context for **#19**, and an upper bound on it, since the two raw rows also drop `ExecuteUpdate`'s
+own translation, not just the `BEGIN`/`COMMIT`.
+
+Reads:
+
+- **The saving is real but the mechanism is not the predicted one.** The issue expected ~6.4 KB per call
+  falling to ~1–2 KB. Measured: the production call is **8.67–12.20 KB** (higher than 6.4 KB — that estimate
+  came from the SQLite pooling micro, and the network drivers cost more), and the raw ADO floor is
+  **~5.4 KB**, not 1–2 KB. The 1–2 KB figure *is* right for a driver with no network stack: SQLite's raw
+  command lands at **1.85 KB**. On Postgres and SQL Server the ~5.4 KB is Npgsql's/SqlClient's own
+  per-command cost (connection rent, command + parameter objects, read/write buffers) and no rewrite removes it.
+- **Net per call: −6.71 KB (Postgres), −3.25 KB (SQL Server).** Times unchanged (0.93–1.03x).
+- **Postgres benefits about twice as much as SQL Server**, because its statement is a ~700-character CTE
+  while SQL Server's is a 90-character `EXEC`.
+- **There is a free half of this issue.** The gap between `Production_SetQueued` and the identical statement
+  issued from a *cached* SQL string is **1.39 KB per call on Postgres** and 0.41 KB on SQL Server —
+  `PostgresTaskStorage.SetStatus` re-interpolates its whole CTE (`$"""…{_schema}…"""`, ~700 chars ≈ 1.4 KB of
+  UTF-16) on **every call**, and the same pattern is in `UpdateCurrentRun`, `CompleteRecurringRun` and the
+  SQL Server `EXEC` builders. The schema is fixed at construction; caching the string per instance is a
+  one-line change with no transactional risk at all.
+
+### P-L.3 — the accounting closes
+
+Fresh `L8` baseline on this tree (`23cbc0c`, net10, Postgres/Testcontainers, audit none, tiny payload,
+parallelism 16, 4 producers, 5k tasks, warmup 2 / measured 5):
+
+```
+Throughput  : 2,708 tasks/s  (stdev 63, CV 2.3%)
+Latency (µs): p50=2,193  p90=2,515  p99=3,170  p999=9,765  max=16,990
+Allocated   : 80,078.5 bytes/task  (78.20 KB)
+```
+
+(Higher than P-I's 74,067 B/task because that predates the 4.0 branch; P-K measured +6.9% on the durable
+write path from the three new columns and the occurrence navigation collection. 74,067 × 1.069 = 79,178 —
+consistent.)
+
+Summing the micros for the four writes a task performs (`Persist` → `SetQueued` → `SetInProgress` →
+`SetCompleted`):
+
+| | Postgres |
+|---|---:|
+| `Tracked_Persist` | 38,318 B |
+| 3 × `Production_SetQueued` | 37,479 B |
+| **Sum of the four storage writes** | **75,797 B** |
+| L8 measured, end to end | 80,078 B |
+| **Storage share of the per-task allocation** | **94.7%** |
+
+The 4,281 B remainder matches the engine layer measured independently (A4W: 3,207 B/task on P-I, 3,498 B on
+the 4.0 branch in P-K) plus dispatch. **There is nothing else to optimize on the durable path** — the four
+writes *are* the per-task allocation, and #17 + #18 are aimed at exactly them.
+
+### P-L.4 — what each issue would buy
+
+Per task, against the 78.20 KB/task Postgres baseline above. SQL Server has no fresh `L8` here; its
+percentages are against the 66.04 KB its own four writes sum to (RESULTS.md P-H measured ~68 KB/task
+end to end on the pre-4.0 tree).
+
+| Change | SQLite | Postgres | SQL Server | Round-trips |
+|--------|-------:|---------:|-----------:|------------:|
+| **#17** raw INSERT via EF `ExecuteSqlRaw` (option 1) | −21.10 KB | −16.37 KB (−20.9%) | −19.16 KB (−29%) | 0 |
+| **#17** raw INSERT via raw ADO (option 2) | −32.22 KB | −25.32 KB (−32.4%) | −29.14 KB (−44%) | 0 |
+| **#18** raw ADO for the 3 status writes | n/a | −20.13 KB (−25.7%) | −9.75 KB (−15%) | 0 |
+| **#18** free half: cache the interpolated SQL | n/a | −4.17 KB (−5.3%) | −1.23 KB (−2%) | 0 |
+| **#16** fold `SetQueued` into `Persist` | −21.26 KB | −12.20 KB (−15.6%) | −8.67 KB (−13%) | **−1 of 4** |
+| **#17 (ADO) + #18 together** | — | **−45.45 KB (−58.1%)** | **−38.89 KB (−59%)** | 0 |
+
+### #16's throughput estimate (an estimate, with its assumptions)
+
+#16 is the only one of the three that removes a round-trip, and P-H/P-I established that the durable path is
+round-trip-bound. Modelling throughput as inversely proportional to the serialized DB time per task, using the
+micro means:
+
+| Provider | 4 writes | 3 writes (folded) | Ceiling |
+|----------|---------:|------------------:|--------:|
+| Postgres | 466 + 3×494 = 1,948 µs | 466 + 2×494 = 1,454 µs | **+34%** |
+| SQL Server | 1,436 + 3×1,477 = 5,867 µs | 4,390 µs | **+34%** |
+| SQLite | 684 + 3×660 = 2,664 µs | 2,004 µs | **+33%** |
+
+All three land on the naive `4/3` model, i.e. **up to ~+33% throughput** — on Postgres that would be
+2,708 → ~3,630 tasks/s. Assumptions, all of which push the real number *down*: the writes are serialized in
+the model but overlap across 16 workers; commit/fsync grouping means the marginal cost of the removed
+statement is below its serialized latency; and p50 latency (2,193 µs at parallelism 16) is queueing-dominated,
+not write-dominated. Treat +33% as a **ceiling**, not a forecast. What is *not* an estimate is the allocation:
+folding removes one whole `SetQueued`, −12.20 KB/task on Postgres.
+
+---
+
+### Verdicts
+
+### #17 — replace the tracked `Persist` insert. **Fix, and fix it first.**
+
+1. **Real, and larger than claimed.** 37–40 KB per call on every provider, ~48% of the whole durable per-task
+   allocation on Postgres. Reproducible, deterministic, three providers.
+2. **Buys** −16 to −21 KB/task keeping EF (option 1), −25 to −32 KB/task on raw ADO (option 2). Zero
+   round-trips, and time is flat: this is a GC-pressure and tail-latency change, not a throughput one.
+3. **Reward vs the stated medium-high risk: worth it, and the risk is lower than the issue assumed.** The
+   feared cost was hand-maintained per-provider SQL; the benchmark shows the statement can be generated once
+   from the EF model, which is provider-agnostic by construction and cannot drift from the schema (a mapped
+   column absent from the value list throws at startup). Recommend **option 1** (parameterized INSERT via
+   `ExecuteSqlRawAsync` in the EF Core base): it is one shared code path, keeps EF's parameter and type
+   handling, and returns ~65% of the total available win. Revisit option 2 per provider only alongside #18.
+
+### #18 — run the procs/CTEs on a raw ADO command. **Fix, Postgres first. Take the free half immediately.**
+
+1. **Real; magnitude confirmed at the task level, mechanism partly refuted.** The per-call prediction
+   (6.4 KB → 1–2 KB) is wrong in both terms: production is 8.67–12.20 KB and the raw ADO floor is ~5.4 KB on
+   the networked providers (SQLite's is 1.85 KB, which is where the 1–2 KB figure holds). The delta,
+   3.25–6.71 KB per call × 3 calls, gives **−20.13 KB/task on Postgres and −9.75 KB/task on SQL Server** —
+   bracketing the issue's predicted 12–15 KB/task.
+2. **Buys** −25.7% of the Postgres per-task allocation, −15% on SQL Server. No round-trips, no time change.
+3. **Reward vs the stated medium risk: yes on Postgres, marginal on SQL Server.** Recommend splitting it:
+   - **now, at no risk** — cache the interpolated SQL string per instance in `PostgresTaskStorage` and
+     `SqlServerTaskStorage` (the schema is fixed at construction): −4.17 KB/task on Postgres, −1.23 KB on
+     SQL Server, for a change that cannot alter a transaction boundary;
+   - **then** the raw `NpgsqlCommand` path on Postgres for the remaining −16 KB/task;
+   - SQL Server's remaining −8.5 KB/task is the weakest of the four candidates — do it only if the raw-ADO
+     plumbing is already there for #17 option 2.
+
+### #16 — fold `SetQueued` into `Persist`. **Real, and the only throughput lever. Do it after #17/#18.**
+
+1. **Real.** One full round-trip and 12.20 KB (Postgres) / 8.67 KB (SQL Server) / 21.26 KB (SQLite) per task,
+   measured as the exact call `WorkerQueue` makes.
+2. **Buys** −15.6% allocation on Postgres and −1 of 4 round-trips; modelled throughput ceiling **+33%**
+   (2,708 → ~3,630 tasks/s), which is an upper bound, not a forecast. It is the only one of the three that can
+   move tasks/sec at all — #17 and #18 leave the round-trip count untouched and their times are flat.
+3. **Reward vs the stated medium risk: yes, but sequence it last.** Its risk is categorically different from
+   the other two: #17 and #18 change *how* a statement is issued and are pinned by a row-equality check,
+   while #16 changes *dispatch and recovery ordering* — the `WaitingQueue` semantics, the full-queue drop
+   paths and the `TaskDeliveryRegistry` double-execution defence. #17 + #18 deliver −58% allocation with no
+   ordering semantics touched; land those first, then take #16 for the throughput, behind the full
+   cross-provider recovery suite.
+
+---
+
+### P-L.5 — #19 BEFORE baseline (SQLite, this tree, unmodified)
+
+Captured on the pristine `23cbc0c` worktree because #19 (skip the explicit transaction in the base relational
+`SetStatus` when no audit row is written) is being implemented elsewhere, so this is the last place the BEFORE
+state exists. **No comment was posted on #19** — the A/B is only complete once the fix lands and the identical
+commands are re-run.
+
+Exact commands from the issue, run with nothing else on the machine:
+
+```bash
+dotnet run -c Release --project benchmarks/EverTask.LoadHarness -- L8 --storage sqlite --audit none --count 3k --parallelism 1 --producers 1 --warmup 2 --measured 5
+dotnet run -c Release --project benchmarks/EverTask.LoadHarness -- L8 --storage sqlite --audit full --count 3k --parallelism 1 --producers 1 --warmup 2 --measured 5
+```
+
+| | audit none | audit full |
+|---|---:|---:|
+| Throughput | 26 tasks/s (stdev 6, **CV 24.4%**) | **7 tasks/s** (stdev 0, CV 1.5%) |
+| p50 / p90 / p99 | 154.3 / 284.4 / 453.8 ms | 156.2 / 158.1 / 166.1 ms |
+| **Allocated** | **112,628.4 B/task** | **156,910.9 B/task** |
+| Raw JSON | `benchmarks/results/L8-20260831-161948.json` | `benchmarks/results/L8-20260831-185351.json` |
+
+Notes for whoever runs the AFTER half:
+
+- **Auditing is what costs on SQLite, not the transaction.** `full` runs at 7 tasks/s against `none`'s 26 —
+  a 3.7x throughput gap and +44 KB/task — because every status transition adds a `StatusAudit` insert. The
+  `full` arm is #19's control (the fix only touches the `createAudit == false` branch) and it should not move.
+- **The two arms have opposite noise characters.** `full` is rock steady (CV 1.5%, p999/p50 = 1.4x) and can
+  resolve a small effect. `none` is not: the harness flagged `CV > 5%: not steady-state`, per-iteration
+  throughput 27 / 24 / 33 / 31 / 15 tasks/s, CV 24.4%. That is the arm #19 actually changes, so **allocation
+  (112,628 B/task, deterministic) is the metric this A/B can decide on**; the `none` throughput column cannot
+  resolve anything smaller than a large effect at this iteration count.
+- If the AFTER run is meant to show the round-trip saving in tasks/sec, give the `none` arm more warmup or
+  more measured iterations than the issue's command specifies — or use the per-write cell
+  (`A4S --storage sqlite --parallelism 1`) that RESULTS.md P-J/P-K used instead, precisely because L8 on
+  SQLite is a single-writer convoy.
+
+For scale, the storage micros above put the SQLite per-task write cost at `Tracked_Persist` 38.63 KB +
+3 × 21.26 KB = 102.4 KB, which with the engine layer accounts for ~96% of the 112.6 KB/task measured here.
+The micro also brackets #19's own target: the base `SetStatus` (transaction + `ExecuteUpdate`) costs
+21.26 KB / 660 µs, and the plain UPDATE it reduces to costs 9.03 KB / 583 µs — an **upper bound** on #19,
+since that comparison also drops `ExecuteUpdate`'s translation, not only the `BEGIN`/`COMMIT`.
+
+---
+
+### Priority
+
+1. **#18's free half** (cache the SQL string) — one line per method, no risk, −4.2 KB/task on Postgres.
+2. **#17 option 1** (model-generated parameterized INSERT in the EF base) — −16 to −21 KB/task, all providers,
+   one shared code path.
+3. **#18 proper on Postgres** (raw `NpgsqlCommand`) — −16 KB/task more.
+4. **#16** — the throughput lever, behind the recovery suite.
+5. **#17 option 2 / #18 on SQL Server** — the remaining ~8–9 KB/task each; only worth it once the raw-ADO
+   plumbing exists.
+
+## P-M — Issue #19 landed: the no-audit transaction elision, A/B
+
+Fix in `edf9ad0`; A/B on the issue's reproduce commands (`L8 --storage sqlite --count 3k --parallelism 1`,
+both sides back-to-back on a quiet machine, BEFORE on a clean `23cbc0c` worktree):
+
+| Arm | Side | Throughput | p50 | Allocated |
+|---|---|---:|---:|---:|
+| audit none | before | 16 tasks/s (CV 28.6%) | 155.5 ms | 113,438 B/task |
+| audit none | after | 433 tasks/s (CV 2.9%) | 3.87 ms | 108,488 B/task |
+| audit full | before | 7 tasks/s (CV 1.5%) | 156.2 ms | 156,910 B/task |
+| audit full | after | 7 tasks/s | 156.2 ms | 157,299 B/task |
+
+The explicit transaction held SQLite's write lock across three round-trips and pushed every concurrent
+writer into busy-handler backoff (the 155 ms p50 is the backoff, not I/O). A single autocommitted UPDATE
+shrinks the lock window to one statement: 27x throughput, p50 down 40x, and the run turns steady. The
+audit-full arm keeps its transaction and is byte-flat and time-flat, as intended.
