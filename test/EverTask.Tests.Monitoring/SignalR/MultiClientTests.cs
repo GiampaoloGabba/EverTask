@@ -22,28 +22,21 @@ public class MultiClientTests : MonitoringTestBase
         var dispatcher = Factory.Services.GetRequiredService<ITaskDispatcher>();
 
         // Act
-        var task = new SampleTask("Broadcast test");
-        await dispatcher.Dispatch(task);
+        var task   = new SampleTask("Broadcast test");
+        var taskId = await dispatcher.Dispatch(task);
 
-        // Wait for all clients to receive events
-        await Task.WhenAll(
-            client1.WaitForEventsAsync(1, timeoutMs: 5000),
-            client2.WaitForEventsAsync(1, timeoutMs: 5000),
-            client3.WaitForEventsAsync(1, timeoutMs: 5000)
+        // Anchor on THIS task's id: startup recovery of other fixtures' rows broadcasts its own events,
+        // so the first event a client happens to receive is not necessarily this dispatch.
+        var events = await Task.WhenAll(
+            client1.WaitForEventAsync(e => e.TaskId == taskId, timeoutMs: 10000),
+            client2.WaitForEventAsync(e => e.TaskId == taskId, timeoutMs: 10000),
+            client3.WaitForEventAsync(e => e.TaskId == taskId, timeoutMs: 10000)
         );
 
-        // Assert
-        client1.ReceivedEvents.Count.ShouldBeGreaterThan(0);
-        client2.ReceivedEvents.Count.ShouldBeGreaterThan(0);
-        client3.ReceivedEvents.Count.ShouldBeGreaterThan(0);
-
-        // Verify all clients received the same event
-        var event1 = client1.ReceivedEvents.First();
-        var event2 = client2.ReceivedEvents.First();
-        var event3 = client3.ReceivedEvents.First();
-
-        event1.TaskId.ShouldBe(event2.TaskId);
-        event2.TaskId.ShouldBe(event3.TaskId);
+        // Assert - every client received this task's event
+        events[0].ShouldNotBeNull();
+        events[1].ShouldNotBeNull();
+        events[2].ShouldNotBeNull();
     }
 
     [Fact]

@@ -20,18 +20,19 @@ public class EventFilteringTests : MonitoringTestBase
         var successTask = new SampleTask("Success test");
         var failTask = new SampleFailingTask("Fail test");
 
-        await dispatcher.Dispatch(successTask);
-        await dispatcher.Dispatch(failTask);
+        var successId = await dispatcher.Dispatch(successTask);
+        var failId    = await dispatcher.Dispatch(failTask);
 
-        // Wait for events
-        await client.WaitForEventsAsync(4, timeoutMs: 5000); // Expect at least 4 events (2 started + 1 completed + 1 error)
+        // Anchor on the two dispatched ids: a global event count races the retry backoff of the failing
+        // task on a slow runner, and other fixtures' recovery events inflate it.
+        var informationEvent = await client.WaitForEventAsync(
+            e => e.TaskId == successId && e.Severity == "Information", timeoutMs: 10000);
+        var errorEvent = await client.WaitForEventAsync(
+            e => e.TaskId == failId && e.Severity == "Error", timeoutMs: 15000);
 
         // Assert
-        var informationEvents = client.ReceivedEvents.Where(e => e.Severity == "Information").ToList();
-        var errorEvents = client.ReceivedEvents.Where(e => e.Severity == "Error").ToList();
-
-        informationEvents.Count.ShouldBeGreaterThan(0);
-        errorEvents.Count.ShouldBeGreaterThan(0);
+        informationEvent.ShouldNotBeNull();
+        errorEvent.ShouldNotBeNull();
     }
 
     [Fact]
