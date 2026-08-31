@@ -39,7 +39,7 @@ await dispatcher.Dispatch(task, r => r.Schedule().EveryDay().AtTime(new TimeOnly
 | `OnMonths(params int[])` | specific months (e.g. `1,4,7,10` quarterly) |
 
 There is no hourly counterpart of `OnDays`/`OnMonths`. `IntervalSchedulerBuilder.OnHours()` exists on the
-concrete class but not on `IIntervalSchedulerBuilder`, so `Schedule().OnHours()` does not compile — and it
+concrete class but not on `IIntervalSchedulerBuilder`, so `Schedule().OnHours()` does not compile, and it
 takes no hours anyway: it builds the same plain hourly cadence as `EveryHour()`. For specific hours of the
 day, name them: `EveryDay().AtTimes(new TimeOnly(8,0), new TimeOnly(20,0))`.
 
@@ -73,7 +73,7 @@ r => r.Schedule().EveryDay().RunUntil(trialEndDate)                    // until 
 ## Time zones
 
 `.InTimeZone(TimeZoneInfo)` / `.InTimeZone(string)`, chainable before the interval (on `Schedule()`), on the
-interval builder, or after the last refinement — every position but between `Every(n)` and its unit. The id
+interval builder, or after the last refinement: every position but between `Every(n)` and its unit. The id
 may be IANA (`Europe/Rome`) or Windows (`W. Europe Standard Time`); the IANA form is what gets persisted,
 inside the schedule JSON, with **no new column**.
 
@@ -95,14 +95,14 @@ r => r.Schedule().UseCron("0 2 * * *").InTimeZone("Asia/Tokyo")
   same way as any other: `EveryDay().AtTimes(new TimeOnly(8,0), new TimeOnly(20,0)).InTimeZone(...)`.
 - `InTimeZone` on an elapsed cadence without day/date exclusions throws `InvalidOperationException` when the schedule is **built** (not at
   the call): an elapsed step is the same set of instants in every zone. `AtMinute`/`AtSecond` therefore align
-  on UTC — `EveryHour().AtMinute(30)` fires at :00 local in India (+05:30) and :15 in Nepal (+05:45).
+  on UTC: `EveryHour().AtMinute(30)` fires at :00 local in India (+05:30) and :15 in Nepal (+05:45).
   Analyzer **ET0010** warns at compile time on a completed chain it can prove is elapsed; `Except` or
   `ExceptWeekends` or `ExceptCalendar` anywhere in that chain suppresses it. A chain split over a variable
   or a helper method is left to the exception, so a clean build proves nothing on its own.
 - An id this machine cannot resolve, or a `TimeZoneInfo.CreateCustomTimeZone` zone, throws `ArgumentException`
   at build. A stored id that stops resolving later is poisoned at recovery like a corrupt cron.
 - `AtTime`/`AtTimes` store the `TimeOnly` verbatim: pass the local time you mean and name the zone. The public
-  `TimeOnly.ToUniversalTime()` extension is **deprecated** (docs only, no `[Obsolete]`) — it never converted
+  `TimeOnly.ToUniversalTime()` extension is **deprecated** (docs only, no `[Obsolete]`): it never converted
   anything, it only dropped the milliseconds. Never generate a call to it.
 - **DST**: a local time a gap removed fires at the gap's exit, and several slots inside one gap collapse into
   a single occurrence; a repeated local time fires on its **first** pass. Gap widths are not assumed to be an
@@ -186,7 +186,7 @@ Per-entity keys: `taskKey: $"report-{userId}"` or `"tenant-{tenantId}:billing"`.
 - Registration-time update: re-dispatch with the same `taskKey` + new schedule (updates if Pending/Queued).
   Right at startup, where the registering code owns the definition.
 - Runtime update: `ITaskScheduleManager` (below). Right for an admin screen, a tenant setting, a support
-  action — anything changing a series someone else registered.
+  action: anything changing a series someone else registered.
 - Cancel: `dispatcher.Cancel(taskId)`, or `ITaskScheduleManager.CancelSchedule(taskKey)` when the key is all
   you have. Terminal either way.
 - Inspect: `ITaskStorage.Get(t => t.IsRecurring)`; `task.CurrentRunCount`, `task.Status`, next run.
@@ -212,39 +212,39 @@ public class ScheduleAdmin(ITaskScheduleManager schedules)
 ```
 
 - `Reschedule(taskKey, configure, mode)` replaces the definition; `ReevaluateSchedule(taskKey)` keeps it and
-  recomputes the cursor from now — which on a durable schedule DISCARDS the backlog it still owed, so reach
+  recomputes the cursor from now, which on a durable schedule DISCARDS the backlog it still owed, so reach
   for `ResumeSchedule(taskKey)` when the work is still wanted: it releases a durable catch-up halt KEEPING
   the cursor, so the backlog is planned again; `RequeueFailedOccurrence(id)` returns one terminal occurrence
-  to the queue with its id, history and audit trail (and spends no run), unless its schedule was cancelled —
-  a cancellation is terminal for every row under it; `CancelSchedule(taskKey)` runs the full cancel pipeline,
-  pending occurrences included.
+  to the queue with its id, history and audit trail (and spends no run), unless its schedule was cancelled,
+  because a cancellation is terminal for every row under it; `CancelSchedule(taskKey)` runs the full cancel
+  pipeline, pending occurrences included.
 - `RescheduleMode.RecalculateFromNow` (default) starts at the new definition's first occurrence after now,
   dropping a durable backlog and reporting it (`DiscardedBacklog`, plus a monitoring event).
-  `RebaseFromCursor` keeps the schedule inside the day/week/month it was already in — the period is read on
+  `RebaseFromCursor` keeps the schedule inside the day/week/month it was already in: the period is read on
   the OLD definition's clock, and the new cursor is the NEW definition's slot at the same POSITION inside it.
   That is what preserves the logical date when only the hour or the zone moves, and what keeps a period
   holding several slots (`OnDays(Mon, Wed).AtTimes(09:00, 15:00)`) from rewinding onto one that already ran.
 - A rebase is narrow on purpose: same cadence and same day/month selectors (only the time of day, the zone,
   `RunUntil`/`MaxRuns` and the misfire settings may change), no cron on either side, never crossing into the
   next period (nor onto a period holding fewer slots than the cursor had already passed), and never past
-  bounds the series has already reached — a `MaxRuns` budget it has spent, or a
-  `RunUntil` its cursor is already at or past. Anything else throws `InvalidOperationException` and writes
-  nothing — fall back to `RecalculateFromNow`.
+  bounds the series has already reached (a `MaxRuns` budget it has spent, or a
+  `RunUntil` its cursor is already at or past). Anything else throws `InvalidOperationException` and writes
+  nothing. Fall back to `RecalculateFromNow`.
 - `EveryWeek()` and `EveryMonth()` name no day inside their period, so that day rides on the CURSOR: a rebase
   keeps the weekday or the day of the month the series was on, and moves only the time of day and the zone.
 - Never refused because a run is in flight. It is immediate for occurrences that have not fired; one already
   in a worker queue may finish under the old definition, and its advance then applies the new one.
 - Also refused (before any write): an unknown key, a one-shot, a cancelled schedule, and a new definition
-  with no occurrence left — use `CancelSchedule` to end a series on purpose.
+  with no occurrence left. Use `CancelSchedule` to end a series on purpose.
 
 ## What the handler knows about the occurrence
 
 Inside `Handle`, `Context` (see `02-tasks-and-handlers.md`) answers what the payload cannot: which
 slot this run stands for (`ScheduledAtUtc`), which run of the series it is (`RunNumber`, durable
 across restarts), and whether the run started late or stands for missed work (`Misfire`, threshold
-`SetMisfireThreshold`, default 5 s). Use `Context.ScheduledAtUtc` — not `DateTimeOffset.UtcNow` — whenever the work is
-defined by its slot (the window a report covers, the day a digest is for): after a downtime or a
-rate-limit deferral the two are not the same instant.
+`SetMisfireThreshold`, default 5 s). Use `Context.ScheduledAtUtc`, not `DateTimeOffset.UtcNow`,
+whenever the work is defined by its slot (the window a report covers, the day a digest is for):
+after a downtime or a rate-limit deferral the two are not the same instant.
 
 ## Schedule-drift behavior
 
@@ -260,8 +260,8 @@ To replay what a downtime missed instead of skipping it, see durable occurrences
 ## Durable occurrences and misfire policies
 
 Opt-in, off by default. `.WithDurableOccurrences()` / `.OnMisfire(...)` / `.BackfillFrom(...)` chain in the
-same positions as `InTimeZone`. They turn every due slot into its own one-shot row — own status, retries,
-audit trail and rate-limit budget — and the schedule row stops running the handler.
+same positions as `InTimeZone`. They turn every due slot into its own one-shot row (own status, retries,
+audit trail and rate-limit budget), and the schedule row stops running the handler.
 
 ```csharp
 // Replay what a downtime missed, oldest first, inside caps
@@ -275,11 +275,11 @@ r => r.Schedule().EveryHour().OnMisfire(m => m.FireOnce())
 r => r.Schedule().EveryDay().AtTime(new TimeOnly(3,0)).WithDurableOccurrences()
 ```
 
-- `CatchUpOptions(maxAge, maxOccurrences)` requires BOTH caps — no defaults. `MaxAge` is how far back a
-  replay may reach (the one ordinary way a slot is lost, always reported); `MaxOccurrences` is how many slots
-  one episode may replay.
+- `CatchUpOptions(maxAge, maxOccurrences)` requires BOTH caps: there are no defaults. `MaxAge` is how far
+  back a replay may reach (the one ordinary way a slot is lost, always reported); `MaxOccurrences` is how
+  many slots one episode may replay.
 - `OverflowPolicy`: `Halt` (default) stops the schedule and writes a durable marker; the passage of time never
-  releases it and neither does a restart — only `ITaskScheduleManager.ResumeSchedule`/`Reschedule` does. A
+  releases it and neither does a restart. Only `ITaskScheduleManager.ResumeSchedule`/`Reschedule` does. A
   halted schedule is not re-parked, so it costs no further deliveries or writes while it waits. Or
   `SkipOldest`, which keeps the most recent `MaxOccurrences` and drops the rest. Pick `Halt` when a flood of
   catch-up work would be worse than a stopped schedule.
@@ -297,20 +297,20 @@ r => r.Schedule().EveryDay().AtTime(new TimeOnly(3,0)).WithDurableOccurrences()
   `Kind = Late` with `Lateness` and no range, even when the materializer registered no replay. What separates
   keeping up from missed work is `SetMisfireThreshold` (default 5 s, `01-setup.md`): a slot that came due longer ago than that stands
   for missed work even when it is the only one owed. A run of more than one slot always reports, threshold or
-  not — the policy is about to collapse or replay slots nothing ran.
+  not: the policy is about to collapse or replay slots nothing ran.
 - A dropped slot always says WHICH limit dropped it, in the log and in the monitoring event: the age window
   (`MaxAge`), the episode cap under `SkipOldest`, or the skip policy itself. One catch-up run can report two
   of them, with a separate count each.
-- **Contracts**: at-least-once (write idempotent handlers) and **one active host** — materialization is
-  idempotent across hosts, execution is not. Requires a storage that implements the atomic occurrence
+- **Contracts**: at-least-once (write idempotent handlers) and **one active host** (materialization is
+  idempotent across hosts, execution is not). Requires a storage that implements the atomic occurrence
   operations; every built-in one does, and a custom one that does not is refused at dispatch.
 - Occurrences are rows: set `OccurrenceRetentionDays` in the audit-cleanup policy (`03-storage.md`) for any
   schedule that runs often.
 
 ## Occurrence providers (a calendar the builder cannot express)
 
-When the grid lives in the application — business days minus a holiday table, opening hours, "the day after
-each invoicing cycle closes" — register an `INextOccurrenceProvider` and let the schedule take its slots from
+When the grid lives in the application (business days minus a holiday table, opening hours, "the day after
+each invoicing cycle closes"), register an `INextOccurrenceProvider` and let the schedule take its slots from
 it. Everything else keeps working over it: misfire policies, durable occurrences, `InTimeZone`, `MaxRuns`,
 skip-forward, the schedule manager.
 
@@ -338,7 +338,7 @@ await dispatcher.Dispatch(new SendReminderTask(),
 ```
 
 - The KEY is persisted on every row that uses it, never a type name: renaming it orphans those schedules.
-  `config` is opaque — EverTask never reads it — so version its format yourself.
+  `config` is opaque (EverTask never reads it), so version its format yourself.
 - Exclusive with every interval and with cron: a provider REPLACES the grid instead of refining it.
 - The provider is resolved in a fresh scope per call (register it yourself for another lifetime), so it may
   depend on a DbContext. Keep it fast: it sits on the path of every advance, and measuring a backlog costs
@@ -350,7 +350,7 @@ await dispatcher.Dispatch(new SendReminderTask(),
   `SetOccurrenceProviderRetry` (1 min doubling to 15 by default), a warning event is published, and the
   recovery poison counter is not touched. It surfaces as `OccurrenceProviderException` only where a caller
   is holding the call: a dispatch, and `ITaskScheduleManager.Reschedule`/`ReevaluateSchedule`, which ask the
-  provider to decide the new cursor — catch it there and retry, nothing was written.
+  provider to decide the new cursor. Catch it there and retry, nothing was written.
 - A provider failure on the question asked AFTER a run leaves that run unwritten: the slot may run again when
   the schedule comes back (at-least-once, like every other EverTask handler).
 - `RescheduleMode.RebaseFromCursor` is refused (no nominal period); `ReevaluateSchedule(taskKey)` is how the

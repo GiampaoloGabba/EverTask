@@ -19,7 +19,7 @@
 
 With 4.0, a recurring schedule can also survive a downtime *observably*: every due slot gets its own persisted row, and a misfire policy decides what happens to the slots an outage missed. Nothing is lost silently: every dropped slot is reported.
 
-It runs in-process (no external scheduler, no Windows Service, no separate worker host), and it doesn't poll the database in a loop. An in-memory scheduler drives execution through channels, and persistence happens where it matters: on enqueue, on status changes, and for recovery after a restart.
+It runs in-process (no external scheduler, no Windows Service, no separate worker host), and it doesn't poll the database in a loop. An in-memory scheduler drives execution through channels, and persistence happens on enqueue, on status changes, and for recovery after a restart.
 
 If you've used MediatR, the request/handler pattern will feel familiar. The difference is that here tasks are persisted, can be isolated across queues, and keep working under load.
 
@@ -33,8 +33,8 @@ Tasks can be CPU-bound or I/O-bound, long- or short-running. Works with ASP.NET 
 - **Persistence**: tasks resume after a restart (SQL Server, PostgreSQL, MySQL/MariaDB, SQLite, In-Memory)
 - **Fluent scheduling**: recurring tasks by minute, hour, day, week, month, or cron
 - **Time zones**: schedule on local wall-clock hours that keep their meaning across daylight saving
-- **Durable occurrences & misfire policies**: give every due slot its own row — with its own status, retries
-  and audit trail — and choose what a downtime does to the slots it missed: skip them, collapse them into one
+- **Durable occurrences & misfire policies**: give every due slot its own row (with its own status, retries
+  and audit trail) and choose what a downtime does to the slots it missed: skip them, collapse them into one
   run, or replay them under explicit caps, with every dropped slot reported
 - **Execution context**: a handler sees the slot it runs for (`Context.ScheduledAtUtc` / `ScheduledAtLocal`)
   and whether its delivery is late or replayed work (`Context.Misfire`)
@@ -185,7 +185,7 @@ await dispatcher.Dispatch(
 
 ### Excluding weekends, holidays and maintenance windows
 
-Any built-in interval or cron grid can subtract fixed moments — the slots simply never exist, so they
+Any built-in interval or cron grid can subtract fixed moments. Those slots never exist, so they
 consume no run, no misfire count and no durable row:
 
 ```csharp
@@ -237,9 +237,9 @@ await dispatcher.Dispatch(
 
 Three misfire policies decide what a downtime does to the slots it covered:
 
-- `.OnMisfire(m => m.Skip())` — the default: missed slots are skipped, and a durable schedule reports how many
-- `.OnMisfire(m => m.FireOnce())` — the whole missed run collapses into ONE occurrence, at the most recent slot
-- `.OnMisfire(m => m.CatchUp(...))` — every missed slot is replayed, oldest first, inside mandatory caps; a
+- `.OnMisfire(m => m.Skip())` is the default: missed slots are skipped, and a durable schedule reports how many
+- `.OnMisfire(m => m.FireOnce())` collapses the whole missed run into ONE occurrence, at the most recent slot
+- `.OnMisfire(m => m.CatchUp(...))` replays every missed slot, oldest first, inside mandatory caps; a
   backlog beyond the caps either halts the schedule until a person resumes it (`Halt`, the default) or keeps
   the most recent slots and reports the drop (`SkipOldest`)
 
@@ -251,7 +251,7 @@ is reported with a count and a range. See
 
 ### Execution Context
 
-A handler knows the slot it stands for — not just the moment it happened to start — and replayed or late work
+A handler knows the slot it stands for, not just the moment it happened to start, and replayed or late work
 says so:
 
 ```csharp
@@ -420,7 +420,7 @@ Capture all logs written during task execution and persist them to the database 
 Tasks are persisted with System.Text.Json, and its contract is stricter than Newtonsoft's. A violation used to
 surface only at runtime, on recovery: a silently dropped member, or a deserialization throw. The Roslyn analyzer
 bundled in `EverTask.Abstractions` (no extra package, no runtime dependency) catches it the moment you reference
-`IEverTask`, in the IDE and in the build — with code fixes for the common cases.
+`IEverTask`, in the IDE and in the build, with code fixes for the common cases.
 
 Twelve rules (ET0001–ET0012) cover the payload serialization contract (public fields, unreachable setters,
 Newtonsoft attributes, polymorphism without `[JsonPolymorphic]`, ambiguous constructors, …), delays beyond
@@ -440,7 +440,7 @@ Full rule list: [serialization analyzers](https://GiampaoloGabba.github.io/EverT
 ## Roadmap
 
 Distributed clustering with leader election, Redis-backed distributed rate limiting, workflow orchestration,
-task management from the dashboard, more storage providers — see [ROADMAP.md](ROADMAP.md).
+task management from the dashboard, more storage providers: see [ROADMAP.md](ROADMAP.md).
 
 ## Contributing
 
@@ -453,7 +453,7 @@ Contributions are welcome. Bug reports, feature requests, and pull requests all 
 
 EverTask is licensed under the [MIT License](LICENSE).
 
-The task/handler pattern is inspired by Jimmy Bogard's [MediatR](https://github.com/jbogard/MediatR) — thanks for years of great ideas in the .NET space.
+The task/handler pattern is inspired by Jimmy Bogard's [MediatR](https://github.com/jbogard/MediatR). Thanks for years of great ideas in the .NET space.
 
 See [ATTRIBUTION.md](ATTRIBUTION.md) for acknowledgements and attributions.
 

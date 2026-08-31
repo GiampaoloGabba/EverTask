@@ -24,7 +24,7 @@ EverTask gives you visibility into your background tasks through an event system
 
 ## Task Events
 
-EverTask publishes events for all significant task lifecycle moments through the `TaskEventOccurredAsync` event on `IEverTaskWorkerExecutor`. Subscribe to these events to build monitoring dashboards, send alerts, or integrate with external systems.
+EverTask publishes events for the task lifecycle through the `TaskEventOccurredAsync` event on `IEverTaskWorkerExecutor`. Subscribe to these events to build monitoring dashboards, send alerts, or integrate with external systems.
 
 ### Event Types
 
@@ -57,14 +57,14 @@ public enum SeverityLevel
 
 ## Durable Occurrence and Schedule Events
 
-Schedules that materialize their slots as rows — [durable occurrences](recurring-tasks/durable-occurrences.md)
-— and schedules changed at runtime through
+Schedules that materialize their slots as rows ([durable occurrences](recurring-tasks/durable-occurrences.md))
+and schedules changed at runtime through
 [`ITaskScheduleManager`](recurring-tasks/managing-tasks.md) publish through the same
-`TaskEventOccurredAsync` channel, carrying the schedule context described above.
+`TaskEventOccurredAsync` channel and carry the schedule context described above.
 
 Grouping them by schedule takes both halves of that context, because the events are about two different rows.
 An event about an **occurrence** carries `ParentTaskId`, the schedule it belongs to. An event about the
-**schedule itself** — a halt, a reschedule, a provider that could not answer — is published on the schedule
+**schedule itself** (a halt, a reschedule, a provider that could not answer) is published on the schedule
 row, so its own `TaskId` is the schedule id and `ParentTaskId` is null, as it is for every row that is
 nobody's occurrence. `ScheduleVersion` is set on both.
 
@@ -96,33 +96,33 @@ Four of them repay a closer look.
 
 **Catch-up started** and **catch-up completed** are the two ends of one replay. Everything between them is
 reported per occurrence, and per occurrence there is no way to tell where a backlog began, how big it was, or
-that it has drained — a serial catch-up materializes its slots one delivery at a time, over as many
+that it has drained: a serial catch-up materializes its slots one delivery at a time, over as many
 materializer runs as it takes. The pair is per process: a host that restarts in the middle of a replay opens a
 new episode, which is what the schedule itself does with the backlog that is left. A replay that HALTS gets no
-completion event — the halt below is the event for that — and neither does one whose series is cancelled
+completion event (the halt below is the event for that), and neither does one whose series is cancelled
 under it.
 
 **Occurrence skipped** is the only ordinary way a durable schedule loses a slot, and it always names the rule
 that dropped it, because the three have different fixes:
 
-- `outside the misfire window` — older than `now - MaxAge`. Widen the window, or accept the loss.
-- `older than the most recent slots the catch-up cap keeps` — the `SkipOldest` overflow policy kept the newest
+- `outside the misfire window`: older than `now - MaxAge`. Widen the window, or accept the loss.
+- `older than the most recent slots the catch-up cap keeps`: the `SkipOldest` overflow policy kept the newest
   `MaxOccurrences` and dropped the rest. Raise the cap, or accept it.
-- `the skip policy does not replay a slot that is no longer current` — the `Skip` policy, working as
+- `the skip policy does not replay a slot that is no longer current`: the `Skip` policy, working as
   configured.
 
 The count reads `at least {n}` instead of a bare number when the grid was counted under a cap: a lower bound
 is said to be one, never dressed up as a total.
 
 **Schedule rescheduled** is `Warning` instead of `Information` when the new definition discarded a backlog,
-and the message then ends with `; {n} due slot(s) were discarded` — plus `; the catch-up halt was released`
+and the message then ends with `; {n} due slot(s) were discarded`, plus `; the catch-up halt was released`
 when the call cleared a halt. The change is committed before the series is handed back to the scheduler, so
 this event is published even when the re-park then fails and the `Error` above follows it.
 
 **Schedule unusable**, **occurrence unusable** and **provider re-park failed** are three events an alert rule
 tends to miss, and they are worth waking someone for. The first two mean this build cannot rebuild a row out
-of what is persisted — a payload that stopped deserializing, a zone id that has left the tz database, a
-handler nobody registers any more — so the schedule materializes nothing at all, or the occurrence is ended
+of what is persisted (a payload that stopped deserializing, a zone id that has left the tz database, a
+handler nobody registers any more), so the schedule materializes nothing at all, or the occurrence is ended
 as `Failed` instead of holding a slot of the concurrency budget for ever. An occurrence whose registered
 handler repeatedly fails to build uses `could not be rebuilt in {n} consecutive process start(s)` after its
 recovery allowance is exhausted; other unusable rows use `cannot be rebuilt from its row`. Each cause also
@@ -137,8 +137,8 @@ parked to ask it again. Nothing polls behind that one: the schedule stays where 
 recovery.
 
 **Catch-up halted** is rate-limited to one event per schedule every five minutes: the halt is a standing
-condition, not a stream of incidents. It is re-emitted when the marker is found again — on every kick and once
-per restart — until an operator resumes or reschedules the series.
+condition, not a stream of incidents. It is re-emitted when the marker is found again, on every kick and once
+per restart, until an operator resumes or reschedules the series.
 
 ## Event Data Structure
 

@@ -55,8 +55,8 @@ Register it:
 builder.Services.AddHostedService<RecurringTasksRegistrar>();
 ```
 
-To change one of these while the application runs — an admin screen moving the digest, a tenant picking its
-own hour — use `ITaskScheduleManager` instead of re-dispatching. It is registered by `AddEverTask` and takes
+To change one of these while the application runs (an admin screen moving the digest, a tenant picking its
+own hour), use `ITaskScheduleManager` instead of re-dispatching. It is registered by `AddEverTask` and takes
 the same builder:
 
 ```csharp
@@ -84,7 +84,7 @@ Notes:
   `zone.GetUtcOffset(localDateTime)`, never `zone.BaseUtcOffset`.
 - `UseCron(...)` overrides every other interval call; never combine them.
 - With the default `Skip` policy, occurrences a downtime missed are logged only: they don't run and don't
-  count against `MaxRuns`. Under `CatchUp` or `FireOnce` they become real rows, so they DO count — a
+  count against `MaxRuns`. Under `CatchUp` or `FireOnce` they become real rows, so they DO count: a
   replayed slot is a run of the series. Pick per task: a heartbeat wants `Skip`, a nightly batch usually
   does not. The handler reads the slot it stands for from `Context.ScheduledAtLocal`, never from the clock:
   a replay delivers several nights within seconds of each other.

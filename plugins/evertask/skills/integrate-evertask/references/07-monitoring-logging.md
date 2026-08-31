@@ -123,11 +123,11 @@ Fixed paths: dashboard `/evertask-monitoring`, API `/evertask-monitoring/api`, h
 `Authorization: Bearer`, or `?access_token=` on the hub alone). Login: `POST /evertask-monitoring/api/auth/login`
 `{username,password}`. Default creds `admin`/`admin`: **always change in production.**
 Enforced inside routing since 4.0+, so the whitelist, the JWT and the hub handshake all hold under
-`app.UsePathBase(...)` — before that a path base skipped every one of them (issue #46). CORS is the
+`app.UsePathBase(...)`. Before that a path base skipped every one of them (issue #46). CORS is the
 exception: its branch still keys off the pre-`UsePathBase` path.
 
 `AllowedIpAddresses` compares `Connection.RemoteIpAddress` and **does not read `X-Forwarded-For`**
-(breaking in 4.0: it used to trust the header, so anyone could spoof a whitelisted address — issue #47).
+(breaking in 4.0, issue #47: it used to trust the header, so anyone could spoof a whitelisted address).
 Behind a reverse proxy, wire the framework's own middleware and let it rewrite the address:
 `Configure<ForwardedHeadersOptions>` with `ForwardedHeaders.XForwardedFor` + `KnownProxies`/`KnownNetworks`,
 then `app.UseForwardedHeaders()` before `UseRouting()`. Without `KnownProxies` nothing is forwarded, which
@@ -153,7 +153,7 @@ below; from application code, changing a schedule at runtime is still `ITaskSche
 your own authorization (`05-scheduling.md`).
 
 The two audit trails are **paged** (4.0+): `GET /tasks/{id}/status-audit` and `/runs-audit` take
-`skip`/`take` (default 0/100) and answer `{audits, totalCount, skip, take}` — not a bare array. The
+`skip`/`take` (default 0/100) and answer `{audits, totalCount, skip, take}`, not a bare array. The
 detail's `statusAudits`/`runsAudits` blocks carry only the FIRST page and report
 `statusAuditsTotalCount`/`runsAuditsTotalCount`: a long-lived recurring row records one transition per
 state per run, so nothing serves the whole history at once any more.
@@ -165,42 +165,42 @@ Management endpoints (4.0+, `POST`, no body, task id in the path):
 answer `{status, message, taskId, nextRunUtc?, releasedHalt}` with 200 / 404 / 409 / 501 / 503. 404 on
 every route while `EnableManagementEndpoints` is false; 403 for a read-only session. `resume` and
 `cancel` resolve the row's `taskKey`, so a schedule dispatched without one answers 409. No CSRF token
-is needed (Bearer header, never a cookie) — keep the dashboard token out of cookies. The gate is an MVC
+is needed (Bearer header, never a cookie). Keep the dashboard token out of cookies. The gate is an MVC
 authorization filter on those routes, so it holds under `app.UsePathBase(...)` as well.
 
 Durable schedules (`.WithDurableOccurrences()` / `.OnMisfire(...)`, see `05-scheduling.md`) show up
 in three places. Task DTOs carry `parentTaskId`, `occurrenceMode`, `misfirePolicy`, `timeZoneId`,
 `scheduleVersion`, `nominalSlotUtc` and `misfireKind` (nulls omitted, and they are null TOGETHER on a
-task that belongs to no schedule — `scheduleVersion` included, so a plain one-shot carries none of
+task that belongs to no schedule, `scheduleVersion` included, so a plain one-shot carries none of
 them rather than a version of 0); `/tasks/{id}` adds an `occurrence` block on a child and a `halt`
 block on a schedule whose catch-up stopped itself over its cap; `/tasks/{id}/occurrences` lists what
 a schedule materialized, newest slot first, paged by the storage itself. Filter the list with `parentTaskId`, `onlyOccurrences` and
 `onlyCatchUp`. `/dashboard/overview` adds `catchUpBacklog`: the occurrences of every durable
 schedule by state (pending / active / failed / skipped / completed), the oldest slot that has not
-started, how far behind it is, and how many schedules are halted — a halt never releases itself, so
+started, how far behind it is, and how many schedules are halted. A halt never releases itself, so
 that counter is the one to alert on, and it counts only the schedules that are still live: a halted
 series someone cancelled keeps its marker, since nothing clears it, but stops being reported. Slots a
 schedule DROPPED never became rows and are not in those counts; they arrive as `OccurrenceSkipped`
 events, which always name the rule that dropped them.
 
 To show how late a delivery is, use `startedAtUtc` (when its run began) and never `lastExecutionUtc`,
-which is written on terminal transitions and so says when the run ENDED — a punctual occurrence with
+which is written on terminal transitions and so says when the run ENDED: a punctual occurrence with
 a three-minute handler would read as three minutes late. It is read from the row's `InProgress`
 transition in the audit trail, so a run still in flight answers for itself at `AuditLevel.Full`;
 below that level a run that FINISHED is derived from its end less its measured duration, and
-everything else — a row that never ran, a failure or a finalization that measured no duration, a row
-waiting for its next delivery — reports nothing rather than an instant nobody measured.
+everything else (a row that never ran, a failure or a finalization that measured no duration, a row
+waiting for its next delivery) reports nothing rather than an instant nobody measured.
 
 The two audit trails (`/status-audit`, `/runs-audit`, and the `statusAudits`/`runsAudits` blocks of
 `/tasks/{id}`) are read from the audit tables, so they answer the same history whatever storage is
 behind the API, and `avgExecutionTimeMs` on the overview is the mean of the durations completions
-measured — the same column `executionTimeMs` reports per task, with the runs nobody measured left out
+measured (the same column `executionTimeMs` reports per task), with the runs nobody measured left out
 rather than counted as zero.
 
 Events from the durable side reach the same `TaskEventOccurredAsync` channel, carrying
 `ScheduledAtUtc` (the nominal slot) and `ScheduleVersion`, plus `ParentTaskId` on the events of an
-OCCURRENCE — a schedule-level event is about the schedule row itself, so there its own `TaskId` is
-the schedule id: occurrence materialized, occurrence skipped, stale occurrence requeued, catch-up
+OCCURRENCE (a schedule-level event is about the schedule row itself, so there its own `TaskId` is
+the schedule id): occurrence materialized, occurrence skipped, stale occurrence requeued, catch-up
 started and completed (the two ends of one replay), catch-up halted (rate-limited to one per schedule
 every five minutes), schedule rescheduled, re-park failed, occurrence-provider evaluation failed, and
 the two `Error` events for a row this build cannot rebuild (a schedule that materializes nothing, an

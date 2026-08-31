@@ -63,7 +63,7 @@ The dashboard and API are **feature complete for read-only monitoring**: observa
 - ⏳ Queue management operations (pause/resume queues)
 - ⏳ Bulk task operations
 
-> **Note**: every endpoint of the REST API is read-only except the three under `/api/management`, and those do not exist until a host sets `EnableManagementEndpoints = true` AND a caller carries the operate role — the dashboard credential never does. See [Management Endpoints](monitoring-api-reference.md#management-endpoints). Changing a schedule from application code stays [`ITaskScheduleManager`](recurring-tasks/managing-tasks.md), behind your own authorization.
+> **Note**: every endpoint of the REST API is read-only except the three under `/api/management`, and those do not exist until a host sets `EnableManagementEndpoints = true` AND a caller carries the operate role. The dashboard credential never does. See [Management Endpoints](monitoring-api-reference.md#management-endpoints). Changing a schedule from application code stays [`ITaskScheduleManager`](recurring-tasks/managing-tasks.md), behind your own authorization.
 
 ## Installation
 

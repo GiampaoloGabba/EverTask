@@ -223,7 +223,7 @@ events.
 
 ## Efficient Task Processing
 
-EverTask avoids polling entirely, using an event-driven approach instead.
+EverTask avoids polling entirely and uses an event-driven approach instead.
 
 ### BoundedQueue Architecture
 
@@ -319,17 +319,17 @@ A consumer runs the task inline on its loop (a thread-pool thread), inside a fre
 
 A persisted task has to run even if the process dies between persistence and execution. Two mechanisms make that safe, and neither was covered above.
 
-**Startup recovery.** When the host starts, the consumers come up *first*, then `ProcessPendingAsync` runs concurrently with them (`RunRecoveryAsync`). It reads back rows in a recoverable status (`WaitingQueue`, `Queued`, `Pending`, `InProgress`, `ServiceStopped`, plus recurring tasks parked between runs) and re-dispatches them. The order matters: starting recovery before the consumers would deadlock when the backlog is larger than the channel capacity. Recovery only touches rows created before a `recoveryCutoff` captured at startup, and the comparison is strict (`CreatedAtUtc <`), so a live dispatch sharing the same wall-clock tick isn't grabbed and re-run as if it were recovery. Pages are read ahead of their own recovery, a few at a time: rows are partitioned per target queue and re-dispatched concurrently, and the reader moves on to the next page instead of waiting for the slowest delivery of the current one — so a saturated queue delays neither the other queues' rows nor the pages behind it.
+**Startup recovery.** When the host starts, the consumers come up *first*, then `ProcessPendingAsync` runs concurrently with them (`RunRecoveryAsync`). It reads back rows in a recoverable status (`WaitingQueue`, `Queued`, `Pending`, `InProgress`, `ServiceStopped`, plus recurring tasks parked between runs) and re-dispatches them. The order matters: starting recovery before the consumers would deadlock when the backlog is larger than the channel capacity. Recovery only touches rows created before a `recoveryCutoff` captured at startup, and the comparison is strict (`CreatedAtUtc <`), so a live dispatch sharing the same wall-clock tick isn't grabbed and re-run as if it were recovery. Pages are read ahead of their own recovery, a few at a time: rows are partitioned per target queue and re-dispatched concurrently, and the reader moves on to the next page instead of waiting for the slowest delivery of the current one, so a saturated queue delays neither the other queues' rows nor the pages behind it.
 
 **Double-execution defense.** The delivery contract is at-least-once, and the guard against accidental in-process double delivery is the `TaskDeliveryRegistry` (one per host). It registers each persistence id from the moment it's written to a channel until that delivery terminally ends; a second write of the same id is rejected at the boundary (`EnqueueResult.DuplicateInProcess`), which recovery and live dispatch both treat as an idempotent skip. The discipline is exactly one `End` per delivery, in the outer `finally` of `WorkerExecutor.DoWork`. Because it's at-least-once and not exactly-once, handlers with side effects should still be idempotent, and a stable task key is the usual lever.
 
 A row whose type loads but whose payload won't deserialize stays recoverable for a few attempts, then gets poisoned (marked `Failed`) rather than retried forever. The full invariants live in `src/EverTask/CLAUDE.md` and the [Resilience](resilience.md) guide.
 
-**Two categories, not one.** The recovery scan separates rows that still have work to *execute* from a recurring series that has nothing left to run but still carries a cursor. The second kind is finalized — `Completed`, cursor cleared — through a conditional write, without passing through the handler; before that distinction existed such a row satisfied no predicate at all and stayed `Queued` forever.
+**Two categories, not one.** The recovery scan separates rows that still have work to *execute* from a recurring series that has nothing left to run but still carries a cursor. The second kind is finalized through a conditional write (`Completed`, cursor cleared), without passing through the handler; before that distinction existed such a row satisfied no predicate at all and stayed `Queued` forever.
 
 **Children before parents.** A host running durable schedules recovers in two waves over the same cutoff: everything else first, the durable schedule rows second. Without that barrier a schedule row could materialize a new occurrence while the recovery was still putting its existing one back, and a concurrency budget of one would be overshot. The second wave is a second keyset scan of the same query, not a buffered list of ids: a backlog spanning many pages costs no memory that grows with it.
 
-**Single active host.** Materialization is idempotent across hosts — the unique index sees to that — but execution deduplication is not: `TaskDeliveryRegistry` is per process. Running two hosts against one shared store is outside the contract; see [Scalability](scalability.md#horizontal-scaling-multiple-instances).
+**Single active host.** Materialization is idempotent across hosts (the unique index sees to that), but execution deduplication is not: `TaskDeliveryRegistry` is per process. Running two hosts against one shared store is outside the contract; see [Scalability](scalability.md#horizontal-scaling-multiple-instances).
 
 ## Design Principles
 

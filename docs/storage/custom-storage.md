@@ -177,8 +177,8 @@ ending a schedule on purpose. Its schedules just cannot be changed while they ru
 | `UpdateSchedule` | Replace the definition and bump the version, guarded by version + cursor and refused on a `Cancelled` row. A finished series expects a `null` cursor, so the guard has to read that as IS NULL; a cancel touches neither the version nor the cursor, so only the status can refuse it |
 | `TryHaltSchedule` | Write the halted marker, guarded by version + cursor + status |
 | `TryReviveCancelledSchedule` | Take a `Cancelled` schedule back to `WaitingQueue` and bump its version, guarded by status + version. The one member here whose default works; see the obligation above |
-| `TrySetTerminalOutcome` | Write the terminal status of a delivery that ended, only while the row still carries the version that delivery ran and — unless the outcome is itself a cancellation — is not `Cancelled` |
-| `RecordRecurringRunForExclusionRetry` | Record one real run with its cursor RETAINED and write the exclusion-retry marker into `RuntimeInfo`, in one commit (version-guarded when a version is passed). The default composes the run update and the marker write in two commits, which reopens a small crash window between them — override it atomically if your store can |
+| `TrySetTerminalOutcome` | Write the terminal status of a delivery that ended, only while the row still carries the version that delivery ran and, unless the outcome is itself a cancellation, is not `Cancelled` |
+| `RecordRecurringRunForExclusionRetry` | Record one real run with its cursor RETAINED and write the exclusion-retry marker into `RuntimeInfo`, in one commit (version-guarded when a version is passed). The default composes the run update and the marker write in two commits, which reopens a small crash window between them; override it atomically if your store can |
 | `UpdateCurrentRun` / `CompleteRecurringRun` (version overloads) | Advance only while the schedule version matches |
 
 `MaterializeOccurrence` must also classify what it finds the way every built-in store does, in this order:
@@ -201,8 +201,8 @@ store that persists the entity it was handed calls the method first. Skip it and
 `MaterializeOccurrence(...)` call stores a different row on your backend than on every other one.
 
 `TryAdvanceScheduleCursor` is how a slot is SKIPPED. Every slot that survives the misfire policy carries the
-cursor forward inside `MaterializeOccurrence` — the occurrence is written at the slot that survives while the
-cursor jumps over the ones that did not — so a skip usually costs no write of its own. This is the write for
+cursor forward inside `MaterializeOccurrence` (the occurrence is written at the slot that survives while the
+cursor jumps over the ones that did not), so a skip usually costs no write of its own. This is the write for
 the case where nothing survives at all: a whole backlog outside the age window, or a stale slot under the skip
 policy. It counts no run and writes no audit, because nothing executed, and a cursor that would move to `null`
 goes through `TrySetRecurringSeriesCompleted` instead.
@@ -213,8 +213,8 @@ the next restart and runs. Occurrences already `InProgress` own a live delivery 
 own. It also touches only rows that exist: cancelling a schedule someone else has already removed is a no-op,
 not an error, and it leaves no audit row for a task that is gone.
 
-**If your backend admits concurrent writers, derive the audited set from the cancelling statement itself** —
-`OUTPUT`, `RETURNING`, or whatever your engine offers — never from a second read. Under READ COMMITTED a
+**If your backend admits concurrent writers, derive the audited set from the cancelling statement itself**
+(`OUTPUT`, `RETURNING`, or whatever your engine offers), never from a second read. Under READ COMMITTED a
 re-read can attribute to this call an occurrence another writer cancelled, so the audit trail would claim a
 transition your transaction never made. A re-read inside the transaction is exact only while writers are
 serialized.
@@ -222,7 +222,7 @@ serialized.
 The five read helpers (`GetOccurrences`, `GetOccurrencesPage`, `GetLastRunStarts`, `GetStatusAuditsPage`,
 `GetRunsAuditsPage`) carry no atomicity contract, so their defaults are a correct query over `Get`. Override them for an indexed
 one. `GetOccurrencesPage` is the one worth the effort: it answers the dashboard's occurrence list, and the
-default reads the whole series to return one page of it — which on a schedule with a long retention behind it
+default reads the whole series to return one page of it, which on a schedule with a long retention behind it
 is hundreds of thousands of rows for a hundred. Order by slot descending, count and slice in the store, and
 return both the page and the total that matches the request. All five in-box stores do. Find out how your
 engine will order by the slot before you promise that: not every one of them can sort a timestamp with an
@@ -367,29 +367,29 @@ builder.Services.AddSingleton<ITaskStoreDbContextFactory, MyCustomDbContextFacto
 
 Your custom storage implementation must:
 
-1. **Persist Tasks**: Store task data durably
-2. **Support Queries**: Retrieve pending and scheduled tasks efficiently
-3. **Handle Concurrent Access**: Support multiple workers reading/writing simultaneously
-4. **Implement Task Keys**: Support idempotent task registration via `GetByTaskKey()`
-5. **Support Audit Trails**: Store audit records for task execution history
-6. **Handle Execution Logs**: Store and retrieve task execution logs (v3.0+)
+1. Store task data durably
+2. Retrieve pending and scheduled tasks efficiently
+3. Read and write from several workers at once
+4. Support idempotent registration by task key, via `GetByTaskKey()`
+5. Keep audit records of task execution
+6. Store and retrieve execution logs (v3.0+)
 
 ### Performance Considerations
 
-1. **Index Key Fields**: Ensure `Status`, `CreatedAtUtc`, and `TaskKey` are indexed for fast queries
-2. **Optimize the Recovery Query**: `RetrievePending()` runs on every startup - keyset pagination on `(CreatedAtUtc, Id)` keeps it fast
-3. **Use Transactions**: Ensure atomic updates where necessary (status changes + audit records)
-4. **Connection Pooling**: Reuse database connections efficiently
-5. **Batch Operations**: Consider batch operations for audit records if your storage supports it
+1. Index `Status`, `CreatedAtUtc` and `TaskKey`: every hot query filters on one of them
+2. `RetrievePending()` runs on every startup; keyset pagination on `(CreatedAtUtc, Id)` keeps it fast
+3. Write a status change and its audit record in one transaction
+4. Reuse connections instead of opening one per call
+5. Batch the audit writes if your backend supports it
 
 ### Error Handling
 
 Your implementation should:
 
-1. **Throw on Critical Failures**: Let EverTask handle retry logic
-2. **Handle Transient Errors**: Implement retry logic for network errors
-3. **Log Errors**: Log storage errors for debugging
-4. **Validate Input**: Check for null/invalid parameters
+1. Throw on a failure it cannot recover from, and let EverTask apply the retry policy
+2. Retry a network error itself
+3. Log what it could not do
+4. Reject null or invalid parameters
 
 ### Testing Your Implementation
 
@@ -488,11 +488,11 @@ public class MongoDbTaskStorage : ITaskStorage
 
 ### CosmosDB
 
-Use the Cosmos SDK with proper partitioning strategy based on task execution patterns.
+Use the Cosmos SDK, and pick the partition key from how your tasks are queried.
 
 ### DynamoDB
 
-Use AWS SDK with appropriate table design and secondary indexes for queries.
+Use the AWS SDK, with secondary indexes for the status and task-key lookups.
 
 ## Next Steps
 

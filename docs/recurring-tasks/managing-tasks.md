@@ -7,7 +7,7 @@ nav_order: 8
 
 # Managing Recurring Tasks
 
-Learn how to change, cancel, retrieve information about, and monitor your recurring tasks.
+How to change, cancel, retrieve information about, and monitor your recurring tasks.
 
 ## Changing a Schedule While It Runs
 
@@ -33,8 +33,8 @@ public class ScheduleAdminController(ITaskScheduleManager schedules) : Controlle
 
 | Method | What it does | What the storage must support |
 |--------|--------------|-------------------------------|
-| `Reschedule(taskKey, configure, mode)` | Replaces the definition and picks a new cursor | `SupportsScheduleVersioning` — and `SupportsDurableOccurrences` as well when the new definition is a durable one |
-| `ReevaluateSchedule(taskKey)` | Keeps the definition, recomputes the cursor from now — **and a durable backlog is discarded** | `SupportsScheduleVersioning` |
+| `Reschedule(taskKey, configure, mode)` | Replaces the definition and picks a new cursor | `SupportsScheduleVersioning`, plus `SupportsDurableOccurrences` when the new definition is a durable one |
+| `ReevaluateSchedule(taskKey)` | Keeps the definition, recomputes the cursor from now; **a durable backlog is discarded** | `SupportsScheduleVersioning` |
 | `ResumeSchedule(taskKey)` | Releases a durable catch-up halt, keeping the cursor | `SupportsScheduleVersioning` |
 | `RequeueFailedOccurrence(occurrenceId)` | Puts one terminal occurrence back in the queue | `SupportsDurableOccurrences` |
 | `CancelSchedule(taskKey)` | Cancels the schedule and every pending occurrence of it | nothing beyond a registered storage |
@@ -42,12 +42,12 @@ public class ScheduleAdminController(ITaskScheduleManager schedules) : Controlle
 All the built-in storages support both capabilities, so the distinction only matters for a custom store.
 The three calls that rewrite a schedule row need the compare-and-swap overloads, and there is no half-atomic
 emulation to fall back on: without a real compare-and-swap a reschedule could report success while a run
-finishing at the same moment overwrote it. `RequeueFailedOccurrence` needs the other capability instead —
+finishing at the same moment overwrote it. `RequeueFailedOccurrence` needs the other capability instead:
 occurrences are rows only a durable schedule ever creates. `CancelSchedule` writes a cancellation, which every
 storage has always been able to do. A call whose capability is missing throws `NotSupportedException`.
 
 What a call is asked to write counts as well as what it is. A `Reschedule` whose new definition turns the
-schedule durable — `WithDurableOccurrences()`, or an `OnMisfire` policy of `FireOnce` or `CatchUp` — asks the
+schedule durable (`WithDurableOccurrences()`, or an `OnMisfire` policy of `FireOnce` or `CatchUp`) asks the
 store for the atomic materialization behind those occurrences too, so it needs `SupportsDurableOccurrences`
 on top of the versioning. It is refused before anything is written, exactly as a dispatch of the same
 definition would be.
@@ -68,11 +68,11 @@ afternoon time, never back onto the morning one that has already run. `EveryWeek
 day inside their period, and for those the day itself rides on the cursor: the weekday, or the day of the
 month, is what the rebase keeps. It is deliberately narrow:
 
-- the two definitions must have the same shape — same cadence, same weekday and month selectors, same period
+- the two definitions must have the same shape: same cadence, same weekday and month selectors, same period
   kind. What may change is the time of day, the zone, the bounds and the misfire settings;
 - a cron schedule states no nominal period and is refused, and so does a schedule whose occurrences come from
   an occurrence provider;
-- a period the new definition has no slot in is refused too, rather than answered from the next period — and
+- a period the new definition has no slot in is refused too, rather than answered from the next period, and
   so is one that holds fewer slots than the cursor had already passed, since there is no position to land on.
 
 Anything refused throws `InvalidOperationException` and writes nothing, so `RecalculateFromNow` is always
@@ -80,15 +80,15 @@ available as the fallback. There is one more reason a rebase is refused, and it 
 calendar: the bounds. Winding a series down means a `RunUntil` the cursor has already passed, or a `MaxRuns`
 budget it has already spent, and either way there is no occurrence left to run. The period arithmetic does not
 notice. A plain cadence keeps its cursor verbatim, `EveryWeek()` and `EveryMonth()` place their slot by hand,
-and neither ever asks the grid — which is the only thing that applies `RunUntil`. Both bounds are checked here
+and neither ever asks the grid, which is the only thing that applies `RunUntil`. Both bounds are checked here
 instead, and both get the answer `RecalculateFromNow` gives for the same definition. Use `CancelSchedule` to
 end a series on purpose.
 
 ### Re-evaluating without changing the definition
 
 `ReevaluateSchedule(taskKey)` is `RecalculateFromNow` applied to the definition already on the row: it is what
-to call when something the schedule depends on has changed — a calendar, a feature flag, an occurrence
-provider's configuration — and the schedule itself has not.
+to call when something the schedule depends on has changed (a calendar, a feature flag, an occurrence
+provider's configuration) and the schedule itself has not.
 
 It moves the cursor to the next occurrence after now, so on a durable schedule that is behind, **the slots it
 still owed are dropped**, counted in `ScheduleUpdateResult.DiscardedBacklog` and carried on the
@@ -121,13 +121,13 @@ previous occurrence run once more and apply the new definition itself.
 
 A reschedule is never refused because a run is in progress, and it takes effect immediately for occurrences
 that have not fired yet: the scheduler's registration is replaced. A delivery already handed to a worker queue
-is considered fired — it may finish under the definition it started with, and its advance then loses the
+is considered fired: it may finish under the definition it started with, and its advance then loses the
 compare-and-swap and applies the new one.
 
 That advance re-aims a bounded number of times, so a schedule rewritten again and again cannot spin it. What
 the bound never costs is the run itself: past the last attempt the guard is given up and the run is recorded
 anyway, against the cursor the last reading carried, and the schedule is parked from that row. A run that
-happened is always counted — losing it would leave the row mid-flight, the execution unaudited and the
+happened is always counted, because losing it would leave the row mid-flight, the execution unaudited and the
 `MaxRuns` budget permanently one short.
 
 ### Requeuing a failed occurrence
@@ -153,7 +153,7 @@ answers `false`. A cancelled series never keeps a live row under it.
 The schedule has the last word. `CancelSchedule` cancels the pending occurrences along with the schedule, so
 by status alone every one of them would look like a legitimate target here; requeuing one is refused with an
 `InvalidOperationException` instead, because a cancellation is terminal for the whole series. A schedule that
-is simply over — its budget spent, its `RunUntil` passed — is not: that occurrence was owed, and replaying it
+is simply over (its budget spent, its `RunUntil` passed) is not: that occurrence was owed, and replaying it
 creates nothing new.
 
 ## Cancelling Recurring Tasks

@@ -92,7 +92,7 @@ public class BuildDailyReportHandler(IReportBuilder builder) : EverTaskHandler<B
 ```
 
 Outside the handler, inject `ITaskExecutionContextAccessor` and read `.Current` (null when no task is
-running on the flow) — see `references/02-tasks-and-handlers.md`.
+running on the flow); see `references/02-tasks-and-handlers.md`.
 
 ## Rate-limited task (per tenant)
 

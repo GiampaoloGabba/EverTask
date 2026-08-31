@@ -153,7 +153,7 @@ For each capability selected in Phase 1, read the matching reference and apply:
   interval calls; schedules are UTC unless they name a zone with `.InTimeZone(...)`, which
   calendar-anchored schedules accept and plain cadences refuse. Ask whether a run the host
   MISSED still has to happen: if it does, `.OnMisfire(m => m.CatchUp(...))` (or `m.FireOnce()`)
-  gives every occurrence a durable row of its own and replays the backlog inside explicit caps —
+  gives every occurrence a durable row of its own and replays the backlog inside explicit caps:
   at-least-once, single active host. Skipping is the default and the right answer for a heartbeat.
   When no interval or cron can express the grid at all (business days, a holiday table, opening
   hours), the calendar belongs to the application: register an `INextOccurrenceProvider` with

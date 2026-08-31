@@ -7,7 +7,7 @@ nav_order: 3
 
 # Cron Expressions
 
-For complex scheduling patterns, cron expressions give you maximum flexibility.
+For complex scheduling patterns, cron expressions cover the schedules the fluent API cannot express.
 
 ## Cron Syntax
 

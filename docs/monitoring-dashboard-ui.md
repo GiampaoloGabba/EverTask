@@ -9,7 +9,7 @@ nav_order: 4
 
 The EverTask dashboard is a React interface for monitoring task execution, debugging failures, and spotting performance patterns.
 
-> **Note**: The dashboard itself is **read-only**. You can view, analyze, filter and export all task data; requeue, resume and cancel are exposed by the API's [management endpoints](monitoring-api-reference.md#management-endpoints) — opt-in and behind their own role — and not yet by a button here. From application code, changing a schedule is [`ITaskScheduleManager`](recurring-tasks/managing-tasks.md), behind your own authorization.
+> **Note**: The dashboard itself is **read-only**. You can view, analyze, filter and export all task data; requeue, resume and cancel are exposed by the API's [management endpoints](monitoring-api-reference.md#management-endpoints) (opt-in and behind their own role) and not yet by a button here. From application code, changing a schedule is [`ITaskScheduleManager`](recurring-tasks/managing-tasks.md), behind your own authorization.
 
 **Quick Access:**
 ```
@@ -36,7 +36,7 @@ Your starting point shows the big picture: total tasks, success rates, active qu
 
 The Recent Activity feed shows the last 50 events as they happen, so you can watch tasks flow through the system in real-time.
 
-When any schedule runs with [durable occurrences](recurring-tasks/durable-occurrences.md), a **Durable Occurrences** card appears with the whole backlog by state — pending, active, failed, skipped, completed — the oldest slot that has not started yet, and how far behind it is. A schedule whose catch-up halted itself over its overflow cap is called out there too, because a halt never releases itself: someone has to resume or reschedule the series.
+When any schedule runs with [durable occurrences](recurring-tasks/durable-occurrences.md), a **Durable Occurrences** card appears with the whole backlog by state (pending, active, failed, skipped, completed), the oldest slot that has not started yet, and how far behind it is. A schedule whose catch-up halted itself over its overflow cap is called out there too, because a halt never releases itself: someone has to resume or reschedule the series.
 
 ### Task List & Filtering
 
@@ -48,15 +48,15 @@ Occurrences of a durable schedule are tasks like any other, so they show up in t
 
 ### Task Details
 
-Click any task to see everything about its lifecycle. The modal view has three tabs — four on a durable schedule:
+Click any task to see everything about its lifecycle. The modal view has three tabs, four on a durable schedule:
 
 **Status History** shows every state transition (Queued → InProgress → Completed/Failed) with timestamps. Perfect for understanding "when did this task actually start?" or "how long was it queued?"
 
 **Execution History** matters most for recurring tasks. See all execution attempts, their durations, and outcomes. Quickly spot if a recurring task that usually takes 2 seconds suddenly took 30 seconds on the last run.
 
-**Occurrences** appears on a durable schedule row only. It lists the rows that schedule materialized, newest slot first, with the run number each of them is, the misfire it stands for, and how late it started. A hundred at a time, with Previous and Next. The storage hands over one page: a schedule with a year of retention behind it holds far more rows than a tab can show. Each line opens that occurrence's own detail page — it is a task row, so it has its own audits and logs.
+**Occurrences** appears on a durable schedule row only. It lists the rows that schedule materialized, newest slot first, with the run number each of them is, the misfire it stands for, and how late it started. A hundred at a time, with Previous and Next. The storage hands over one page: a schedule with a year of retention behind it holds far more rows than a tab can show. Each line opens that occurrence's own detail page. It is a task row, so it has its own audits and logs.
 
-A schedule row also carries what its definition says: the occurrence mode, the misfire policy, the time zone its calendar is read on, and the schedule version, which changes every time the schedule is [rescheduled at runtime](recurring-tasks/managing-tasks.md). An occurrence carries the other half — the schedule it belongs to, its nominal slot, and the range of missed slots it was created out of.
+A schedule row also carries what its definition says: the occurrence mode, the misfire policy, the time zone its calendar is read on, and the schedule version, which changes every time the schedule is [rescheduled at runtime](recurring-tasks/managing-tasks.md). An occurrence carries the other half: the schedule it belongs to, its nominal slot, and the range of missed slots it was created out of.
 
 **Execution Logs** is where you actually debug. If you enabled persistent logging, you'll see a terminal-style viewer with color-coded log levels (Info in blue, Warnings in yellow, Errors in red). Stack traces get syntax highlighting, and you can export logs to JSON/CSV for deeper analysis.
 
@@ -70,7 +70,7 @@ This is where multi-queue setups pay off: you can see at a glance if your "criti
 
 The Statistics page helps you understand patterns over time. Success rate trends show if your system is getting more stable or degrading. Task type distribution reveals which handlers run most frequently (maybe you didn't realize your health check runs 10,000 times a day).
 
-Execution time analysis is where you find performance bottlenecks. A sortable table shows average, min, and max execution times per task type. Color-coded indicators highlight slow tasks (>5s average = red flag). This helps you prioritize optimization efforts: "Our email task averages 8 seconds, but our payment task averages 50ms – let's optimize emails."
+Execution time analysis is where you find performance bottlenecks. A sortable table shows average, min, and max execution times per task type. Color-coded indicators highlight slow tasks (>5s average = red flag). This helps you prioritize optimization efforts: "Our email task averages 8 seconds, but our payment task averages 50ms: time to optimize emails."
 
 ## Real-Time Updates
 
@@ -78,7 +78,7 @@ The dashboard uses SignalR for real-time updates. Instead of polling every few s
 
 **How It Works:**
 
-When a task completes, fails, or changes status, EverTask broadcasts a SignalR event. The dashboard receives the event and invalidates its cache, triggering a fresh data fetch. Multiple rapid events (like during a task burst) are debounced to prevent API spam – if 100 tasks complete in 2 seconds, you get one refresh, not 100.
+When a task completes, fails, or changes status, EverTask broadcasts a SignalR event. The dashboard receives the event and invalidates its cache, triggering a fresh data fetch. Multiple rapid events (like during a task burst) are debounced to prevent API spam: if 100 tasks complete in 2 seconds, you get one refresh, not 100.
 
 **Configure Responsiveness:**
 
@@ -100,7 +100,7 @@ That keeps network traffic down without leaving the UI on stale data between pol
 
 ## Screenshots
 
-See the dashboard in action with these 10 screenshots showing all major features:
+See the dashboard in action across these 10 screenshots:
 
 <div align="center">
 <p>
@@ -156,7 +156,7 @@ See the dashboard in action with these 10 screenshots showing all major features
 
 ## Coming in Future Releases
 
-Write operations from the dashboard itself — requeue, resume, cancel, queue pause/resume — wait on an
+Write operations from the dashboard itself (requeue, resume, cancel, queue pause/resume) wait on an
 authorization model of their own: the dashboard's single username and password is a read credential, and
 operations need a role that is not it. Until then those calls live in your application code, where the
 authorization already is.

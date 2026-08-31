@@ -152,7 +152,7 @@ public class TaskScheduleService
 
 Re-dispatching under the same key updates the row in place and is the right tool at startup, where the code
 that registers a schedule is also the code that owns its definition. When something else changes the schedule
-of a series that is already running — an admin screen, a tenant setting, a support action — reach for
+of a series that is already running (an admin screen, a tenant setting, a support action), reach for
 [`ITaskScheduleManager`](managing-tasks.md#changing-a-schedule-while-it-runs) instead:
 
 - it refuses a key that names no schedule, rather than creating one;
@@ -168,7 +168,7 @@ same key never interleave.
 **One limit worth knowing.** A reschedule is immediate for occurrences that have not fired yet: the parked
 registration is replaced. An occurrence already handed to a worker queue is considered fired, and within the
 process that rescheduled it EverTask drops that delivery instead of running the definition you just replaced.
-Across a restart there is nothing to drop against — a fresh process publishes no version — so a delivery
+Across a restart there is nothing to drop against, since a fresh process publishes no version: a delivery
 recovered from storage always runs, and its advance is what applies the new definition.
 
 ## Task Key Guidelines

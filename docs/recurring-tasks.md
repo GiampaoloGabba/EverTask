@@ -7,7 +7,7 @@ has_children: true
 
 # Recurring Tasks
 
-Schedule work that runs on a repeating cadence, from an hourly job to a cron schedule.
+Schedule work that repeats on an interval or a cron expression.
 
 ## Overview
 
@@ -15,9 +15,9 @@ Recurring tasks run on a schedule you define with either a type-safe fluent API 
 
 **Key Features:**
 - **Fluent API**: Type-safe, readable schedule building
-- **Cron Support**: Full cron expression support for complex patterns
+- **Cron Support**: 5- and 6-field cron expressions for complex patterns
 - **Idempotent Registration**: Prevent duplicate tasks with task keys
-- **Flexible Starting Strategies**: Run immediately, delay, or schedule first run
+- **Starting Strategies**: Run immediately, delay, or schedule first run
 - **Execution Limits**: MaxRuns and RunUntil for time-limited tasks
 - **Time Zones**: Read a calendar schedule on a real clock, daylight saving included
 - **Durable Occurrences**: One row per occurrence, with misfire policies that replay what a downtime missed
@@ -108,10 +108,10 @@ or unknown calendars are refused at ingress and poison a rebuilt schedule rather
 Introduction to recurring tasks with quick examples and feature overview.
 
 ### [Fluent Scheduling API](recurring-tasks/fluent-api.md)
-Learn how to use the fluent API to build schedules for minute-based, hourly, daily, weekly, and monthly recurring tasks. Covers basic intervals, starting strategies, execution limits, and complex schedules.
+Use the fluent API to build schedules for minute-based, hourly, daily, weekly, and monthly recurring tasks. Covers basic intervals, starting strategies, execution limits, and complex schedules.
 
 ### [Cron Expressions](recurring-tasks/cron-expressions.md)
-Use cron expressions for maximum scheduling flexibility. Learn the syntax, common patterns, and how to combine cron with starting strategies and limits.
+Cron syntax, common patterns, and how to combine it with starting strategies and limits.
 
 ### [Time Zones](recurring-tasks/time-zones.md)
 Run a calendar schedule on a real clock with `InTimeZone`, set a default zone for the whole application, and see what happens on the two days a year a local hour is skipped or repeated.
@@ -120,7 +120,7 @@ Run a calendar schedule on a real clock with `InTimeZone`, set a default zone fo
 Give every due slot its own persisted row, and choose what a downtime does to the slots it missed: skip them, collapse them into one run, or replay them under explicit caps.
 
 ### [Occurrence Providers](recurring-tasks/occurrence-providers.md)
-Take the occurrence grid from your own calendar — business days, a holiday table, opening hours — when no interval or cron expression can express it.
+Take the occurrence grid from your own calendar (business days, a holiday table, opening hours) when no interval or cron expression can express it.
 
 ### [Idempotent Task Registration](recurring-tasks/idempotent-registration.md)
 Prevent duplicate recurring tasks using task keys. Learn about update behavior, startup registration patterns, and dynamic configuration.
@@ -129,7 +129,7 @@ Prevent duplicate recurring tasks using task keys. Learn about update behavior, 
 Reschedule, re-evaluate, resume and cancel a running schedule with `ITaskScheduleManager`, requeue a failed occurrence, and monitor schedules through lifecycle hooks and storage queries.
 
 ### [Best Practices](recurring-tasks/best-practices.md)
-Follow best practices for task keys, schedule format selection, long-running tasks, time zones, execution limits, and health monitoring.
+Guidance on task keys, schedule format selection, long-running tasks, time zones, execution limits, and health monitoring.
 
 ## Common Patterns
 
@@ -190,7 +190,7 @@ public async Task UpdateUserReportSchedule(string userId, TimeOnly newTime)
 ```
 
 Re-dispatching under the same key is the registration-time way to change a schedule. To change one **while it
-is running** — and to decide what happens to the occurrences it had already planned — use
+is running**, and to decide what happens to the occurrences it had already planned, use
 [`ITaskScheduleManager`](recurring-tasks/managing-tasks.md):
 
 ```csharp

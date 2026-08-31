@@ -3,7 +3,7 @@
 Resolve the package set from the user's storage choice + selected capabilities. The version is
 governed lockstep by `Directory.Build.props` in this repo; for an external consumer, take the
 latest published version of each package (they release in lockstep). Current repo package version:
-**4.0.0**, not yet released — the latest published one is **3.11.0**.
+**4.0.0**, not yet released; the latest published one is **3.11.0**.
 
 | Feature / choice | Package | Notes |
 |---|---|---|
@@ -45,6 +45,6 @@ latest published version of each package (they release in lockstep). Current rep
 
 All packages (core, storage, monitoring, SignalR, Serilog) multi-target **net8.0/net9.0/net10.0**
 (inherited from `Directory.Build.props`; no project overrides this). net8.0 is the minimum.
-**Exception:** `EverTask.Storage.MySql` targets **net9.0/net10.0 only** — its underlying Microting
+**Exception:** `EverTask.Storage.MySql` targets **net9.0/net10.0 only**: its underlying Microting
 provider has no EF Core 8 build. `EverTask.Monitor.Api.Scalar` compiles for all three TFMs but is
 functional on net9.0+ only (the built-in ASP.NET Core OpenAPI generator does not exist on net8.0).

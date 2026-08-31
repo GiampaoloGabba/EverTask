@@ -177,7 +177,7 @@ reads in the dashboard.
 
 `RetrievePending` must return TWO categories: rows still to EXECUTE
 (`QueuedTask.IsRecoverableForExecution(now)`) and recurring series that only need FINALIZING
-(`QueuedTask.IsRecurringSeriesToFinalize()` — every remaining slot past `RunUntil`, or the run budget
+(`QueuedTask.IsRecurringSeriesToFinalize()`: every remaining slot past `RunUntil`, or the run budget
 spent). `TrySetQueuedIfRecoverable` applies only the first, so a spent series is never handed back to a
 worker queue. Both members also have a `nowUtc` overload that the core always calls: the defaults
 delegate to the legacy signatures, so an existing storage keeps working but resolves the clock itself.
@@ -187,20 +187,20 @@ Durable recurring schedules need atomic operations that no non-atomic emulation 
 `TryRequeueStaleOccurrence`, `UpdateSchedule`, `TryHaltSchedule`, `TrySetRecurringSeriesCompleted`,
 `TrySetTerminalOutcome` and the compare-and-swap overloads of `UpdateCurrentRun` / `CompleteRecurringRun`).
 `TryAdvanceScheduleCursor` is
-the write a SKIPPED slot needs — a compare-and-swap on version plus cursor that moves the cursor and
-nothing else: no run counted, no audit row. They default to throwing `NotSupportedException`, gated
+the write a SKIPPED slot needs: a compare-and-swap on version plus cursor that moves the cursor and
+nothing else. No run counted, no audit row. They default to throwing `NotSupportedException`, gated
 by `SupportsDurableOccurrences` / `SupportsScheduleVersioning` (both `false` by default). Implement them
-atomically before flipping either flag — a "best effort" version built from two writes is exactly the
+atomically before flipping either flag: a "best effort" version built from two writes is exactly the
 crash window they exist to close.
 
 `TrySetTerminalOutcome` is required when `SupportsScheduleVersioning` is `true`. It writes a delivery's
 terminal outcome only while the row still carries the version that delivery ran, and returns `false` when
-the version moved or the row is already `Cancelled` — unless the outcome being written is itself
+the version moved or the row is already `Cancelled`, unless the outcome being written is itself
 `Cancelled`.
 
 `TryReviveCancelledSchedule` sits beside them with one difference: its default WORKS (status write, then a
-read that confirms the row left `Cancelled`), because a re-dispatch under a cancelled schedule's task key —
-the documented way to restart one — has to work on any storage. What the default cannot do is bump
+read that confirms the row left `Cancelled`), because a re-dispatch under a cancelled schedule's task key,
+the documented way to restart one, has to work on any storage. What the default cannot do is bump
 `ScheduleVersion`, so a storage advertising `SupportsScheduleVersioning` owes it a real override: the revived
 row keeps its id, and the version is the only thing separating the new registration from a delivery of the
 series the cancel ended.

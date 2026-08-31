@@ -44,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are not one. Every field is added as an `init` property, never as an appended constructor parameter, so
   the DTO signatures a consumer already builds are unchanged.
 - **The overview answers "what does this host still owe".** `catchUpBacklog` reports the occurrences of every
-  durable schedule by state — pending, active, failed, skipped, completed — plus the oldest slot that has not
+  durable schedule by state (pending, active, failed, skipped, completed), plus the oldest slot that has not
   started, how far behind it already is, and how many schedules have halted their own catch-up. The dashboard
   shows the same as a card, and the schedule detail grows an Occurrences tab with catch-up and lateness badges
   and its own paging, so a schedule with hundreds of occurrences is readable past its most recent page.
@@ -52,30 +52,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   happen, by the `OccurrenceSkipped` event.
 - **The API stays read-only by default.** Everything #30 added reports; changing a schedule at runtime goes
   through `ITaskScheduleManager` in your own code, behind your own authorization. The three write endpoints
-  the same release later added are opt-in and carry a credential of their own — see
+  the same release later added are opt-in and carry a credential of their own. See
   *Added (opt-in management endpoints, #42)* below.
 - **Task DTOs carry `startedAtUtc`**, the instant a row's last (or current) run began. It is the term to
   measure lateness with: `lastExecutionUtc` is written on terminal transitions and so says when a run ENDED,
   which reported a punctual occurrence with a slow handler as late by its whole execution time. The instant
   comes from the row's own `InProgress` transition in the audit trail, so a run STILL RUNNING answers for
   itself; a run that finished is derived from its end less its measured duration when nothing recorded that
-  transition, and everything with no measured start — a row that never ran, a failure or a finalization
-  (neither records a duration), a row waiting for its next delivery — reports nothing instead of an invented
-  instant. The
-  schedule fields — `scheduleVersion` included, now nullable — are absent together on a task that belongs to
-  no schedule, instead of one of them reading 0 on every row in the store.
-- **Four new reads on `ITaskStorage`** — `GetOccurrencesPage`, `GetLastRunStarts`, `GetStatusAuditsPage` and
+  transition, and everything with no measured start reports nothing instead of an invented instant: a row
+  that never ran, a failure or a finalization (neither records a duration), a row waiting for its next
+  delivery. The schedule fields (`scheduleVersion` included, now nullable) are absent together on a task
+  that belongs to no schedule, instead of one of them reading 0 on every row in the store.
+- **Four new reads on `ITaskStorage`**: `GetOccurrencesPage`, `GetLastRunStarts`, `GetStatusAuditsPage` and
   `GetRunsAuditsPage` (default members, so a custom storage keeps working). The occurrence and audit lists are
   ordered, counted and sliced by the storage over the indexes their contracts already need, rather than read
   whole and paged in memory. The other three read the audit trail, which nothing else can: no query
   materializes `QueuedTask.StatusAudits` or `QueuedTask.RunsAudits`, so the recorded start of a page of rows,
   the status-history tab and the runs-history tab answered over the in-memory store alone and handed back
   nothing on SQL Server, PostgreSQL, MySQL and SQLite. Each is one indexed query over the audit table.
-- **`avgExecutionTimeMs` on the overview** is the mean of the durations the worker measured around the runs —
-  the same column `executionTimeMs` reports per task, and the same average the queue metrics already used. It
+- **`avgExecutionTimeMs` on the overview** is the mean of the durations the worker measured around the runs,
+  the same column `executionTimeMs` reports per task and the same average the queue metrics already used. It
   was computed from the status audit trail, which made the tile read `0.0` on every relational store and at
   every audit level below `Full`. Runs nobody measured are left out rather than counted as zero.
-- **A catch-up says where a replay begins and when it is over** — `Catch-up of schedule … started from slot …`
+- **A catch-up says where a replay begins and when it is over**: `Catch-up of schedule … started from slot …`
   and `… completed: N occurrence(s) materialized …`, one pair per episode. Everything between them is
   reported per occurrence, which cannot say how big a backlog was or that it has drained. `docs/monitoring-events.md`
   now also lists the three `Error` events the durable side publishes for a row this build cannot rebuild and
@@ -86,7 +85,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Three write endpoints, off by default and behind a credential of their own.**
   `POST /api/management/tasks/{id}/requeue`, `/resume` and `/cancel` call `ITaskScheduleManager` for you:
   requeue a failed occurrence, release a halted catch-up, cancel a schedule. They exist only when
-  `EnableManagementEndpoints` is `true` — while it is false the whole prefix answers `404` and the routes are
+  `EnableManagementEndpoints` is `true`. While it is false the whole prefix answers `404` and the routes are
   absent from the OpenAPI document, so an existing deployment is unchanged and reads exactly as it did.
 - **Reading and operating are two different credentials.** The dashboard username/password and the magic link
   keep granting read; only the new `ManagementUsername` / `ManagementPassword` pair grants operate, and the
@@ -116,11 +115,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instant. Non-expiring tokens and monitoring hosts with authentication disabled keep their existing
   behavior.
 
-### Changed (breaking — the two audit endpoints are paged, #44)
+### Changed (breaking: the two audit endpoints are paged, #44)
 
 - **`GET /tasks/{id}/status-audit` and `GET /tasks/{id}/runs-audit` return an object, not an array.** Both
   now take `skip` / `take` like `/execution-logs` and answer `{ audits, totalCount, skip, take }`. A client
-  deserializing the body as a list — `JsonSerializer.Deserialize<List<StatusAuditDto>>(...)` — throws at
+  deserializing the body as a list (`JsonSerializer.Deserialize<List<StatusAuditDto>>(...)`) throws at
   runtime after the upgrade and has to read `audits` instead. The reason is a long-lived recurring row: it
   accumulates one transition per state per run, and the tab that shows the first twenty of them was
   transferring the whole series to do it.
@@ -130,14 +129,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`TaskDetailDto.StatusAudits` / `RunsAudits` now carry the FIRST PAGE** (100 entries) rather than the whole
   trail, with `StatusAuditsTotalCount` / `RunsAuditsTotalCount` beside them and the two endpoints for the
   rest. The dashboard's detail grows Previous/Next on both tabs.
-- Two new `ITaskStorage` reads — `GetStatusAuditsPage` and `GetRunsAuditsPage` — as default members that read
+- Two new `ITaskStorage` reads, `GetStatusAuditsPage` and `GetRunsAuditsPage`, as default members that read
   the row's audit data directly, so a custom storage keeps working; the EF base, the in-memory store and the
   SQL Server deadlock re-read override them with an indexed count and slice.
 
 ### Added (occurrence providers, #29)
 
-- **A schedule can take its grid from your own calendar.** Implement `INextOccurrenceProvider` — one method
-  answering "which occurrence comes after this instant" — register it with
+- **A schedule can take its grid from your own calendar.** Implement `INextOccurrenceProvider` (one method
+  answering "which occurrence comes after this instant"), register it with
   `AddOccurrenceProvider<T>("key")`, and select it with `.UseOccurrenceProvider("key", config?)`. Business
   days, a holiday table, opening hours: the schedules no interval and no cron expression can express. The row
   persists the KEY and an opaque config string, never a type name a rename would orphan.
@@ -150,7 +149,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the cursor stays exactly where it was, the schedule is parked to ask again after a backoff that doubles per
   consecutive failure (`SetOccurrenceProviderRetry`, 1 minute to 15 minutes by default), and a warning event
   carries the key and the failure count. The recovery poison counter is not touched: a calendar that is down
-  for an hour cannot mark a schedule as poison. An unknown key IS a configuration error — `ArgumentException`
+  for an hour cannot mark a schedule as poison. An unknown key IS a configuration error: `ArgumentException`
   at dispatch, terminal poison at recovery.
 - **A replay over a provider grid asks it once per slot, not once per occurrence.** The measurement that
   decides the catch-up cap is taken once per episode and continued by the runs that follow it, so a backlog
@@ -169,12 +168,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`RescheduleMode`** decides what happens to the schedule's position. `RecalculateFromNow` puts the cursor
   at the new definition's first occurrence after now, discarding a durable backlog and reporting exactly how
   much of it was discarded. `RebaseFromCursor` keeps the schedule inside the day, week or month the old cursor
-  was in, at the same POSITION inside that period — which is what stops a period holding several slots from
+  was in, at the same POSITION inside that period, which is what stops a period holding several slots from
   rewinding onto one that has already run. Only the time of day, the zone, the bounds and the misfire settings
   may change that way; a different cadence, a cron schedule, or a period with no valid slot is refused and
   writes nothing.
 - **Every advance of a managed schedule is a compare-and-swap.** A run completing while a reschedule commits
-  loses the swap, re-reads the row and applies the new definition instead of overwriting it — and the same
+  loses the swap, re-reads the row and applies the new definition instead of overwriting it, and the same
   guard covers the cancel that lands in the middle. A delivery already handed to a worker queue may finish
   under the old definition; one that has not fired is invalidated immediately. `ScheduleRescheduled` reports
   the whole change: both versions, both cursors, the mode, the backlog discarded and whether a halt was
@@ -198,7 +197,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   questions, and a per-second grid left behind by a three-month downtime owes eight million slots.
   `MaxPendingOccurrences` (default 1, meaning strictly serial) bounds how many occurrences of the schedule may
   be alive at once. When the backlog exceeds the cap, `OverflowPolicy` either keeps the most recent slots
-  (`SkipOldest`) or — the default — writes a durable `Halt` marker and replays nothing. A halt does not release
+  (`SkipOldest`) or (the default) writes a durable `Halt` marker and replays nothing. A halt does not release
   itself: not by the backlog ageing out of its own window, not by a restart. `ResumeSchedule` or `Reschedule`
   is what releases it, which is the point.
 - **No slot is ever lost silently.** Every dropped slot is reported with the rule that dropped it, because the
@@ -209,8 +208,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **New host knobs**: `SetMaterializationConcurrency` (how many schedules may materialize at once; defaults to
   the worker parallelism) and `SetBacklogRetryInterval` (how long a schedule that could not make progress waits
   before trying again; 1 minute, bounded to a day). `AuditRetentionPolicy.OccurrenceRetentionDays` prunes the
-  finished occurrences of durable schedules in EVERY terminal state — completed, failed and cancelled — while
-  keeping any occurrence that still owns execution logs.
+  finished occurrences of durable schedules in EVERY terminal state (completed, failed and cancelled),
+  while keeping any occurrence that still owns execution logs.
 - **A handler learns what its delivery stands for** through `Context.Misfire`: the kind of missed work, the
   range of slots it covers, how many they are, whether that count is exact, and how late the delivery actually
   started.
@@ -221,8 +220,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compare-and-swap overloads of the advance operations. `TrySetTerminalOutcome` is required when a custom
   storage advertises `SupportsScheduleVersioning`: it returns false if the row moved version or is already
   `Cancelled`, unless the outcome is itself `Cancelled`. Every operation is written at the tier of its
-  provider — stored procedures on SQL Server and MySQL, a writable CTE on PostgreSQL, a single `SaveChanges`
-  on the EF Core base — and two
+  provider (stored procedures on SQL Server and MySQL, a writable CTE on PostgreSQL, a single `SaveChanges`
+  on the EF Core base), and two
   capability flags (`SupportsDurableOccurrences`, `SupportsScheduleVersioning`) let a custom storage say it
   does not implement them instead of half-implementing them. One migration per provider.
 
@@ -230,7 +229,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A recurring schedule can be read on a real time zone.** `InTimeZone(zone)` / `InTimeZone(id)` on the
   fluent builder makes 09:00 mean 09:00 there, all year and across every daylight-saving change, instead
-  of 09:00 UTC. It applies to schedules anchored to a calendar — a time of day, a day of the week, a
+  of 09:00 UTC. It applies to schedules anchored to a calendar: a time of day, a day of the week, a
   month selector, a cron expression, and the day, week and month cadences, which land on midnight when
   no time was named. A plain cadence in seconds, minutes or hours is refused instead of quietly
   accepted: it is a constant step in elapsed time and falls on the same instants in every zone, so a
@@ -256,7 +255,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alone, and an explicit `InTimeZone` wins.
 - **The compiler says it first.** The bundled analyzer reports **ET0010** on an `InTimeZone` call sitting on a
   chain it can prove is a plain cadence, so the mistake shows up in the IDE instead of at the first startup.
-  It reports only what the chain in front of it spells out — a chain split over a variable or a helper method,
+  It reports only what the chain in front of it spells out. A chain split over a variable or a helper method,
   or one whose shape it does not recognize, is left to the runtime exception, which stays the guard. Severity
   is warning, tunable per project with `dotnet_diagnostic.ET0010.severity`.
 - **A handler is told which zone its delivery belongs to.** `Context.TimeZoneId` and
@@ -284,7 +283,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   knows nothing about occurrence child rows: a provider-backed schedule silently degrades to an inline one,
   and during an overlapping rollout an old host can run the slot a 4.0 child row already represents. The
   migration's `Down` deletes the child rows precisely so a rollback cannot execute them as standalone
-  tasks — pending occurrences are LOST on downgrade by design. Disable durable occurrences and drain the
+  tasks: pending occurrences are LOST on downgrade by design. Disable durable occurrences and drain the
   children before any planned rollback.
 - **A custom `IScheduler` that does not implement `TrySchedule` keeps unconditional registration.** The
   default interface body forwards to `Schedule`, so runtime rescheduling over such a scheduler cannot
@@ -360,7 +359,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   definition, the cursor, the bounds and the task key cleared. The providers that build the `INSERT`
   by hand write exactly those columns; the ones that persist the entity apply the method first.
 - **`AuditRetentionPolicy.OccurrenceRetentionDays`** prunes the finished occurrences of a durable
-  schedule in any terminal state — Completed, Failed and Cancelled alike, which
+  schedule in any terminal state, Completed, Failed and Cancelled alike, which
   `DeleteCompletedTasksAfterRetention` does not do. It honours the same execution-log guard: with a
   log-retention window or cap active, an occurrence that still owns logs is kept, so a short
   occurrence window never cascade-deletes logs a longer log window meant to keep. Each audit trail gets a
@@ -407,8 +406,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   have left it, after the new definition is written and with the transition audited. A one-shot was never
   affected: a terminal row is removed and recreated under a new id.
   - That entry is also the only thing covering the occurrences the cancel had already terminalized while
-    their delivery was past the queue boundary — sitting in a channel, or waiting at the rate-limit gate,
-    where nothing re-reads the row. Each of them gets an entry of its own before the schedule's is dropped,
+    their delivery was past the queue boundary (sitting in a channel, or waiting at the rate-limit gate,
+    where nothing re-reads the row). Each of them gets an entry of its own before the schedule's is dropped,
     so an occurrence the cancel confirmed terminal cannot run the old series' payload after the restart. One
     the cancel found running is left alone and still finishes.
   - A schedule that was HALTED when it was cancelled comes back released. The halt belonged to the series the
@@ -416,13 +415,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     An ordinary re-registration under the same task key still leaves a standing halt exactly where it is:
     re-declaring your schedules at startup is not a request to replay the backlog the halt stopped.
 - **A schedule's description no longer renders its bounds on the host's clock.**
-  `RecurringTask.ToString()` — persisted as `QueuedTask.RecurringInfo` and shown by the dashboard — formatted
+  `RecurringTask.ToString()` (persisted as `QueuedTask.RecurringInfo` and shown by the dashboard) formatted
   `RunUntil` and a `SpecificRunTime` with `ToLocalTime()`, so the same definition wrote a different sentence
   from a UTC container and from a developer machine, and the time zone printed at the end of the sentence
   labelled a wall time that was not its own. Both are now read on the schedule's own zone, or in UTC, named,
   when it has none.
 
-### Changed (license — Apache 2.0 → MIT)
+### Changed (license: Apache 2.0 → MIT)
 
 - **EverTask is now MIT-licensed.** The one piece of Apache-sourced code (the MediatR-derived
   `HandlerRegistrar`) was rewritten from scratch, so no third-party notice is needed anymore:
@@ -468,16 +467,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   discovered gets registered. Duplicates split across different assemblies are still reported at
   startup only. ET0010 is reserved for the durable-occurrences work (#34).
 
-### Changed (breaking — retry policies moved to the `EverTask.Abstractions` namespace)
+### Changed (breaking: retry policies moved to the `EverTask.Abstractions` namespace)
 
 - **`LinearRetryPolicy` now lives in `EverTask.Abstractions`** (together with the new
   `ExponentialRetryPolicy` and `RetryPolicyBase<TPolicy>`), next to `IRetryPolicy` and the
   `HandleTransient*` extensions, instead of the two-file `EverTask.Resilience` namespace the
-  interface never shared. Migration: remove any `using EverTask.Resilience;` — most files already
+  interface never shared. Migration: remove any `using EverTask.Resilience;`. Most files already
   import `EverTask.Abstractions` for the handler base and need nothing else. Assemblies compiled
   against 3.11.0 need a recompile.
 
-### Changed (breaking — Monitor.Api OpenAPI integration rebuilt, #20)
+### Changed (breaking: Monitor.Api OpenAPI integration rebuilt, #20)
 
 - **`EverTask.Monitor.Api` no longer depends on Swashbuckle.** The hard dependency crashed .NET 10
   hosts using the built-in OpenAPI stack (`Microsoft.AspNetCore.OpenApi` → `Microsoft.OpenApi` 2.x)
@@ -657,14 +656,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **BREAKING — the monitoring IP whitelist no longer honors `X-Forwarded-For` (#47).**
+- **BREAKING: the monitoring IP whitelist no longer honors `X-Forwarded-For` (#47).**
   `AllowedIpAddresses` was compared against the address in that header whenever one was present, and the
   header was believed unconditionally: any direct caller could send a whitelisted address and walk through
-  the whitelist, on the API, on the SignalR hub and on the dashboard files alike — which no JWT covers. The
+  the whitelist, on the API, on the SignalR hub and on the dashboard files alike, which no JWT covers. The
   whitelist was advisory, not a boundary. The client address is now `Connection.RemoteIpAddress` and nothing
   else.
   **What to do:** a host that is NOT behind a reverse proxy needs no change. A host that IS must let ASP.NET
-  Core rewrite the address before the request is routed — `Configure<ForwardedHeadersOptions>` with
+  Core rewrite the address before the request is routed: `Configure<ForwardedHeadersOptions>` with
   `ForwardedHeaders.XForwardedFor` and `KnownProxies` / `KnownNetworks`, then `app.UseForwardedHeaders()`
   before `UseRouting()`. Naming the trusted peers is the whole point: that is what decides whether the header
   may be believed, and it is a decision only the host can make. See

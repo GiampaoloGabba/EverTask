@@ -7,7 +7,7 @@ has_children: true
 
 # Scalability
 
-EverTask scales from modest workloads to high-load ones. This section covers the features that help you scale background task processing horizontally and vertically.
+EverTask scales from modest workloads to high-load ones. This section covers the features that scale background task processing on a single host: queues, parallelism, sharding and the storage knobs. Running the scheduler on several hosts at once is a separate epic (see the single-active-host note in the durable-occurrences guide).
 
 ## Overview
 
@@ -67,16 +67,16 @@ so the standby picks up exactly what the active instance left behind.
 
 Two things that ARE safe across instances, because the database enforces them:
 
-- **Materialization of durable occurrences** — the unique index on (schedule, slot) means two instances
+- **Materialization of durable occurrences**: the unique index on (schedule, slot) means two instances
   racing the same backlog still produce one row per slot.
-- **Idempotent registration by task key** — the unique index on the key means a schedule registered at every
+- **Idempotent registration by task key**: the unique index on the key means a schedule registered at every
   startup exists once, whichever instance got there first.
 
 Neither of those makes execution distributed. An occurrence materialized once can still be DELIVERED twice if
 two instances are live.
 
-> **Planned**: a distributed execution lease — a claim taken on a task before it runs, with fencing and
-> expiry — is a separate epic that will apply to every task, not only to recurring ones. Until it exists, size
+> **Planned**: a distributed execution lease (a claim taken on a task before it runs, with fencing and
+> expiry) is a separate epic that will apply to every task, not only to recurring ones. Until it exists, size
 > a single instance vertically (parallelism, multi-queue, sharded scheduler) and keep the second one on
 > standby.
 

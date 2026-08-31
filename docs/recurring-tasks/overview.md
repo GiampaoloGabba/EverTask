@@ -14,7 +14,7 @@ Schedule recurring tasks with a type-safe fluent API or a cron expression.
 - **Fluent API**: Type-safe, readable schedule building
 - **Cron Support**: Full cron expression support for complex patterns
 - **Idempotent Registration**: Prevent duplicate tasks with task keys
-- **Flexible Starting Strategies**: Run immediately, delay, or schedule first run
+- **Starting Strategies**: Run immediately, delay, or schedule first run
 - **Execution Limits**: MaxRuns and RunUntil for time-limited tasks
 - **Time Zones**: Read a calendar schedule on a real clock, daylight saving included
 - **Durable Occurrences**: One row per occurrence, with misfire policies that replay what a downtime missed
@@ -56,7 +56,7 @@ await dispatcher.Dispatch(
 Learn how to use the fluent API to build schedules for minute-based, hourly, daily, weekly, and monthly recurring tasks. Covers basic intervals, starting strategies, execution limits, and complex schedules.
 
 ### [Cron Expressions](cron-expressions.md)
-Use cron expressions for maximum scheduling flexibility. Learn the syntax, common patterns, and how to combine cron with starting strategies and limits.
+Cron expressions cover the schedules the fluent API cannot express. Syntax, common patterns, and how to combine cron with starting strategies and limits.
 
 ### [Time Zones](time-zones.md)
 Run a calendar schedule on a real clock with `InTimeZone`, set a default zone for the whole application, and see what happens on the two days a year a local hour is skipped or repeated.
@@ -66,7 +66,7 @@ Give every due slot its own persisted row, and choose what a downtime does to th
 collapse them into one run, or replay them under explicit caps.
 
 ### [Occurrence Providers](occurrence-providers.md)
-Take the occurrence grid from your own calendar — business days, a holiday table, opening hours — when no
+Take the occurrence grid from your own calendar (business days, a holiday table, opening hours) when no
 interval or cron expression can express it, and keep every other feature working over it.
 
 ### [Idempotent Task Registration](idempotent-registration.md)

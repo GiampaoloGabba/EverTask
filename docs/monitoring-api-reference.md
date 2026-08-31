@@ -9,7 +9,7 @@ nav_order: 3
 
 Complete REST API documentation for the EverTask Monitoring Dashboard.
 
-> **Note**: every endpoint is **read-only** except the three under [`/management`](#management-endpoints), which a host has to enable and authorize explicitly (`EnableManagementEndpoints`, off by default). Changing a schedule at runtime from application code — reschedule, resume a halted catch-up, requeue a failed occurrence, cancel a series — still goes through [`ITaskScheduleManager`](recurring-tasks/managing-tasks.md), behind your own authorization.
+> **Note**: every endpoint is **read-only** except the three under [`/management`](#management-endpoints), which a host has to enable and authorize explicitly (`EnableManagementEndpoints`, off by default). Changing a schedule at runtime from application code (reschedule, resume a halted catch-up, requeue a failed occurrence, cancel a series) still goes through [`ITaskScheduleManager`](recurring-tasks/managing-tasks.md), behind your own authorization.
 
 ## Table of Contents
 
@@ -168,13 +168,13 @@ Authorization: Bearer {token}
 }
 ```
 
-Nulls are omitted, and the schedule fields are null together on a task that belongs to no schedule —
+Nulls are omitted, and the schedule fields are null together on a task that belongs to no schedule,
 `scheduleVersion` included, which is why a plain one-shot carries none of them rather than a version of 0. On
 a **schedule row** they describe the definition (`occurrenceMode`, `misfirePolicy`, `timeZoneId`,
 `scheduleVersion`); on an **occurrence** they describe the row's own identity (`parentTaskId`,
 `nominalSlotUtc`, `misfireKind`).
 
-`startedAtUtc` is when the row's last run began — the current one, while it is still running. Measure
+`startedAtUtc` is when the row's last run began, which is the current one while it is still running. Measure
 lateness against that one and never against `lastExecutionUtc`, which is written on terminal transitions and
 so says when a run ENDED: subtract a nominal slot from it and a punctual delivery with a three-minute handler
 reports three minutes of tardiness.
@@ -243,15 +243,15 @@ Authorization: Bearer {token}
 }
 ```
 
-`statusAudits` and `runsAudits` both come back **newest first**, read from the audit tables themselves — the
+`statusAudits` and `runsAudits` both come back **newest first**, read from the audit tables themselves, the
 same source as `GET /tasks/{id}/status-audit` and `GET /tasks/{id}/runs-audit`, so the two blocks and the two
 endpoints always agree. Each block holds the FIRST PAGE of its trail (100 entries), and
 `statusAuditsTotalCount` / `runsAuditsTotalCount` report how many there are in total: a schedule that has run
 for a year holds one transition per state per run, and the two paged endpoints are where the rest is asked
 for. What they hold is whatever the task's [audit level](configuration-reference.md) let storage record.
 
-A **durable schedule row** answers with `occurrenceMode: "Durable"`, its `misfirePolicy`, and — while its
-catch-up has stopped itself over the overflow cap — a `halt` block:
+A **durable schedule row** answers with `occurrenceMode: "Durable"`, its `misfirePolicy`, and a `halt` block
+while its catch-up has stopped itself over the overflow cap:
 
 ```json
 {
@@ -319,7 +319,7 @@ Authorization: Bearer {token}
 ```
 
 `totalCount` is the whole trail, not the page: a long-lived recurring row records one transition per state per
-run, so the endpoint pages it (`skip`/`take`) instead of answering the entire history — exactly as
+run, so the endpoint pages it (`skip`/`take`) instead of answering the entire history, exactly as
 `GET /tasks/{id}/occurrences` does on the other side of the detail. The page is ordered, counted and sliced by
 the storage, not in the API. `skip` is clamped to non-negative and `take` to the range `0..500`.
 
@@ -449,10 +449,10 @@ Authorization: Bearer {token}
 }
 ```
 
-`totalCount` is the whole series, not the page — and the page is a page all the way down to the database: the
+`totalCount` is the whole series, not the page, and the page is a page all the way down to the database: the
 storage orders, counts and slices, so a schedule with a year of retention behind it costs the same request as
 a young one. Each occurrence is a task row in its own right, so `GET /tasks/{occurrenceId}` gives it the full
-detail treatment — audits and execution logs included.
+detail treatment, audits and execution logs included.
 
 ---
 
@@ -565,7 +565,7 @@ materialized its occurrences yesterday is exactly the case the tile exists for.
 | `lagSeconds` | How far past that slot it already is; `0` when nothing is pending or the slot is still ahead |
 | `haltedSchedules` | Durable schedules whose catch-up halted itself over the overflow cap |
 
-Slots a schedule **dropped** never became rows and are therefore absent here — outside the misfire window,
+Slots a schedule **dropped** never became rows and are therefore absent here: outside the misfire window,
 over the overflow cap under `SkipOldest`, or no longer current under `Skip`. Those are reported when they
 happen, by the `OccurrenceSkipped` [monitoring event](monitoring-events.md).
 
@@ -753,7 +753,7 @@ The only endpoints of this API that WRITE. They exist behind an authorization of
 upgrades does not gain them:
 
 - `EnableManagementEndpoints` is `false` by default. While it is, **every** path under
-  `/evertask-monitoring/api/management` answers `404` — the prefix does not exist.
+  `/evertask-monitoring/api/management` answers `404`: the prefix does not exist.
 - Once enabled, a call must still carry the **operate** role: the token returned by logging in with
   `ManagementUsername` / `ManagementPassword`. The dashboard credential and every magic link are read-only
   and get `403`.
@@ -762,7 +762,7 @@ upgrades does not gain them:
   inside routing, after the host's `UseAuthentication`, so `context.User` is the principal the application
   authenticated.
 
-The gate is an MVC authorization filter on these routes, so it holds behind an `app.UsePathBase(...)` too —
+The gate is an MVC authorization filter on these routes, so it holds behind an `app.UsePathBase(...)` too:
 the request routing resolves is the request it judges.
 
 Configuration and the full decision order are in
@@ -809,7 +809,7 @@ POST /evertask-monitoring/api/management/tasks/dc49351d-476d-49f0-a1e8-3e2a39182
 Authorization: Bearer {operate-token}
 ```
 
-`409` also answers an occurrence that is not terminal any more, and one whose schedule was cancelled — which
+`409` also answers an occurrence that is not terminal any more, and one whose schedule was cancelled, which
 is terminal for every row under it.
 
 ---
@@ -850,7 +850,7 @@ stands now: if it still exceeds the cap, the schedule halts again. To drop the b
 
 Cancel a schedule and, with it, every occurrence of it still pending. Occurrences already executing are left
 to finish. The cancellation is **terminal**: the schedule cannot be rescheduled afterwards, nor can one of its
-occurrences be requeued — it has to be dispatched again.
+occurrences be requeued. It has to be dispatched again.
 
 **Path Parameters:**
 - `id` (Guid, required): the schedule row.

@@ -118,7 +118,7 @@ multi-queue → enable sharded scheduler only if profiling shows scheduler lock 
 
 **There is no horizontal scale-out.** EverTask executes on ONE active instance: nothing claims a task
 before it runs, so two live instances on the same database both recover the same pending row and both
-run it. A second instance is for availability — deploy it as a standby whose EverTask host is not
+run it. A second instance is for availability: deploy it as a standby whose EverTask host is not
 started. Rate limits are per instance as well. What the database does enforce across instances is
 materialization of durable occurrences (unique index on schedule + slot) and idempotent registration by
 task key; neither makes execution distributed. See `docs/scalability.md`.

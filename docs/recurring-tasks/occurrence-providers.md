@@ -11,8 +11,8 @@ Some schedules cannot be written as an interval or a cron expression. "Every bus
 the holidays in our table." "The day after each invoicing cycle closes." In those, the calendar lives in the
 application, not in the schedule.
 
-An occurrence provider is that calendar, plugged into the scheduler. It answers one question — which
-occurrence comes after this instant — and everything else keeps working: misfire policies, durable
+An occurrence provider is that calendar, plugged into the scheduler. It answers one question (which
+occurrence comes after this instant) and everything else keeps working: misfire policies, durable
 occurrences, time zones, `MaxRuns`, the skip-forward after a downtime, the runtime schedule manager.
 
 ```csharp
@@ -68,7 +68,7 @@ await dispatcher.Dispatch(
 
 A schedule row stores the KEY and the opaque `config` string, never a type name. That is deliberate: a row
 outlives the assembly that wrote it, so a persisted type name would turn a rename or a move into a schedule
-nobody can run. Treat the key as part of the durable contract — renaming it orphans every schedule that
+nobody can run. Treat the key as part of the durable contract: renaming it orphans every schedule that
 carries the old one.
 
 The `config` string is yours. EverTask never reads it and never validates it; if its format is going to
@@ -84,7 +84,7 @@ refining it, so naming an interval or a cron expression beside one is refused wh
 | `ProviderKey` | The key this provider was registered under |
 | `Config` | The opaque string the schedule carries, or `null` |
 | `AfterUtc` | The instant to answer strictly after |
-| `TimeZoneId` | The schedule's IANA zone, or `null`. EverTask converts nothing for a provider — the answer is taken as UTC — so a calendar that means "07:00 in Rome" reads this and resolves it itself |
+| `TimeZoneId` | The schedule's IANA zone, or `null`. EverTask converts nothing for a provider (the answer is taken as UTC), so a calendar that means "07:00 in Rome" reads this and resolves it itself |
 | `RunNumber` | The 1-based run being computed, or `0` when the question is not about a particular run |
 | `TaskKey` | The dispatch key, when the schedule has one |
 | `ScheduleId` | The schedule row, or `Guid.Empty` while it does not exist yet (the first occurrence of a brand-new dispatch is computed before anything is persisted) |
@@ -101,8 +101,8 @@ The provider is resolved from a fresh scope for every call, so it can depend on 
 the path of everything that moves a schedule forward, so keep it fast: cache the calendar, index the table,
 and remember that measuring a backlog costs several questions rather than one.
 
-Honour the cancellation token while you are at it. Every call carries the token of whatever is asking — a
-dispatch, the advance that closes a run, the materializer bringing a durable schedule up to date — and a host
+Honour the cancellation token while you are at it. Every call carries the token of whatever is asking (a
+dispatch, the advance that closes a run, the materializer bringing a durable schedule up to date), and a host
 that is stopping cancels it. A calendar that ignores it holds the delivery that asked, and with it a worker
 and the host's shutdown, until it comes back on its own.
 
@@ -113,7 +113,7 @@ needs it: `CatchUpOverflowPolicy.SkipOldest`, which keeps the most recent slots 
 probing the grid at instants it never returned. A schedule that asks for that policy over a provider which
 does not declare determinism is refused when it is dispatched, instead of replaying the wrong slots.
 
-Everything else works either way — including `Halt`, the default overflow policy.
+Everything else works either way, including `Halt`, the default overflow policy.
 
 ## When a provider cannot answer
 
@@ -122,7 +122,7 @@ Two failures, two different verdicts.
 **An unregistered key is a configuration error.** It does not heal by waiting, so it is never retried: a
 dispatch is refused with `ArgumentException` while the caller is still holding it, and a persisted row naming
 a key this build no longer registers is poisoned by startup recovery exactly like an unparseable cron
-expression — `Failed`, cursor cleared, no restart bringing it back.
+expression: `Failed`, cursor cleared, no restart bringing it back.
 
 **An exception from the provider is transient.** The application's own database being briefly unavailable must
 not end a series, so nothing is written: not the cursor, not the status, not an audit row. The row stays
@@ -143,7 +143,7 @@ before they can decide the new cursor, so both throw `OccurrenceProviderExceptio
 The schedule keeps the cursor it already had; call again once the calendar is back.
 
 One case is worth spelling out. When the provider fails on the question asked **after a run**, that run's
-completion cannot be written either — the write and the next cursor are one operation. The row is then in the
+completion cannot be written either: the write and the next cursor are one operation. The row is then in the
 state a crash between a side effect and its storage write leaves, and the at-least-once contract covers what
 follows: the slot may run a second time when the schedule comes back. Handlers on a provider-driven schedule
 should be idempotent for the same reason every other EverTask handler should be.
@@ -152,14 +152,14 @@ should be idempotent for the same reason every other EverTask handler should be.
 
 | Feature | Over a provider |
 |---------|-----------------|
-| Misfire policies (`Skip`, `FireOnce`, `CatchUp`) | Yes — the provider's grid is the grid they replay |
+| Misfire policies (`Skip`, `FireOnce`, `CatchUp`) | Yes: the provider's grid is the grid they replay |
 | Durable occurrences, `BackfillFrom` | Yes |
 | `InTimeZone` | Yes, and the id travels to the provider, which is what reads the calendar on it |
 | `MaxRuns`, `RunUntil` | Yes, applied exactly as on any other schedule |
 | Skip-forward after a downtime | Yes |
-| `ITaskScheduleManager.ReevaluateSchedule(taskKey)` | Yes — the way to say "my calendar changed" |
+| `ITaskScheduleManager.ReevaluateSchedule(taskKey)` | Yes: the way to say "my calendar changed" |
 | `CatchUpOverflowPolicy.SkipOldest` | Only with `IsDeterministic => true` |
-| `RescheduleMode.RebaseFromCursor` | No. A rebase carries a cursor across a nominal period — a day, a week, a month — and a provider exposes none. Use `RecalculateFromNow` |
+| `RescheduleMode.RebaseFromCursor` | No. A rebase carries a cursor across a nominal period (a day, a week, a month) and a provider exposes none. Use `RecalculateFromNow` |
 | An interval or a cron expression on the same schedule | No: a provider replaces the grid |
 
 ## Changing the calendar at runtime
@@ -172,7 +172,7 @@ await scheduleManager.ReevaluateSchedule("invoice-reminder");
 ```
 
 It re-asks the provider with the definition as it stands and re-parks the schedule on the answer. On a durable
-schedule it recomputes the cursor from now, which discards a backlog that was still owed — `ResumeSchedule` is
+schedule it recomputes the cursor from now, which discards a backlog that was still owed: `ResumeSchedule` is
 the one that keeps it.
 
 It asks the provider, which means it can also come back empty-handed. An endpoint that calls it right after
@@ -202,7 +202,7 @@ Every question is a round trip, so the answers EverTask needs are bounded rather
 only ends up in a log line or an event walks at most 250 slots and then reports its number as a lower bound;
 the count of what a downtime cost and the backlog a `Reschedule` throws away both take that bound.
 
-Finding where the newest slots of a backlog begin — what `SkipOldest` does when a catch-up overflows its cap —
+Finding where the newest slots of a backlog begin (what `SkipOldest` does when a catch-up overflows its cap)
 is a bisection over the instants, and it stops at the first probe that lands on the answer instead of
 narrowing to the tick. Each probe counts forward as far as the cap, but the two bounds do not multiply: the
 probes walk the same stretch of your calendar and the search remembers it, so no instant is asked about twice.

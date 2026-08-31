@@ -9,14 +9,12 @@ nav_order: 5
 
 **Available since:** v3.0
 
-A built-in log capture system records logs written during task execution. It is a **proxy** that ALWAYS forwards logs to the standard ILogger infrastructure (console, file, Serilog, Application Insights, etc.) and **optionally** persists them to the database for audit trails.
+A built-in log capture system records logs written during task execution. It is a proxy that ALWAYS forwards logs to the standard ILogger infrastructure (console, file, Serilog, Application Insights, etc.) and optionally persists them to the database for audit trails.
 
 ## Why Use Log Capture?
 
-- **Debugging**: Review exactly what happened during task execution, including retry attempts
-- **Audit Trails**: Keep a permanent record of task execution logs in the database
-- **Compliance**: Meet regulatory requirements for task execution logging
-- **Root Cause Analysis**: Investigate failures with full execution context
+- Review what a run did, retry attempts included, and investigate a failure with the context the run itself wrote
+- Keep a permanent record of it in the database, when an audit trail or a compliance rule asks for one
 
 ## Basic Usage
 
@@ -37,11 +35,11 @@ public class ProcessOrderHandler : EverTaskHandler<ProcessOrderTask>
 }
 ```
 
-**Key Point**: Logs are ALWAYS written to ILogger (console, file, etc.) regardless of persistence settings. This ensures you never lose visibility into task execution.
+Logs are ALWAYS written to ILogger (console, file, etc.) regardless of persistence settings: leaving persistence off costs you the database rows, not the visibility.
 
 ## Structured Logging Support
 
-The `Logger` property fully supports **structured logging** with message templates and parameters, just like standard `ILogger`:
+The `Logger` property supports structured logging with message templates and parameters, exactly like a standard `ILogger`:
 
 ```csharp
 public class DataProcessingHandler : EverTaskHandler<DataProcessingTask>
@@ -99,7 +97,7 @@ services.AddEverTask(opt => opt
 
 ## How It Works
 
-The log capture system uses a **proxy pattern**:
+The log capture system uses a proxy pattern:
 
 ```
 Handler.Logger.LogInformation("msg")
@@ -110,9 +108,9 @@ ILogger        Database
 (always)     (optional)
 ```
 
-1. **Always Log to ILogger**: Every log call forwards to `ILogger<THandler>` for standard logging infrastructure
-2. **Conditional Persistence**: If persistent logging is enabled via `.WithPersistentLogger(log => log.Enable())`, logs are also stored in database
-3. **Filtered Persistence**: `SetMinimumLevel()` filters only database persistence, not ILogger
+1. Every log call forwards to `ILogger<THandler>`, whatever else happens to it
+2. With persistent logging enabled via `.WithPersistentLogger(log => log.Enable())`, the entry is also stored in the database
+3. `SetMinimumLevel()` filters that database copy only, never the ILogger one
 
 ## Retrieving Persisted Logs
 
@@ -186,24 +184,22 @@ This is **intentional**: it keeps the full record of every execution attempt.
 ## Performance Considerations
 
 ### When Disabled
-- **Zero overhead**: JIT optimizations eliminate all log capture code paths
-- Single `if` check per log call (negligible performance impact)
+- One `if` per log call; the JIT drops the rest of the capture path
 
 ### When Enabled
-- **Minimal impact**: ~5-10ms overhead for typical tasks
-- ~100 bytes per log in memory, single bulk INSERT after task completion
-- **Logs persist even on failure**: Captured in the finally block for debugging failed tasks
+- ~5-10ms over a typical task, ~100 bytes per log in memory, single bulk INSERT after completion
+- Logs are written in the finally block, so a failed task keeps the ones that explain why
 
 ### Always
-- **ILogger Always Invoked**: Standard Microsoft.Extensions.Logging overhead applies regardless of persistence settings
+- The ILogger call happens either way, with the usual Microsoft.Extensions.Logging cost
 
 ## Best Practices
 
-1. **Use Standard Log Levels**: `LogInformation` for normal flow, `LogWarning` for issues, `LogError` for failures
-2. **Include Context**: Log task parameters and key decision points
-3. **Set Reasonable Limits**: The default 1000 logs caps a single execution; pair it with retention to bound the total
-4. **Use for Debugging**: Don't rely on persisted logs for real-time monitoring (use ILogger infrastructure)
-5. **Set Log Retention**: Use `ExecutionLogRetentionDays` / `MaxExecutionLogsPerTask` (see [Log Retention](#log-retention)) so the table doesn't grow without bound
+1. `LogInformation` for normal flow, `LogWarning` for something odd, `LogError` for a failure
+2. Log the task parameters and the decisions the run made, not just that it started and ended
+3. Bound both ends: the default cap of 1000 caps a single execution, and `ExecutionLogRetentionDays` /
+   `MaxExecutionLogsPerTask` (see [Log Retention](#log-retention)) keep the table from growing forever
+4. Read persisted logs after the fact; for real-time monitoring, watch the ILogger side
 
 ## Example: Audit Trail
 

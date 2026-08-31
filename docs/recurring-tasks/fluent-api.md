@@ -304,8 +304,8 @@ await dispatcher.Dispatch(
 
 ## Next Steps
 
-- **[Cron Expressions](cron-expressions.md)** - Maximum flexibility with cron syntax
+- **[Cron Expressions](cron-expressions.md)** - Cron syntax and its supported fields
 - **[Time Zones](time-zones.md)** - Run a calendar schedule on a real clock
 - **[Idempotent Task Registration](idempotent-registration.md)** - Prevent duplicate tasks with task keys
 - **[Managing Recurring Tasks](managing-tasks.md)** - Cancel and monitor recurring tasks
-- **[Best Practices](best-practices.md)** - Follow recurring task best practices
+- **[Best Practices](best-practices.md)** - Patterns and pitfalls

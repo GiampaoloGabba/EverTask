@@ -305,7 +305,7 @@ opt.SetMaterializationConcurrency(4)
 
 **Notes:**
 - Materialization is a short burst of storage writes, so this bounds how much of that the store sees at once.
-- It is **not** how many occurrences execute concurrently — that is the queue's parallelism — and not how many
+- It is **not** how many occurrences execute concurrently (that is the queue's parallelism), and not how many
   may be alive per schedule, which is `CatchUpOptions.MaxPendingOccurrences`.
 - See [Recurring Tasks › Durable Occurrences](recurring-tasks/durable-occurrences.md).
 
@@ -339,7 +339,7 @@ opt.SetBacklogRetryInterval(TimeSpan.FromSeconds(15))
 - A **halted** catch-up is the one thing this interval does not cover. A halt never releases itself, not by
   ageing and not by restarting, so retrying it would put the schedule row back through the worker queue every
   interval for ever: a status transition and an audit row each time, to produce nothing. Only
-  an explicit schedule change releases one — `ResumeSchedule`, `Reschedule`, or dispatching the series again
+  an explicit schedule change releases one: `ResumeSchedule`, `Reschedule`, or dispatching the series again
   after a cancel.
 - Below the scheduler's own one-second tick it buys nothing, which is the lower bound.
 - The upper bound is one day. This interval is the last thing between a blocked schedule and the next restart,
@@ -363,7 +363,7 @@ SetOccurrenceProviderRetry(Action<OccurrenceProviderRetryOptions> configure)
 - `MaxBackoff` (TimeSpan): the longest wait the doubling reaches. Default: 15 minutes.
 
 Both must be positive and at most one day; anything else throws `ArgumentOutOfRangeException`. A `MaxBackoff`
-below `InitialBackoff` simply makes every wait that long.
+below `InitialBackoff` makes every wait that long.
 
 **Examples:**
 ```csharp
@@ -377,7 +377,7 @@ opt.SetOccurrenceProviderRetry(retry =>
 
 **Notes:**
 - A provider that throws is treated as TRANSIENT: the database a calendar is read from being briefly down
-  must not end a series. Nothing is written — the row keeps its cursor and stays recoverable — and the
+  must not end a series. Nothing is written (the row keeps its cursor and stays recoverable), and the
   schedule is parked to ask again after this wait.
 - The wait doubles at each consecutive failure of the SAME schedule, up to `MaxBackoff`, and one answer
   resets it. The counter is in memory and per host: a restart starts over at `InitialBackoff`, which costs
@@ -425,7 +425,7 @@ services.AddEverTask(opt => opt.RegisterTasksFromAssembly(typeof(Program).Assemb
 - `TProvider` is registered as **scoped** with `TryAdd`, so an application that wants another lifetime (a
   singleton holding a cached calendar) registers it itself and keeps that registration. It is resolved in a
   fresh scope for every question.
-- The KEY is what every schedule using the provider persists — never a type name, which a rename would
+- The KEY is what every schedule using the provider persists, never a type name, which a rename would
   orphan. Treat it as part of the durable contract; it is matched ordinally.
 - Registering the same type under the same key twice is a no-op, so a registration that runs at every startup
   is idempotent. A DIFFERENT type under a key already taken throws `ArgumentException`.
@@ -707,7 +707,7 @@ When enabled, EverTask automatically chooses the best resolution strategy:
 **Benefits:**
 - **Memory Optimization**: Handlers are disposed after dispatch, so long-running scheduled tasks hold less memory
 - **Fresh Dependencies**: Handlers get fresh scoped services at execution time (important for DbContext, etc.)
-- **Automatic Tuning**: Adaptive algorithm balances memory and performance
+- **Automatic Tuning**: The adaptive algorithm above picks the mode per task
 
 **When to Disable:**
 
@@ -1112,7 +1112,7 @@ AddMySqlStorage(string connectionString, Action<MySqlTaskStoreOptions>? configur
 **MySqlTaskStoreOptions Properties:**
 - `AutoApplyMigrations` (bool): Auto-apply EF Core migrations (default: true)
 - `ServerVersion` (ServerVersion?): Explicit server version (default: null = `ServerVersion.AutoDetect`)
-- `SchemaName` (string?): Defaults to `""` and must stay empty — MySQL/MariaDB have no sub-database schema (a "schema" is a database).
+- `SchemaName` (string?): Defaults to `""` and must stay empty: MySQL/MariaDB have no sub-database schema (a "schema" is a database).
 
 ### AddSqliteStorage
 
@@ -1484,7 +1484,7 @@ options.EnableAuthentication = !builder.Environment.IsDevelopment();
 **Behind a path base.** The checks are enforced inside routing, so they hold when the application runs under
 `app.UsePathBase("/tenant")`: what is judged is the path routing resolved, which is the monitoring path
 without the base. Before 4.0.0 they were enforced only by a middleware that runs before `UsePathBase`, so on
-such a host every layer was skipped at once — the read endpoints answered anonymously, the IP whitelist never
+such a host every layer was skipped at once: the read endpoints answered anonymously, the IP whitelist never
 ran and the SignalR handshake was granted (issue #46). Only the monitoring CORS policy still keys off the
 pre-`UsePathBase` path, so under a path base you may need your own CORS setup for cross-origin dashboards.
 
@@ -1510,14 +1510,14 @@ pre-`UsePathBase` path, so under a path base you may need your own CORS setup fo
 #### EnableManagementEndpoints, ManagementUsername / ManagementPassword, ManagementAuthorization
 
 The monitoring API is read-only by construction. These four options are what opens the one exception to that
-— the management endpoints, which requeue a terminal occurrence, resume a halted catch-up or cancel a
-schedule — and they start from the **authorization**, not from the endpoints.
+(the management endpoints, which requeue a terminal occurrence, resume a halted catch-up or cancel a
+schedule), and they start from the **authorization**, not from the endpoints.
 
 **Why a second credential.** `Username`/`Password` is the dashboard credential: everyone who looks at the
 dashboard shares it, and looking is all it is for. A requeue puts a handler with side effects back into
 execution, so it does not travel on that credential. `ManagementUsername`/`ManagementPassword` is a separate
-account, and logging in with it returns a token carrying the **operate** role; every other login — the
-dashboard credential and every magic link, which is a URL and gets forwarded — returns a read-only one.
+account, and logging in with it returns a token carrying the **operate** role; every other login (the
+dashboard credential and every magic link, which is a URL and gets forwarded) returns a read-only one.
 
 **Examples:**
 ```csharp
@@ -1548,7 +1548,7 @@ With `EnableAuthentication = false` there is no session and therefore no role: t
 refused (403) unless `ManagementAuthorization` says otherwise. Opening the read API must not silently mean
 "anyone may cancel a schedule".
 
-**Where the decision runs.** Inside routing, as an MVC authorization filter on the management routes — not in
+**Where the decision runs.** Inside routing, as an MVC authorization filter on the management routes, not in
 the monitoring middleware. Two things follow, and both matter:
 
 - It sees the request as routing does, so a host that calls `app.UsePathBase("/tenant")` is covered.
@@ -1566,7 +1566,7 @@ already hands out for reading is not a second credential, it is the shared one w
 **CSRF.** These endpoints need no anti-forgery token: the API authenticates a session with a Bearer token in
 the `Authorization` header, never with a cookie (the `?access_token=` fallback exists on the SignalR hub path
 alone). A browser attaches neither to a cross-site request, so a page the operator did not open cannot make
-one of these calls in their name — which also means the dashboard's token must stay out of cookies.
+one of these calls in their name. That also means the dashboard's token must stay out of cookies.
 
 The endpoints themselves are documented in
 [Monitoring API Reference](monitoring-api-reference.md#management-endpoints). The application-side road is
@@ -1673,7 +1673,7 @@ options.AllowedIpAddresses = new[]
 **Features:**
 - Supports **IPv4** and **IPv6** addresses
 - Supports **CIDR notation** (e.g., `192.168.0.0/24`)
-- The client address is `Connection.RemoteIpAddress` — **no header is trusted** (see below)
+- The client address is `Connection.RemoteIpAddress`: **no header is trusted** (see below)
 - Returns **403 Forbidden** if IP not in whitelist
 - IP check runs **before authentication** (more efficient)
 
@@ -1683,7 +1683,7 @@ options.AllowedIpAddresses = new[]
 - Protects the API, the SignalR hub and the dashboard files (which no JWT covers)
 - More efficient than firewall rules at application level
 
-**Behind a reverse proxy** (changed in 4.0.0 — see below)
+**Behind a reverse proxy** (changed in 4.0.0, see below)
 
 The whitelist compares the address of the connection EverTask actually sees. Behind a proxy that address is
 the proxy's, so the host must let ASP.NET Core replace it first, with the standard
@@ -1715,7 +1715,7 @@ location /evertask-monitoring {
 > **BREAKING (4.0.0), security.** Before 4.0.0 EverTask read `X-Forwarded-For` itself and believed it
 > unconditionally, so **any** direct caller could bypass the whitelist by sending a whitelisted address in
 > that header (issue #47). It no longer reads the header at all. If you are behind a proxy and relied on the
-> old behavior, configure `UseForwardedHeaders` as above — with `KnownProxies` or `KnownNetworks` set, which
+> old behavior, configure `UseForwardedHeaders` as above, with `KnownProxies` or `KnownNetworks` set, which
 > is what decides whether the header may be believed. Hosts not behind a proxy need no change.
 
 #### MagicLinkToken
@@ -1776,7 +1776,7 @@ Once configured, the monitoring API exposes REST endpoints for querying tasks an
 - `GET /statistics/success-rate-trend` - Success rate trends
 - `GET /rate-limits` - Keyed rate-limit state (per-key parked count, next slot, tracked keys, fail-open count; in-memory, single-node)
 
-Every endpoint is read-only: nothing here changes a task or a schedule. Changing a schedule while the application runs is [`ITaskScheduleManager`](recurring-tasks/managing-tasks.md), called from your own code behind your own authorization — the dashboard credentials are one read credential shared by everyone who looks at it.
+Every endpoint is read-only: nothing here changes a task or a schedule. Changing a schedule while the application runs is [`ITaskScheduleManager`](recurring-tasks/managing-tasks.md), called from your own code behind your own authorization: the dashboard credentials are one read credential shared by everyone who looks at it.
 
 See [Monitoring Dashboard](monitoring-dashboard.md) for complete API documentation.
 
@@ -1788,7 +1788,7 @@ When `EnableUI` is true, the embedded React dashboard provides:
 - **Catch-up Backlog**: The occurrences of every durable schedule by state (pending, active, failed, skipped, completed), how far behind the oldest pending slot is, and how many schedules stopped themselves over their catch-up cap. Shown only when a durable schedule exists
 - **Task List**: Filtering, sorting, pagination, status filters, plus a catch-up badge and a lateness badge on the rows that stand for missed work
 - **Task Details**: Complete information, execution history, error details
-- **Occurrences**: A tab on a durable schedule — the occurrences it materialized, newest slot first, with page controls
+- **Occurrences**: A tab on a durable schedule listing the occurrences it materialized, newest slot first, with page controls
 - **Queue Metrics**: Per-queue statistics and health monitoring
 - **Analytics**: Success rate trends, task type distribution, execution times
 - **Real-Time Updates**: Live task updates via SignalR
@@ -1899,7 +1899,7 @@ app.MapEverTaskMonitorHub("/custom/hub", hub =>     // custom route + SignalR hu
 
 - **Hub Route**: When mapped by `MapEverTaskApi()` the route is **fixed** at `EverTaskApiOptions.SignalRHubPath` (`/evertask-monitoring/hub`, read-only). In **standalone** mode the route is **configurable**: `MapEverTaskMonitorHub(pattern)` accepts any pattern (defaulting to `/evertask-monitoring/hub`); if you choose a custom pattern, point your client at the same path.
 - **Log Streaming**: Execution logs are always available via ILogger and database persistence (if enabled)
-- **Performance Impact**: Enabling `IncludeExecutionLogs` significantly increases SignalR message size and network bandwidth
+- **Performance Impact**: Enabling `IncludeExecutionLogs` increases SignalR message size and network bandwidth
 - **Use Case**: Enable only when you need real-time log streaming to monitoring dashboards
 
 **Client-Side Setup:**
@@ -2248,15 +2248,15 @@ The `Action<IRecurringTaskBuilder>` overload of `Dispatch` configures a recurrin
 
 **Time zone:** `.InTimeZone(TimeZoneInfo)` / `.InTimeZone(string)`, accepted before the interval (on `Schedule()`), on the interval builder itself (`EveryDay().InTimeZone(z).AtTime(...)`) and after the final refinement: every position but between `Every(n)` and its unit. The id may be IANA or Windows; the IANA form is what gets persisted, inside the schedule definition, with no new column. It governs calendar-anchored schedules and the local dates read by day/date exclusions. A plain cadence without calendar exclusions still refuses it. Across daylight saving, a skipped local time fires at the gap's exit and a repeated one fires on its first pass. Global default: [`SetDefaultScheduleTimeZone`](#setdefaultscheduletimezone). Full rules: [Time Zones](recurring-tasks/time-zones.md).
 
-**Occurrence provider:** `.UseOccurrenceProvider(string key, string? config = null)` on `Schedule()`, for a calendar no interval and no cron can express. The grid then comes from the `INextOccurrenceProvider` registered as [`AddOccurrenceProvider<T>(key)`](#addoccurrenceprovidert), which answers "which occurrence comes strictly after this instant" in UTC; `null` ends the series. **Exclusive** with every interval and with cron — a provider replaces the grid instead of refining it, and naming both throws `InvalidOperationException` at build. Only the key and the opaque `config` string are persisted (never a type name), and the schedule's `InTimeZone` id travels to the provider, which is what reads the calendar on it. Everything else applies unchanged: misfire policies, durable occurrences, `MaxRuns`/`RunUntil`, the skip-forward after a downtime, and `ReevaluateSchedule` as the way to say the calendar changed. Two exceptions: `CatchUpOverflowPolicy.SkipOldest` needs `IsDeterministic => true` on the provider (refused at dispatch otherwise) and `RescheduleMode.RebaseFromCursor` is refused, because a provider exposes no nominal period. An unknown key is a configuration error (`ArgumentException` at dispatch, terminal poison at recovery); a provider that throws is transient — nothing is written, the schedule is re-parked after [`SetOccurrenceProviderRetry`](#setoccurrenceproviderretry)'s backoff, and it surfaces as `OccurrenceProviderException` only where a caller is holding the call: a dispatch, and the `ITaskScheduleManager` methods that decide a new cursor (`Reschedule`, `ReevaluateSchedule`). Full rules: [Occurrence Providers](recurring-tasks/occurrence-providers.md).
+**Occurrence provider:** `.UseOccurrenceProvider(string key, string? config = null)` on `Schedule()`, for a calendar no interval and no cron can express. The grid then comes from the `INextOccurrenceProvider` registered as [`AddOccurrenceProvider<T>(key)`](#addoccurrenceprovidert), which answers "which occurrence comes strictly after this instant" in UTC; `null` ends the series. **Exclusive** with every interval and with cron: a provider replaces the grid instead of refining it, and naming both throws `InvalidOperationException` at build. Only the key and the opaque `config` string are persisted (never a type name), and the schedule's `InTimeZone` id travels to the provider, which is what reads the calendar on it. Everything else applies unchanged: misfire policies, durable occurrences, `MaxRuns`/`RunUntil`, the skip-forward after a downtime, and `ReevaluateSchedule` as the way to say the calendar changed. Two exceptions: `CatchUpOverflowPolicy.SkipOldest` needs `IsDeterministic => true` on the provider (refused at dispatch otherwise) and `RescheduleMode.RebaseFromCursor` is refused, because a provider exposes no nominal period. An unknown key is a configuration error (`ArgumentException` at dispatch, terminal poison at recovery); a provider that throws is transient. Nothing is written, the schedule is re-parked after [`SetOccurrenceProviderRetry`](#setoccurrenceproviderretry)'s backoff, and it surfaces as `OccurrenceProviderException` only where a caller is holding the call: a dispatch, and the `ITaskScheduleManager` methods that decide a new cursor (`Reschedule`, `ReevaluateSchedule`). Full rules: [Occurrence Providers](recurring-tasks/occurrence-providers.md).
 
-**Limits:** `.RunUntil(DateTimeOffset)` (must be future) and `.MaxRuns(int)` (counts real executions only; occurrences skipped to realign after downtime do not consume the budget). Stops at whichever is reached first. On a **durable** schedule `MaxRuns` counts materializations instead — an occurrence that later fails or is cancelled still spent a run, because the schedule did produce it.
+**Limits:** `.RunUntil(DateTimeOffset)` (must be future) and `.MaxRuns(int)` (counts real executions only; occurrences skipped to realign after downtime do not consume the budget). Stops at whichever is reached first. On a **durable** schedule `MaxRuns` counts materializations instead: an occurrence that later fails or is cancelled still spent a run, because the schedule did produce it.
 
-**Durable occurrences:** `.WithDurableOccurrences()`, `.OnMisfire(Action<IMisfirePolicyBuilder>)` and `.BackfillFrom(DateTimeOffset)`, accepted in the same positions as `InTimeZone`. They turn every due slot into its own one-shot row — its own status, retries, audit trail and rate-limit budget — and the schedule row stops running the handler.
+**Durable occurrences:** `.WithDurableOccurrences()`, `.OnMisfire(Action<IMisfirePolicyBuilder>)` and `.BackfillFrom(DateTimeOffset)`, accepted in the same positions as `InTimeZone`. They turn every due slot into its own one-shot row (its own status, retries, audit trail and rate-limit budget), and the schedule row stops running the handler.
 
 - `.OnMisfire(m => m.Skip())` is the default written out: missed slots are dropped, at most the one still current runs, and no occurrence rows are created.
 - `.OnMisfire(m => m.FireOnce(options))` collapses a whole run of missed slots into ONE occurrence at the most recent of them, with the range it covers in `ITaskExecutionContext.Misfire`. `FireOnceOptions.MaxAge` (default `null`) drops the run entirely when even its newest slot is older than the window.
-- `.OnMisfire(m => m.CatchUp(options))` replays every missed slot, oldest first. `CatchUpOptions(maxAge, maxOccurrences)` requires both caps; `MaxPendingOccurrences` (default `1`) is how many occurrences may be alive at once; `OverflowPolicy` is `Halt` (default — nothing is materialized, a durable marker is written, the schedule stops being parked so it costs no further deliveries or writes, and neither time nor a restart releases it: only an explicit schedule change does — [`ResumeSchedule` or `Reschedule`](#runtime-schedule-management), or dispatching the series again after a cancel) or `SkipOldest`, which keeps the most recent `MaxOccurrences`.
+- `.OnMisfire(m => m.CatchUp(options))` replays every missed slot, oldest first. `CatchUpOptions(maxAge, maxOccurrences)` requires both caps; `MaxPendingOccurrences` (default `1`) is how many occurrences may be alive at once; `OverflowPolicy` is `Halt` (default: nothing is materialized, a durable marker is written, the schedule stops being parked so it costs no further deliveries or writes, and neither time nor a restart releases it; only an explicit schedule change does, either [`ResumeSchedule` or `Reschedule`](#runtime-schedule-management) or dispatching the series again after a cancel) or `SkipOldest`, which keeps the most recent `MaxOccurrences`.
 - Both replaying policies imply durable occurrences; `.WithDurableOccurrences()` gives the rows without the replay.
 - `.BackfillFrom(startUtc)` starts the cursor at the first occurrence on or after `startUtc` instead of after the dispatch. New registrations only, and still bounded by the caps above.
 - Requires a storage that implements the atomic occurrence operations. Every built-in provider does; a custom one that does not is refused at dispatch with `NotSupportedException`.
@@ -2282,33 +2282,33 @@ public class ScheduleAdmin(ITaskScheduleManager schedules)
 | Method | Returns | Purpose |
 |--------|---------|---------|
 | `Reschedule(taskKey, configure, mode, ct)` | `ScheduleUpdateResult` | Replace the definition and choose a new cursor |
-| `ReevaluateSchedule(taskKey, ct)` | `ScheduleUpdateResult` | Keep the definition, recompute the cursor from now — a durable backlog is discarded |
+| `ReevaluateSchedule(taskKey, ct)` | `ScheduleUpdateResult` | Keep the definition, recompute the cursor from now; a durable backlog is discarded |
 | `ResumeSchedule(taskKey, ct)` | `ScheduleUpdateResult` | Release a durable catch-up halt, keeping the cursor |
 | `RequeueFailedOccurrence(occurrenceId, ct)` | `bool` | Put one terminal occurrence back in the queue |
 | `CancelSchedule(taskKey, ct)` | `Task` | Cancel the schedule and every pending occurrence of it |
 
-**Requirements.** Every method needs a registered storage, and beyond that each one asks for what it actually uses. `Reschedule`, `ReevaluateSchedule` and `ResumeSchedule` rewrite a schedule row and need `SupportsScheduleVersioning`; `RequeueFailedOccurrence` addresses a child row and needs `SupportsDurableOccurrences`; `CancelSchedule` needs neither, because writing a cancellation is something every storage has always done. What a call is asked to WRITE counts too: a `Reschedule` whose new definition turns the schedule durable — `WithDurableOccurrences()`, or an `OnMisfire` policy of `FireOnce`/`CatchUp` — needs `SupportsDurableOccurrences` on top of the versioning, and is refused before anything is written, exactly as a dispatch of the same definition would be. Both capabilities are true for all built-in providers. A storage without the one a call needs throws `NotSupportedException` rather than degrading: without a real compare-and-swap a reschedule could report success while a run finishing at the same moment silently overwrote it, and there is no half-atomic emulation of the occurrence operations to fall back on.
+**Requirements.** Every method needs a registered storage, and beyond that each one asks for what it actually uses. `Reschedule`, `ReevaluateSchedule` and `ResumeSchedule` rewrite a schedule row and need `SupportsScheduleVersioning`; `RequeueFailedOccurrence` addresses a child row and needs `SupportsDurableOccurrences`; `CancelSchedule` needs neither, because writing a cancellation is something every storage has always done. What a call is asked to WRITE counts too: a `Reschedule` whose new definition turns the schedule durable (`WithDurableOccurrences()`, or an `OnMisfire` policy of `FireOnce`/`CatchUp`) needs `SupportsDurableOccurrences` on top of the versioning, and is refused before anything is written, exactly as a dispatch of the same definition would be. Both capabilities are true for all built-in providers. A storage without the one a call needs throws `NotSupportedException` rather than degrading: without a real compare-and-swap a reschedule could report success while a run finishing at the same moment silently overwrote it, and there is no half-atomic emulation of the occurrence operations to fall back on.
 
 **Storage is the source of truth.** Each schedule row carries a `ScheduleVersion`. A reschedule writes the definition, the cursor, the bounds and the version in one conditional update, guarded by the version it read; every advance of a managed schedule carries the version its run belonged to, so a completion that lands after a reschedule loses the guard, records its run against the row's own cursor and lets the new definition stand.
 
 ### RescheduleMode
 
-`RecalculateFromNow` (the default) points the cursor at the new definition's first occurrence after now. On a durable schedule, whatever the old definition still owed is dropped and reported — `DiscardedBacklog`, `DiscardedBacklogIsExact` and a monitoring event naming the count.
+`RecalculateFromNow` (the default) points the cursor at the new definition's first occurrence after now. On a durable schedule, whatever the old definition still owed is dropped and reported: `DiscardedBacklog`, `DiscardedBacklogIsExact` and a monitoring event naming the count.
 
-`RebaseFromCursor` keeps the schedule inside the calendar period it was already in. The day, week or month the old cursor fell in is read on the old definition's clock, and the new cursor is the new definition's occurrence at the same POSITION inside that period, read on the new one. That is what preserves the logical date when the time of day or the zone changes. Position matters as soon as a period holds more than one slot: with `OnDays(Monday, Wednesday).AtTimes(09:00, 15:00)`, a cursor standing on the afternoon run rebases onto the new afternoon time and never back onto the morning one that has already run — which would replay it and spend one more of `MaxRuns`, where `RecalculateFromNow` on the same definition answers the later slot. It is refused, with `InvalidOperationException` and no write, when:
+`RebaseFromCursor` keeps the schedule inside the calendar period it was already in. The day, week or month the old cursor fell in is read on the old definition's clock, and the new cursor is the new definition's occurrence at the same POSITION inside that period, read on the new one. That is what preserves the logical date when the time of day or the zone changes. Position matters as soon as a period holds more than one slot: with `OnDays(Monday, Wednesday).AtTimes(09:00, 15:00)`, a cursor standing on the afternoon run rebases onto the new afternoon time and never back onto the morning one that has already run, which would replay it and spend one more of `MaxRuns`, where `RecalculateFromNow` on the same definition answers the later slot. It is refused, with `InvalidOperationException` and no write, when:
 
-- the two definitions have different shapes (a different cadence, different weekday or month selectors, a different period kind — only the time of day, the zone, `RunUntil`/`MaxRuns` and the misfire settings may move);
+- the two definitions have different shapes (a different cadence, different weekday or month selectors, a different period kind; only the time of day, the zone, `RunUntil`/`MaxRuns` and the misfire settings may move);
 - either side is a cron schedule or a schedule driven by an occurrence provider, neither of which states a nominal period;
 - the period holds no slot of the new definition, or fewer slots than the cursor had already passed, so there is no position to land on. A rebase never crosses into the next period: doing so would skip a period of work or replay one;
 - the new definition's bounds are already past. `RunUntil` and `MaxRuns` are what an operator changes to wind a series down, and the period arithmetic applies neither: a plain cadence keeps its cursor verbatim and the day-carrying cadences place their slot by hand, so neither ever asks the grid, which is the only thing that applies `RunUntil`. Both bounds are checked here instead. A definition one mode would refuse is refused by the other too, rather than running one occurrence past the end just set.
 
-A plain cadence has no calendar structure to preserve, so its cursor is carried over unchanged, which is how a halted catch-up keeps its backlog while its caps are widened. A week or month cadence that names no day inside its period — `EveryWeek()` and `EveryMonth()` without `OnDay`/`OnDays`/`OnFirst` — carries that day on the cursor rather than in the definition, so the day it was already on is what the rebase keeps, and only the time of day and the zone move.
+A plain cadence has no calendar structure to preserve, so its cursor is carried over unchanged, which is how a halted catch-up keeps its backlog while its caps are widened. A week or month cadence that names no day inside its period (`EveryWeek()` and `EveryMonth()` without `OnDay`/`OnDays`/`OnFirst`) carries that day on the cursor rather than in the definition, so the day it was already on is what the rebase keeps, and only the time of day and the zone move.
 
 ### Linearization
 
 A reschedule takes effect immediately for occurrences that have not fired: the scheduler's registration is replaced in place, with no window in which the schedule is parked nowhere. A delivery already handed to a worker queue is past the scheduler's reach and is considered fired; inside the process that rescheduled it, EverTask drops that delivery rather than running the definition just replaced. After a restart nothing has been published, so a delivery recovered from storage always runs and its advance is what applies the new definition.
 
-If the re-park itself fails, nothing is published and the update still stands: the previous occurrence runs once more, and its advance loses the compare-and-swap, applies the new definition and parks the schedule from the row it has just read — so a re-park that threw costs one extra run of the old definition, never a series that stops.
+If the re-park itself fails, nothing is published and the update still stands: the previous occurrence runs once more, and its advance loses the compare-and-swap, applies the new definition and parks the schedule from the row it has just read, so a re-park that threw costs one extra run of the old definition, never a series that stops.
 
 ### ScheduleUpdateResult
 
@@ -2326,7 +2326,7 @@ If the re-park itself fails, nothing is published and the update still stands: t
 `InvalidOperationException`, always before anything is written:
 
 - no task carries that key, or the task it names is a one-shot;
-- the schedule was cancelled — a cancellation is terminal, dispatch it again;
+- the schedule was cancelled: a cancellation is terminal, dispatch it again;
 - the new definition has no occurrence left to run (its bounds are already past). Use `CancelSchedule` to end a series on purpose, instead of leaving a row nothing can finish;
 - the row's payload or definition cannot be rebuilt by this build;
 - a rebase that cannot map the cursor (see above);

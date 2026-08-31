@@ -26,7 +26,7 @@ Resilient task handling comes down to a few things: retrying transient errors, f
 ## What a downtime does to a recurring schedule
 
 Recovery brings back everything that was pending, but a recurring schedule is a special case: the slots that
-came due while nobody was running are gone by the time the process is back. By default they are **skipped** —
+came due while nobody was running are gone by the time the process is back. By default they are **skipped**:
 at most the slot that is still the current one runs, and the schedule moves on. That is the right answer for a
 heartbeat and the wrong one for a nightly billing job.
 

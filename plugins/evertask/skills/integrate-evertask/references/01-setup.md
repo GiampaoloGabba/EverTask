@@ -78,7 +78,7 @@ moderate 2000–5000, high 10000+.
 | `SetDefaultScheduleTimeZone(TimeZoneInfo)` | `null` (UTC) | Zone for **calendar-anchored** schedules and day/date exclusions built without `InTimeZone` (`05-scheduling.md`). Plain cadences without calendar exclusions are never touched. Stamped into the definition at dispatch, so rows already stored keep their meaning. A custom (non-IANA) zone throws. |
 | `AddScheduleCalendar(string, Action<IExclusionBuilder>)` | none | Static reusable weekday/date/range exclusion set. Names are trimmed and case-sensitive; the configuration is deep-frozen immediately after the callback. Reference it with `ExceptCalendar` (`05-scheduling.md`). |
 | `SetMaterializationConcurrency(int)` | same as `SetMaxDegreeOfParallelism` | How many durable schedules may materialize occurrences at once (`05-scheduling.md`). Bounds the storage burst of a restart backlog; it is neither the queue's parallelism nor `MaxPendingOccurrences`. Below 1 throws. |
-| `SetBacklogRetryInterval(TimeSpan)` | `1 min` | How long a durable schedule waits before trying again when it could not progress (budget full, or a write that lost its race). The usual way it resumes is the kick each occurrence gives when it ends; this is the guarantee behind it. A **halted** catch-up is never retried — only an explicit schedule change releases one (`ResumeSchedule`, `Reschedule`, or dispatching the series again after a cancel). Below 1 s throws, and so does above 1 day: it is the last resort before a restart, and it is added to a UTC instant at every re-park. |
+| `SetBacklogRetryInterval(TimeSpan)` | `1 min` | How long a durable schedule waits before trying again when it could not progress (budget full, or a write that lost its race). The usual way it resumes is the kick each occurrence gives when it ends; this is the guarantee behind it. A **halted** catch-up is never retried; only an explicit schedule change releases one (`ResumeSchedule`, `Reschedule`, or dispatching the series again after a cancel). Below 1 s throws, and so does above 1 day: it is the last resort before a restart, and it is added to a UTC instant at every re-park. |
 | `SetOccurrenceProviderRetry(Action<OccurrenceProviderRetryOptions>)` | `InitialBackoff` 1 min, `MaxBackoff` 15 min | How long a live schedule waits after occurrence evaluation could not answer: a provider failure or exclusion-search budget exhaustion (`05-scheduling.md`). The cursor stays put, the wait doubles per consecutive failure of that schedule and one answer resets it. Either bound outside `(0, 1 day]` throws. |
 
 ### Persistent logger (handler logs → DB)
@@ -125,7 +125,7 @@ See `06-rate-limiting-queues.md`.
 **The scheduling clock is a seam.** `AddEverTask` registers `TimeProvider.System` with `TryAddSingleton`, and
 one `TimeProvider` governs every scheduling decision: dispatch delays, the occurrence grid, both schedulers,
 startup recovery and the rate limiter. Register your own (`services.AddSingleton<TimeProvider>(fake)` before
-`AddEverTask`, or on `.Services` after it) and the whole pipeline follows it — that is what makes an
+`AddEverTask`, or on `.Services` after it) and the whole pipeline follows it. That is what makes an
 end-to-end schedule test deterministic instead of a race against the wall clock. Retry delays, audit and
 logging deliberately stay on the real clock.
 
