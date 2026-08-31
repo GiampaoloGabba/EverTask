@@ -734,3 +734,22 @@ The explicit transaction held SQLite's write lock across three round-trips and p
 writer into busy-handler backoff (the 155 ms p50 is the backoff, not I/O). A single autocommitted UPDATE
 shrinks the lock window to one statement: 27x throughput, p50 down 40x, and the run turns steady. The
 audit-full arm keeps its transaction and is byte-flat and time-flat, as intended.
+
+## P-N — The 4.0 storage batch, clean A/B (release measurement)
+
+After a run polluted by an unrelated CPU-hogging container first read as "throughput flat", the
+definitive pair ran back-to-back on a quiet machine: BEFORE on a pristine `23cbc0c` worktree, AFTER on
+the 4.0 tree (`084a7db`: SQL caching + #17 model-derived INSERT + #16 born-Queued fold). L8 Postgres,
+audit none, tiny payload, p16, 4 producers, 5k tasks, warmup 2 / measured 5.
+
+| Side | Throughput | p50 | p90 | p99 | p999 | Allocated |
+|---|---:|---:|---:|---:|---:|---:|
+| BEFORE (CV 0.8%) | 2,792 tasks/s | 2,140 µs | 2,419 µs | 3,006 µs | 5,587 µs | 80,077 B/task |
+| AFTER (CV 2.5%) | 4,694 tasks/s | 1,660 µs | 2,499 µs | 5,726 µs | 10,297 µs | 48,179 B/task |
+
+**+68% throughput, −22% p50, −40% allocations.** The naive 4/3 round-trip model predicted a +33%
+ceiling; the fold beat it because the removed SetQueued was not just a round-trip but a contended
+write between the producer and the consumers. The tail is higher in absolute terms (p99 3.0 → 5.7 ms)
+with 68% more tasks in flight at the same pool and parallelism — the pre-release soak run
+characterizes it at matched load. Allocations are deterministic across every run of the day
+(48,079-48,179 B/task on three AFTER runs under wildly different CPU conditions).
