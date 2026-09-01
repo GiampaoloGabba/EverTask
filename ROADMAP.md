@@ -1,23 +1,40 @@
 # EverTask Roadmap
 
-Planned work, in no particular order. Priorities shift with real-world feedback: if one of these matters to
-you, [open an issue](https://github.com/GiampaoloGabba/EverTask/issues) describing your use case.
+Planned work. The near-term sequence is decided: pipeline behaviors
+([#60](https://github.com/GiampaoloGabba/EverTask/issues/60)), then OpenTelemetry
+([#61](https://github.com/GiampaoloGabba/EverTask/issues/61)) built on top of them, then durable
+continuations ([#62](https://github.com/GiampaoloGabba/EverTask/issues/62)); the distribution track
+([#59](https://github.com/GiampaoloGabba/EverTask/issues/59) →
+[#31](https://github.com/GiampaoloGabba/EverTask/issues/31)) follows. Everything else has no fixed order,
+and priorities shift with real-world feedback: if one of these matters to you,
+[open an issue](https://github.com/GiampaoloGabba/EverTask/issues) describing your use case.
 
 ## Planned
 
 ### Task management from the dashboard
 
-The dashboard and REST API are read-only today. Planned: stop, cancel and requeue tasks from the UI, bulk
-operations on failed tasks, pause/resume queues, and editing a recurring schedule in place. The runtime
+4.0 shipped the first write surface (off by default, behind a separate operate credential): requeue a failed
+occurrence, resume a halted schedule, cancel a schedule. Planned next: retry any failed task (not only
+occurrences), bulk operations on failed tasks, pause/resume queues, and editing a recurring schedule in
+place. The runtime
 [`ITaskScheduleManager`](https://GiampaoloGabba.github.io/EverTask/recurring-tasks/managing-tasks.html)
 shipped in 4.0 is the seam this builds on.
 
-### Distributed clustering
+### Multi-publisher, single consumer
 
-Multiple active hosts with leader election and automatic failover. EverTask 4.0 contracts a single active
-host (a standby that is not started is fine): materialization is already idempotent across hosts, but
-execution is not claimed, so clustering means pluggable queue and distributed-lock providers on top of the
-existing single-instance mode, which stays supported.
+Dispatch from any number of processes, execute in one
+([#59](https://github.com/GiampaoloGabba/EverTask/issues/59)): a publisher-only registration mode, a wake
+channel so the consumer discovers new work without polling (Postgres LISTEN/NOTIFY natively, Redis pub/sub
+for SQL Server and MySQL), a runtime pickup reusing the recovery pipeline, and a slow reconciliation sweep as
+the safety net for lost signals. The single-active-host contract stays, guaranteed by deployment: this is
+the first slice of distributed execution, shippable without leases.
+
+### Distributed execution
+
+Multiple active hosts ([#31](https://github.com/GiampaoloGabba/EverTask/issues/31)): per-task execution
+leases with fencing tokens in place of `SetInProgress`, lease-aware recovery predicates, and a reaper that
+notices a crashed peer. Materialization is already idempotent across hosts; claiming execution is what this
+adds. Single-instance mode stays supported.
 
 ### Distributed rate limiting
 
@@ -26,22 +43,40 @@ A Redis-based (GCRA) keyed limiter sharing budgets across instances. The in-proc
 
 ### Advanced throttling
 
-Global rate limits (max N tasks/sec across all queues), per-handler concurrency caps, and adaptive
-throttling based on CPU/memory pressure.
+Global rate limits (max N tasks/sec across all queues), concurrency caps per handler and per key
+(mutex/semaphore semantics next to the GCRA rate budgets), and adaptive throttling based on CPU/memory
+pressure.
+
+### Continuations
+
+Run a task when another one finishes ([#62](https://github.com/GiampaoloGabba/EverTask/issues/62)): continue
+on completion or on failure, linked atomically to the parent and surviving restarts (the storage already
+carries parent-child linkage for durable occurrences). This is the primitive both workflows and batch
+continuations build on.
 
 ### Workflow orchestration
 
-Sequential, parallel, conditional and saga/compensation flows with a fluent API, built on the existing
-continuation primitives, with step-level persistence and monitoring integration.
+Sequential, parallel, conditional and saga/compensation flows with a fluent API, built on the continuation
+primitives above, with step-level persistence and monitoring integration.
 
 ### Batch dispatch
 
 Dispatch and track a set of tasks as one unit: aggregated batch status (completed, running, failed,
-cancelled), batch monitoring events, optional batch persistence.
+cancelled), batch monitoring events, optional batch persistence, and batch continuations: a task fired when
+the whole batch has ended.
 
-### Additional monitoring targets
+### Pipeline behaviors
 
-Sentry Crons, Application Insights, OpenTelemetry metrics and traces export.
+MediatR-style behaviors around handler execution
+([#60](https://github.com/GiampaoloGabba/EverTask/issues/60)), so cross-cutting logic (context enrichment,
+custom metrics, veto/skip rules) wraps every handler without changes to the handlers themselves.
+
+### OpenTelemetry and additional monitoring targets
+
+Native instrumentation first ([#61](https://github.com/GiampaoloGabba/EverTask/issues/61)):
+`ActivitySource` traces and `Meter` metrics, with W3C context propagated from
+dispatch to execution so a task's trace links back to the request that dispatched it (and, with the
+multi-publisher mode above, across processes). Then export targets: Sentry Crons, Application Insights.
 
 ### More storage options
 

@@ -13,6 +13,23 @@ This guide covers techniques for coordinating and managing task execution workfl
 
 You can chain tasks together for sequential execution using the lifecycle methods in task handlers.
 
+### Reliability Limits
+
+Before building on this pattern, know what it does not give you. The chain lives in memory, not in storage:
+`OnCompleted` runs after the parent is already marked `Completed`, so a crash in that window (or a transient
+storage error during the dispatch itself) loses the continuation. The parent looks done, recovery has nothing
+to replay, and the next task was never persisted. A callback that throws is reported as an error event, but
+the task stays `Completed` and nothing retries the dispatch. The dispatched task is also an unrelated row:
+the dashboard shows no link between the two.
+
+Treat it as a pragmatic bridge. It works well when the next task is idempotent and a lost link is acceptable,
+or covered by your own reconciliation. Durable continuations (persisted with the parent, triggered by the
+terminal status write) are on the [roadmap](https://github.com/GiampaoloGabba/EverTask/blob/master/ROADMAP.md).
+
+One caveat specific to error chains: `OnError` fires only on the terminal failure (individual retries go
+through `OnRetry`), but it also receives `RateLimitRejectedException` when a rate-limit policy rejects the
+task. Filter that exception if the follow-up should run only on real handler failures.
+
 ### Basic Continuation
 
 ```csharp

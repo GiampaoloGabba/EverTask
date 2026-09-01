@@ -9,6 +9,8 @@ nav_order: 2
 
 Combine continuations, rescheduling, and conditional logic to build sophisticated workflows that orchestrate complex business processes.
 
+The continuation links in these patterns are in-memory callbacks, not persisted state: a crash between a stage completing and the next dispatch loses the chain. Read the [reliability limits](task-orchestration.md#reliability-limits) before relying on them for critical flows.
+
 ## Workflow Orchestrator Pattern
 
 The lifecycle callbacks receive only the task ID, so the orchestrator captures the request into private fields during `Handle` and reads them back in `OnCompleted` and `OnError`:
