@@ -231,8 +231,14 @@ null when the schedule carries no zone. See
 
 ## One-Shot Dispatches
 
-`Dispatch(task, DateTimeOffset)` takes an absolute instant and is not affected by any of this. Build the
-`DateTimeOffset` from the zone at the moment you mean, rather than from `BaseUtcOffset`:
+`Dispatch(task, DateTimeOffset)` takes an absolute instant, and a `DateTimeOffset` already carries its own
+offset: it is a fully specified point in time, so there is nothing left for a zone to govern. `InTimeZone`
+exists for the recurring case, where "09:00" has to be re-read on the zone's clock at every occurrence; a
+one-shot resolves its offset exactly once, when you build the value, and nothing can drift afterwards.
+
+So there is no `InTimeZone` for one-shots, and none is missing. What you may have to do is build the instant
+from a wall-clock time yourself ("10:00 on 25 December, Rome time"), and the one rule there is to use the
+offset in force on that date:
 
 ```csharp
 var zone  = TimeZoneInfo.FindSystemTimeZoneById("Europe/Rome");
@@ -242,8 +248,16 @@ var when  = new DateTimeOffset(local, zone.GetUtcOffset(local));
 await dispatcher.Dispatch(new SendGreetingTask(userId), when);
 ```
 
-`GetUtcOffset(local)` resolves the offset in force on that date. `BaseUtcOffset` returns the zone's standard
-offset regardless of the date, so it is wrong for half the year.
+`GetUtcOffset(local)` answers with the offset that date actually has: +01:00 on 25 December, +02:00 on a July
+date. `BaseUtcOffset` is the zone's *standard* offset regardless of the date, so it is an hour off for the
+whole daylight-saving season. `TimeZoneInfo.ConvertTimeToUtc(local, zone)` is an equivalent, sometimes
+clearer spelling of the same conversion.
+
+Two edge cases the one-liner does not answer well: a local time the spring transition skipped
+(`ConvertTimeToUtc` throws, `GetUtcOffset` answers as if the time existed) and one the autumn clock repeats
+(`GetUtcOffset` silently picks one of the two readings). A dispatch overload that takes a local time and a
+zone and answers both the way the recurring path does is tracked in
+[#64](https://github.com/GiampaoloGabba/EverTask/issues/64).
 
 ## Next Steps
 

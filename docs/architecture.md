@@ -405,15 +405,16 @@ Extension points let you adapt EverTask to your specific requirements without fo
 ## Performance Characteristics
 
 > Indicative, smoke-level numbers from one machine (Ryzen 9 7950X, .NET 10 / EF Core 10, databases in
-> Docker/WSL2, audit off, small payloads, 16 concurrent producers). Order of magnitude, not a guarantee:
-> measure in your own environment. Full methodology and data: `benchmarks/RESULTS.md`. See also
+> Docker/WSL2, audit off, small payloads, 16 concurrent producers), measured on the released 4.0 tree
+> (the P-N run in `benchmarks/RESULTS.md`, which the 4.0 storage batch moved by +68% throughput and
+> −40% allocations). Order of magnitude, not a guarantee: measure in your own environment. See also
 > [Scalability](scalability.md#measured-performance-indicative).
 
 ### Throughput (task execution, storage-bound)
 
 | Backend | Indicative throughput | Notes |
 |---------|-----------------------|-------|
-| PostgreSQL | ~2,500 tasks/sec | scales with parallelism + connection pool |
+| PostgreSQL | ~4,700 tasks/sec | scales with parallelism + connection pool |
 | SQLite | ~200 tasks/sec | single writer; parallelism does not help |
 | Engine only (no persistence) | hundreds of k/sec | diagnostic ceiling; durability off, not a real-app number |
 
@@ -425,7 +426,7 @@ calls/sec) is a separate axis we haven't benchmarked yet (see [Sharded Scheduler
 
 | Path | Measured | Notes |
 |------|----------|-------|
-| Dispatch → handler start, PostgreSQL | p50 ~2.3 ms | under concurrent load; includes the SetInProgress write |
+| Dispatch → handler start, PostgreSQL | p50 ~1.7 ms | under concurrent load; includes the SetInProgress write |
 | `await Dispatch()` call, in-memory | microseconds | enqueue to the channel, no database |
 | `await Dispatch()` call, durable | single-digit ms | a database write on the calling thread |
 
@@ -434,7 +435,7 @@ calls/sec) is a separate axis we haven't benchmarked yet (see [Sharded Scheduler
 | Path | Allocation/task | Notes |
 |------|-----------------|-------|
 | Engine only (no persistence) | ~3.2 KB | after the System.Text.Json switch |
-| PostgreSQL (durable, tiny payload) | ~73 KB | EF command pipeline + `SqlParameter[]` arrays dominate |
+| PostgreSQL (durable, tiny payload) | ~48 KB | storage writes still dominate; the remaining slices are tracked in [#58](https://github.com/GiampaoloGabba/EverTask/issues/58) |
 | Per shard (ShardedScheduler) | ~300 bytes | fixed overhead per shard |
 
 Larger payloads add serialization allocation on top (see `benchmarks/RESULTS.md` P-G/P-H). Reducing the

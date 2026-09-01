@@ -106,7 +106,7 @@ and retry/timeout config.
 ## Scalability: two independent axes
 
 - **Execution throughput** is storage-bound (DB round-trips/task). Indicative (Ryzen 9 7950X,
-  .NET 10, audit off): Postgres ~2,500/s, SQLite ~200/s (single writer; parallelism doesn't help).
+  .NET 10, audit off, 4.0 storage batch): Postgres ~4,700/s, SQLite ~200/s (single writer; parallelism doesn't help).
   MySQL/MariaDB share Postgres' server-side relational profile (not separately benchmarked).
   Levers: faster DB, lower audit level, fewer round-trips. **Neither multi-queue nor the sharded
   scheduler raises this.**

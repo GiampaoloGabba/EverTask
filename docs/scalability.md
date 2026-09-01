@@ -108,7 +108,7 @@ the database sets the ceiling, not EverTask. Indicative throughput, audit off:
 
 | Storage backend | Indicative task-execution throughput |
 |-----------------|--------------------------------------|
-| PostgreSQL | ~2,500 tasks/sec |
+| PostgreSQL | ~4,700 tasks/sec |
 
 SQLite is a single writer (a local file), so it runs much lower and gets nothing from parallelism: around
 200/sec on this machine. SQL Server is left out on purpose. The only figure we have comes from Docker under

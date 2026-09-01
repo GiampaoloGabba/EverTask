@@ -1,6 +1,7 @@
 # EverTask Roadmap
 
-Planned work. The near-term sequence is decided: pipeline behaviors
+Planned work. The near-term sequence is decided: analyzer usage guidance
+([#63](https://github.com/GiampaoloGabba/EverTask/issues/63)) first, then pipeline behaviors
 ([#60](https://github.com/GiampaoloGabba/EverTask/issues/60)), then OpenTelemetry
 ([#61](https://github.com/GiampaoloGabba/EverTask/issues/61)) built on top of them, then durable
 continuations ([#62](https://github.com/GiampaoloGabba/EverTask/issues/62)); the distribution track
@@ -81,6 +82,14 @@ multi-publisher mode above, across processes). Then export targets: Sentry Crons
 ### More storage options
 
 Redis and Cosmos DB providers. (PostgreSQL shipped in 3.x, MySQL/MariaDB in 4.0.)
+
+### Analyzer usage guidance
+
+A new tier of diagnostics ([#63](https://github.com/GiampaoloGabba/EverTask/issues/63)) that teach good use
+at the point of writing, on top of the contract checks in ET0001–ET0012: an Info when a recurring dispatch
+carries no `taskKey` (every call creates a new series; with a key it is an idempotent upsert), compile-time
+validation of constant cron expressions and schedule values, and a hint when a handler never observes its
+`CancellationToken`.
 
 ### Richer samples
 
